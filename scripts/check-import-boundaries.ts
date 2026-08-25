@@ -19,7 +19,7 @@
  *        files in a kernel subdirectory, siblings of that subdirectory).
  *   d2 — no ad-hoc fs. `recorder.ts`, `admission.ts`, `delivery-record.ts` may
  *        not import the fs/process/os family directly; their filesystem work
- *        goes through the `artifacts.ts` port (U8).
+ *        goes through the `artifacts.ts` fs port (not yet created).
  *   e  — GEN-5 time ban. No `Date.now()`, `new Date()`, or `recordedAt` member
  *        read (`x.recordedAt`, `x["recordedAt"]`) in the decision paths the spec
  *        forbids consulting a clock from. A locally-scoped binding merely named
