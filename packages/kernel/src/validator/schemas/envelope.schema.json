@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "delivery-evidence/1/envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spec", "provider", "candidate", "runHistory",
+               "artifacts", "attestation", "recordedAt", "claims"],
+  "properties": {
+    "spec": { "const": "delivery-evidence/1" },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runId", "finalPassId"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*$" },
+        "version": { "type": "string", "minLength": 1 },
+        "runId": { "type": "string", "minLength": 1, "maxLength": 128,
+                   "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "finalPassId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vcs", "treeSha", "deliverable", "base", "workspaceId"],
+      "properties": {
+        "vcs": { "const": "git" },
+        "treeSha": { "$ref": "#/$defs/gitOid" },
+        "headSha": { "$ref": "#/$defs/gitOid" },
+        "deliverable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["digest", "identity"],
+          "properties": {
+            "digest": { "$ref": "#/$defs/sha256hex" },
+            "identity": { "type": "string", "minLength": 1 }
+          }
+        },
+        "base": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref", "tipSha", "mergeBaseSha"],
+          "properties": {
+            "ref": { "type": "string", "minLength": 1 },
+            "tipSha": { "$ref": "#/$defs/gitOid" },
+            "mergeBaseSha": { "$ref": "#/$defs/gitOid" }
+          }
+        },
+        "workspaceId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "repository": { "type": ["string", "null"], "minLength": 1 },
+    "runHistory": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["preparedTreeSha", "evaluatedInPassId"],
+        "properties": {
+          "preparedTreeSha": { "$ref": "#/$defs/gitOid" },
+          "evaluatedInPassId": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "role"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "$ref": "#/$defs/sha256hex" },
+          "role": { "type": "string",
+                    "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" }
+        }
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "signatures"],
+      "properties": {
+        "level": { "enum": ["self", "provider-signed", "independently-verified"] },
+        "signatures": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["obligation", "payloadSpec", "payload"],
+        "properties": {
+          "obligation": { "type": "string",
+                          "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)*$" },
+          "payloadSpec": { "type": "string", "minLength": 1 },
+          "payload": { "type": "object" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "gitOid": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
