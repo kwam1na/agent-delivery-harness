@@ -200,6 +200,14 @@ describe("a sound config", () => {
     expect(codes).toHaveLength(2);
   });
 
+  it("reports an obligation's absent id once, not as an invalid value too", () => {
+    const input = structuredClone(validInput()) as MutableInput;
+    delete (input.obligations[0] as Partial<Record<string, unknown>>)["id"];
+    const codes = codesFor(input);
+    expect(new Set(codes)).toEqual(new Set(["config_missing_member"]));
+    expect(codes).toHaveLength(1);
+  });
+
   it("keeps a diagnostic readable through the blocker redaction chain", () => {
     // `ciPolicyEnvKey` ends in a credential word, and a finding rendered as
     // `member: detail` is exactly the assignment shape the redaction chain
