@@ -229,9 +229,11 @@ export function isManifestRejectionCode(value: unknown): value is ManifestReject
 /**
  * One violated rule. `pointer` is an RFC 6901 JSON pointer into the submitted
  * manifest, so a caller can show the offending member without the validator
- * formatting anything for a screen (that is the renderer's job, and the message
- * here is untrusted-content-free by construction: it never interpolates
- * provider text).
+ * formatting anything for a screen — that is the renderer's job, and the
+ * messages here are constant strings that never interpolate provider-authored
+ * text. A pointer can still carry a submitted member name (an unknown member is
+ * named by the pointer to it), which is why display goes through the shared
+ * renderer's neutralization (§11.2) like any other evidence text.
  */
 export interface ManifestRejection {
   readonly code: ManifestRejectionCode;

@@ -23,7 +23,7 @@
  *   vectors are bound to — produces the same result.
  */
 import { describe, expect, it } from "vitest";
-import { manifestDigest, type HarnessConfig } from "@delivery-harness/kernel";
+import { RECORDER_EMITTED_CODES, manifestDigest, type HarnessConfig } from "@delivery-harness/kernel";
 import { loadKitRepoConfig } from "../fixtures/repo-config-adapter.ts";
 import { kitVariantConfig } from "../fixtures/kit-variant-config.ts";
 import {
@@ -80,6 +80,23 @@ describe("the vendored kit", () => {
     ]);
     for (const deferred of RECORDER_DEPENDENT_VECTORS) {
       expect(deferred.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("defers nothing a pure validator could have decided", () => {
+    // The mechanical justification for the skip list: each deferred reject
+    // vector expects a code the registry marks as recorder-emitted, and the one
+    // deferred accept vector expects a multi-step protocol rather than a single
+    // submission. Anything else on this list would be coverage quietly dropped.
+    for (const { id } of RECORDER_DEPENDENT_VECTORS) {
+      const deferred = vector(id);
+      if (deferred.expect.result === "accepted") {
+        expect(Object.keys(deferred.extra ?? {}), id).not.toHaveLength(0);
+        continue;
+      }
+      for (const code of deferred.expect.codes ?? []) {
+        expect(RECORDER_EMITTED_CODES, `${id} expects ${code}`).toContain(code);
+      }
     }
   });
 });
@@ -143,7 +160,9 @@ describe("the kit's expectation semantics", () => {
 
   it("fails an acceptance where a rejection was expected, and the reverse", () => {
     expect(compareOutcome(floor, { accepted: true, codes: [] })).toHaveLength(1);
-    expect(compareOutcome({ result: "accepted" }, { accepted: false, codes: ["no_claims"] })).toHaveLength(1);
+    const failures = compareOutcome({ result: "accepted" }, { accepted: false, codes: ["no_claims"] });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("no_claims");
   });
 });
 
@@ -190,10 +209,27 @@ describe("the kit repo-config adapter's negative space", () => {
   /**
    * The config unit proved that a default widening the configuration into the
    * kit's negative space is *detectable*. This is the other half: the same
-   * widening turns a reject vector green, which is what makes the negative space
+   * widening turns a vector red, which is what makes the negative space
    * load-bearing rather than decorative.
    */
-  it("goes red on a vector when a config dimension is pointed at a vector-bound value", () => {
+  it("goes red on a vector when a mapped dimension is pointed at a vector-bound value", () => {
+    const widened = {
+      ...kitConfig,
+      identityVersions: [...kitConfig.identityVersions, "deliverable-tree/v0"],
+    } as HarnessConfig;
+
+    const result = runKitUnitMode({ config: widened });
+    expect(result.failed.map((outcome) => outcome.id)).toEqual(["env-6-unknown-identity-version"]);
+    expect(result.failed[0]?.failures.join(" ")).toContain("unsupported_identity_version");
+  });
+
+  it("stays green when the accepted payload specs are widened, because the validator refuses specs it does not implement", () => {
+    // The falsification the config unit named — adding review.green/0 to the
+    // accepted payload specs — turns out not to reach a vector, and the reason
+    // is worth pinning: acceptance requires the spec to be both configured and
+    // implemented, so widening configuration alone cannot admit a payload no
+    // rule has ever read. The negative-space guard still catches the widening;
+    // this records that the validator is the second lock on that door.
     const widened = {
       ...kitConfig,
       obligations: kitConfig.obligations.map((obligation) => ({
@@ -202,14 +238,12 @@ describe("the kit repo-config adapter's negative space", () => {
       })),
     } as HarnessConfig;
 
-    const result = runKitUnitMode({ config: widened });
-    expect(result.failed.map((outcome) => outcome.id)).toEqual(["env-14-unsupported-payload-spec"]);
-    expect(result.failed[0]?.failures.join(" ")).toContain("got acceptance");
+    expect(runKitUnitMode({ config: widened }).failed).toEqual([]);
   });
 
   it("is green again once the widening is removed", () => {
-    // The restore half of the falsification: the config is a parameter, so the
-    // widening cannot leak out of the test that made it.
+    // The restore half of the falsification: the config is a parameter, so no
+    // widening can leak out of the test that made it.
     expect(runKitUnitMode({ config: kitConfig }).failed).toEqual([]);
   });
 });

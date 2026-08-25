@@ -190,8 +190,9 @@ export function compareOutcome(expect: KitExpectation, actual: ValidatorOutcome)
   if (expect.result === "accepted") {
     if (!actual.accepted) {
       failures.push(`expected acceptance, got rejection with [${actual.codes.join(", ")}]`);
-    }
-    if (actual.codes.length > 0) {
+    } else if (actual.codes.length > 0) {
+      // An acceptance carrying codes is a contradiction in the validator, not a
+      // lenient pass: the kit says an accepted submission has no codes at all.
       failures.push(`an accepted submission must carry no rejection codes, got [${actual.codes.join(", ")}]`);
     }
     return failures;
