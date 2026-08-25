@@ -34,7 +34,15 @@ import {
   matchesNeutralSet,
   validateHarnessConfig,
   type HarnessConfig,
+  type HarnessConfigInput,
 } from "./config.ts";
+
+/**
+ * Every row below feeds `defineHarnessConfig` a value the authoring type would
+ * reject — that is the point of the row — so the type is asserted at this one
+ * seam rather than at each call site.
+ */
+const define = (input: unknown): HarnessConfig => defineHarnessConfig(input as HarnessConfigInput);
 
 // ── The shared valid fixture ───────────────────────────────────────────────
 
@@ -120,8 +128,12 @@ const validInput = () => ({
 
 type MutableInput = ReturnType<typeof validInput>;
 
-/** Deep-clones the fixture, hands it to the mutation, and validates the result. */
-function withInput(mutate: (input: MutableInput) => void): unknown {
+/**
+ * Deep-clones the fixture and hands it to a mutation. The mutation sees an
+ * untyped draft on purpose: most rows corrupt the fixture into a shape the
+ * authoring type forbids, which is exactly the input the loader must reject.
+ */
+function withInput(mutate: (input: any) => void): unknown {
   const input = structuredClone(validInput());
   mutate(input);
   return input;
@@ -160,7 +172,7 @@ describe("a sound config", () => {
   });
 
   it("is returned frozen, with exactly the declared members", () => {
-    const config = defineHarnessConfig(validInput());
+    const config = define(validInput());
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.keys(config).sort()).toEqual(Object.keys(validInput()).sort());
   });
@@ -170,7 +182,7 @@ describe("a sound config", () => {
     delete input.baseRef;
     delete input.storageNamespace;
     delete input.deliveryRecordVerification;
-    const config = defineHarnessConfig(input as MutableInput);
+    const config = define(input);
     expect(config.baseRef).toBe(DEFAULT_BASE_REF);
     expect(config.storageNamespace).toBe(DEFAULT_STORAGE_NAMESPACE);
     expect(config.deliveryRecordVerification).toEqual({ baseMovement: "stale" });
@@ -191,7 +203,7 @@ describe("a sound config", () => {
     });
     let thrown: unknown;
     try {
-      defineHarnessConfig(broken as MutableInput);
+      define(broken);
     } catch (error) {
       thrown = error;
     }
@@ -399,7 +411,7 @@ describe("remediation catalogs", () => {
 
 describe("the finding-code partition", () => {
   it("computes the emittable universe as the structural registry plus the obligation's providers", () => {
-    const config = defineHarnessConfig(validInput());
+    const config = define(validInput());
     const universe = emittableFindingCodes(config, "review.green");
     expect([...universe].sort()).toEqual([...GATE_STRUCTURAL_FINDING_CODES, PROVIDER_CODE].sort());
   });
@@ -407,7 +419,9 @@ describe("the finding-code partition", () => {
   it("rejects a code in the universe that neither list classifies", () => {
     expectOnly(
       withInput((input) => {
-        input.obligations[0]!.waivableCodes = input.obligations[0]!.waivableCodes.filter((code) => code !== "stale_evidence");
+        input.obligations[0]!.waivableCodes = (input.obligations[0]!.waivableCodes as string[]).filter(
+          (code: string) => code !== "stale_evidence",
+        );
       }),
       "config_unclassified_finding_code",
     );
@@ -449,7 +463,9 @@ describe("the two neutral sets", () => {
   it("rejects a record-neutral matcher outside the review-neutral set", () => {
     expectOnly(
       withInput((input) => {
-        input.recordNeutral = [{ prefix: "delivery/records/" }];
+        // The record path keeps a covered matcher, so this row falsifies the
+        // subset rule alone rather than the double-neutrality rule with it.
+        input.recordNeutral = [{ prefix: "docs/reports/" }, { prefix: "delivery/records/" }];
       }),
       "config_record_neutral_not_subset",
     );
@@ -459,6 +475,7 @@ describe("the two neutral sets", () => {
     const result = validateHarnessConfig(
       withInput((input) => {
         input.recordNeutral = [{ prefix: "docs/reports/records/" }];
+        input.deliveryRecordPath = "docs/reports/records/delivery-record.json";
       }),
     );
     expect(result.ok ? [] : result.blockers).toEqual([]);
@@ -491,7 +508,13 @@ describe("identity versions", () => {
   it("rejects a computing identity version the recorder does not accept", () => {
     expectOnly(
       withInput((input) => {
-        input.computingIdentityVersion = "deliverable-tree/v2";
+        // The review-neutral set moves off the v1 narration set at the same
+        // time, so this row falsifies the membership rule alone: leaving the
+        // narration set in place would also trip the token biconditional and
+        // the row would stop naming one rule.
+        input.computingIdentityVersion = "delivery-harness-tree/v1";
+        input.reviewNeutral = [{ prefix: "docs/reports/" }, { prefix: "delivery/records/" }];
+        input.recordNeutral = [{ prefix: "docs/reports/" }];
       }),
       "config_identity_version_not_accepted",
     );
@@ -571,7 +594,9 @@ describe("aggregation", () => {
         "config_empty_remediation",
         "config_delivery_record_not_neutral",
         "config_identity_version_not_accepted",
-        "config_identity_token_requires_v1_neutral_set",
+        // The narration set is untouched while the token moves off v1, so the
+        // biconditional's second direction fires here too.
+        "config_v1_neutral_set_requires_v1_token",
       ]),
     );
   });

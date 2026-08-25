@@ -107,6 +107,11 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
   // pure module. Registered as a d1 class so the allowlist cannot become the
   // hole in the rule it exists to enforce.
   { id: "kernel-blockers", path: "packages/kernel/src/blockers.ts", kind: "file", rules: ["d1"], status: "present" },
+  // Also on the d1 allowlist, for the same reason and with the same
+  // consequence: config is what every pure module reads its policy from, so an
+  // fs edge here would be an fs edge in the validator, the evaluator, and the
+  // context classifier at once.
+  { id: "kernel-config", path: "packages/kernel/src/config.ts", kind: "file", rules: ["d1"], status: "present" },
 ];
 
 /**

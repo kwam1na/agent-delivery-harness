@@ -32,3 +32,7 @@ export {
 // The failure vocabulary: typed blockers, the gate's structural finding-code
 // registry, and the one total renderer.
 export * from "./blockers.ts";
+
+// The injected policy surface: the config schema, its load-time invariants, and
+// the neutral-matcher primitive the identity computation shares with it.
+export * from "./config.ts";
