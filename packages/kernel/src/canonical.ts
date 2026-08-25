@@ -13,11 +13,12 @@
  *
  * Deliberate departures from `JSON.stringify`, all in the fail-closed
  * direction: `JSON.stringify` silently drops `undefined` members, symbol keys,
- * and functions, silently turns `NaN`/`Infinity` into `null`, and silently
- * renders a `Date` (or any object with `toJSON`) as something other than its
- * members. Every one of those is a canonical form that does not represent the
- * caller's value, which on this path means a digest over data nobody wrote.
- * All of them throw `CanonicalizationError` here.
+ * array holes, and functions, silently turns `NaN`/`Infinity` into `null`,
+ * silently renders a `Date` (or any object with `toJSON`) as something other
+ * than its members, and silently escapes unpaired surrogates that RFC 8785
+ * §3.2.2.2 requires be rejected. Every one of those is a canonical form that
+ * does not represent the caller's value, which on this path means a digest
+ * over data nobody wrote. All of them throw `CanonicalizationError` here.
  */
 
 export type CanonicalErrorCode =
@@ -27,6 +28,8 @@ export type CanonicalErrorCode =
   | "unsupported_value"
   /** An own symbol-keyed member, which has no JSON spelling. */
   | "symbol_key"
+  /** An unpaired surrogate in a string value or member name (RFC 8785 §3.2.2.2). */
+  | "lone_surrogate"
   /** A value that contains itself. */
   | "circular_reference";
 
@@ -93,15 +96,38 @@ const serializeNumber = (value: number, path: string): string => {
 };
 
 /**
+ * Matches a string containing an unpaired surrogate. Under the `u` flag the
+ * subject is read as code points, so a well-formed pair is a single non-
+ * surrogate code point and only unpaired halves remain in category Cs.
+ */
+const LONE_SURROGATE = /\p{Surrogate}/u;
+
+/**
  * RFC 8785 §3.2.2.2 defers string serialization to ECMAScript's
  * `QuoteJSONString`, which is what `JSON.stringify` applies to a string: the
  * short escapes for `"` `\` and the five named C0 controls, lowercase
- * `\u00xx` for the rest of U+0000–U+001F, lone surrogates escaped for
- * well-formed output (ES2019+), and every other character emitted literally.
- * Reimplementing that byte-for-byte would add a second, weaker definition of
- * the same normative algorithm.
+ * `\u00xx` for the rest of U+0000–U+001F, and every other character emitted
+ * literally. Reimplementing that byte-for-byte would add a second, weaker
+ * definition of the same normative algorithm.
+ *
+ * The one place we do not follow `JSON.stringify` is unpaired surrogates.
+ * §3.2.2.2 requires that "occurrences of such data MUST cause a compliant JCS
+ * implementation to terminate with an appropriate error"; `JSON.stringify`
+ * escapes them instead, for well-formed output (ES2019+), and so does the
+ * reference `canonicalize` npm package. Escaping would let two distinct
+ * malformed inputs acquire canonical forms — and therefore digests — on a
+ * path where a digest is an identity claim. The RFC text governs.
  */
-const serializeString = (value: string): string => JSON.stringify(value);
+const serializeString = (value: string, path: string): string => {
+  if (LONE_SURROGATE.test(value)) {
+    throw new CanonicalizationError(
+      "lone_surrogate",
+      path,
+      "string contains an unpaired surrogate, which RFC 8785 §3.2.2.2 requires be rejected",
+    );
+  }
+  return JSON.stringify(value);
+};
 
 /** True for objects that came from JSON — no exotic prototype, no `toJSON`. */
 const isPlainObject = (value: object): boolean => {
@@ -126,7 +152,7 @@ const serialize = (value: unknown, path: string, ancestors: Set<object>): string
     case "number":
       return serializeNumber(value, path);
     case "string":
-      return serializeString(value);
+      return serializeString(value, path);
     case "object":
       break;
     default:
@@ -144,9 +170,15 @@ const serialize = (value: unknown, path: string, ancestors: Set<object>): string
   ancestors.add(container);
   try {
     if (Array.isArray(container)) {
-      const elements = (container as readonly unknown[]).map((element, index) =>
-        serialize(element, `${path}/${index}`, ancestors),
-      );
+      // Indexed rather than `map`, which skips holes: a sparse array would
+      // otherwise emit nothing between the commas and produce `[1,,3]`, which
+      // is not JSON. Read positionally, a hole is `undefined` and takes the
+      // `unsupported_value` path with the right pointer.
+      const source = container as readonly unknown[];
+      const elements: string[] = [];
+      for (let index = 0; index < source.length; index += 1) {
+        elements.push(serialize(source[index], `${path}/${index}`, ancestors));
+      }
       return `[${elements.join(",")}]`;
     }
 
@@ -170,8 +202,10 @@ const serialize = (value: unknown, path: string, ancestors: Set<object>): string
     const members = Object.keys(record)
       .sort(compareUtf16CodeUnits)
       .map((key) => {
-        const child = serialize(record[key], `${path}${pointerSegment(key)}`, ancestors);
-        return `${serializeString(key)}:${child}`;
+        // The member name is checked at the *containing* object's pointer:
+        // a malformed name is not a location a pointer can address.
+        const name = serializeString(key, path);
+        return `${name}:${serialize(record[key], `${path}${pointerSegment(key)}`, ancestors)}`;
       });
     return `{${members.join(",")}}`;
   } finally {

@@ -1,10 +1,9 @@
 /**
  * Digest helpers: SHA-256 over canonical JSON, and the spec's manifestDigest.
  *
- * Written before `digest.ts` existed (V26-1331, test-first per the U2
- * execution note).
+ * Written before `digest.ts` existed.
  *
- * The load-bearing property is spec 6:
+ * The load-bearing property is spec §6:
  *
  *     manifestDigest = lowerhex(sha256(JCS(manifest with attestation.signatures := [])))
  *
@@ -122,6 +121,17 @@ describe("digestCanonical", () => {
 describe("manifestDigest", () => {
   it("is lowercase hex", () => {
     expect(manifestDigest(MANIFEST)).toMatch(LOWER_HEX_SHA256);
+  });
+
+  it("matches its frozen value for the fixture manifest", () => {
+    // A byte anchor. Every other assertion here is relational — this digest
+    // equals that one — so a change to canonicalize() and a compensating
+    // change to sha256Hex() could cancel out and leave the suite green while
+    // every previously issued digest silently stopped matching. This literal
+    // cannot be satisfied by anything but the exact canonical bytes.
+    expect(manifestDigest(MANIFEST)).toBe(
+      "fa033ca0b82895c1e64286d1ed6729a7c29a2c99110022e8977c5c9649b2f5be",
+    );
   });
 
   it("equals sha256 of the canonical form with signatures emptied", () => {

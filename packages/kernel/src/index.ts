@@ -10,7 +10,7 @@
 
 export const PACKAGE_NAME = "@delivery-harness/kernel";
 
-// U2 (V26-1331) — RFC 8785 canonical JSON and the digest helpers built on it.
+// RFC 8785 canonical JSON and the digest helpers built on it.
 export {
   CanonicalizationError,
   canonicalBytes,

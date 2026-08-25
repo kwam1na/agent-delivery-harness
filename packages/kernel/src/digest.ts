@@ -1,11 +1,12 @@
 /**
  * SHA-256 over canonical JSON, and the spec's `manifestDigest`.
  *
- * Everything the harness identifies by content — `manifestDigest` here,
- * `recordId` and `workspaceId` in U7 — is a lowercase-hex SHA-256 over the
- * RFC 8785 canonical bytes produced by `canonical.ts`. This module is on the
- * d1 kernel-import allowlist; `node:crypto` is not in the fs/process/os
- * specifier family the purity rules ban, and it is the only import here.
+ * Everything the harness identifies by content — the manifest digest here,
+ * and the record and workspace identifiers derived later — is a lowercase-hex
+ * SHA-256 over the RFC 8785 canonical bytes produced by `canonical.ts`. This
+ * module is on the d1 kernel-import allowlist; `node:crypto` is not in the
+ * fs/process/os specifier family the purity rules ban, and it is the only
+ * import here.
  *
  * Lowercase hex is a discipline, not a preference: digests travel through
  * filenames, JSON records, and cross-tool comparisons, and a comparison that
@@ -73,8 +74,8 @@ export function digestsEqual(a: string, b: string): boolean {
 /**
  * Replaces `attestation.signatures` with `[]` without mutating the input, and
  * without inventing an `attestation` member that was not there — a manifest
- * missing it is structurally invalid, and rejecting that is the validator's
- * job (U4), not this module's.
+ * missing it is structurally invalid, and rejecting that belongs to the
+ * envelope validator, not to this module.
  */
 const withEmptySignatures = (manifest: unknown): unknown => {
   if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return manifest;

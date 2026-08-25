@@ -1,19 +1,18 @@
 /**
  * RFC 8785 (JCS) conformance suite for the repo's only canonicalizer.
  *
- * Written before `canonical.ts` existed (V26-1331, test-first per the U2
- * execution note): the vectors below are transcribed from RFC 8785 itself —
- * its property-sorting example, its escaping example, and its number
+ * Written before `canonical.ts` existed: the vectors below come from RFC 8785
+ * itself — its property-sorting example, its escaping example, and its number
  * serialization table — and every expectation is a *literal* expected string.
  * Nothing here round-trips the implementation against itself, because a
  * canonicalizer checked against its own output cannot fail.
  *
- * Transcription note: RFC 8785 §3.2.2.3 delegates number serialization to the
- * ECMAScript `Number::toString` algorithm (shortest round-tripping decimal).
- * Two rows of the transcribed table in the `333333333.33333…` cluster are
- * carried here at the value the normative algorithm produces; the RFC's table
- * is a rendering of that algorithm, so the algorithm is the authority when a
- * transcription and it disagree.
+ * Number vectors: RFC 8785 §3.2.2.3 normatively delegates number
+ * serialization to the ECMAScript `Number::toString` algorithm — the shortest
+ * decimal that round-trips. Each row below is the `Number::toString` output of
+ * the listed IEEE-754 bit pattern, verified to round-trip to that same
+ * pattern. Where any published table text differs from what the algorithm
+ * produces, the algorithm is authoritative.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -185,9 +184,11 @@ describe("RFC 8785 — string serialization", () => {
     expect(canonicalBytes("\u20ac")).toEqual(utf8('"\u20ac"'));
   });
 
-  it("escapes unpaired surrogates (well-formed output)", () => {
-    expect(canonicalize("\ud800")).toBe('"\\ud800"');
-    expect(canonicalize("\udfff")).toBe('"\\udfff"');
+  it("emits U+2028 and U+2029 as literal UTF-8", () => {
+    // JSON permits them raw inside a string; only JavaScript source has a
+    // problem with them, and canonical JSON is not JavaScript source.
+    expect(canonicalBytes("\u2028")).toEqual(new Uint8Array([0x22, 0xe2, 0x80, 0xa8, 0x22]));
+    expect(canonicalBytes("\u2029")).toEqual(new Uint8Array([0x22, 0xe2, 0x80, 0xa9, 0x22]));
   });
 });
 
@@ -345,6 +346,35 @@ describe("non-JSON-representable input", () => {
 
   it("rejects symbol-keyed members rather than dropping them", () => {
     rejects({ a: 1, [Symbol("s")]: 2 }, "symbol_key", "");
+  });
+
+  it("rejects lone surrogates in string values", () => {
+    // RFC 8785 §3.2.2.2: unpaired surrogates MUST terminate canonicalization
+    // with an error. `JSON.stringify` escapes them instead, and so does the
+    // `canonicalize` npm package; the RFC text governs here.
+    rejects("\ud800", "lone_surrogate", "");
+    rejects("\udfff", "lone_surrogate", "");
+    rejects("ok\ud83d", "lone_surrogate", "");
+    rejects({ a: ["\udc00"] }, "lone_surrogate", "/a/0");
+  });
+
+  it("rejects lone surrogates in member names", () => {
+    rejects({ "\ud800": 1 }, "lone_surrogate", "");
+    rejects({ outer: { "x\udfff": 1 } }, "lone_surrogate", "/outer");
+  });
+
+  it("accepts well-formed surrogate pairs", () => {
+    expect(canonicalize("😀")).toBe('"😀"');
+    expect(canonicalize({ "😀": 1 })).toBe('{"😀":1}');
+  });
+
+  it("rejects array holes rather than emitting invalid JSON", () => {
+    // `[1,,3]` is a sparse array: index 1 has no element. Emitting the hole as
+    // nothing at all would produce the byte sequence `[1,,3]`, which is not
+    // JSON. A hole reads as `undefined`, which has no JSON representation.
+    rejects([1, , 3], "unsupported_value", "/1");
+    rejects(new Array<number>(3), "unsupported_value", "/0");
+    rejects({ r: [, 1] }, "unsupported_value", "/r/0");
   });
 
   it("rejects circular references", () => {
