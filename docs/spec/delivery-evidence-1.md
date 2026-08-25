@@ -243,7 +243,7 @@ on it (GEN-5).
 Non-empty array. Each entry:
 
 ```json
-{ "obligation": "review.green", "payloadSpec": "review.green/1", "payload": { } }
+{ "obligation": "review.green", "payloadSpec": "review.green/1", "payload": { "…": true } }
 ```
 
 Obligation ids MUST be unique within a manifest. The `payloadSpec` names the
@@ -849,4 +849,7 @@ source extraction had flattened it:
   them.
 - In §9.2 the illustrative `"candidate"` placeholder — written in the source as a
   bare ellipsis comment inside a JSON block — is rendered as a string-keyed
+  member so the block stays parseable; it is illustrative, not normative.
+- In §5.9 the illustrative `"payload"` placeholder — written in the source as a
+  bare ellipsis inside a JSON block — is rendered as the same string-keyed
   member so the block stays parseable; it is illustrative, not normative.

@@ -264,6 +264,36 @@ describe("rule b — import-time process.env", () => {
     const findings = scan({ "packages/cli/src/index.ts": `export const ARGS = process.argv.slice(2);\n` });
     expect(rules(findings)).not.toContain("b-import-time-env");
   });
+
+  it("rejects a nested destructuring of env off process at import time", () => {
+    expectFalsified(
+      "b-import-time-env",
+      { "packages/mcp/src/index.ts": `const { env: { CI } } = process;\nexport const LEVEL = (): unknown => CI;\n` },
+      "packages/mcp/src/index.ts",
+    );
+  });
+
+  it("rejects a read through a rest binding of process at import time", () => {
+    expectFalsified(
+      "b-import-time-env",
+      { "packages/mcp/src/index.ts": `const { ...proc } = process;\nexport const LEVEL = proc.env["X"];\n` },
+      "packages/mcp/src/index.ts",
+    );
+  });
+
+  it("keeps the same nested destructuring green inside a function body", () => {
+    const findings = scan({
+      "packages/mcp/src/index.ts": `export const level = (): unknown => {\n  const { env: { CI } } = process;\n  return CI;\n};\n`,
+    });
+    expect(rules(findings)).not.toContain("b-import-time-env");
+  });
+
+  it("keeps the same rest binding green inside a function body", () => {
+    const findings = scan({
+      "packages/mcp/src/index.ts": `export const level = (): unknown => {\n  const { ...proc } = process;\n  return proc.env["X"];\n};\n`,
+    });
+    expect(rules(findings)).not.toContain("b-import-time-env");
+  });
 });
 
 // ── Rule c — Bun API ───────────────────────────────────────────────────────
@@ -353,6 +383,46 @@ describe("rule d1 — true purity", () => {
     expect(findings[0]?.message).toContain("does not resolve");
   });
 
+  it("rejects the kernel barrel specifier, which no allowlist entry names", () => {
+    const findings = expectFalsified(
+      "d1-kernel-purity",
+      { "packages/kernel/src/evaluator.ts": `import { sha256 } from "@delivery-harness/kernel";\nexport const evaluate = (s: string): string => sha256(s);\n` },
+      "packages/kernel/src/evaluator.ts",
+    );
+    expect(findings[0]?.message).toContain("kernel barrel");
+  });
+
+  it("rejects a subpath of the kernel barrel too", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      { "packages/kernel/src/context.ts": `import { lsTree } from "@delivery-harness/kernel/identity";\nexport const classify = (): string => lsTree();\n` },
+      "packages/kernel/src/context.ts",
+    );
+  });
+
+  it("rejects an ambient process import in a d1-pure module", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      { "packages/kernel/src/context.ts": `import { argv } from "node:process";\nexport const classify = (): string => argv[0] ?? "";\n` },
+      "packages/kernel/src/context.ts",
+    );
+  });
+
+  it("gives a non-validator kernel subdirectory no sibling allowance", () => {
+    const root = writeTree({
+      ...CLEAN_TREE,
+      "packages/kernel/src/gate/helpers.ts": `export const helper = (s: string): string => s;\n`,
+      "packages/kernel/src/gate/decide.ts": `import { helper } from "./helpers.ts";\nexport const decide = (s: string): string => helper(s);\n`,
+    });
+    const registry: ProtectedClass[] = [
+      ...registryFor(root),
+      { id: "kernel-gate", path: "packages/kernel/src/gate", kind: "dir", rules: ["d1"], status: "present" },
+    ];
+    const findings = runImportBoundarySensor({ root, protectedClasses: registry }).findings;
+    expect(findings.some((f) => f.rule === "d1-kernel-purity" && f.file === "packages/kernel/src/gate/decide.ts")).toBe(true);
+    expect(findings.find((f) => f.file === "packages/kernel/src/gate/decide.ts")?.message).toContain("no sibling allowance");
+  });
+
   it("leaves a validator test file outside the d1 scan", () => {
     const findings = scan({
       "packages/kernel/src/validator/envelope.test.ts": `import { readFileSync } from "node:fs";\nexport const fixture = (p: string): string => readFileSync(p, "utf8");\n`,
@@ -422,6 +492,32 @@ describe("rule e — GEN-5 time ban", () => {
     expectFalsified("e-time-ban", { "packages/action/src/main.ts": `export const run = (): Date => new Date();\n` }, "packages/action/src/main.ts");
   });
 
+  it("rejects Date.now() in the action entry point", () => {
+    expectFalsified("e-time-ban", { "packages/action/src/main.ts": `export const run = (): number => Date.now();\n` }, "packages/action/src/main.ts");
+  });
+
+  it("rejects a `.recordedAt` member read in a decision path", () => {
+    const findings = expectFalsified(
+      "e-time-ban",
+      { "packages/kernel/src/admission.ts": `export const admit = (m: { recordedAt: string }): string => m.recordedAt;\n` },
+      "packages/kernel/src/admission.ts",
+    );
+    expect(findings[0]?.message).toContain("recordedAt");
+  });
+
+  it('rejects a `["recordedAt"]` element read in a decision path', () => {
+    expectFalsified(
+      "e-time-ban",
+      { "packages/kernel/src/evaluator.ts": `export const evaluate = (m: Record<string, string>): string => m["recordedAt"];\n` },
+      "packages/kernel/src/evaluator.ts",
+    );
+  });
+
+  it("leaves a bare `recordedAt` parameter in a decision path alone", () => {
+    expect(rules(scan())).not.toContain("e-time-ban");
+    expect(CLEAN_TREE["packages/action/src/main.ts"]).toContain("recordedAt");
+  });
+
   it("rejects a clock read in each remaining protected decision path", () => {
     for (const file of ["packages/kernel/src/recorder.ts", "packages/kernel/src/evaluator.ts", "packages/kernel/src/admission.ts", "packages/kernel/src/delivery-record.ts"]) {
       expectFalsified("e-time-ban", { [file]: `export const stamp = (): number => Date.now();\n` }, file);
@@ -447,6 +543,20 @@ describe("anti-vacuity", () => {
     const root = writeTree({ ...CLEAN_TREE, "packages/empty/src/notes.md": "no source here\n" });
     const result = runImportBoundarySensor({ root, scanRoots: [...SCAN_ROOTS, "packages/empty/src"], protectedClasses: registryFor(root) });
     expect(result.findings.some((f) => f.rule === "anti-vacuity" && f.file === "packages/empty/src" && f.message.includes("no TypeScript source files"))).toBe(true);
+  });
+
+  it("reports a present dir class that holds only test files", () => {
+    const testsOnly = Object.fromEntries(Object.entries(CLEAN_TREE).filter(([rel]) => !rel.startsWith("packages/kernel/src/validator/")));
+    const root = writeTree({
+      ...testsOnly,
+      "packages/kernel/src/validator/envelope.test.ts": `export const t = true;\n`,
+    });
+    const result = runImportBoundarySensor({ root, protectedClasses: registryFor(root) });
+    expect(
+      result.findings.some(
+        (f) => f.rule === "anti-vacuity" && f.file === "packages/kernel/src/validator" && f.message.includes("no non-test TypeScript source files"),
+      ),
+    ).toBe(true);
   });
 
   it("reports a protected class registered present that has vanished", () => {

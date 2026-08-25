@@ -20,8 +20,10 @@
  *   d2 — no ad-hoc fs. `recorder.ts`, `admission.ts`, `delivery-record.ts` may
  *        not import the fs/process/os family directly; their filesystem work
  *        goes through the `artifacts.ts` port (U8).
- *   e  — GEN-5 time ban. No `Date.now()` / `new Date()` in the decision paths
- *        the spec forbids consulting a clock from.
+ *   e  — GEN-5 time ban. No `Date.now()`, `new Date()`, or `recordedAt` member
+ *        read (`x.recordedAt`, `x["recordedAt"]`) in the decision paths the spec
+ *        forbids consulting a clock from. A locally-scoped binding merely named
+ *        `recordedAt` is legal; only reading the member is a finding.
  *
  * `import type` is always legal — a type has no runtime edge. `*.test.ts` files
  * are outside the d1/d2/e scans (tests read fixtures from disk and stub clocks);
@@ -74,6 +76,9 @@ export interface ProtectedClass {
   readonly status: "present" | "pending";
 }
 
+/** The informational timestamp (§5.8) no decision path may read. */
+const RECORDED_AT = "recordedAt";
+
 /** Directories walked for the always-on rules (a, b, c). */
 export const SCAN_ROOTS: readonly string[] = [
   "packages/kernel/src",
@@ -85,6 +90,9 @@ export const SCAN_ROOTS: readonly string[] = [
 ];
 
 export const KERNEL_SRC = "packages/kernel/src";
+
+/** The kernel's workspace specifier — its barrel, reachable without a relative path. */
+export const KERNEL_PACKAGE = "@delivery-harness/kernel";
 
 export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
   { id: "kernel-validator", path: "packages/kernel/src/validator", kind: "dir", rules: ["d1", "e"], status: "pending" },
@@ -98,7 +106,9 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
 
 /**
  * The fs/process/os specifier family banned by d1 and d2. `node:module` and
- * `module` are members because `createRequire` is an fs escape hatch.
+ * `module` are members because `createRequire` is an fs escape hatch;
+ * `node:process` and `process` are members because a d1-pure module receives the
+ * environment as a context snapshot and never imports the ambient process.
  */
 export const FS_SPECIFIER_FAMILY: readonly string[] = [
   "node:fs",
@@ -111,6 +121,8 @@ export const FS_SPECIFIER_FAMILY: readonly string[] = [
   "os",
   "node:module",
   "module",
+  "node:process",
+  "process",
 ];
 
 /**
@@ -200,6 +212,19 @@ export function runImportBoundarySensor(input: SensorInput): SensorResult {
         message: `protected class "${entry.id}" now exists but is still registered as pending; set status to "present" so rules ${entry.rules.join("/")} are enforced against it`,
       });
     }
+    if (entry.status === "present" && exists && entry.kind === "dir") {
+      // `*.test.ts` files are outside the d1/d2/e scans, so a directory holding
+      // only tests carries no enforced file at all.
+      const scanned = collectSourceFiles(path.join(root, entry.path)).filter((f) => !f.endsWith(".test.ts"));
+      if (scanned.length === 0) {
+        findings.push({
+          rule: "anti-vacuity",
+          file: entry.path,
+          line: 0,
+          message: `protected class "${entry.id}" contains no non-test TypeScript source files; rules ${entry.rules.join("/")} would vacuously pass over it`,
+        });
+      }
+    }
   }
 
   const activeClasses = protectedClasses.filter((c) => c.status === "present");
@@ -231,7 +256,7 @@ export function runImportBoundarySensor(input: SensorInput): SensorResult {
     const rules = rulesFor(relFile, activeClasses);
 
     if (rules.has("d1")) {
-      checkD1(relFile, kernelSrc, imports, root, emit);
+      checkD1(relFile, kernelSrc, imports, root, hasSiblingAllowance(relFile, activeClasses), emit);
     }
     if (rules.has("d2")) {
       checkFsFamily(imports, "d2-no-adhoc-fs", "filesystem work must go through the artifacts.ts port, not a direct import", emit);
@@ -366,10 +391,26 @@ function checkImportTimeEnv(source: ts.SourceFile, emit: (rule: SensorRule, node
       }
       if (ts.isObjectBindingPattern(decl.name) && resolve(init) === "process") {
         for (const element of decl.name.elements) {
+          if (element.dotDotDotToken !== undefined) {
+            // `const { ...proc } = process` — the rest binding still carries
+            // `env`, so it is an alias of `process`, not a skip.
+            if (ts.isIdentifier(element.name)) {
+              aliases.set(element.name.text, "process");
+            } else {
+              emit(
+                "b-import-time-env",
+                element,
+                `rest element of a \`process\` destructuring that this sensor cannot resolve; unresolvable constructs are findings, not skips`,
+              );
+            }
+            continue;
+          }
           const propertyName = element.propertyName;
           const sourceName = propertyName && ts.isIdentifier(propertyName) ? propertyName.text : ts.isIdentifier(element.name) ? element.name.text : undefined;
-          if (sourceName === "env" && ts.isIdentifier(element.name)) {
-            aliases.set(element.name.text, "env");
+          if (sourceName === "env") {
+            // A nested pattern (`const { env: { CI } } = process`) binds no
+            // alias but has already read `process.env` at import time.
+            if (ts.isIdentifier(element.name)) aliases.set(element.name.text, "env");
             emit("b-import-time-env", element, `destructures \`env\` off \`process\` at import time; move the read inside a function`);
           }
         }
@@ -474,15 +515,28 @@ function checkD1(
   kernelSrc: string,
   imports: readonly ImportEdge[],
   root: string,
+  hasSiblingAllowance: boolean,
   emit: (rule: SensorRule, node: ts.Node, message: string) => void,
 ): void {
   checkFsFamily(imports, "d1-kernel-purity", "this module is pure by contract and performs no I/O", emit);
 
   const importerDir = path.posix.dirname(relFile);
-  const inKernelSubdirectory = importerDir !== kernelSrc;
 
   for (const edge of imports) {
     if (edge.typeOnly) continue;
+
+    // The workspace barrel re-exports the whole kernel, so it is a kernel-internal
+    // import that no allowlist entry names — reaching it would acquire fs
+    // transitively.
+    if (edge.specifier === KERNEL_PACKAGE || edge.specifier.startsWith(`${KERNEL_PACKAGE}/`)) {
+      emit(
+        "d1-kernel-purity",
+        edge.node,
+        `imports "${edge.specifier}"; the kernel barrel is not on the d1 allowlist — a d1-pure module may reach only *.types.ts or ${D1_KERNEL_ALLOWLIST.join(", ")} by relative path`,
+      );
+      continue;
+    }
+
     if (!edge.specifier.startsWith(".")) continue;
 
     const resolved = resolveRelativeImport(root, relFile, edge.specifier);
@@ -501,12 +555,12 @@ function checkD1(
     const allowed =
       base.endsWith(".types.ts") ||
       D1_KERNEL_ALLOWLIST.includes(kernelRel) ||
-      (inKernelSubdirectory && path.posix.dirname(resolved) === importerDir);
+      (hasSiblingAllowance && path.posix.dirname(resolved) === importerDir);
 
     if (!allowed) {
-      const allowance = inKernelSubdirectory
+      const allowance = hasSiblingAllowance
         ? `, or a sibling inside ${importerDir}`
-        : ` (root-level pure modules get no sibling allowance)`;
+        : ` (no sibling allowance outside the validator/ class)`;
       emit(
         "d1-kernel-purity",
         edge.node,
@@ -525,6 +579,17 @@ function checkTimeBan(source: ts.SourceFile, emit: (rule: SensorRule, node: ts.N
     }
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Date") {
       emit("e-time-ban", node, `\`new Date()\` in a decision path; GEN-5 forbids any admissibility or freshness decision from consulting a clock`);
+    }
+    // `recordedAt` is informational (§5.8). Only member reads are banned — a
+    // locally-scoped binding of that name carries no manifest timestamp.
+    if (ts.isPropertyAccessExpression(node) && node.name.text === RECORDED_AT) {
+      emit("e-time-ban", node, `reads \`.${RECORDED_AT}\` in a decision path; GEN-5 forbids any admissibility or freshness decision from depending on it`);
+    }
+    if (ts.isElementAccessExpression(node)) {
+      const arg = unwrap(node.argumentExpression);
+      if (ts.isStringLiteralLike(arg) && arg.text === RECORDED_AT) {
+        emit("e-time-ban", node, `reads \`["${RECORDED_AT}"]\` in a decision path; GEN-5 forbids any admissibility or freshness decision from depending on it`);
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -585,6 +650,20 @@ function rulesFor(relFile: string, activeClasses: readonly ProtectedClass[]): Se
     if (matches) for (const rule of entry.rules) rules.add(rule);
   }
   return rules;
+}
+
+/**
+ * The d1 sibling allowance belongs to the `validator/` dir class only. Any other
+ * kernel subdirectory gets the same allowlist as the kernel root.
+ */
+function hasSiblingAllowance(relFile: string, activeClasses: readonly ProtectedClass[]): boolean {
+  return activeClasses.some(
+    (entry) =>
+      entry.kind === "dir" &&
+      entry.rules.includes("d1") &&
+      path.posix.basename(entry.path) === "validator" &&
+      isUnder(relFile, entry.path),
+  );
 }
 
 function resolveRelativeImport(root: string, relFile: string, specifier: string): string | undefined {
