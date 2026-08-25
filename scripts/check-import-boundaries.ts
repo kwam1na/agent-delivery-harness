@@ -591,6 +591,12 @@ function checkTimeBan(source: ts.SourceFile, emit: (rule: SensorRule, node: ts.N
         emit("e-time-ban", node, `reads \`["${RECORDED_AT}"]\` in a decision path; GEN-5 forbids any admissibility or freshness decision from depending on it`);
       }
     }
+    if (ts.isBindingElement(node)) {
+      const member = node.propertyName ?? node.name;
+      if (ts.isIdentifier(member) && member.text === RECORDED_AT) {
+        emit("e-time-ban", node, `destructures \`${RECORDED_AT}\` in a decision path; GEN-5 forbids any admissibility or freshness decision from depending on it`);
+      }
+    }
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(source, visit);

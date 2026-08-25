@@ -851,5 +851,6 @@ source extraction had flattened it:
   bare ellipsis comment inside a JSON block — is rendered as a string-keyed
   member so the block stays parseable; it is illustrative, not normative.
 - In §5.9 the illustrative `"payload"` placeholder — written in the source as a
-  bare ellipsis inside a JSON block — is rendered as the same string-keyed
-  member so the block stays parseable; it is illustrative, not normative.
+  bare ellipsis inside a JSON block — is restored using the same string-keyed
+  convention as §9.2 so the elision stays visible rather than reading as an
+  intentionally empty object; it is illustrative, not normative.

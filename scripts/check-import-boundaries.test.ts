@@ -513,6 +513,22 @@ describe("rule e — GEN-5 time ban", () => {
     );
   });
 
+  it("rejects a destructured `recordedAt` read in a decision path", () => {
+    expectFalsified(
+      "e-time-ban",
+      { "packages/kernel/src/admission.ts": `export const admit = (m: { recordedAt: string }): string => { const { recordedAt } = m; return recordedAt; };\n` },
+      "packages/kernel/src/admission.ts",
+    );
+  });
+
+  it("rejects a renamed destructured `recordedAt` read in a decision path", () => {
+    expectFalsified(
+      "e-time-ban",
+      { "packages/kernel/src/admission.ts": `export const admit = (m: { recordedAt: string }): string => { const { recordedAt: at } = m; return at; };\n` },
+      "packages/kernel/src/admission.ts",
+    );
+  });
+
   it("leaves a bare `recordedAt` parameter in a decision path alone", () => {
     expect(rules(scan())).not.toContain("e-time-ban");
     expect(CLEAN_TREE["packages/action/src/main.ts"]).toContain("recordedAt");
