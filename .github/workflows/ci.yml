@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # `--maxWorkers`-style lever read by vitest.config.ts. GitHub runners have
+  # starved vitest's worker RPC at default concurrency before.
+  DELIVERY_HARNESS_MAX_WORKERS: "2"
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: node-22
+            node: "22"
+            bun: false
+          - name: node-24
+            node: "24"
+            bun: false
+          - name: bun-latest
+            # Node is still installed on this leg: it provides npm for the
+            # install and hosts the toolchain the Bun-native steps compare
+            # against.
+            node: "24"
+            bun: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - if: matrix.bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Import-boundary sensor
+        run: npm run sensor
+
+      # R8: Bun is a supported runtime, never a required one. These two steps
+      # execute repo code with Bun as the actual interpreter. (`vitest` below is
+      # launched by Bun but still forks Node workers, so it does not by itself
+      # prove Bun compatibility — these steps do.)
+      - name: Import-boundary sensor (Bun runtime)
+        if: matrix.bun
+        run: bun scripts/check-import-boundaries.ts
+
+      - name: Conformance kit regenerates byte-identically (Bun runtime)
+        if: matrix.bun
+        run: |
+          out="$(mktemp -d)"
+          bun packages/conformance/src/generate.ts "$out"
+          diff -r packages/conformance/vectors "$out"
+
+      - name: Tests
+        if: ${{ !matrix.bun }}
+        run: npm run test
+
+      - name: Tests (Bun)
+        if: matrix.bun
+        run: bun x vitest run

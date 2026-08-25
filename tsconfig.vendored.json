@@ -1,0 +1,9 @@
+{
+  "//": "Vendored normative input. Typechecked under `strict`, but without the repo's two extra index-signature ratchets: the kit generator is carried verbatim from the artifact that produced the 89 vectors, and editing it would break its provenance.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false,
+    "noPropertyAccessFromIndexSignature": false
+  },
+  "include": ["packages/conformance/src/generate.ts"]
+}
