@@ -102,6 +102,11 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
   { id: "kernel-admission", path: "packages/kernel/src/admission.ts", kind: "file", rules: ["d2", "e"], status: "pending" },
   { id: "kernel-delivery-record", path: "packages/kernel/src/delivery-record.ts", kind: "file", rules: ["d2", "e"], status: "pending" },
   { id: "action-main", path: "packages/action/src/main.ts", kind: "file", rules: ["e"], status: "pending" },
+  // On the d1 kernel-import allowlist below, which means d1-pure modules may
+  // import it: an fs edge acquired here would be an fs edge acquired by every
+  // pure module. Registered as a d1 class so the allowlist cannot become the
+  // hole in the rule it exists to enforce.
+  { id: "kernel-blockers", path: "packages/kernel/src/blockers.ts", kind: "file", rules: ["d1"], status: "present" },
 ];
 
 /**

@@ -9,3 +9,7 @@
  */
 
 export const PACKAGE_NAME = "@delivery-harness/kernel";
+
+// The failure vocabulary: typed blockers, the gate's structural finding-code
+// registry, and the one total renderer.
+export * from "./blockers.ts";
