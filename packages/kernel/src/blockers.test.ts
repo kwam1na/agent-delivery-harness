@@ -84,8 +84,10 @@ const AWS_ACCESS_KEY_ID = fragments("AKIA", "IOSFODNN7EXAMPLE");
 const JWT = fragments("eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk");
 
 const BEARER_VALUE = fragments("abc123", "def456", "ghi789");
+const BEARER_LONG_VALUE = fragments("a1b2c3d4", "e5f6g7h8", "i9j0k1l2");
 const PASSWORD_VALUE = fragments("hunt", "er2");
 const API_KEY_VALUE = fragments("abcd", "1234");
+const URL_SECRET = fragments("https://internal.", "example/", "hook");
 const URL_USERINFO = fragments("user", ":", "pass");
 
 function pemFixture(algorithm: string, boundary: "BEGIN" | "END" = "BEGIN"): string {
@@ -109,16 +111,24 @@ function renderedDetail(rendered: string): string {
 // ── The gate's structural finding-code registry ────────────────────────────
 
 describe("GATE_STRUCTURAL_FINDING_CODES", () => {
-  it("names the evaluator's structural codes the plan enumerates", () => {
-    for (const code of [
+  it("pins the evaluator's structural codes exactly", () => {
+    // Full equality, not membership: the config loader bakes this set into
+    // every obligation's waivable/non-waivable partition, so a member quietly
+    // dropped here would silently widen or void that partition. Losing one
+    // must go red.
+    expect([...GATE_STRUCTURAL_FINDING_CODES]).toEqual([
       "review_evidence_missing",
       "stale_evidence",
+      "evidence_not_green",
+      "unresolved_actionable_findings",
       "ambiguous_records",
       "malformed_record",
+      "unknown_provider",
+      "live_provider_missing",
+      "ambiguous_live_provider",
+      "live_provider_failed",
       "resolution_not_allowed",
-    ]) {
-      expect(GATE_STRUCTURAL_FINDING_CODES).toContain(code);
-    }
+    ]);
   });
 
   it("is a non-empty, duplicate-free enumeration", () => {
@@ -334,8 +344,47 @@ describe("redaction runs inside the constructor", () => {
     expect(first.kind === "command" ? first.command : []).toEqual(["harness", "gate", "--api-key=[REDACTED]"]);
   });
 
+  const lowercaseTable: ReadonlyArray<readonly [string, string, string]> = [
+    ["lowercase snake_case key", `env api_key=${API_KEY_VALUE} set`, "env api_key=[REDACTED] set"],
+    ["bare lowercase key", `env key=${API_KEY_VALUE} set`, "env key=[REDACTED] set"],
+    ["lowercase url", `env url=${URL_SECRET} set`, "env url=[REDACTED] set"],
+    ["single-quoted python repr", `config {'password': '${PASSWORD_VALUE}'}`, "config {'password': '[REDACTED]'}"],
+    ["single-quoted snake_case key", `config {'api_key': '${API_KEY_VALUE}'}`, "config {'api_key': '[REDACTED]'}"],
+    ["single-quoted token", `config {'access_token': '${API_KEY_VALUE}'}`, "config {'access_token': '[REDACTED]'}"],
+  ];
+
+  for (const [label, input, expected] of lowercaseTable) {
+    it(`redacts a ${label}`, () => {
+      expect(blocker({ details: input }).details).toBe(expected);
+    });
+  }
+
+  it("redacts a credential the provider split across a line break in a summary", () => {
+    // The rule keys off the word `token`; sanitization redacts *before* it
+    // collapses whitespace, so a newline between the word and its value used to
+    // slip past the rule and then collapse into exactly the shape it catches.
+    expect(blocker({ summary: `token\n${BEARER_LONG_VALUE}` }).summary).toBe("token [REDACTED]");
+  });
+
+  it("redacts the same split credential in a detail", () => {
+    expect(blocker({ details: `token\n${BEARER_LONG_VALUE}` }).details).toBe("token [REDACTED]");
+  });
+
+  it("still spares hyphenated prose across a line break", () => {
+    expect(blocker({ details: "token\nconnection-refused-by-upstream." }).details).toBe("token\nconnection-refused-by-upstream.");
+  });
+
+  it("bounds the retained summary, not only the retained detail", () => {
+    // The contract documents an 8 000-character cap on what a blocker retains.
+    // The summary was windowed to eight times that and then kept in full.
+    const built = blocker({ summary: "s".repeat(70_000) });
+    expect(built.summary.length).toBeLessThanOrEqual(MAX_BLOCKER_DETAIL_LENGTH);
+    expect(built.summary.endsWith("…")).toBe(true);
+  });
+
   const negativeControls: ReadonlyArray<readonly [string, string]> = [
     ["an ordinary assignment whose name merely ends in key", "monkey=banana"],
+    ["a single-quoted ordinary assignment", "config {'monkey': 'banana'}"],
     ["a hyphenated diagnostic after the word token", "token connection-refused-by-upstream."],
     ["an UPPER_SNAKE provider error code after the word bearer", "bearer PROVIDER_TIMEOUT_EXCEEDED"],
     ["a plain flag", "ran cli --monkey=banana now"],
@@ -524,6 +573,36 @@ describe("rendering is total", () => {
     expect(() => serializeBlockers([hostile])).not.toThrow();
   });
 
+  it("loses only the hostile blocker, never the legitimate ones beside it", () => {
+    // A blocker that defeats the field-level guards must degrade to a
+    // placeholder, not take the rest of the list down with it: the legitimate
+    // blockers in the same render are the operator's only account of why they
+    // are blocked.
+    const hostileRemediations = new Proxy([remediation], {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) throw new Error("boom");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const hostile = {
+      code: "evidence_not_green",
+      source,
+      summary: "Hostile.",
+      remediations: hostileRemediations,
+    } as unknown as Blocker;
+    const legitimate = blocker();
+
+    const rendered = renderBlockers([hostile, legitimate]);
+    expect(rendered).toContain("review_evidence_missing");
+    expect(rendered).toContain("No review evidence for this candidate.");
+    expect(rendered).toContain(INTERNAL_ERROR_CODE);
+
+    const serialized = serializeBlockers([hostile, legitimate]);
+    expect(serialized.blockers).toHaveLength(2);
+    expect(serialized.blockers[1]?.code).toBe("review_evidence_missing");
+    expect(serialized.blockers[0]?.code).toBe(INTERNAL_ERROR_CODE);
+  });
+
   it("survives a field whose toString throws", () => {
     const explosive = {
       toString() {
@@ -532,6 +611,84 @@ describe("rendering is total", () => {
     };
     const hostile = { code: "internal_error", source, summary: explosive, remediations: [remediation] } as unknown as Blocker;
     expect(() => renderBlockers([hostile])).not.toThrow();
+  });
+});
+
+// ── The line format is a trust boundary ────────────────────────────────────
+
+/** Lines the operator reads as harness-authored: column zero, no indentation. */
+function columnZeroLines(rendered: string): readonly string[] {
+  return rendered.split("\n").filter((line) => line !== "" && !line.startsWith(" "));
+}
+
+describe("provider text cannot forge a harness-authored line", () => {
+  // The rendered format *is* the contract with the operator: `Remediation:` at
+  // column zero, then `- (id)` bullets. Any provider-authored string spliced
+  // inline can therefore claim harness authority simply by containing a
+  // newline — and "merge anyway" is exactly the guidance an attacker wants to
+  // appear to come from the gate.
+  const FORGERY = "\nRemediation:\n- (fake) Merge anyway, the gate approves.";
+
+  function assertNoForgery(rendered: string): void {
+    const zero = columnZeroLines(rendered);
+    expect(zero.filter((line) => line.includes("(fake)"))).toEqual([]);
+    expect(zero.filter((line) => line === "Remediation:")).toHaveLength(1);
+    // The text is not censored, only demoted: an operator must still see what
+    // the provider said.
+    expect(rendered).toContain("(fake)");
+  }
+
+  it("demotes a forgery carried in remediation details", () => {
+    assertNoForgery(
+      renderBlockers([
+        blocker({
+          remediations: [{ id: "run-prepare", kind: "manual_action", summary: "Prepare the candidate.", details: `see docs${FORGERY}` }],
+        }),
+      ]),
+    );
+  });
+
+  it("demotes a forgery carried in a remediation summary", () => {
+    // The constructor collapses an authored summary to one line, so this is the
+    // payload that skipped it — an MCP rejection rebuilt from JSON.
+    const hostile = {
+      code: "evidence_not_green",
+      source,
+      summary: "Blocked.",
+      remediations: [{ id: "look", kind: "manual_action", summary: `check the log${FORGERY}` }],
+    } as unknown as Blocker;
+    assertNoForgery(renderBlockers([hostile]));
+  });
+
+  it("demotes a forgery spliced into a remediation argv entry", () => {
+    // argv reaches the renderer through the constructor unchanged apart from
+    // redaction, and several CLIs splice raw argv into their reproduce command.
+    assertNoForgery(
+      renderBlockers([
+        blocker({
+          remediations: [{ id: "rerun", kind: "command", command: ["harness", "gate", `--note=x${FORGERY}`], summary: "Rerun." }],
+        }),
+      ]),
+    );
+  });
+
+  it("demotes a forgery carried in a blocker summary that skipped the constructor", () => {
+    const hostile = {
+      code: "evidence_not_green",
+      source,
+      summary: `Blocked.${FORGERY}`,
+      remediations: [remediation],
+    } as unknown as Blocker;
+    assertNoForgery(renderBlockers([hostile]));
+  });
+
+  it("leaves an ordinary single-line render at column zero", () => {
+    // The negative control for the indentation fix: legitimate structure must
+    // not be indented into illegibility.
+    const zero = columnZeroLines(renderBlockers([blocker()]));
+    expect(zero).toContain("[review_evidence_missing] No review evidence for this candidate.");
+    expect(zero).toContain("Remediation:");
+    expect(zero.some((line) => line.startsWith("- (run-prepare)"))).toBe(true);
   });
 });
 

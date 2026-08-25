@@ -269,26 +269,36 @@ function redactSecrets(value: string): string {
       .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED]")
       .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/g, "[REDACTED]")
       .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, "$1[REDACTED]")
-      .replace(/\b(bearer|token)[ \t]+([A-Za-z0-9._~+/-]{16,}=*)/gi, (match, label: string, candidate: string) =>
+      // The separator admits line breaks, not just spaces. Sanitization redacts
+      // *before* it collapses whitespace, so `token\n<credential>` would
+      // otherwise slip past this rule and then collapse into exactly the shape
+      // the rule exists to catch.
+      .replace(/\b(bearer|token)[ \t\r\n]+([A-Za-z0-9._~+/-]{16,}=*)/gi, (match, label: string, candidate: string) =>
         // Hyphenated prose ("token connection-refused-by-upstream.") or an
         // UPPER_SNAKE provider error code: both are diagnostics an operator
         // needs, and neither is a credential shape.
         /^[A-Za-z]+(?:-[A-Za-z]+)+[.,;:!?]?$|^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+[.,;:!?]?$/.test(candidate) ? match : `${label} [REDACTED]`,
       )
       // Credential words, standing alone or prefixed, assigned with = or :.
+      // The quote is `["']?` on both sides so a Python or Ruby repr
+      // (`{'password': 'x'}`) redacts like a JSON one, and `'` is excluded from
+      // the value run so the closing quote survives instead of being eaten.
       .replace(
-        /((?:^|[\s"'`(\[{,?&;])-{0,2}(?:[A-Za-z0-9]+[_-])*(?:TOKEN|SECRET|PASSWORD)"?\s*[:=]\s*"?)(?!\[REDACTED)[^\s",}\])]+/gi,
+        /((?:^|[\s"'`(\[{,?&;])-{0,2}(?:[A-Za-z0-9]+[_-])*(?:TOKEN|SECRET|PASSWORD)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/gi,
         "$1[REDACTED]",
       )
       // camelCase config dumps: `apiKey=`, `accessToken=`. Case-sensitive on the
       // capital, so `monkey=` cannot match on the Key suffix.
       .replace(
-        /((?:^|[\s"'`(\[{,?&;])[A-Za-z][A-Za-z0-9]*(?:Token|Secret|Password|Key)"?\s*[:=]\s*"?)(?!\[REDACTED)[^\s",}\])]+/g,
+        /((?:^|[\s"'`(\[{,?&;])[A-Za-z][A-Za-z0-9]*(?:Token|Secret|Password|Key)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/g,
         "$1[REDACTED]",
       )
-      // Ordinary words as an UPPERCASE env-style name.
+      // Ordinary words as an env-style name. Case-insensitive, so the
+      // lowercase `api_key=` and `url=` a config dump actually prints redact
+      // alongside `API_KEY=`. `monkey=banana` is still safe: the word has to
+      // sit at a separator boundary, and `key` inside `monkey` does not.
       .replace(
-        /((?:^|[\s"'`(\[{,?&;])(?:[A-Z0-9]+[_-])*(?:KEY|URL)"?\s*[:=]\s*"?)(?!\[REDACTED)[^\s",}\])]+/g,
+        /((?:^|[\s"'`(\[{,?&;])(?:[A-Za-z0-9]+[_-])*(?:KEY|URL)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/gi,
         "$1[REDACTED]",
       )
       // Or as a dashed flag, where a separator has to precede the word so
@@ -378,7 +388,9 @@ function sanitizedLine(value: unknown, label: string): string {
   const raw = requireString(value, label);
   const sanitized = redactSecrets(windowed(raw, MAX_BLOCKER_DETAIL_LENGTH)).replace(/\s+/g, " ").trim();
   if (sanitized === "") throw new Error(`${label} must be non-empty.`);
-  return sanitized;
+  // Bounded like a detail. The cap is documented as what a blocker retains, and
+  // a summary is no less able to arrive multi-megabyte from a provider.
+  return bounded(sanitized, MAX_BLOCKER_DETAIL_LENGTH);
 }
 
 /**
@@ -634,6 +646,35 @@ interface DisplayBlocker {
   readonly remediations: readonly DisplayRemediation[];
 }
 
+/**
+ * The placeholder a blocker degrades to when it defeats the field-level guards
+ * entirely — a proxy that throws on index access, say, which `safeGet` cannot
+ * intercept because the throw happens during iteration rather than on a
+ * property read.
+ */
+const UNRENDERABLE_BLOCKER: DisplayBlocker = {
+  code: INTERNAL_ERROR_CODE,
+  sourceKind: UNAVAILABLE,
+  sourceId: UNAVAILABLE,
+  summary: "A blocker could not be rendered; the other blockers in this result are unaffected.",
+  details: null,
+  remediations: [],
+};
+
+/**
+ * One hostile blocker must cost exactly one blocker. Catching per entry rather
+ * than around the whole loop is the difference between an operator losing a
+ * line and an operator losing the entire account of why they are blocked —
+ * and a payload that can silence every *other* blocker is a way past the gate.
+ */
+function toDisplaySafe(blocker: unknown, maxDetailLength: number): DisplayBlocker | undefined {
+  try {
+    return toDisplay(blocker, maxDetailLength);
+  } catch {
+    return UNRENDERABLE_BLOCKER;
+  }
+}
+
 function toDisplay(blocker: unknown, maxDetailLength: number): DisplayBlocker | undefined {
   if (blocker === null || typeof blocker !== "object") return undefined;
   const source = safeGet(blocker, "source");
@@ -686,10 +727,21 @@ function uniqueRemediations(blockers: readonly DisplayBlocker[]): readonly Displ
   return out;
 }
 
+/**
+ * The rendered format is itself a contract with the operator: `Remediation:` at
+ * column zero, then `- (id)` bullets. Every field spliced into a bullet is
+ * provider-authored, and each of them can still carry a newline at this point —
+ * details and argv keep theirs through sanitization by design, and a payload
+ * that skipped the constructor never had its summary collapsed. Left inline, a
+ * newline lets provider text start its own column-zero line and claim harness
+ * authority ("Remediation: - (fake) Merge anyway"). Indenting the whole bullet
+ * demotes any such continuation without censoring it: the operator still reads
+ * what the provider said, one indent level below the line that vouches for it.
+ */
 function remediationInstruction(remediation: DisplayRemediation): string {
   const command = remediation.command === null ? "" : ` Command: ${formatCommand(remediation.command)}`;
   const details = remediation.details === null || remediation.details === "" ? "" : ` ${remediation.details}`;
-  return `- (${remediation.id}) ${remediation.summary}${command}${details}`;
+  return `- (${remediation.id}) ${remediation.summary}${command}${details}`.replaceAll("\n", "\n    ");
 }
 
 /**
@@ -703,7 +755,7 @@ export function renderBlockers(blockers: readonly Blocker[], options: RenderOpti
     const maxOutputLength = options.maxOutputLength ?? 12_000;
     const display: DisplayBlocker[] = [];
     for (const blocker of blockers as readonly unknown[]) {
-      const entry = toDisplay(blocker, maxDetailLength);
+      const entry = toDisplaySafe(blocker, maxDetailLength);
       if (entry !== undefined) display.push(entry);
     }
     if (display.length === 0) return "";
@@ -720,7 +772,9 @@ export function renderBlockers(blockers: readonly Blocker[], options: RenderOpti
     const body = bounded(
       display
         .flatMap((blocker) => [
-          `[${blocker.code}] ${blocker.summary}`,
+          // Indented for the same reason as the remediation bullet: a summary
+          // that skipped the constructor keeps its newlines.
+          `[${blocker.code}] ${blocker.summary}`.replaceAll("\n", "\n    "),
           `  Source: ${blocker.sourceKind}:${blocker.sourceId}`,
           ...(blocker.details === null || blocker.details === "" ? [] : [`  Details: ${blocker.details.replaceAll("\n", "\n    ")}`]),
         ])
@@ -746,7 +800,7 @@ export function serializeBlockers(blockers: readonly Blocker[]): SerializedBlock
   try {
     if (Array.isArray(blockers)) {
       for (const blocker of blockers as readonly unknown[]) {
-        const entry = toDisplay(blocker, MAX_BLOCKER_DETAIL_LENGTH);
+        const entry = toDisplaySafe(blocker, MAX_BLOCKER_DETAIL_LENGTH);
         if (entry === undefined) continue;
         out.push({
           code: entry.code,
