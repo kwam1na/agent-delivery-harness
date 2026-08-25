@@ -282,23 +282,39 @@ function redactSecrets(value: string): string {
       // Credential words, standing alone or prefixed, assigned with = or :.
       // The quote is `["']?` on both sides so a Python or Ruby repr
       // (`{'password': 'x'}`) redacts like a JSON one, and `'` is excluded from
-      // the value run so the closing quote survives instead of being eaten.
+      // the value run so the closing quote survives instead of being eaten. The
+      // separator accepts Ruby's `=>` ahead of `=`, because matching the bare
+      // `=` consumed the `>` as the whole value and left the secret standing
+      // right beside a `[REDACTED]` that claimed to have removed it.
       .replace(
-        /((?:^|[\s"'`(\[{,?&;])-{0,2}(?:[A-Za-z0-9]+[_-])*(?:TOKEN|SECRET|PASSWORD)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/gi,
+        /((?:^|[\s"'`(\[{,?&;])-{0,2}(?:[A-Za-z0-9]+[_-])*(?:TOKEN|SECRET|PASSWORD)["']?\s*(?:=>|[:=])\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/gi,
         "$1[REDACTED]",
       )
       // camelCase config dumps: `apiKey=`, `accessToken=`. Case-sensitive on the
       // capital, so `monkey=` cannot match on the Key suffix.
       .replace(
-        /((?:^|[\s"'`(\[{,?&;])[A-Za-z][A-Za-z0-9]*(?:Token|Secret|Password|Key)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/g,
+        /((?:^|[\s"'`(\[{,?&;])[A-Za-z][A-Za-z0-9]*(?:Token|Secret|Password|Key)["']?\s*(?:=>|[:=])\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/g,
         "$1[REDACTED]",
       )
-      // Ordinary words as an env-style name. Case-insensitive, so the
-      // lowercase `api_key=` and `url=` a config dump actually prints redact
-      // alongside `API_KEY=`. `monkey=banana` is still safe: the word has to
-      // sit at a separator boundary, and `key` inside `monkey` does not.
+      // `key` as an env-style name, case-insensitive, so the lowercase
+      // `api_key=` a config dump actually prints redacts alongside `API_KEY=`.
+      // `monkey=banana` is still safe: the word has to sit at a separator
+      // boundary, and `key` inside `monkey` does not.
       .replace(
-        /((?:^|[\s"'`(\[{,?&;])(?:[A-Za-z0-9]+[_-])*(?:KEY|URL)["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/gi,
+        /((?:^|[\s"'`(\[{,?&;])(?:[A-Za-z0-9]+[_-])*KEY["']?\s*(?:=>|[:=])\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/gi,
+        "$1[REDACTED]",
+      )
+      // `url`, deliberately uppercase-only. A lowercase `*_url:` is
+      // overwhelmingly a field name — `html_url`, `checkout_url`, `run_url` are
+      // in every GitHub API payload an operator reads — and redacting those
+      // destroys the one field that says where to look. The credential-bearing
+      // case is not given up: the userinfo rule below turns
+      // `url=https://user:pass@host/path` into `url=https://[REDACTED]@host/path`,
+      // which removes the secret and keeps the diagnostic. That is strictly
+      // better output than blanking the whole value, which is what this rule
+      // did while it was case-insensitive.
+      .replace(
+        /((?:^|[\s"'`(\[{,?&;])(?:[A-Z0-9]+[_-])*URL["']?\s*(?:=>|[:=])\s*["']?)(?!\[REDACTED)[^\s"',}\])]+/g,
         "$1[REDACTED]",
       )
       // Or as a dashed flag, where a separator has to precede the word so
@@ -775,7 +791,7 @@ export function renderBlockers(blockers: readonly Blocker[], options: RenderOpti
           // Indented for the same reason as the remediation bullet: a summary
           // that skipped the constructor keeps its newlines.
           `[${blocker.code}] ${blocker.summary}`.replaceAll("\n", "\n    "),
-          `  Source: ${blocker.sourceKind}:${blocker.sourceId}`,
+          `  Source: ${blocker.sourceKind}:${blocker.sourceId}`.replaceAll("\n", "\n    "),
           ...(blocker.details === null || blocker.details === "" ? [] : [`  Details: ${blocker.details.replaceAll("\n", "\n    ")}`]),
         ])
         .join("\n"),
