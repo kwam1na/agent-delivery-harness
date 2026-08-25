@@ -1,0 +1,21 @@
+{
+  "environmentVersion": 1,
+  "description": "State the validator harness must establish before running a vector. currentCandidate is what the recorder's candidate capture returns at submission; prepared=false simulates a missing/failed preparation. The harness materializes each vector's artifact contents (exact bytes) inside the run root it allocates for provider.runId, and places the manifest at that run root unless the vector overrides manifestLocation.",
+  "currentCandidate": {
+    "vcs": "git",
+    "treeSha": "3dd16b56e3035a4c9f3d591f55edde08a4107990",
+    "headSha": "31740476c0227fc5c77b00c37aff24d03d692e47",
+    "deliverable": {
+      "digest": "c63b4981ab1c11a6e19a0225d596ecd59a399e2fdf06cffbb8da69bace6b9db9",
+      "identity": "deliverable-tree/v1"
+    },
+    "base": {
+      "ref": "origin/main",
+      "tipSha": "8248f1bc1cf32509843ef77387841c8ea06245cb",
+      "mergeBaseSha": "892135fcf4acee18bebcefd8398192fd0faf1293"
+    },
+    "workspaceId": "w-0dcf2d98505da17d"
+  },
+  "workspaceId": "w-0dcf2d98505da17d",
+  "prepared": true
+}

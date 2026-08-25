@@ -1,0 +1,1250 @@
+{
+  "kit": "delivery-evidence-conformance/1",
+  "spec": "delivery-evidence/1",
+  "payloadSpecs": [
+    "review.green/1"
+  ],
+  "counts": {
+    "total": 89,
+    "accept": 8,
+    "reject": 81
+  },
+  "vectors": [
+    {
+      "id": "a-minimal-green",
+      "file": "vectors/accept/a-minimal-green.json",
+      "title": "Minimal green manifest with one reviewer",
+      "rules": [
+        "GEN-2",
+        "ENV-9",
+        "RG-1"
+      ],
+      "expect": {
+        "result": "accepted"
+      }
+    },
+    {
+      "id": "a-three-reviewers",
+      "file": "vectors/accept/a-three-reviewers.json",
+      "title": "Green manifest with a three-reviewer set",
+      "rules": [
+        "RG-2",
+        "RG-3",
+        "RG-4"
+      ],
+      "expect": {
+        "result": "accepted"
+      }
+    },
+    {
+      "id": "a-completed-order-differs",
+      "file": "vectors/accept/a-completed-order-differs.json",
+      "title": "completed lists the same reviewers in a different order",
+      "rules": [
+        "RG-3"
+      ],
+      "expect": {
+        "result": "accepted",
+        "notes": "Set equality, not sequence equality."
+      }
+    },
+    {
+      "id": "a-deferred-expansion",
+      "file": "vectors/accept/a-deferred-expansion.json",
+      "title": "Deferred P2 expansion finding with a tracker id and matching telemetry",
+      "rules": [
+        "RG-7",
+        "RG-8"
+      ],
+      "expect": {
+        "result": "accepted"
+      }
+    },
+    {
+      "id": "a-resolved-and-advisory",
+      "file": "vectors/accept/a-resolved-and-advisory.json",
+      "title": "Resolved P1 and advisory non-actionable finding",
+      "rules": [
+        "RG-5",
+        "RG-6"
+      ],
+      "expect": {
+        "result": "accepted"
+      }
+    },
+    {
+      "id": "a-cost-tokens",
+      "file": "vectors/accept/a-cost-tokens.json",
+      "title": "Self-reported token cost with per-reviewer breakdown summing below total",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "accepted"
+      }
+    },
+    {
+      "id": "a-cost-fractional",
+      "file": "vectors/accept/a-cost-fractional.json",
+      "title": "Fractional cost units from a platform's own metering",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "accepted"
+      }
+    },
+    {
+      "id": "a-idempotent-resubmission",
+      "file": "vectors/accept/a-idempotent-resubmission.json",
+      "title": "Identical resubmission is an idempotent success with the same record ids",
+      "rules": [
+        "SUB-4"
+      ],
+      "expect": {
+        "result": "accepted",
+        "notes": "Submit twice; both succeed and record ids are identical across submissions."
+      }
+    },
+    {
+      "id": "gen-1-unknown-envelope-member",
+      "file": "vectors/reject/gen-1-unknown-envelope-member.json",
+      "title": "Unknown member at the envelope root",
+      "rules": [
+        "GEN-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unknown_member"
+        ]
+      }
+    },
+    {
+      "id": "gen-1-legacy-count-field",
+      "file": "vectors/reject/gen-1-legacy-count-field.json",
+      "title": "Legacy summary-count field from the pre-spec contract",
+      "rules": [
+        "GEN-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unknown_member"
+        ]
+      }
+    },
+    {
+      "id": "gen-2-unsupported-spec",
+      "file": "vectors/reject/gen-2-unsupported-spec.json",
+      "title": "Unsupported envelope spec version",
+      "rules": [
+        "GEN-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unsupported_envelope_spec"
+        ]
+      }
+    },
+    {
+      "id": "env-1-unregistered-provider",
+      "file": "vectors/reject/env-1-unregistered-provider.json",
+      "title": "Provider not registered for the claimed obligation",
+      "rules": [
+        "ENV-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unregistered_provider"
+        ]
+      }
+    },
+    {
+      "id": "env-2-run-id-1",
+      "file": "vectors/reject/env-2-run-id-1.json",
+      "title": "Unsafe or non-single-component run id \"../run-a\"",
+      "rules": [
+        "ENV-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_run_id"
+        ]
+      }
+    },
+    {
+      "id": "env-2-run-id-2",
+      "file": "vectors/reject/env-2-run-id-2.json",
+      "title": "Unsafe or non-single-component run id \"nested/run-a\"",
+      "rules": [
+        "ENV-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_run_id"
+        ]
+      }
+    },
+    {
+      "id": "env-2-run-id-3",
+      "file": "vectors/reject/env-2-run-id-3.json",
+      "title": "Unsafe or non-single-component run id \"nested\\\\run-a\"",
+      "rules": [
+        "ENV-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_run_id"
+        ]
+      }
+    },
+    {
+      "id": "env-2-run-id-4",
+      "file": "vectors/reject/env-2-run-id-4.json",
+      "title": "Unsafe or non-single-component run id \".\"",
+      "rules": [
+        "ENV-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_run_id"
+        ]
+      }
+    },
+    {
+      "id": "env-2-run-id-5",
+      "file": "vectors/reject/env-2-run-id-5.json",
+      "title": "Unsafe or non-single-component run id \"..\"",
+      "rules": [
+        "ENV-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_run_id"
+        ]
+      }
+    },
+    {
+      "id": "env-4-unsupported-vcs",
+      "file": "vectors/reject/env-4-unsupported-vcs.json",
+      "title": "Non-git vcs value",
+      "rules": [
+        "ENV-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unsupported_vcs"
+        ]
+      }
+    },
+    {
+      "id": "env-5-malformed-object-id",
+      "file": "vectors/reject/env-5-malformed-object-id.json",
+      "title": "treeSha that is not a 40-hex git object id",
+      "rules": [
+        "ENV-5"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_object_id"
+        ]
+      }
+    },
+    {
+      "id": "env-6-unknown-identity-version",
+      "file": "vectors/reject/env-6-unknown-identity-version.json",
+      "title": "Unknown deliverable identity version fails closed",
+      "rules": [
+        "ENV-6"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unsupported_identity_version"
+        ]
+      }
+    },
+    {
+      "id": "env-6-missing-identity",
+      "file": "vectors/reject/env-6-missing-identity.json",
+      "title": "Candidate missing the deliverable identity block",
+      "rules": [
+        "ENV-6",
+        "GEN-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "malformed_field"
+        ]
+      }
+    },
+    {
+      "id": "env-8-repository-required",
+      "file": "vectors/reject/env-8-repository-required.json",
+      "title": "provider-signed attestation without a repository identifier",
+      "rules": [
+        "ENV-8",
+        "ENV-13"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "repository_required",
+          "unsupported_attestation"
+        ]
+      }
+    },
+    {
+      "id": "env-9-final-pass-mismatch",
+      "file": "vectors/reject/env-9-final-pass-mismatch.json",
+      "title": "runHistory's final entry names an earlier pass",
+      "rules": [
+        "ENV-9"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "run_history_final_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "env-9-final-tree-mismatch",
+      "file": "vectors/reject/env-9-final-tree-mismatch.json",
+      "title": "runHistory's final entry names an earlier tree",
+      "rules": [
+        "ENV-9"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "run_history_final_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "env-9-empty-run-history",
+      "file": "vectors/reject/env-9-empty-run-history.json",
+      "title": "Empty runHistory",
+      "rules": [
+        "ENV-9",
+        "RG-9"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "run_history_final_mismatch",
+          "iteration_count_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "env-10-artifact-traversal",
+      "file": "vectors/reject/env-10-artifact-traversal.json",
+      "title": "Artifact path traversing outside the run root",
+      "rules": [
+        "ENV-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "artifact_path_invalid"
+        ]
+      }
+    },
+    {
+      "id": "env-10-artifact-duplicate",
+      "file": "vectors/reject/env-10-artifact-duplicate.json",
+      "title": "Duplicate artifact path entries",
+      "rules": [
+        "ENV-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "artifact_path_duplicate"
+        ]
+      }
+    },
+    {
+      "id": "env-10-artifact-missing-file",
+      "file": "vectors/reject/env-10-artifact-missing-file.json",
+      "title": "Artifact entry whose file does not exist in the run root",
+      "rules": [
+        "ENV-10",
+        "ENV-11"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "artifact_digest_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "env-11-artifact-digest-mismatch",
+      "file": "vectors/reject/env-11-artifact-digest-mismatch.json",
+      "title": "Artifact digest that does not match the file bytes",
+      "rules": [
+        "ENV-11"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "artifact_digest_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "env-12-unknown-attestation-level",
+      "file": "vectors/reject/env-12-unknown-attestation-level.json",
+      "title": "Unknown attestation level",
+      "rules": [
+        "ENV-12"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unsupported_attestation"
+        ]
+      }
+    },
+    {
+      "id": "env-13-nonempty-signatures",
+      "file": "vectors/reject/env-13-nonempty-signatures.json",
+      "title": "Non-empty signatures array before a signing profile exists",
+      "rules": [
+        "ENV-13"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unsupported_attestation"
+        ]
+      }
+    },
+    {
+      "id": "env-14-no-claims",
+      "file": "vectors/reject/env-14-no-claims.json",
+      "title": "Empty claims array",
+      "rules": [
+        "ENV-14"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "no_claims"
+        ]
+      }
+    },
+    {
+      "id": "env-14-duplicate-claim",
+      "file": "vectors/reject/env-14-duplicate-claim.json",
+      "title": "Two claims for the same obligation",
+      "rules": [
+        "ENV-14"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "duplicate_claim"
+        ]
+      }
+    },
+    {
+      "id": "env-14-unconfigured-obligation",
+      "file": "vectors/reject/env-14-unconfigured-obligation.json",
+      "title": "Claim for an obligation the repository has not configured",
+      "rules": [
+        "ENV-14"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "obligation_not_configured"
+        ]
+      }
+    },
+    {
+      "id": "env-14-unsupported-payload-spec",
+      "file": "vectors/reject/env-14-unsupported-payload-spec.json",
+      "title": "Payload spec version the repository does not accept",
+      "rules": [
+        "ENV-14"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "unsupported_payload_spec"
+        ]
+      }
+    },
+    {
+      "id": "sub-1-deliverable-changed",
+      "file": "vectors/reject/sub-1-deliverable-changed.json",
+      "title": "Current candidate no longer matches: deliverable changed after review",
+      "rules": [
+        "SUB-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "candidate_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "sub-1-raw-tree-changed",
+      "file": "vectors/reject/sub-1-raw-tree-changed.json",
+      "title": "Current candidate no longer matches: raw tree changed after review",
+      "rules": [
+        "SUB-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "candidate_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "sub-1-base-tip-moved",
+      "file": "vectors/reject/sub-1-base-tip-moved.json",
+      "title": "Current candidate no longer matches: base tip changed after review",
+      "rules": [
+        "SUB-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "candidate_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "sub-1-merge-base-moved",
+      "file": "vectors/reject/sub-1-merge-base-moved.json",
+      "title": "Current candidate no longer matches: merge base changed after review",
+      "rules": [
+        "SUB-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "candidate_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "sub-2-unprepared",
+      "file": "vectors/reject/sub-2-unprepared.json",
+      "title": "Submission without a current preparation (dirty or unprepared tree)",
+      "rules": [
+        "SUB-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "candidate_unprepared"
+        ]
+      }
+    },
+    {
+      "id": "sub-3-manifest-outside-run-root",
+      "file": "vectors/reject/sub-3-manifest-outside-run-root.json",
+      "title": "Manifest copied outside the recorder-allocated run root",
+      "rules": [
+        "SUB-3"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "manifest_outside_run_root"
+        ]
+      }
+    },
+    {
+      "id": "sub-4-record-conflict",
+      "file": "vectors/reject/sub-4-record-conflict.json",
+      "title": "Resubmission with identical record identity but different content",
+      "rules": [
+        "SUB-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "record_conflict"
+        ]
+      }
+    },
+    {
+      "id": "rg-1-verdict-not-green",
+      "file": "vectors/reject/rg-1-verdict-not-green.json",
+      "title": "Non-green verdict",
+      "rules": [
+        "RG-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "verdict_not_green"
+        ]
+      }
+    },
+    {
+      "id": "rg-1-not-finalized",
+      "file": "vectors/reject/rg-1-not-finalized.json",
+      "title": "Unfinalized manifest",
+      "rules": [
+        "RG-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "not_finalized"
+        ]
+      }
+    },
+    {
+      "id": "rg-1-edited-after-final-pass",
+      "file": "vectors/reject/rg-1-edited-after-final-pass.json",
+      "title": "Post-final-pass edits admitted by the provider",
+      "rules": [
+        "RG-1"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "edited_after_final_pass"
+        ]
+      }
+    },
+    {
+      "id": "rg-2-duplicate-selected",
+      "file": "vectors/reject/rg-2-duplicate-selected.json",
+      "title": "Duplicate reviewer in selected",
+      "rules": [
+        "RG-2"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "reviewer_set_invalid"
+        ]
+      }
+    },
+    {
+      "id": "rg-3-completed-missing",
+      "file": "vectors/reject/rg-3-completed-missing.json",
+      "title": "Selected reviewer missing from completed",
+      "rules": [
+        "RG-3"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "reviewer_set_incomplete"
+        ]
+      }
+    },
+    {
+      "id": "rg-3-completed-unrelated",
+      "file": "vectors/reject/rg-3-completed-unrelated.json",
+      "title": "Completed reviewer never selected",
+      "rules": [
+        "RG-3"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "reviewer_set_incomplete"
+        ]
+      }
+    },
+    {
+      "id": "rg-3-failed-reviewer",
+      "file": "vectors/reject/rg-3-failed-reviewer.json",
+      "title": "A failed reviewer in a green manifest",
+      "rules": [
+        "RG-3"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "reviewer_set_incomplete"
+        ]
+      }
+    },
+    {
+      "id": "rg-3-timed-out-reviewer",
+      "file": "vectors/reject/rg-3-timed-out-reviewer.json",
+      "title": "A timed-out reviewer in a green manifest",
+      "rules": [
+        "RG-3"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "reviewer_set_incomplete"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-missing",
+      "file": "vectors/reject/rg-4-approval-missing.json",
+      "title": "Selected reviewer with no reviewer-approval artifact",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_missing"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-extra",
+      "file": "vectors/reject/rg-4-approval-extra.json",
+      "title": "More reviewer-approval artifacts than selected reviewers",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-wrong-run",
+      "file": "vectors/reject/rg-4-approval-wrong-run.json",
+      "title": "Reviewer approval stamp with wrong run",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-wrong-pass",
+      "file": "vectors/reject/rg-4-approval-wrong-pass.json",
+      "title": "Reviewer approval stamp with wrong pass",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-wrong-workspace",
+      "file": "vectors/reject/rg-4-approval-wrong-workspace.json",
+      "title": "Reviewer approval stamp with wrong workspace",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-wrong-candidate",
+      "file": "vectors/reject/rg-4-approval-wrong-candidate.json",
+      "title": "Reviewer approval stamp with wrong candidate",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-wrong-reviewer",
+      "file": "vectors/reject/rg-4-approval-wrong-reviewer.json",
+      "title": "Reviewer approval stamp with wrong reviewer",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-not-approved",
+      "file": "vectors/reject/rg-4-approval-not-approved.json",
+      "title": "Reviewer approval stamp with not approved",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-wrong-provider",
+      "file": "vectors/reject/rg-4-approval-wrong-provider.json",
+      "title": "Reviewer approval stamp with wrong provider",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-4-approval-malformed",
+      "file": "vectors/reject/rg-4-approval-malformed.json",
+      "title": "Reviewer approval artifact that is not JSON",
+      "rules": [
+        "RG-4"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "approval_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-5-unknown-severity",
+      "file": "vectors/reject/rg-5-unknown-severity.json",
+      "title": "Finding with unknown severity",
+      "rules": [
+        "RG-5"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "finding_invalid"
+        ]
+      }
+    },
+    {
+      "id": "rg-5-unknown-scope",
+      "file": "vectors/reject/rg-5-unknown-scope.json",
+      "title": "Finding with unknown scope",
+      "rules": [
+        "RG-5"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "finding_invalid"
+        ]
+      }
+    },
+    {
+      "id": "rg-5-unknown-disposition",
+      "file": "vectors/reject/rg-5-unknown-disposition.json",
+      "title": "Finding with unknown disposition",
+      "rules": [
+        "RG-5"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "finding_invalid"
+        ]
+      }
+    },
+    {
+      "id": "rg-5-duplicate-finding-id",
+      "file": "vectors/reject/rg-5-duplicate-finding-id.json",
+      "title": "Two findings sharing an id",
+      "rules": [
+        "RG-5"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "finding_invalid"
+        ]
+      }
+    },
+    {
+      "id": "rg-6-blocking-finding",
+      "file": "vectors/reject/rg-6-blocking-finding.json",
+      "title": "A blocking finding in a green manifest",
+      "rules": [
+        "RG-6"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "blocking_finding_present"
+        ]
+      }
+    },
+    {
+      "id": "rg-6-actionable-unresolved",
+      "file": "vectors/reject/rg-6-actionable-unresolved.json",
+      "title": "Actionable finding left unresolved despite green verdict",
+      "rules": [
+        "RG-6"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "actionable_unresolved"
+        ]
+      }
+    },
+    {
+      "id": "rg-6-actionable-ignored",
+      "file": "vectors/reject/rg-6-actionable-ignored.json",
+      "title": "Actionable finding left ignored despite green verdict",
+      "rules": [
+        "RG-6"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "actionable_unresolved"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-p0",
+      "file": "vectors/reject/rg-7-defer-p0.json",
+      "title": "Illegal deferral: p0",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-p1",
+      "file": "vectors/reject/rg-7-defer-p1.json",
+      "title": "Illegal deferral: p1",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-in-contract",
+      "file": "vectors/reject/rg-7-defer-in-contract.json",
+      "title": "Illegal deferral: in contract",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-adjacent",
+      "file": "vectors/reject/rg-7-defer-adjacent.json",
+      "title": "Illegal deferral: adjacent",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-placeholder-issue-id",
+      "file": "vectors/reject/rg-7-defer-placeholder-issue-id.json",
+      "title": "Illegal deferral: placeholder issue id",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-lowercase-issue-id",
+      "file": "vectors/reject/rg-7-defer-lowercase-issue-id.json",
+      "title": "Illegal deferral: lowercase issue id",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-missing-issue-id",
+      "file": "vectors/reject/rg-7-defer-missing-issue-id.json",
+      "title": "Illegal deferral: missing issue id",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-blocking",
+      "file": "vectors/reject/rg-7-defer-blocking.json",
+      "title": "Illegal deferral: blocking",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-defer-non-actionable",
+      "file": "vectors/reject/rg-7-defer-non-actionable.json",
+      "title": "Illegal deferral: non actionable",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-7-issue-id-on-resolved",
+      "file": "vectors/reject/rg-7-issue-id-on-resolved.json",
+      "title": "deferredIssueId present on a non-deferred finding",
+      "rules": [
+        "RG-7"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "illegal_deferral"
+        ]
+      }
+    },
+    {
+      "id": "rg-8-counts-contradict-findings",
+      "file": "vectors/reject/rg-8-counts-contradict-findings.json",
+      "title": "findingCounts claiming zero over findings with real severities",
+      "rules": [
+        "RG-8"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "telemetry_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-8-deferral-count-disagrees",
+      "file": "vectors/reject/rg-8-deferral-count-disagrees.json",
+      "title": "Deferral count disagreeing with the findings",
+      "rules": [
+        "RG-8"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "telemetry_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-8-deferral-ids-disagree",
+      "file": "vectors/reject/rg-8-deferral-ids-disagree.json",
+      "title": "Deferred issue ids disagreeing with the findings",
+      "rules": [
+        "RG-8"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "telemetry_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-9-iteration-count-mismatch",
+      "file": "vectors/reject/rg-9-iteration-count-mismatch.json",
+      "title": "iterationCount disagreeing with runHistory length",
+      "rules": [
+        "RG-9"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "iteration_count_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-missing-unit",
+      "file": "vectors/reject/rg-10-cost-missing-unit.json",
+      "title": "Cost with missing unit",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-empty-unit",
+      "file": "vectors/reject/rg-10-cost-empty-unit.json",
+      "title": "Cost with empty unit",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-negative-total",
+      "file": "vectors/reject/rg-10-cost-negative-total.json",
+      "title": "Cost with negative total",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-null-total",
+      "file": "vectors/reject/rg-10-cost-null-total.json",
+      "title": "Cost with null total",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-by-reviewer-exceeds-total",
+      "file": "vectors/reject/rg-10-cost-by-reviewer-exceeds-total.json",
+      "title": "Cost with by reviewer exceeds total",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-negative-by-reviewer",
+      "file": "vectors/reject/rg-10-cost-negative-by-reviewer.json",
+      "title": "Cost with negative by reviewer",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-empty-reported-by",
+      "file": "vectors/reject/rg-10-cost-empty-reported-by.json",
+      "title": "Cost with empty reported by",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    },
+    {
+      "id": "rg-10-cost-unknown-reviewer-in-breakdown",
+      "file": "vectors/reject/rg-10-cost-unknown-reviewer-in-breakdown.json",
+      "title": "Cost with unknown reviewer in breakdown",
+      "rules": [
+        "RG-10"
+      ],
+      "expect": {
+        "result": "rejected",
+        "codes": [
+          "invalid_cost"
+        ]
+      }
+    }
+  ]
+}

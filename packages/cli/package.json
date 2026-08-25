@@ -1,0 +1,16 @@
+{
+  "name": "@delivery-harness/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Delivery harness CLI: prepare, review-context, submit-evidence, gate, record, verify, check",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ]
+}

@@ -30,3 +30,28 @@ The repo ends v1 gating its own PRs with its own harness.
 
 Node ≥ 22 (engines floor). CI matrix: Node 22, Node 24, Bun. All process
 control uses `node:child_process`; Bun-only APIs are banned by static sensor.
+
+## Working on it
+
+```
+npm ci             # install (npm workspaces, ESM throughout)
+npm run typecheck  # tsc, strict
+npm run sensor     # import-boundary / env / Bun / purity / time sensor
+npm test           # vitest (DELIVERY_HARNESS_MAX_WORKERS caps concurrency)
+npm run check      # all three, in order
+```
+
+Normative inputs are vendored, not referenced: the spec lives at
+[`docs/spec/delivery-evidence-1.md`](docs/spec/delivery-evidence-1.md) and the
+89-vector conformance kit at
+[`packages/conformance/vectors/`](packages/conformance/vectors), regenerated
+byte-identically by `npm run kit:generate` and guarded against drift by a test.
+
+`scripts/check-import-boundaries.ts` is the static sensor: it keeps the kernel
+free of surface-package imports and of `harness.config`, bans import-time
+`process.env` reads and `Bun.*` APIs, holds the validator/evaluator/context
+modules to true purity and the recorder/admission/delivery-record modules to the
+filesystem port, and enforces the spec's GEN-5 clock ban in decision paths. Files
+those rules protect do not all exist yet; each is registered with an explicit
+`pending` status that the sensor checks against the filesystem, so the unit that
+creates one has to promote it in the same change.

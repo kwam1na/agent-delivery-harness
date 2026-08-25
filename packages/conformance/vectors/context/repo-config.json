@@ -1,0 +1,22 @@
+{
+  "configVersion": 1,
+  "gateId": "example.pr-validation",
+  "acceptedEnvelopeSpecs": [
+    "delivery-evidence/1"
+  ],
+  "identityVersions": [
+    "deliverable-tree/v1"
+  ],
+  "obligations": {
+    "review.green": {
+      "acceptedPayloadSpecs": [
+        "review.green/1"
+      ],
+      "providers": [
+        "claude-code.ce-code-review",
+        "example.second-provider"
+      ],
+      "minimumAttestationLevel": "self"
+    }
+  }
+}

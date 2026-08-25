@@ -1,0 +1,114 @@
+{
+  "vectorVersion": 1,
+  "id": "rg-9-iteration-count-mismatch",
+  "title": "iterationCount disagreeing with runHistory length",
+  "rules": [
+    "RG-9"
+  ],
+  "provenance": "delivery-evidence/1 (spec-tightened; Athena accepted a looser form)",
+  "expect": {
+    "result": "rejected",
+    "codes": [
+      "iteration_count_mismatch"
+    ]
+  },
+  "artifacts": {
+    "reviewers/correctness.json": "{\n  \"schemaVersion\": 1,\n  \"reviewerId\": \"correctness\",\n  \"result\": \"approved\",\n  \"provider\": {\n    \"id\": \"claude-code.ce-code-review\",\n    \"runId\": \"r-conformance-01\",\n    \"finalPassId\": \"pass-2\"\n  },\n  \"workspaceId\": \"w-0dcf2d98505da17d\",\n  \"candidate\": {\n    \"vcs\": \"git\",\n    \"treeSha\": \"3dd16b56e3035a4c9f3d591f55edde08a4107990\",\n    \"headSha\": \"31740476c0227fc5c77b00c37aff24d03d692e47\",\n    \"deliverable\": {\n      \"digest\": \"c63b4981ab1c11a6e19a0225d596ecd59a399e2fdf06cffbb8da69bace6b9db9\",\n      \"identity\": \"deliverable-tree/v1\"\n    },\n    \"base\": {\n      \"ref\": \"origin/main\",\n      \"tipSha\": \"8248f1bc1cf32509843ef77387841c8ea06245cb\",\n      \"mergeBaseSha\": \"892135fcf4acee18bebcefd8398192fd0faf1293\"\n    },\n    \"workspaceId\": \"w-0dcf2d98505da17d\"\n  }\n}\n",
+    "reviewers/security.json": "{\n  \"schemaVersion\": 1,\n  \"reviewerId\": \"security\",\n  \"result\": \"approved\",\n  \"provider\": {\n    \"id\": \"claude-code.ce-code-review\",\n    \"runId\": \"r-conformance-01\",\n    \"finalPassId\": \"pass-2\"\n  },\n  \"workspaceId\": \"w-0dcf2d98505da17d\",\n  \"candidate\": {\n    \"vcs\": \"git\",\n    \"treeSha\": \"3dd16b56e3035a4c9f3d591f55edde08a4107990\",\n    \"headSha\": \"31740476c0227fc5c77b00c37aff24d03d692e47\",\n    \"deliverable\": {\n      \"digest\": \"c63b4981ab1c11a6e19a0225d596ecd59a399e2fdf06cffbb8da69bace6b9db9\",\n      \"identity\": \"deliverable-tree/v1\"\n    },\n    \"base\": {\n      \"ref\": \"origin/main\",\n      \"tipSha\": \"8248f1bc1cf32509843ef77387841c8ea06245cb\",\n      \"mergeBaseSha\": \"892135fcf4acee18bebcefd8398192fd0faf1293\"\n    },\n    \"workspaceId\": \"w-0dcf2d98505da17d\"\n  }\n}\n",
+    "reviewers/tests.json": "{\n  \"schemaVersion\": 1,\n  \"reviewerId\": \"tests\",\n  \"result\": \"approved\",\n  \"provider\": {\n    \"id\": \"claude-code.ce-code-review\",\n    \"runId\": \"r-conformance-01\",\n    \"finalPassId\": \"pass-2\"\n  },\n  \"workspaceId\": \"w-0dcf2d98505da17d\",\n  \"candidate\": {\n    \"vcs\": \"git\",\n    \"treeSha\": \"3dd16b56e3035a4c9f3d591f55edde08a4107990\",\n    \"headSha\": \"31740476c0227fc5c77b00c37aff24d03d692e47\",\n    \"deliverable\": {\n      \"digest\": \"c63b4981ab1c11a6e19a0225d596ecd59a399e2fdf06cffbb8da69bace6b9db9\",\n      \"identity\": \"deliverable-tree/v1\"\n    },\n    \"base\": {\n      \"ref\": \"origin/main\",\n      \"tipSha\": \"8248f1bc1cf32509843ef77387841c8ea06245cb\",\n      \"mergeBaseSha\": \"892135fcf4acee18bebcefd8398192fd0faf1293\"\n    },\n    \"workspaceId\": \"w-0dcf2d98505da17d\"\n  }\n}\n"
+  },
+  "manifest": {
+    "spec": "delivery-evidence/1",
+    "provider": {
+      "id": "claude-code.ce-code-review",
+      "version": "1.0.0",
+      "runId": "r-conformance-01",
+      "finalPassId": "pass-2"
+    },
+    "candidate": {
+      "vcs": "git",
+      "treeSha": "3dd16b56e3035a4c9f3d591f55edde08a4107990",
+      "headSha": "31740476c0227fc5c77b00c37aff24d03d692e47",
+      "deliverable": {
+        "digest": "c63b4981ab1c11a6e19a0225d596ecd59a399e2fdf06cffbb8da69bace6b9db9",
+        "identity": "deliverable-tree/v1"
+      },
+      "base": {
+        "ref": "origin/main",
+        "tipSha": "8248f1bc1cf32509843ef77387841c8ea06245cb",
+        "mergeBaseSha": "892135fcf4acee18bebcefd8398192fd0faf1293"
+      },
+      "workspaceId": "w-0dcf2d98505da17d"
+    },
+    "repository": null,
+    "runHistory": [
+      {
+        "preparedTreeSha": "132c7f8efa52032271d4f06fc0cb9e264a05e0e1",
+        "evaluatedInPassId": "pass-1"
+      },
+      {
+        "preparedTreeSha": "3dd16b56e3035a4c9f3d591f55edde08a4107990",
+        "evaluatedInPassId": "pass-2"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "reviewers/correctness.json",
+        "sha256": "128b2a9756c778c36ce29b4390e944c2f05438904d1953a0bed4027f55e1ede8",
+        "role": "reviewer-approval"
+      },
+      {
+        "path": "reviewers/security.json",
+        "sha256": "4933efc56d9e3fe6173f31b703ba7c41cb7490cbd2f5538b5b5ef2a7cc8fa03e",
+        "role": "reviewer-approval"
+      },
+      {
+        "path": "reviewers/tests.json",
+        "sha256": "3ec8364e062dcfc9f631262d9d36afc750f49080483755767345fcc22c1b1e42",
+        "role": "reviewer-approval"
+      }
+    ],
+    "attestation": {
+      "level": "self",
+      "signatures": []
+    },
+    "recordedAt": "2026-08-25T00:00:00Z",
+    "claims": [
+      {
+        "obligation": "review.green",
+        "payloadSpec": "review.green/1",
+        "payload": {
+          "verdict": "green",
+          "finalized": true,
+          "editedAfterFinalPass": false,
+          "reviewers": {
+            "selected": [
+              "correctness",
+              "security",
+              "tests"
+            ],
+            "completed": [
+              "correctness",
+              "security",
+              "tests"
+            ],
+            "failed": [],
+            "timedOut": []
+          },
+          "findings": [],
+          "telemetry": {
+            "iterationCount": 7,
+            "findingCounts": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 0
+            },
+            "deferredExpansionCount": 0,
+            "deferredIssueIds": []
+          }
+        }
+      }
+    ]
+  }
+}
