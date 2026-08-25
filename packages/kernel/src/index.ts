@@ -9,3 +9,22 @@
  */
 
 export const PACKAGE_NAME = "@delivery-harness/kernel";
+
+// RFC 8785 canonical JSON and the digest helpers built on it.
+export {
+  CanonicalizationError,
+  canonicalBytes,
+  canonicalize,
+  compareUtf16CodeUnits,
+  type CanonicalErrorCode,
+} from "./canonical.ts";
+export {
+  DigestError,
+  assertSha256Hex,
+  digestCanonical,
+  digestsEqual,
+  isSha256Hex,
+  manifestDigest,
+  sha256Hex,
+  type DigestErrorCode,
+} from "./digest.ts";
