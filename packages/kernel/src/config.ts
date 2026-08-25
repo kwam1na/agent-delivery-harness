@@ -271,7 +271,9 @@ export const CONFIG_FINDING_CODES = [
   // References
   "config_dangling_provider",
   "config_dangling_ci_policy",
-  "config_dangling_payload_spec",
+  // Not a dangling reference: it fires on an obligation that accepts *no*
+  // payload spec, so nothing can ever bind to it.
+  "config_no_payload_spec",
   // Policy coherence
   "config_waiver_policy_mismatch",
   "config_empty_remediation",
@@ -315,10 +317,12 @@ const REMEDIATION_KINDS = ["command", "manual_action", "code_change", "retry"] a
  * Repo-relative POSIX paths only. A backslash is rejected rather than rewritten:
  * on a case-folding or path-rewriting host, a config that says `docs\reports\`
  * and an identity computation that says `docs/reports/` would disagree silently,
- * and the disagreement would show up as an unexplained digest change.
+ * and the disagreement would show up as an unexplained digest change. A NUL is
+ * rejected for a duller reason: no such path can exist, so one in a config is a
+ * mangled string rather than a location.
  */
 function isRepoRelativePath(value: string): boolean {
-  if (value === "" || value.startsWith("/") || value.includes("\\") || value.includes(" ")) return false;
+  if (value === "" || value.startsWith("/") || value.includes("\\") || value.includes("\u0000")) return false;
   if (value.trim() !== value) return false;
   return value.split("/").every((segment, index, segments) => {
     if (segment === "." || segment === "..") return false;
@@ -355,12 +359,20 @@ class FindingList {
  * always the same shape — edit the config — but naming the exact member is what
  * makes it actionable, so the remediation is built per finding rather than
  * shared.
+ *
+ * The member name is backtick-quoted, and that is load-bearing rather than
+ * decorative. Blocker construction redacts credential-shaped text, and a member
+ * whose name ends in `Key`, `Token`, `Secret` or `Password` followed by `: `
+ * reads exactly like a credential assignment — `ciPolicyEnvKey: is required`
+ * renders as `ciPolicyEnvKey: [REDACTED]`, destroying the diagnostic to protect
+ * a secret that was never there. A quote between the name and the separator
+ * cannot complete that match, so the operator keeps the sentence.
  */
 function toBlocker(finding: ConfigFinding, sourceId: string): Blocker {
   return createBlocker({
     code: finding.code,
     source: { kind: "config", id: sourceId },
-    summary: `${finding.member}: ${finding.detail}`,
+    summary: `\`${finding.member}\`: ${finding.detail}`,
     remediations: [
       {
         id: "correct-harness-config",
@@ -463,7 +475,11 @@ function readNeutralMatchers(findings: FindingList, member: string, value: unkno
       sound = false;
       return;
     }
-    out.push(suffix === undefined ? { prefix } : { prefix, suffix });
+    // An empty suffix constrains nothing, so it is normalized away here rather
+    // than carried. Two consumers read a suffix differently — the subset check
+    // compares it, the set-equality check keys on it — and an author's `""`
+    // meaning "no suffix" has to mean that to both of them.
+    out.push(suffix === undefined || suffix === "" ? { prefix } : { prefix, suffix });
   });
   return sound ? out : undefined;
 }
@@ -590,7 +606,8 @@ function readObligation(findings: FindingList, member: string, value: unknown): 
     if (value[name] === undefined) findings.add("config_missing_member", `${member}.${name}`, "is required");
   }
 
-  const id = readString(findings, `${member}.id`, value["id"], { pattern: ID_PATTERN, describe: "a lowercase obligation id" });
+  const id =
+    value["id"] === undefined ? undefined : readString(findings, `${member}.id`, value["id"], { pattern: ID_PATTERN, describe: "a lowercase obligation id" });
 
   let activation: ObligationActivation | undefined;
   if (isRecord(value["activation"])) {
@@ -709,7 +726,8 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     }
   }
 
-  const gateId = readString(findings, "gateId", input["gateId"], { pattern: ID_PATTERN, describe: "a lowercase gate id" });
+  const gateId =
+    input["gateId"] === undefined ? undefined : readString(findings, "gateId", input["gateId"], { pattern: ID_PATTERN, describe: "a lowercase gate id" });
   const baseRef =
     input["baseRef"] === undefined ? DEFAULT_BASE_REF : readString(findings, "baseRef", input["baseRef"], { pattern: REF_PATTERN, describe: "a git ref" });
   const storageNamespace =
@@ -954,8 +972,13 @@ function subsumes(wide: NeutralMatcher, narrow: NeutralMatcher): boolean {
   return wide.suffix === undefined || narrow.suffix === wide.suffix;
 }
 
+/**
+ * Two matchers are the same matcher when both halves agree. The separator is a
+ * NUL because no path part can contain one, so `{prefix: "a/b", suffix: "c"}`
+ * and `{prefix: "a/b\u0000c"}` cannot collide into one key.
+ */
 function matcherKey(matcher: NeutralMatcher): string {
-  return `${matcher.prefix} ${matcher.suffix ?? ""}`;
+  return `${matcher.prefix}\u0000${matcher.suffix ?? ""}`;
 }
 
 function sameMatcherSet(left: readonly NeutralMatcher[], right: readonly NeutralMatcher[]): boolean {
@@ -977,12 +1000,17 @@ function sameMatcherSet(left: readonly NeutralMatcher[], right: readonly Neutral
  */
 export function emittableFindingCodes(config: HarnessConfig, obligationId: string): readonly string[] {
   const obligation = config.obligations.find((candidate) => candidate.id === obligationId);
+  if (obligation === undefined) {
+    // Answering with the structural set would make a typo look like a policy: a
+    // caller partitioning against it would classify exactly the right number of
+    // codes for entirely the wrong obligation, and nothing downstream could
+    // tell the difference.
+    throw new Error(`No obligation ${JSON.stringify(obligationId)} is declared by this config.`);
+  }
   const codes = new Set<string>(GATE_STRUCTURAL_FINDING_CODES);
-  if (obligation !== undefined) {
-    for (const providerId of obligation.providers) {
-      const provider = config.providers.find((registration) => registration.id === providerId);
-      for (const code of provider?.findingCodes ?? []) codes.add(code);
-    }
+  for (const providerId of obligation.providers) {
+    const provider = config.providers.find((registration) => registration.id === providerId);
+    for (const code of provider?.findingCodes ?? []) codes.add(code);
   }
   return [...codes];
 }
@@ -1028,7 +1056,7 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
     }
     if (obligation.acceptedPayloadSpecs.length === 0) {
       findings.add(
-        "config_dangling_payload_spec",
+        "config_no_payload_spec",
         `${at}.acceptedPayloadSpecs`,
         "accepts no payload spec, so no claim can ever bind to this obligation",
       );

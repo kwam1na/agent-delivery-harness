@@ -22,7 +22,7 @@
  * unenforced and the suite would not notice.
  */
 import { describe, expect, it } from "vitest";
-import { BlockedError, GATE_STRUCTURAL_FINDING_CODES, type Blocker } from "./blockers.ts";
+import { BlockedError, GATE_STRUCTURAL_FINDING_CODES, renderBlockers, type Blocker } from "./blockers.ts";
 import {
   CONFIG_FINDING_CODES,
   DEFAULT_BASE_REF,
@@ -193,7 +193,24 @@ describe("a sound config", () => {
     delete input.gateId;
     delete input.preparationWiringPaths;
     const codes = codesFor(input);
-    expect(codes.filter((code) => code === "config_missing_member")).toHaveLength(2);
+    // Set equality, not a count of the code we expect. An omitted member that
+    // also reported as invalid would tell the author to fix a value they never
+    // wrote, and a filtered assertion would never notice.
+    expect(new Set(codes)).toEqual(new Set(["config_missing_member"]));
+    expect(codes).toHaveLength(2);
+  });
+
+  it("keeps a diagnostic readable through the blocker redaction chain", () => {
+    // `ciPolicyEnvKey` ends in a credential word, and a finding rendered as
+    // `member: detail` is exactly the assignment shape the redaction chain
+    // hunts for. Unquoted, the operator is told a key is [REDACTED] instead of
+    // being told which member is missing.
+    const input = structuredClone(validInput()) as Partial<MutableInput>;
+    delete input.ciPolicyEnvKey;
+    const blockers = blockersFor(input);
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]!.summary).toContain("is required");
+    expect(renderBlockers(blockers)).not.toContain("[REDACTED]");
   });
 
   it("throws a BlockedError carrying every blocker when a config is unsound", () => {
@@ -347,7 +364,7 @@ describe("dangling references", () => {
       withInput((input) => {
         input.obligations[0]!.acceptedPayloadSpecs = [];
       }),
-      "config_dangling_payload_spec",
+      "config_no_payload_spec",
     );
   });
 });
@@ -416,6 +433,14 @@ describe("the finding-code partition", () => {
     expect([...universe].sort()).toEqual([...GATE_STRUCTURAL_FINDING_CODES, PROVIDER_CODE].sort());
   });
 
+  it("refuses to compute a universe for an obligation the config does not declare", () => {
+    // Returning the structural set for an unknown id would make a typo look
+    // like a policy: a caller partitioning against it would classify the right
+    // number of codes for the wrong obligation.
+    const config = define(validInput());
+    expect(() => emittableFindingCodes(config, "not.declared")).toThrow(/not\.declared/);
+  });
+
   it("rejects a code in the universe that neither list classifies", () => {
     expectOnly(
       withInput((input) => {
@@ -479,6 +504,24 @@ describe("the two neutral sets", () => {
       }),
     );
     expect(result.ok ? [] : result.blockers).toEqual([]);
+  });
+
+  it("treats an explicitly empty suffix as no suffix at all", () => {
+    // The subset test and the set-equality test read a suffix differently — one
+    // compares it, the other keys on it — so an empty string that means "no
+    // suffix" to an author must mean that to both, or a matcher that is plainly
+    // a subset reports as if it were not.
+    const result = validateHarnessConfig(
+      withInput((input) => {
+        input.reviewNeutral = [
+          { prefix: "docs/reports/", suffix: "" },
+          { prefix: "docs/solutions/" },
+          { prefix: "telemetry/delivery-runs/" },
+        ];
+        input.recordNeutral = [{ prefix: "docs/reports/" }];
+      }),
+    );
+    expect(result.ok ? [] : result.blockers.map((blocker) => blocker.code)).toEqual([]);
   });
 
   it("rejects a delivery-record path that is review-neutral but not record-neutral", () => {

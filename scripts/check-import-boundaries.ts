@@ -36,7 +36,7 @@
  * or a newly landed unit therefore cannot silently drop coverage. Scan roots
  * must exist and yield at least one source file.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -79,14 +79,23 @@ export interface ProtectedClass {
 /** The informational timestamp (§5.8) no decision path may read. */
 const RECORDED_AT = "recordedAt";
 
-/** Directories walked for the always-on rules (a, b, c). */
+/**
+ * Scanned for the always-on rules (a, b, c). Directories are walked; a single
+ * file is scanned as itself, which is how the two pieces of repository source
+ * that live outside any package `src` are covered — the fixture configs and the
+ * consumer-owned config at the repo root. Source the sensor does not scan is
+ * source the rules do not reach, and a config file is an unusually likely place
+ * for an import-time environment read to be written.
+ */
 export const SCAN_ROOTS: readonly string[] = [
   "packages/kernel/src",
   "packages/conformance/src",
+  "packages/conformance/fixtures",
   "packages/cli/src",
   "packages/mcp/src",
   "packages/action/src",
   "scripts",
+  "harness.config.ts",
 ];
 
 export const KERNEL_SRC = "packages/kernel/src";
@@ -190,7 +199,9 @@ export function runImportBoundarySensor(input: SensorInput): SensorResult {
       });
       continue;
     }
-    const found = collectSourceFiles(abs).map((f) => toPosix(path.relative(root, f)));
+    const found = statSync(abs).isDirectory()
+      ? collectSourceFiles(abs).map((f) => toPosix(path.relative(root, f)))
+      : [toPosix(scanRoot)];
     scanRootFileCounts[scanRoot] = found.length;
     if (found.length === 0) {
       findings.push({

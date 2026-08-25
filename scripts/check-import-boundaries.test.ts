@@ -63,6 +63,11 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
   "packages/mcp/src/index.ts": `export const PACKAGE_NAME = "mcp";\n`,
   "packages/conformance/src/index.ts": `export const PACKAGE_NAME = "conformance";\n`,
   "scripts/placeholder.ts": `export const PLACEHOLDER = true;\n`,
+
+  // Source that lives outside every package's `src`: the fixture configs, and
+  // the consumer-owned config at the repo root.
+  "packages/conformance/fixtures/example-config.ts": `export const exampleConfig = { gateId: "example.gate" };\n`,
+  "harness.config.ts": `export default { gateId: "example.gate" };\n`,
 };
 
 const tempRoots: string[] = [];
@@ -314,6 +319,25 @@ describe("rule c — Bun API", () => {
 
   it("rejects Bun reached through globalThis", () => {
     expectFalsified("c-bun-api", { "packages/mcp/src/index.ts": `export const w = (): unknown => globalThis.Bun.write("x", "y");\n` }, "packages/mcp/src/index.ts");
+  });
+
+  it("rejects Bun in a fixture config", () => {
+    // The fixture configs are real source that no package `src` contains. Left
+    // unscanned they would be the one place in the repo a banned runtime API
+    // could sit unnoticed.
+    expectFalsified(
+      "c-bun-api",
+      { "packages/conformance/fixtures/example-config.ts": `export const gateId = (): unknown => Bun.file("harness.config.ts");\n` },
+      "packages/conformance/fixtures/example-config.ts",
+    );
+  });
+
+  it("rejects Bun in the consumer config at the repo root", () => {
+    expectFalsified(
+      "c-bun-api",
+      { "harness.config.ts": `export default { gateId: String(Bun.env["GATE"]) };\n` },
+      "harness.config.ts",
+    );
   });
 
   it("rejects Bun usage inside a test file too", () => {
