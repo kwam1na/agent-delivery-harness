@@ -25,7 +25,7 @@
  * tampered record hide behind a truncated write.
  */
 import { execFile } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,11 +95,19 @@ const WORKSPACE = "9".repeat(64);
 
 // ── Temp repositories ──────────────────────────────────────────────────────
 
+/**
+ * Deliberately NOT realpathed. macOS hands out `/var` temporary directories
+ * that are really `/private/var`, so every test here addresses its store
+ * through a symlinked spelling — which is exactly the case a store that
+ * digested the path as written would get wrong.
+ */
 function tempDir(label: string): string {
-  // Realpath because macOS hands out `/var` symlinks for `/private/var`, and a
-  // workspace id derived from an unresolved path would differ from the one git
-  // reports for the same directory.
-  return realpathSync(mkdtempSync(path.join(tmpdir(), `dh-${label}-`)));
+  return mkdtempSync(path.join(tmpdir(), `dh-${label}-`));
+}
+
+/** The physical spelling of a path whose leaf may not exist yet. */
+function real(target: string): string {
+  return path.join(realpathSync(path.dirname(target)), path.basename(target));
 }
 
 async function git(cwd: string, ...args: readonly string[]): Promise<string> {
@@ -211,11 +219,12 @@ describe("storage resolution", () => {
     const repo = await tempRepo();
     const { storageRoot, storageDir, workspaceId } = await resolveRecordStorage(repo);
 
-    expect(storageRoot).toBe(path.join(repo, ".git", "delivery-harness"));
+    expect(storageRoot).toBe(path.join(realpathSync(repo), ".git", "delivery-harness"));
     expect(storageDir).toBe(path.join(storageRoot, RECORDS_LEAF));
     // Git-private: the store is inside `.git`, which no working tree tracks.
-    expect(storageDir.startsWith(path.join(repo, ".git") + path.sep)).toBe(true);
+    expect(storageDir.startsWith(path.join(realpathSync(repo), ".git") + path.sep)).toBe(true);
     expect(workspaceId).toBe(sha256Hex(canonicalize(storageRoot)));
+    expect(storageRoot).toBe(real(storageRoot));
   });
 
   it("normalizes a namespace whether or not the config spelled a trailing slash", async () => {
@@ -225,7 +234,7 @@ describe("storage resolution", () => {
 
     expect(withSlash.storageDir).toBe(withoutSlash.storageDir);
     expect(withSlash.workspaceId).toBe(withoutSlash.workspaceId);
-    expect(withSlash.storageDir).toBe(path.join(repo, ".git", "evidence", RECORDS_LEAF));
+    expect(withSlash.storageDir).toBe(path.join(realpathSync(repo), ".git", "evidence", RECORDS_LEAF));
   });
 
   it("derives the workspace id from the namespace root, so every leaf shares one workspace", async () => {
@@ -247,8 +256,8 @@ describe("storage resolution", () => {
     const storageRoot = tempStorageRoot();
     const resolved = await resolveRecordStorage(path.join(storageRoot, "..", "nowhere"), { storageRoot });
 
-    expect(resolved.storageRoot).toBe(storageRoot);
-    expect(resolved.workspaceId).toBe(sha256Hex(canonicalize(storageRoot)));
+    expect(resolved.storageRoot).toBe(real(storageRoot));
+    expect(resolved.workspaceId).toBe(sha256Hex(canonicalize(real(storageRoot))));
   });
 });
 
@@ -538,6 +547,164 @@ describe("discovery", () => {
     expect(found.records).toEqual([]);
     expect(found.quarantined).toHaveLength(1);
     expect(found.quarantined[0]?.path).toBe(published.path);
+  });
+
+  it("redacts a credential planted in a stored record before reporting it", async () => {
+    const storageRoot = tempStorageRoot("redaction");
+    const published = await publishRecord(storageRoot, EVIDENCE, { storageRoot });
+    const token = `ghp_${"A".repeat(30)}`;
+    writeFileSync(published.path, JSON.stringify({ ...published.record, schemaVersion: token }));
+
+    const found = await discoverRecords(storageRoot, { ...selector, storageRoot });
+
+    expect(found.quarantined).toHaveLength(1);
+    expect(found.quarantined[0]?.detail).not.toContain(token);
+    expect(found.quarantined[0]?.detail).toContain("[REDACTED]");
+  });
+
+  it("blocks with a read-path blocker when the store cannot be listed", async () => {
+    if (process.getuid?.() === 0) return; // root ignores the mode bits this asserts on
+    const storageRoot = tempStorageRoot("unlistable");
+    const published = await publishRecord(storageRoot, EVIDENCE, { storageRoot });
+    const dir = path.dirname(published.path);
+    chmodSync(dir, 0o000);
+    try {
+      const code = await captureBlocker(() => discoverRecords(storageRoot, { ...selector, storageRoot }));
+      expect(code).toBe("record_store_unreadable");
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+});
+
+
+
+// ── Namespace containment ──────────────────────────────────────────────────
+
+describe("namespace containment", () => {
+  it("blocks a namespace that traverses back into the working tree", async () => {
+    const repo = await tempRepo("traversal");
+    const code = await captureBlocker(() => resolveRecordStorage(repo, { storageNamespace: "foo/../../bar" }));
+    expect(code).toBe("record_store_unresolved");
+  }, 60_000);
+
+  it("blocks a namespace that escapes the repository entirely", async () => {
+    const repo = await tempRepo("escape");
+    const code = await captureBlocker(() => resolveRecordStorage(repo, { storageNamespace: "a/../../../escape" }));
+    expect(code).toBe("record_store_unresolved");
+  }, 60_000);
+
+  /**
+   * Git roots a handful of names — `objects`, `refs`, `info`, `hooks`, `logs`
+   * — in the common directory rather than the per-worktree one, so a namespace
+   * under any of them resolves identically from every worktree and every
+   * worktree would share one store. The containment check refuses it the moment
+   * a second worktree exists, which is the only moment the privacy claim is
+   * making a promise.
+   */
+  const commonNames = ["objects", "refs", "info", "hooks", "logs"] as const;
+
+  for (const name of commonNames) {
+    it(`blocks the shared-store namespace "${name}/dh" from a linked worktree`, async () => {
+      const repo = await tempRepo(`common-${name}`);
+      const linked = path.join(tempDir(`common-wt-${name}`), "wt");
+      await git(repo, "worktree", "add", "--quiet", "-b", `common-${name}`, linked);
+
+      const code = await captureBlocker(() => resolveRecordStorage(linked, { storageNamespace: `${name}/dh` }));
+      expect(code).toBe("record_store_unresolved");
+    }, 60_000);
+  }
+
+  it("still resolves the default and a nested namespace from both worktrees", async () => {
+    const repo = await tempRepo("nested");
+    const linked = path.join(tempDir("nested-wt"), "wt");
+    await git(repo, "worktree", "add", "--quiet", "-b", "nested-feature", linked);
+
+    for (const dir of [repo, linked]) {
+      const byDefault = await resolveRecordStorage(dir);
+      const nested = await resolveRecordStorage(dir, { storageNamespace: "team/delivery-harness/v1" });
+      expect(byDefault.storageDir.endsWith(path.join("delivery-harness", RECORDS_LEAF))).toBe(true);
+      expect(nested.storageDir.endsWith(path.join("team", "delivery-harness", "v1", RECORDS_LEAF))).toBe(true);
+    }
+  }, 60_000);
+});
+
+// ── Path spelling ──────────────────────────────────────────────────────────
+
+describe("workspace identity is physical, not textual", () => {
+  it("gives one store one id however the caller spelled the path", async () => {
+    const repo = await tempRepo("spelling");
+    const alias = path.join(tempDir("alias"), "repo-link");
+    symlinkSync(repo, alias);
+
+    const direct = await resolveRecordStorage(repo);
+    const viaSymlink = await resolveRecordStorage(alias);
+
+    expect(viaSymlink.workspaceId).toBe(direct.workspaceId);
+    expect(viaSymlink.storageDir).toBe(direct.storageDir);
+  }, 60_000);
+
+  it("lets the two spellings see each other's records", async () => {
+    const repo = await tempRepo("spelling-records");
+    const alias = path.join(tempDir("alias-records"), "repo-link");
+    symlinkSync(repo, alias);
+    const selector = { gateId: EVIDENCE.gateId, obligationId: EVIDENCE.obligationId };
+
+    const published = await publishRecord(alias, EVIDENCE, {});
+    const found = await discoverRecords(repo, selector);
+
+    expect(found.records.map((record) => record.recordId)).toEqual([published.record.recordId]);
+    expect(found.quarantined).toEqual([]);
+    // And a republication through the other spelling is idempotent, not a
+    // second record filed under a second workspace.
+    expect((await publishRecord(repo, EVIDENCE, {})).status).toBe("idempotent");
+  }, 60_000);
+});
+
+// ── Inputs the identity computation itself rejects ─────────────────────────
+
+describe("malformed publish input", () => {
+  const cyclicBinding = (): unknown => {
+    const binding: Record<string, unknown> = { ...BINDING };
+    binding["treeSha"] = binding;
+    return binding;
+  };
+
+  const cases: readonly (readonly [string, () => unknown])[] = [
+    ["a missing candidate binding", () => ({ ...EVIDENCE, candidateBinding: undefined })],
+    ["a missing resolution", () => ({ gateId: EVIDENCE.gateId, obligationId: EVIDENCE.obligationId, candidateBinding: BINDING })],
+    ["an unknown resolution kind", () => ({ ...EVIDENCE, resolution: { kind: "hunch" } })],
+    ["a cyclic candidate binding", () => ({ ...EVIDENCE, candidateBinding: cyclicBinding() })],
+    [
+      "a candidate binding whose toJSON throws",
+      () => ({
+        ...EVIDENCE,
+        candidateBinding: {
+          ...BINDING,
+          toJSON: () => {
+            throw new Error("hostile serializer");
+          },
+        },
+      }),
+    ],
+  ];
+
+  for (const [label, build] of cases) {
+    it(`blocks ${label} as invalid input, never as a raw throw`, async () => {
+      const storageRoot = tempStorageRoot("invalid");
+      const code = await captureBlocker(() =>
+        publishRecord(storageRoot, build() as PublishRecordInput, { storageRoot }),
+      );
+      expect(code).toBe("record_input_invalid");
+    });
+  }
+
+  it("blocks a slot name the filesystem cannot hold", async () => {
+    const storageRoot = tempStorageRoot("long-slot");
+    const code = await captureBlocker(() =>
+      publishRecord(storageRoot, { ...EVIDENCE, gateId: "g".repeat(5_000) }, { storageRoot }),
+    );
+    expect(code).toBe("record_store_unwritable");
   });
 });
 

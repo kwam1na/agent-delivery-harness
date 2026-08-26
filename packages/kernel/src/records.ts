@@ -38,10 +38,10 @@
  */
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { chmod, link, mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, open, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { BlockedError, createBlocker, type Blocker, type Remediation } from "./blockers.ts";
+import { BlockedError, createBlocker, sanitizedDetail, type Blocker, type Remediation } from "./blockers.ts";
 import { digestCanonical } from "./digest.ts";
 import { DEFAULT_STORAGE_NAMESPACE } from "./config.ts";
 import {
@@ -63,15 +63,21 @@ export { RECORD_SCHEMA_VERSION } from "./records.types.ts";
 
 const execFileAsync = promisify(execFile);
 
-/** The leaf this module owns. Receipts (U16) reuse the resolver with their own. */
+/** The leaf this module owns. Preparation receipts reuse the resolver with their own. */
 export const RECORDS_LEAF = "records";
 
 /** Owner-only, on the directory and on every record in it. */
 const DIRECTORY_MODE = 0o700;
 const RECORD_MODE = 0o600;
 
-/** Filesystem errors that mean "you may not write here", not "something broke". */
-const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOSPC", "ENOTDIR"]);
+/**
+ * Filesystem errors that mean "this store will not take the write", not
+ * "something broke". `ENAMETOOLONG` belongs here because the slot name is built
+ * from config-owned ids: an over-long `gateId` is a configuration the operator
+ * can fix, and it must arrive as guidance rather than as a raw throw from
+ * `link()`.
+ */
+const UNWRITABLE_CODES = new Set(["EACCES", "EPERM", "EROFS", "ENOSPC", "ENOTDIR", "ENAMETOOLONG"]);
 
 export type GitRunner = (cwd: string, args: readonly string[]) => Promise<string>;
 
@@ -114,7 +120,12 @@ const RETRY: Remediation = {
 };
 
 function storeBlocker(
-  code: "record_store_unresolved" | "record_store_unwritable" | "record_conflict" | "record_input_invalid",
+  code:
+    | "record_store_unresolved"
+    | "record_store_unwritable"
+    | "record_store_unreadable"
+    | "record_conflict"
+    | "record_input_invalid",
   summary: string,
   details: string,
   remediation: Remediation,
@@ -146,48 +157,119 @@ function normalizeNamespace(namespace: string): string {
   return trimmed === "" ? DEFAULT_STORAGE_NAMESPACE.replace(/\/+$/, "") : trimmed;
 }
 
+/**
+ * The physical spelling of a path whose leaf need not exist yet.
+ *
+ * `workspaceId` is the digest of a directory, so it has to be the digest of a
+ * *directory* and not of one caller's way of writing it. macOS hands out `/var`
+ * temporary paths that are really `/private/var`, and a repository reached
+ * through a symlinked parent is the same repository; without this, one store
+ * would carry two workspace ids and each half would quarantine the other's
+ * records as belonging to a foreign workspace.
+ *
+ * The store directory legitimately does not exist before the first
+ * publication, so the walk resolves the deepest ancestor that does and
+ * re-attaches the rest. Anything other than a missing path is left alone: a
+ * directory that cannot be traversed is not this function's failure to report.
+ */
+async function physicalPath(target: string): Promise<string> {
+  const absolute = path.resolve(target);
+  const trailing: string[] = [];
+  let cursor = absolute;
+  for (;;) {
+    try {
+      return path.join(await realpath(cursor), ...[...trailing].reverse());
+    } catch (error) {
+      const parent = path.dirname(cursor);
+      if (errorCode(error) !== "ENOENT" || parent === cursor) return absolute;
+      trailing.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+/** Strictly inside: a path is not contained in itself. */
+function isInside(child: string, parent: string): boolean {
+  return child !== parent && child.startsWith(parent + path.sep);
+}
+
+function unresolved(details: string): BlockedError {
+  return blocked(
+    storeBlocker(
+      "record_store_unresolved",
+      "The evidence store could not be located inside this worktree's git directory.",
+      details,
+      {
+        id: "correct-storage-namespace",
+        kind: "manual_action",
+        summary:
+          "Run the harness from inside the git repository, and give storageNamespace a plain relative path git does not already own.",
+      },
+    ),
+  );
+}
+
 const defaultGitRunner: GitRunner = async (cwd, args) => {
   const { stdout } = await execFileAsync("git", [...args], { cwd });
   return stdout.trim();
 };
 
+/**
+ * Resolves the namespace root, and refuses anything that is not private to this
+ * worktree.
+ *
+ * `--git-path` is asked for the namespace and `--git-dir` for the directory
+ * git roots this worktree's private paths in, in one invocation, and the result
+ * must land strictly inside that directory. Two different failures are closed
+ * by the one containment check:
+ *
+ *   - TRAVERSAL. `--git-path` does not normalize, so a namespace like
+ *     `foo/../../bar` resolves to a sibling of the git directory — in the main
+ *     worktree, that lands in the working tree itself, which is the one place a
+ *     store must never be: records would become tracked content and writing
+ *     evidence would perturb the identity the evidence is about.
+ *   - SHARED STORES. Git roots a fixed set of names — `objects`, `refs`,
+ *     `info`, `hooks`, `logs` — in the *common* directory rather than the
+ *     per-worktree one. A namespace under any of them therefore resolves
+ *     identically from every worktree of the repository, and worktree privacy
+ *     would be silently void. From a linked worktree the common directory is
+ *     outside `--git-dir`, so the check refuses it.
+ *
+ * In the main worktree those two directories are the same by construction, so
+ * the second case cannot be told apart there by any path comparison. It does
+ * not need to be: a store shared by one worktree is not shared, and the moment
+ * a second worktree exists the resolution fails closed rather than joining it.
+ *
+ * An explicitly injected `storageRoot` skips all of this. It is not a namespace
+ * git was asked to interpret; it is a caller naming a directory outright, and
+ * the caller owns where it points.
+ */
 async function resolveStorageRoot(rootDir: string, options: RecordStorageOptions): Promise<string> {
-  if (options.storageRoot !== undefined) return path.resolve(options.storageRoot);
+  if (options.storageRoot !== undefined) return physicalPath(options.storageRoot);
 
   const namespace = normalizeNamespace(options.storageNamespace ?? DEFAULT_STORAGE_NAMESPACE);
+  const cwd = await physicalPath(rootDir);
   const runGit = options.runGit ?? defaultGitRunner;
   let reported: string;
   try {
-    reported = await runGit(rootDir, ["rev-parse", "--git-path", namespace]);
+    reported = await runGit(cwd, ["rev-parse", "--git-dir", "--git-path", namespace]);
   } catch (error) {
-    throw blocked(
-      storeBlocker(
-        "record_store_unresolved",
-        "The evidence store could not be located: git did not resolve the storage namespace.",
-        `git rev-parse --git-path ${namespace} failed in ${rootDir}: ${describe(error)}`,
-        {
-          id: "run-inside-repository",
-          kind: "manual_action",
-          summary: "Run the harness from inside the git repository that holds the candidate.",
-        },
-      ),
+    throw unresolved(`git rev-parse --git-dir --git-path ${namespace} failed in ${cwd}: ${describe(error)}`);
+  }
+
+  const [gitDirLine, storageLine] = reported.split("\n").map((line) => line.trim());
+  if (gitDirLine === undefined || gitDirLine === "" || storageLine === undefined || storageLine === "") {
+    throw unresolved(`git rev-parse --git-dir --git-path ${namespace} printed no path in ${cwd}`);
+  }
+
+  const gitDir = await physicalPath(path.resolve(cwd, gitDirLine));
+  const storageRoot = await physicalPath(path.resolve(cwd, storageLine));
+  if (!isInside(storageRoot, gitDir)) {
+    throw unresolved(
+      `storageNamespace ${JSON.stringify(namespace)} resolves to ${storageRoot}, which is outside this worktree's git directory ${gitDir}`,
     );
   }
-  if (reported === "") {
-    throw blocked(
-      storeBlocker(
-        "record_store_unresolved",
-        "The evidence store could not be located: git resolved the storage namespace to nothing.",
-        `git rev-parse --git-path ${namespace} printed no path in ${rootDir}`,
-        {
-          id: "run-inside-repository",
-          kind: "manual_action",
-          summary: "Run the harness from inside the git repository that holds the candidate.",
-        },
-      ),
-    );
-  }
-  return path.resolve(rootDir, reported);
+  return storageRoot;
 }
 
 /**
@@ -461,6 +543,33 @@ function unwritable(target: string, error: unknown): BlockedError {
   );
 }
 
+function unreadableStore(target: string, error: unknown): BlockedError {
+  return blocked(
+    storeBlocker(
+      "record_store_unreadable",
+      "The evidence store could not be read.",
+      `${target}: ${describe(error)}`,
+      {
+        id: "restore-store-readability",
+        kind: "manual_action",
+        summary: "Make the evidence store readable by the account running the harness, then re-run.",
+      },
+    ),
+  );
+}
+
+/**
+ * Quarantine diagnostics quote a file the store has just refused to trust, so
+ * they are untrusted bytes on an operator-facing path. They go through the
+ * blocker contract's own redaction chain — at construction, like every other
+ * retained diagnostic — rather than a second one written here. Neutralization
+ * is not applied: that belongs to the renderer, which is the last thing before
+ * a display surface and is not always this process.
+ */
+function quarantineDetail(text: string): string {
+  return sanitizedDetail(text, "Quarantine detail");
+}
+
 function conflict(destination: string, reason: string): BlockedError {
   return blocked(
     storeBlocker(
@@ -474,6 +583,47 @@ function conflict(destination: string, reason: string): BlockedError {
       },
     ),
   );
+}
+
+/**
+ * Derives the identity, builds the record, and proves the store's own reader
+ * would accept it — under one guard, because all three steps consume the same
+ * untrusted input and every one of them can throw on it. Identity derivation
+ * canonicalizes, so a cyclic binding or a hostile `toJSON` fails there; reading
+ * a member off a missing resolution fails during construction; a member that is
+ * merely wrong fails the round trip. Splitting the guard is what let the first
+ * two escape as raw `CanonicalizationError`s and `TypeError`s — bypassing the
+ * constructor's redaction on the way out, and arriving at a surface coded as an
+ * internal error rather than as the bad input it is.
+ *
+ * The round trip is over JSON rather than over the object: the record is
+ * checked in the form it will be *stored* in, so a value that serializes into
+ * something the reader would quarantine is caught here rather than at a gate,
+ * attributed to the wrong layer.
+ */
+function prepareRecord(workspaceId: string, input: PublishRecordInput): EvidenceRecord {
+  try {
+    const record: EvidenceRecord = {
+      schemaVersion: RECORD_SCHEMA_VERSION,
+      recordId: computeRecordId(workspaceId, input),
+      workspaceId,
+      gateId: input.gateId,
+      obligationId: input.obligationId,
+      candidateBinding: input.candidateBinding,
+      resolution: input.resolution,
+    };
+    parseRecord(JSON.parse(JSON.stringify(record)));
+    return record;
+  } catch (error) {
+    throw blocked(
+      storeBlocker(
+        "record_input_invalid",
+        "The record to publish is not a well-formed evidence record.",
+        describe(error),
+        { id: "fix-record-input", kind: "code_change", summary: "Correct the record the recorder is publishing." },
+      ),
+    );
+  }
 }
 
 /**
@@ -492,31 +642,8 @@ export async function publishRecord(
   options: PublishOptions = {},
 ): Promise<PublishedRecord> {
   const { storageDir, workspaceId } = await resolveRecordStorage(rootDir, options);
-  const recordId = computeRecordId(workspaceId, input);
-  const record: EvidenceRecord = {
-    schemaVersion: RECORD_SCHEMA_VERSION,
-    recordId,
-    workspaceId,
-    gateId: input.gateId,
-    obligationId: input.obligationId,
-    candidateBinding: input.candidateBinding,
-    resolution: input.resolution,
-  };
-
-  // A record the store's own reader would quarantine must never be written:
-  // the failure would surface later, at a gate, attributed to the wrong layer.
-  try {
-    parseRecord(JSON.parse(JSON.stringify(record)));
-  } catch (error) {
-    throw blocked(
-      storeBlocker(
-        "record_input_invalid",
-        "The record to publish is not a well-formed evidence record.",
-        describe(error),
-        { id: "fix-record-input", kind: "code_change", summary: "Correct the record the recorder is publishing." },
-      ),
-    );
-  }
+  const record = prepareRecord(workspaceId, input);
+  const recordId = record.recordId;
 
   const destination = path.join(storageDir, recordFileName(record.gateId, record.obligationId, recordId));
   const rendered = renderRecord(record);
@@ -557,6 +684,14 @@ export async function publishRecord(
     await syncPath(storageDir, false);
     return { status: "published", path: destination, record, workspaceId };
   } finally {
+    // Only a publisher that returns cleans up after itself. A process killed
+    // between the fsync and the link leaves its temporary behind — one file per
+    // crash, mode 0600, dot-prefixed so no reader will serve it and no later
+    // publisher will collide with it. That accumulation is accepted, not
+    // overlooked: there is deliberately no reaper, because a reaper cannot tell
+    // an abandoned temporary from one a concurrent publisher is mid-way through
+    // writing, and deleting the second is a data race introduced to tidy up
+    // after the first.
     await rm(temporary, { force: true });
   }
 }
@@ -616,7 +751,7 @@ export async function discoverRecords(rootDir: string, selector: RecordSelector)
     entries = (await readdir(storageDir)).sort();
   } catch (error) {
     if (errorCode(error) === "ENOENT") return { storageDir, workspaceId, records, quarantined, ignored };
-    throw unwritable(storageDir, error);
+    throw unreadableStore(storageDir, error);
   }
 
   const prefix = slotPrefix(selector.gateId, selector.obligationId);
@@ -636,7 +771,7 @@ export async function discoverRecords(rootDir: string, selector: RecordSelector)
     try {
       text = await readFile(filePath, "utf8");
     } catch (error) {
-      quarantined.push({ path: filePath, reason: "unreadable", detail: describe(error) });
+      quarantined.push({ path: filePath, reason: "unreadable", detail: quarantineDetail(describe(error)) });
       continue;
     }
 
@@ -645,7 +780,7 @@ export async function discoverRecords(rootDir: string, selector: RecordSelector)
       record = parseStoredText(text);
     } catch (error) {
       const reason = error instanceof RecordShapeError ? error.reason : "malformed_shape";
-      quarantined.push({ path: filePath, reason, detail: describe(error) });
+      quarantined.push({ path: filePath, reason, detail: quarantineDetail(describe(error)) });
       continue;
     }
 
@@ -662,7 +797,7 @@ export async function discoverRecords(rootDir: string, selector: RecordSelector)
             ? `filename does not carry recordId ${record.recordId}`
             : undefined;
     if (misfiling !== undefined) {
-      quarantined.push({ path: filePath, reason: "identity_mismatch", detail: misfiling });
+      quarantined.push({ path: filePath, reason: "identity_mismatch", detail: quarantineDetail(misfiling) });
       continue;
     }
 
