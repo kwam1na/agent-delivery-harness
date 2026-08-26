@@ -36,8 +36,13 @@
 # Triggers: every pull request that touches release surfaces, so a version or
 # license regression is red before it merges rather than at release time.
 # Published package sources are a release surface too — a newly added import is
-# how an undeclared dependency gets in — so `packages/*/src/**` is on the list;
-# and workflow_dispatch, so the full set can be run on demand against any ref.
+# how an undeclared dependency gets in — so EVERYTHING a manifest's `files`
+# ships is on the list, per package rather than only at the repo root: `src/`,
+# `fixtures/` and `vectors/` for the conformance kit, and each package's own
+# LICENSE and NOTICE. The bare `LICENSE`/`NOTICE` entries match the root alone,
+# so without the `packages/*/` forms, deleting `packages/kernel/NOTICE` would
+# not start the very workflow whose license-coherence pack-shape rule exists to
+# catch it. And workflow_dispatch, to run the full set against any ref.
 
 name: Release checks
 
@@ -48,8 +53,16 @@ on:
       - "package-lock.json"
       - "packages/*/package.json"
       - "packages/*/src/**"
+      # Published source is not only `src/`: the conformance kit's runner
+      # imports `fixtures/repo-config-adapter.ts`, which its `files` ships.
+      - "packages/*/fixtures/**"
+      - "packages/conformance/vectors/**"
       - "LICENSE"
       - "NOTICE"
+      # The per-package copies. `license-coherence` checks the pack shape, and
+      # npm auto-includes a license only from the package's own directory.
+      - "packages/*/LICENSE"
+      - "packages/*/NOTICE"
       # Redundant under `packages/*/src/**` above, kept because the
       # harness-version-lockstep rule is specifically about this file.
       - "packages/kernel/src/preparation.ts"

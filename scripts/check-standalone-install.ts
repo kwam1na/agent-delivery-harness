@@ -71,9 +71,14 @@ export const PACKAGE_SCOPE = "@agent-delivery-harness";
 
 /**
  * The command the CLI tarball must actually run once installed standalone, and
- * the substrings its output must carry. `--help` walks the whole command
- * registry, which is what imports every command module and therefore every
- * kernel edge the CLI has — an import probe alone would only reach the barrel.
+ * the substrings its output must carry.
+ *
+ * The entry-point probe already REACHES every module carrying a kernel edge —
+ * the barrel imports all seven command modules and `boundary.ts` to build
+ * `COMMANDS`, so resolution is covered before this step runs. What `--help`
+ * adds is EXECUTION: the registry is walked and rendered, so a package that
+ * resolves but cannot run is still a finding. The CLI is an operator surface,
+ * and "it imports" is a weaker claim than "it works".
  */
 export const CLI_SMOKE_ARGS: readonly string[] = ["--help"];
 export const CLI_SMOKE_EXPECTED: readonly string[] = ["prepare", "gate", "record", "verify"];
@@ -97,8 +102,6 @@ export interface StandaloneCheckInput {
    * which is what puts them outside the workspace.
    */
   readonly workRoot?: string;
-  /** Leave the temp trees in place for inspection. */
-  readonly keepWorkDir?: boolean;
   readonly log?: (line: string) => void;
 }
 
@@ -334,7 +337,7 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       });
     }
   } finally {
-    if (input.keepWorkDir !== true) rmSync(scratch, { recursive: true, force: true });
+    rmSync(scratch, { recursive: true, force: true });
   }
 
   return { findings, packagesProbed, siblingEdgesVerified };
