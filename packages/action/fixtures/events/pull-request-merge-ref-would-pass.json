@@ -1,0 +1,24 @@
+{
+  "description": "The head-vs-merge-ref proof. The base has advanced, so the synthetic merge commit carries a tree the head does not: verifying GITHUB_SHA would find a record that matches it exactly, while the head's own tree does not match. The Action must fail on the head.",
+  "env": {
+    "CI": "true",
+    "GITHUB_ACTIONS": "true",
+    "GITHUB_EVENT_NAME": "pull_request",
+    "GITHUB_EVENT_PATH": "{{EVENT_PATH}}",
+    "GITHUB_WORKSPACE": "{{WORKSPACE}}",
+    "GITHUB_REPOSITORY": "kwam1na/delivery-harness",
+    "GITHUB_SHA": "{{MERGE_SHA}}",
+    "GITHUB_REF": "refs/pull/7/merge"
+  },
+  "event": {
+    "action": "synchronize",
+    "number": 7,
+    "pull_request": {
+      "number": 7,
+      "draft": false,
+      "head": { "sha": "{{HEAD_SHA}}", "ref": "codex/behind-the-base" },
+      "base": { "sha": "{{BASE_SHA}}", "ref": "main" }
+    },
+    "repository": { "full_name": "kwam1na/delivery-harness", "default_branch": "main" }
+  }
+}

@@ -1,0 +1,300 @@
+# Delivery harness — delivery-record verification (verify mode).
+#
+# A composite action, deliberately: it wraps the kernel's pure
+# `verifyDeliveryRecord` core and needs no hosted infrastructure, no App, and no
+# credentials. Everything it does is read-only.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS CHECKS OUT THE PULL REQUEST HEAD AND NEVER THE MERGE REF
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# On a `pull_request` event, `actions/checkout` defaults to `refs/pull/N/merge`
+# and `GITHUB_SHA` names a commit GitHub *fabricates* by merging the head into
+# the current base tip. That commit is not the head, and verifying it would be
+# wrong three ways:
+#
+#   1. Its tree carries base changes the author never delivered, so its
+#      deliverable identity is an identity no local gate ever computed. A record
+#      that verified against it would attest a tree nobody reviewed.
+#   2. It is regenerated whenever the base moves, so the artifact under check
+#      would change under a pull request that did not change.
+#   3. It would launder base movement. The `deliveryRecordVerification.baseMovement`
+#      policy exists to stale a record when the base moves; a tree with the new
+#      base already folded in makes every record look fresh.
+#
+# So the checkout below pins `github.event.pull_request.head.sha`, and `main.ts`
+# reads that same sha out of the event payload and recomputes the identity from
+# *that commit's tree* through git. The working tree is never the identity
+# source — which means even a workflow that checked out the wrong ref cannot
+# make this check pass. `GITHUB_SHA` is reported in the summary as the commit
+# that was **not** verified, and is resolved nowhere.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THE BOOTSTRAP RULE
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A delivery record is written by `delivery-harness record` *after* a local gate
+# admits, and is committed to the branch. So the first pull request that
+# introduces this check cannot satisfy it: at the moment its author runs the
+# loop, the config that names the record path, the workflow that runs the
+# verification, or both are still part of the change under review. The same
+# holds for the pull request that revises `computingIdentityVersion` — an
+# identity-token revision cascades, and every record computed under the old
+# token stops matching by design.
+#
+# The rule, stated once so it is never improvised:
+#
+#   The pull request that INTRODUCES the verification workflow (or revises the
+#   consumer's identity token) is bootstrap-exempt. The exemption is recorded in
+#   the pull request itself, is granted by a human merging with the check
+#   failing or absent, and is never implemented as a code path in this Action.
+#   Every subsequent pull request is gated.
+#
+# There is deliberately no `bootstrap: true` input. An exemption that the Action
+# could grant itself is an exemption an author can request forever; an exemption
+# that only a repository administrator can grant, once, leaves a trail.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THE PRODUCER / POLLER JOB SPLIT
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The job that VERIFIES a record must never be the job that PRODUCES it.
+#
+# The reason is structural, not stylistic. Producing a record means committing a
+# file to the branch, and committing to the branch moves the head. The check
+# just reported would then describe a head that no longer exists, and the new
+# head has no record — so a self-producing job either reports on a stale commit
+# or chases its own tail forever. Worse, a job that can push is a job with write
+# credentials evaluating untrusted pull request content.
+#
+# Split it in two:
+#
+#   producer — runs where the work happens (the agent's or author's workspace,
+#              or a separate workflow the author dispatches). It runs the local
+#              loop, `delivery-harness record`, and commits the record with the
+#              change it describes. It has whatever credentials it needs; it
+#              never reports a check.
+#
+#   poller   — this Action. `on: pull_request`, `permissions: contents: read`,
+#              no credentials, no writes. It verifies whatever the head carries
+#              *right now*. When the producer pushes the record, GitHub delivers
+#              a `synchronize` event and the poller re-runs against the new head.
+#              The re-delivery IS the polling loop: nothing waits in-process, so
+#              nothing burns a runner minute waiting for a human.
+#
+# ```yaml
+# on: pull_request
+#
+# jobs:
+#   verify-delivery-record:
+#     runs-on: ubuntu-latest
+#     permissions:
+#       contents: read
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: actions/setup-node@v4
+#         with:
+#           node-version: "22"
+#       - uses: ./packages/action
+# ```
+#
+# The first `actions/checkout` is not optional and is not the same one this
+# action performs internally: GitHub resolves a *local* action reference
+# (`uses: ./…`) from the workspace on disk, so without a checkout the workflow
+# fails before this action is ever loaded. The action then re-checks-out the
+# head by sha itself, which is what pins what gets verified.
+#
+# Two more things that are easy to get wrong:
+#
+#   * Do not add `pull_request_target`. It runs with the base repository's
+#     privileges against an unreviewed head. `main.ts` refuses that event by
+#     name rather than trusting a workflow author to have thought it through.
+#   * Do not make this job `continue-on-error`. A verification that cannot fail
+#     the merge is documentation, not a gate.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# HOW THIS ACTION RESOLVES ITS OWN CODE, AND THE v1 BOUNDARY
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The harness ships as TypeScript source and imports `@delivery-harness/kernel`
+# by package name. That name resolves only through an npm workspace install, and
+# the internal `actions/checkout` below runs with `clean` at its default — which
+# deletes an untracked `node_modules`, including one a caller installed before
+# calling this action. So the verify step installs the harness workspace itself.
+# It installs in the root of the ACTION's own checkout — walked up from
+# `$GITHUB_ACTION_PATH`, which is where this action's code actually sits — and
+# not in `$GITHUB_WORKSPACE`, which a `working-directory` input can point
+# somewhere else entirely. `--ignore-scripts`, because the tree being installed
+# is the pull request's own and a lifecycle script in an untrusted head has no
+# business running inside the verifier.
+#
+# SELF-HOSTED FORM. With `uses: ./packages/action` the action's code and the
+# repository under verification are one checkout, so `$GITHUB_ACTION_PATH` is
+# `$GITHUB_WORKSPACE/packages/action`, the walk finds the workspace root two
+# levels up, and the install produces the `node_modules/@delivery-harness/*`
+# links the kernel import resolves through. Node resolves those links to their
+# real paths under `packages/`, which is also why type stripping works: the file
+# it strips is not, in the end, under `node_modules`.
+#
+# One consequence of the self-hosted form is worth saying plainly rather than
+# leaving to be discovered: the pull request being verified supplies the verifier
+# that judges it. That is inherent to a repository gating itself with its own
+# tool, not a defect of this action — a pull request can weaken its own gate, and
+# the mitigation (pinning the action to a ref from the base rather than from the
+# head) belongs to the self-hosting workflow, not here.
+#
+# PUBLISHED FORM — A KNOWN v1 BOUNDARY. Referencing this action as
+# `owner/repo/packages/action@ref` does not work today, and the step says so
+# rather than failing with a module-resolution stack: the published action is
+# fetched on its own, with no workspace root above it to install, and even with
+# one, Node refuses to strip types from files under `node_modules`
+# (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). Both are fixed the same way —
+# by shipping a compiled, dependency-inlined bundle — and bundling is release
+# mechanics, which the release unit owns. Until then the supported form is the
+# self-hosted one.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ATTESTATION HONESTY
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# This check is L0: "self / workspace-scoped — process discipline and freshness,
+# not provenance". It proves that a gate ran against this exact deliverable and
+# that the record has not gone stale. It does not prove WHO ran it, and it is
+# not a signature. The summary says so on every run, passing or failing.
+
+name: "Verify delivery record"
+description: >-
+  Fail-closed verification of the tracked delivery record against the pull
+  request head — never the synthetic merge commit.
+author: "delivery-harness"
+
+inputs:
+  ci-policy-id:
+    description: >-
+      Claim delegated-authority mode under this declared CI policy id. The claim
+      is checked EXACTLY against the consumer config's `ciPolicies`: the id must
+      be declared and every one of its `requiredEnv` corroborations must hold. A
+      near miss is `unauthorized_automation`, never a quiet downgrade to verify
+      mode. Leave unset to run in verify mode, which grants nothing and needs no
+      authorization.
+    required: false
+    default: ""
+  working-directory:
+    description: "Repository root to verify. Defaults to the workspace."
+    required: false
+    default: ""
+  fetch-depth:
+    description: >-
+      Checkout depth. The default of 0 (full history) is what lets git resolve
+      the configured base ref and compute the merge base; a shallow clone fails
+      closed with `base_ref_unresolved` or `merge_base_unavailable` rather than
+      guessing.
+    required: false
+    default: "0"
+
+outputs:
+  verified:
+    description: "`true` when the check passed."
+    value: ${{ steps.verify.outputs.verified }}
+  mode:
+    description: >-
+      One of `verify` (no delegation was claimed), `delegated-authority` (a
+      claim was made and corroborated completely), or `delegation-refused` (a
+      claim was made and refused — never reported as `verify`, so a consumer
+      grouping runs by mode sees the refusal as its own class rather than
+      filed among ordinary unprivileged checks).
+    value: ${{ steps.verify.outputs.mode }}
+  head-sha:
+    description: "The pull request head commit whose tree was verified."
+    value: ${{ steps.verify.outputs.head-sha }}
+  record-path:
+    description: "The tracked delivery record that was checked, if one was selected."
+    value: ${{ steps.verify.outputs.record-path }}
+  deliverable-digest:
+    description: "The deliverable identity recomputed from the head."
+    value: ${{ steps.verify.outputs.deliverable-digest }}
+
+runs:
+  using: composite
+  steps:
+    # The head, pinned by sha. Not `refs/pull/N/merge`, not `github.ref`, not a
+    # branch name that can move between the checkout and the check.
+    - name: Check out the pull request head (never the synthetic merge commit)
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        # This job reads. Leaving a token in the checkout would give an
+        # untrusted head's build steps something to reach for.
+        persist-credentials: false
+
+    - name: Verify the tracked delivery record
+      id: verify
+      shell: bash
+      env:
+        DELIVERY_HARNESS_CI_POLICY_ID: ${{ inputs.ci-policy-id }}
+        DELIVERY_HARNESS_ACTION_PATH: ${{ github.action_path }}
+        DELIVERY_HARNESS_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -eu
+
+        # The action's own npm workspace root — the one whose node_modules the
+        # kernel import resolves through. Walked up from the action directory
+        # rather than assumed to be the workspace, so a layout this action was
+        # not designed for fails loudly instead of installing somewhere
+        # unrelated. Four levels is generous: the action sits two below its root.
+        harness_root=""
+        candidate="${DELIVERY_HARNESS_ACTION_PATH}"
+        for _ in 1 2 3 4; do
+          candidate="$(cd "${candidate}/.." && pwd)"
+          if [ -f "${candidate}/package.json" ] && grep -q '"workspaces"' "${candidate}/package.json"; then
+            harness_root="${candidate}"
+            break
+          fi
+        done
+
+        if [ -z "${harness_root}" ]; then
+          # The published-action shape. Say so in the harness's own voice: an
+          # operator who gets ERR_MODULE_NOT_FOUND here learns nothing, while
+          # this names the boundary and the supported form.
+          message="delivery-harness: this action runs from TypeScript source and needs its own npm workspace root above ${DELIVERY_HARNESS_ACTION_PATH}, which does not exist. The published-action form is not supported in v1 (it also hits ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING); use the self-hosted form, 'uses: ./packages/action', from a checkout of the harness repository."
+          printf '%s\n' "${message}" >&2
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            # The attestation label, spelled out because the module that owns it
+            # is the one thing that could not be loaded. Every block published
+            # under this heading carries it, and this block is no exception: a
+            # summary that dropped the label would be the only one under that
+            # heading implying more than L0. The literal is pinned against the
+            # kernel's ATTESTATION_LABEL by the composite test suite.
+            printf '## Delivery record verification\n\n%s\n\n_Attestation level is L0: self / workspace-scoped — process discipline and freshness, not provenance._\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          exit 1
+        fi
+
+        # The checkout above uses actions/checkout's `clean` default, which
+        # removes an untracked node_modules — so on a normal run this install is
+        # what makes the kernel resolvable at all. Skipped when the harness is
+        # already linked at that root, which is what keeps this step cheap for a
+        # caller that installed first and what keeps it offline in tests.
+        # --ignore-scripts: the tree being installed is the pull request's own.
+        if [ ! -e "${harness_root}/node_modules/@delivery-harness/kernel" ]; then
+          ( cd "${harness_root}" && npm ci --ignore-scripts )
+        fi
+
+        workspace="${GITHUB_WORKSPACE:-$PWD}"
+        if [ -n "${DELIVERY_HARNESS_WORKING_DIRECTORY:-}" ]; then
+          workspace="${DELIVERY_HARNESS_WORKING_DIRECTORY}"
+        fi
+        export GITHUB_WORKSPACE="${workspace}"
+        cd "${workspace}"
+
+        # The harness ships as source. Node 23.6+ strips types by default; 22.18+
+        # needs the flag. Probed rather than assumed so the invocation keeps
+        # working if a future major drops the flag — and a runtime that supports
+        # neither fails loudly here rather than skipping the check.
+        node_flags="--disable-warning=ExperimentalWarning"
+        if node --experimental-strip-types --version >/dev/null 2>&1; then
+          node_flags="--experimental-strip-types ${node_flags}"
+        fi
+        # shellcheck disable=SC2086
+        node ${node_flags} "${DELIVERY_HARNESS_ACTION_PATH}/src/main.ts"

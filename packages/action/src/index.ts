@@ -1,8 +1,26 @@
 /**
  * Delivery harness GitHub Action.
  *
- * Placeholder package: action.yml and src/main.ts (the thin wrapper over the
- * kernel's delivery-record verification core) are not implemented yet.
+ * The package barrel. `action.yml` runs `src/main.ts` directly — a composite
+ * action's entry point is a file path, not an import — so this exists for the
+ * consumers that reach for the Action's surface as a library: the self-hosting
+ * workflow's tests, and anything that wants to drive the verification from a
+ * simulated event without a runner.
  */
-
 export const PACKAGE_NAME = "@delivery-harness/action";
+
+export {
+  ACTION_EXIT_OK,
+  ACTION_EXIT_POLICY,
+  ACTION_MODES,
+  CI_POLICY_INPUT_ENV,
+  defaultRuntime,
+  entryHref,
+  importHarnessConfig,
+  invokedDirectly,
+  main,
+  runAction,
+  type ActionMode,
+  type ActionResult,
+  type ActionRuntime,
+} from "./main.ts";

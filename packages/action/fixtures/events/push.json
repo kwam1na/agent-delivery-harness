@@ -1,0 +1,19 @@
+{
+  "description": "A push delivery. There is no pull request head to verify, so the Action fails closed rather than reporting a pass it never computed.",
+  "env": {
+    "CI": "true",
+    "GITHUB_ACTIONS": "true",
+    "GITHUB_EVENT_NAME": "push",
+    "GITHUB_EVENT_PATH": "{{EVENT_PATH}}",
+    "GITHUB_WORKSPACE": "{{WORKSPACE}}",
+    "GITHUB_REPOSITORY": "kwam1na/delivery-harness",
+    "GITHUB_SHA": "{{HEAD_SHA}}",
+    "GITHUB_REF": "refs/heads/main"
+  },
+  "event": {
+    "ref": "refs/heads/main",
+    "before": "{{BASE_SHA}}",
+    "after": "{{HEAD_SHA}}",
+    "repository": { "full_name": "kwam1na/delivery-harness", "default_branch": "main" }
+  }
+}
