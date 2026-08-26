@@ -483,8 +483,17 @@ function checkArtifacts(root: Record<string, unknown>, collector: Collector): re
  * realpath clause of ENV-10 — that a resolved location stays inside the
  * recorder-allocated run root — is a filesystem question, and lives with the
  * recorder that allocated the root.
+ *
+ * `artifacts.ts` carries the same predicate, because the port must be safe for
+ * a caller that never ran this validator. The two are kept character-for-
+ * character identical and a test pins them over a shared table: a path one
+ * accepted and the other refused would be an artifact the recorder never
+ * digests and no rule ever rejects. A NUL is refused by both — no filesystem
+ * admits one in a path segment, and letting it through turns the port's
+ * classification into an argument-validation throw.
  */
 function isSafeRelativePath(value: string): boolean {
+  if (value.includes("\u0000")) return false;
   if (value.startsWith("/") || value.startsWith("\\")) return false;
   if (/^[A-Za-z]:/.test(value)) return false;
   const segments = value.split(/[/\\]/);

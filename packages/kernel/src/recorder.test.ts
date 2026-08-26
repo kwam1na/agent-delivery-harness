@@ -28,13 +28,14 @@ import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createArtifactsPort } from "./artifacts.ts";
+import { createArtifactsPort, isSafeRelativePath } from "./artifacts.ts";
 import { GATE_STRUCTURAL_FINDING_CODES, type Blocker, type NonEmptyTuple } from "./blockers.ts";
 import type { CandidateCapture, CapturedCandidate } from "./candidate.types.ts";
 import { DELIVERABLE_TREE_V1_NARRATION_SET, defineHarnessConfig, type HarnessConfig } from "./config.ts";
 import { manifestDigest, sha256Hex } from "./digest.ts";
 import { publishPreparationReceipt } from "./preparation.ts";
 import { compareSubmissionCandidate, submitManifest, type SubmissionOptions, type SubmissionOutcome } from "./recorder.ts";
+import { validateManifest } from "./validator/envelope.ts";
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -215,9 +216,10 @@ interface Scenario {
   readonly storageRoot: string;
   readonly outsideDir: string;
   readonly runRoot: string;
+  readonly runRootBase: string;
   readonly artifacts: ReturnType<typeof createArtifactsPort>;
   writeArtifact(relative: string, contents: string): Promise<void>;
-  writeManifest(manifest: unknown, options?: { readonly outside?: boolean }): Promise<string>;
+  writeManifest(manifest: unknown, options?: { readonly outside?: boolean; readonly name?: string }): Promise<string>;
   prepare(candidate?: CapturedCandidate): Promise<void>;
   submit(manifestPath: string, options?: Partial<SubmissionOptions> & { readonly config?: HarnessConfig }): Promise<SubmissionOutcome>;
   recordCount(): Promise<number>;
@@ -259,6 +261,7 @@ async function scenario(options: { readonly runId?: string; readonly providerId?
     storageRoot,
     outsideDir,
     runRoot,
+    runRootBase,
     artifacts,
     async writeArtifact(relative, contents) {
       const target = path.join(runRoot, relative);
@@ -266,7 +269,7 @@ async function scenario(options: { readonly runId?: string; readonly providerId?
       await writeFile(target, contents, "utf8");
     },
     async writeManifest(manifest, writeOptions = {}) {
-      const target = path.join(writeOptions.outside === true ? outsideDir : runRoot, "manifest.json");
+      const target = path.join(writeOptions.outside === true ? outsideDir : runRoot, writeOptions.name ?? "manifest.json");
       await writeFile(target, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
       return target;
     },
@@ -430,6 +433,56 @@ describe("atomicity across claims (GEN-3)", () => {
     // One record: the first submission's. The good claim wrote nothing.
     expect(await test.recordCount()).toBe(1);
   });
+});
+
+describe("atomicity under concurrency (GEN-3)", () => {
+  /**
+   * The window the preflight cannot close.
+   *
+   * Looking for conflicts across every claim before publishing any of them
+   * makes the common case atomic, but two submissions for the same provider run
+   * can interleave: both preflight clean, one publishes, and the other reaches
+   * the same slot with different content and is rejected — with its earlier
+   * claims already linked into place. The store's own publication closes
+   * *detection*, not atomicity, so the rejection has to undo what it wrote.
+   *
+   * The invariant is stated over the store rather than over either submission:
+   * whatever is on disk must be exactly what the accepted submissions reported.
+   * A rejected submission contributing even one record is the GEN-3 breach.
+   */
+  it("leaves the store holding exactly the accepted submissions' records, over 40 rounds", async () => {
+    for (let round = 0; round < 40; round += 1) {
+      const test = await preparedScenario();
+      await test.writeArtifact("reviewers/security.json", approvalFor("security"));
+      const artifacts = [approvalEntry("correctness"), approvalEntry("security")];
+
+      const single = manifestFor({
+        artifacts,
+        recordedAt: "2026-08-25T00:00:00Z",
+        claims: [{ obligation: "review.green", payloadSpec: "review.green/1", payload: greenPayload(BOTH) }],
+      });
+      // The colliding claim is *second*, so this submission has already
+      // published one record by the time it discovers the conflict.
+      const pair = manifestFor({
+        artifacts,
+        recordedAt: "2026-08-26T00:00:00Z",
+        claims: [
+          { obligation: "security.reviewed", payloadSpec: "review.green/1", payload: greenPayload(BOTH) },
+          { obligation: "review.green", payloadSpec: "review.green/1", payload: greenPayload(BOTH) },
+        ],
+      });
+
+      const singlePath = await test.writeManifest(single, { name: "single.json" });
+      const pairPath = await test.writeManifest(pair, { name: "pair.json" });
+      const outcomes = await Promise.all([test.submit(singlePath), test.submit(pairPath)]);
+
+      const expected = outcomes
+        .flatMap((outcome) => (outcome.status === "accepted" ? [...outcome.records] : []))
+        .map((record) => path.basename(record.path))
+        .sort();
+      expect([...(await test.recordFiles())].sort(), `round ${round}`).toEqual(expected);
+    }
+  }, 120_000);
 });
 
 // ── SUB-4 ──────────────────────────────────────────────────────────────────
@@ -715,6 +768,57 @@ describe("artifact verification", () => {
   });
 });
 
+// ── A run root the provider tampered with ──────────────────────────────────
+
+describe("a run root that is not where the harness put it", () => {
+  it("blocks a submission whose run root has been replaced with a symlink", async () => {
+    // The provider owns the run root between allocation and submission, so it
+    // can remove the directory and link the name somewhere else. Every
+    // containment check downstream then measures the planted target: the
+    // manifest and its artifacts sit outside the pool entirely and SUB-3 and
+    // ENV-10 both report success. This is the failure that fails *open*, so it
+    // is a blocker — there is no manifest rule for "the harness's own
+    // directory is not its own".
+    const test = await scenario();
+    await test.prepare();
+
+    const planted = path.join(test.outsideDir, "planted-run");
+    await mkdir(path.join(planted, "reviewers"), { recursive: true });
+    await writeFile(path.join(planted, "reviewers", "correctness.json"), approvalFor("correctness"), "utf8");
+    await rm(test.runRoot, { recursive: true, force: true });
+    await symlink(planted, path.join(test.runRootBase, PROVIDER_ID, RUN_ID));
+
+    const manifestPath = path.join(planted, "manifest.json");
+    await writeFile(manifestPath, `${JSON.stringify(manifestFor(), null, 2)}\n`, "utf8");
+
+    const outcome = await test.submit(manifestPath);
+    expect(outcome.status).toBe("blocked");
+    expect(blockerCodesOf(outcome)).toEqual(["run_root_outside_base"]);
+    expect(await test.recordFiles()).toEqual([]);
+  });
+
+  it("still accepts a legitimate run root, and one reached through an aliased base", async () => {
+    // The other half of the fix: the base is resolved before the comparison, so
+    // a symlinked temp directory — every macOS `/var` path — is an alias rather
+    // than an escape.
+    const test = await preparedScenario();
+    expect((await test.submit(await test.writeManifest(manifestFor()))).status).toBe("accepted");
+  });
+
+  it("blocks rather than throwing when the provider id cannot be a path component", async () => {
+    // ENV-1 bounds the grammar and not the length, so nothing else in the
+    // system rejects a 300-character provider id: skipping the run-root rules
+    // for it would accept a manifest whose artifacts were never verified.
+    const test = await preparedScenario();
+    const longId = "a".repeat(300);
+    const manifest = manifestFor({ provider: { id: longId, runId: RUN_ID, finalPassId: FINAL_PASS } });
+    const outcome = await test.submit(await test.writeManifest(manifest));
+    expect(outcome.status).toBe("blocked");
+    expect(blockerCodesOf(outcome)).toEqual(["provider_id_too_long"]);
+    expect(await test.recordFiles()).toEqual([]);
+  });
+});
+
 // ── SUB-3 ──────────────────────────────────────────────────────────────────
 
 describe("the manifest's location (SUB-3)", () => {
@@ -792,6 +896,54 @@ describe("the submitted file", () => {
     const outcome = await test.submit(path.join(test.runRoot, "absent.json"));
     expect(outcome.status).toBe("blocked");
     expect(blockerCodesOf(outcome)).toEqual(["artifact_file_unreadable"]);
+  });
+
+  it("rejects an artifact path carrying a NUL byte rather than throwing", async () => {
+    // `realpath` rejects a NUL-bearing path with `ERR_INVALID_ARG_VALUE`, and
+    // an argument-validation `TypeError` escaping a submission would reach a
+    // command surface as an internal error rather than as the bad input it is.
+    const test = await preparedScenario();
+    const manifest = manifestFor({
+      artifacts: [{ path: "reviewers/\u0000correctness.json", sha256: hex64("nul"), role: "reviewer-approval" }],
+    });
+    const outcome = await test.submit(await test.writeManifest(manifest));
+    expect(outcome.status).toBe("rejected");
+    expect(codesOf(outcome)).toContain("artifact_path_invalid");
+  });
+
+  it("keeps the port's path predicate and the validator's in exact step", async () => {
+    // The port refuses a path before joining it; the validator rejects one
+    // under ENV-10. They are deliberately two copies — the port must be safe
+    // for a caller who never ran the validator — but a path one accepted and
+    // the other refused would be an artifact nobody digests and no rule
+    // rejects. This asserts the agreement rather than trusting the comment.
+    const paths = [
+      "reviewers/a.json",
+      "a.json",
+      "deep/nested/file.json",
+      "./a.json",
+      "",
+      "/absolute.json",
+      "\\unc.json",
+      "C:/drive.json",
+      "../escape.json",
+      "a/../b.json",
+      "a//b.json",
+      "a/",
+      "a\u0000b.json",
+    ];
+
+    for (const declared of paths) {
+      const validation = validateManifest(manifestFor({ artifacts: [{ path: declared, sha256: hex64(declared), role: "reviewer-approval" }] }), {
+        config: CONFIG,
+        currentCandidate: CANDIDATE,
+        prepared: true,
+        artifactContents: new Map(),
+      });
+      const validatorRefused =
+        !validation.ok && validation.rejections.some((rejection) => rejection.code === "artifact_path_invalid");
+      expect(isSafeRelativePath(declared), `disagreement on ${JSON.stringify(declared)}`).toBe(!validatorRefused);
+    }
   });
 
   it("rejects a manifest that is not a JSON object", async () => {

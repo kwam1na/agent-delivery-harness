@@ -116,6 +116,60 @@ describe("run-root derivation", () => {
     },
   );
 
+  it("refuses a provider id too long to be a path component", async () => {
+    // ENV-1 bounds the *grammar* of a provider id and not its length, so a
+    // 300-character slug is spec-legal and the validator will not reject it.
+    // Left unbounded here it reaches `mkdir` and comes back `ENAMETOOLONG`,
+    // which is a refusal wearing an exception's clothes.
+    const base = await freshBase("provider-length");
+    const port = createArtifactsPort({ runRootBase: base });
+    const allocation = await port.allocateRunRoot({ providerId: "a".repeat(300), runId: "r-1" });
+    expect(allocation.ok).toBe(false);
+    if (allocation.ok) return;
+    expect(allocation.reason).toBe("provider_id_too_long");
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it("refuses a run root that has been replaced with a symlink out of the pool", async () => {
+    // THE PROVIDER OWNS THE RUN ROOT BETWEEN ALLOCATION AND SUBMISSION — that
+    // is the kit's protocol and the production shape both. `mkdir` with
+    // `recursive` is a *no-op* on a path that already resolves to a directory,
+    // symlink included, so a provider that removes its run root and links the
+    // name at somewhere else gets every later containment check measured
+    // against the planted target instead of the pool. Refusing here is what
+    // keeps "inside the run root" a statement about a directory this process
+    // created.
+    const base = await freshBase("planted-root");
+    const port = createArtifactsPort({ runRootBase: base });
+    const legitimate = await port.allocateRunRoot({ providerId: "p", runId: "r-1" });
+    expect(legitimate.ok).toBe(true);
+
+    const elsewhere = path.join(workspace, "planted-target");
+    await mkdir(elsewhere, { recursive: true });
+    await rm(path.join(base, "p", "r-1"), { recursive: true, force: true });
+    await symlink(elsewhere, path.join(base, "p", "r-1"));
+
+    for (const allocation of [await port.allocateRunRoot({ providerId: "p", runId: "r-1" }), await port.resolveRunRoot({ providerId: "p", runId: "r-1" })]) {
+      expect(allocation.ok).toBe(false);
+      if (allocation.ok) continue;
+      expect(allocation.reason).toBe("run_root_outside_base");
+    }
+  });
+
+  it("refuses a run root reached through a planted parent directory", async () => {
+    // The same planting one level up: the provider directory is the link.
+    const base = await freshBase("planted-parent");
+    const port = createArtifactsPort({ runRootBase: base });
+    const elsewhere = path.join(workspace, "planted-parent-target");
+    await mkdir(elsewhere, { recursive: true });
+    await symlink(elsewhere, path.join(base, "p"));
+
+    const allocation = await port.allocateRunRoot({ providerId: "p", runId: "r-1" });
+    expect(allocation.ok).toBe(false);
+    if (allocation.ok) return;
+    expect(allocation.reason).toBe("run_root_outside_base");
+  });
+
   it("derives the default base under the system temp directory and this harness's namespace", async () => {
     const base = await defaultRunRootBase();
     expect(base).toBe(path.join(await realpath(tmpdir()), RUN_ROOT_NAMESPACE, RUN_ROOT_LEAF));
@@ -259,6 +313,17 @@ describe("artifact observation", () => {
     }
   });
 
+  it("refuses a declared path carrying a NUL byte rather than letting it reach realpath", async () => {
+    // `realpath` rejects a NUL-bearing path with `ERR_INVALID_ARG_VALUE`, which
+    // is neither of the two absences the resolver treats as "nowhere" — so it
+    // propagates as a raw `TypeError` out of a function whose whole contract is
+    // to classify. A path segment cannot contain a NUL on any supported
+    // filesystem, so this is a shape refusal like the others.
+    const { port, runRoot } = await runRootWith("observe-nul");
+    const observation = await port.observeArtifact(runRoot, "reviewers/\u0000x.json");
+    expect(observation.status).toBe("path_refused");
+  });
+
   it("reports a missing run root rather than resolving paths against nothing", async () => {
     const base = await freshBase("observe-no-root");
     const port = createArtifactsPort({ runRootBase: base });
@@ -277,7 +342,7 @@ describe("the safe-relative-path predicate", () => {
     },
   );
 
-  it.each(["", "/absolute", "\\unc", "C:/drive", "c:\\drive", "../escape", "a/../b", "a//b", "a/"])(
+  it.each(["", "/absolute", "\\unc", "C:/drive", "c:\\drive", "../escape", "a/../b", "a//b", "a/", "a\u0000b", "\u0000"])(
     "refuses %j",
     (value) => {
       expect(isSafeRelativePath(value)).toBe(false);

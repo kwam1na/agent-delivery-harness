@@ -85,8 +85,16 @@ const DEFAULT_FILE_MODE = 0o644;
  * the join happens. They are deliberately a *second* copy of the validator's
  * rule rather than an import of it: this is the mechanical guard on a path
  * component, and it must hold even for a caller that never ran the validator.
+ *
+ * The provider length bound is this port's own and has no counterpart in ENV-1,
+ * which bounds the character set and not the length. It is here because a
+ * 300-character slug is a legal provider id and an illegal path component: left
+ * unbounded it reaches `mkdir` and returns `ENAMETOOLONG`, which is a refusal
+ * arriving as an exception. Because the validator does *not* name it, the
+ * refusal it produces is one a caller must fail closed on rather than skip.
  */
 const PROVIDER_ID = /^[a-z0-9]+([._-][a-z0-9]+)*$/;
+const MAX_PROVIDER_ID_LENGTH = 128;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const MAX_RUN_ID_LENGTH = 128;
 
@@ -169,10 +177,18 @@ export function isInsideResolved(parent: string, child: string): boolean {
  * digests and no rule ever rejects — a hole, not extra safety. The duplication
  * is deliberate all the same: the validator produces a verdict, this decides
  * whether a provider-supplied string reaches `path.join`, and that decision
- * must hold for a caller who never ran the validator.
+ * must hold for a caller who never ran the validator. A test pins the two in
+ * step over a shared table.
+ *
+ * A NUL is refused for a mechanical reason rather than a spec one: no supported
+ * filesystem admits one in a path segment, and `realpath` rejects it with
+ * `ERR_INVALID_ARG_VALUE` — which is neither of the two absences the resolver
+ * reads as "nowhere", so it escapes a classifying function as a raw
+ * `TypeError`. Both copies refuse it, so it is a rejection rather than a crash.
  */
 export function isSafeRelativePath(value: string): boolean {
   if (value === "") return false;
+  if (value.includes("\u0000")) return false;
   if (value.startsWith("/") || value.startsWith("\\")) return false;
   if (/^[A-Za-z]:/.test(value)) return false;
   const segments = value.split(/[/\\]/);
@@ -210,6 +226,7 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
 
   const derive = async (request: RunRootRequest, create: boolean): Promise<RunRootResolution> => {
     if (!PROVIDER_ID.test(request.providerId)) return { ok: false, reason: "unsafe_provider_id" };
+    if (request.providerId.length > MAX_PROVIDER_ID_LENGTH) return { ok: false, reason: "provider_id_too_long" };
     if (
       request.runId.length > MAX_RUN_ID_LENGTH ||
       !RUN_ID.test(request.runId) ||
@@ -231,12 +248,31 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
     }
 
     const resolved = await resolvedOrNull(target);
+
+    // THE RUN ROOT MUST BE INSIDE THE POOL IT WAS ALLOCATED FROM.
+    //
+    // Creating it is not the same as owning it. The provider holds the
+    // directory between allocation and submission, and `mkdir` with `recursive`
+    // succeeds silently on a path that already resolves to a directory — a
+    // symlink included. So a provider that removes its run root and links the
+    // name at somewhere else gets a run root whose resolution is that
+    // somewhere, and every containment check downstream then measures the
+    // planted target: the manifest and its artifacts can sit entirely outside
+    // the pool while SUB-3 and ENV-10 both report success. Comparing the
+    // resolution against the *resolved* base is what closes that, and resolving
+    // the base is also what keeps the macOS `/var` alias an alias rather than
+    // an escape.
+    if (resolved !== null && !isInsideResolved(baseDir, resolved)) {
+      return { ok: false, reason: "run_root_outside_base" };
+    }
+
     const runRoot: RunRoot = {
       providerId: request.providerId,
       runId: request.runId,
       // An unallocated run root has no physical form yet; the derived path is
-      // still the answer to "where would it be", and containment against a
-      // directory that does not exist is false for every target anyway.
+      // still the answer to "where would it be". Nothing resolves there, so
+      // every containment check against it is false and every artifact under it
+      // is missing — it fails closed rather than needing a check of its own.
       path: resolved ?? target,
     };
     return { ok: true, runRoot };
@@ -358,6 +394,18 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
           `${target}: ${describe(error)}`,
           CHECK_PATH,
         );
+      }
+    },
+
+    async removeFile(target) {
+      try {
+        await rm(target, { force: true });
+        return true;
+      } catch {
+        // The caller is a rejection cleaning up records it had already
+        // published; a cleanup that throws would replace the reason for the
+        // rejection with the reason the cleanup failed. It reports instead.
+        return false;
       }
     },
 

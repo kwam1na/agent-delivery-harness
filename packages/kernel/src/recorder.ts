@@ -15,8 +15,8 @@
  *
  *   1. Read the manifest through the fs port.
  *   2. Re-capture the candidate through the injected port (SUB-1, SUB-2).
- *   3. Require a current preparation receipt for that candidate (U16's
- *      ordering mechanism).
+ *   3. Require a current preparation receipt for that candidate — the
+ *      preparation receipt's ordering mechanism.
  *   4. Derive the run root from the provider coordinates, and observe every
  *      declared artifact inside it (ENV-10's realpath clause, ENV-11).
  *   5. Validate the manifest, handing it the re-captured candidate and the
@@ -48,7 +48,7 @@
  */
 import { BlockedError, createBlocker, sanitizedDetail, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
 import { createArtifactsPort } from "./artifacts.ts";
-import type { ArtifactObservation, ArtifactsPort, RunRoot } from "./artifacts.types.ts";
+import type { ArtifactObservation, ArtifactsPort, RunRoot, RunRootRefusalReason, RunRootResolution } from "./artifacts.types.ts";
 import {
   classifyCandidateDrift,
   type CandidateBinding,
@@ -493,7 +493,9 @@ export async function submitManifest(input: SubmissionInput, options: Submission
   const rejections: ManifestRejection[] = [];
 
   // ── The run root, and everything decided inside it ──
-  const runRoot = await allocateRunRootFor(manifest, artifacts);
+  const allocation = await allocateRunRootFor(manifest, artifacts);
+  if (!allocation.ok && allocation.blocker !== null) return blockedOutcome([allocation.blocker]);
+  const runRoot = allocation.ok ? allocation.runRoot : null;
   const artifactContents = new Map<string, string>();
 
   if (runRoot !== null) {
@@ -551,26 +553,92 @@ function storageOptions(options: SubmissionOptions): RecordStorageOptions {
 }
 
 /**
- * The run root for this manifest's provider run, or `null` when the provider
- * coordinates are not usable as path components.
+ * Refusals the manifest validator independently names, under ENV-1 and ENV-2.
  *
- * A `runId` of `"../run-a"` or `"."` never reaches the filesystem: the port
- * refuses it, and this returns `null` so the run-root rules are skipped
- * entirely. Skipping is right rather than lenient — the validator rejects those
- * ids under ENV-1/ENV-2, and emitting `manifest_outside_run_root` for a run
- * root that was never allocated would claim a containment check that could not
- * be performed.
+ * The distinction decides whether a refusal may be skipped. A `runId` of
+ * `"../run-a"` or `"."` never reaches the filesystem, and skipping the
+ * run-root rules for it loses nothing: the submission is already rejected for
+ * the id, and emitting `manifest_outside_run_root` for a run root that was
+ * never allocated would claim a containment check that could not be performed.
+ *
+ * Every other refusal is the opposite case. An over-long provider id is legal
+ * under ENV-1 and a planted run root is legal everywhere — nothing else in the
+ * system rejects either — so skipping there would accept a submission whose
+ * containment and artifact digests were never checked at all. Those fail
+ * closed, as blockers: there is no manifest rule for "the harness's own
+ * directory is not its own", and inventing one would put a spec code on a check
+ * that did not happen.
  */
-async function allocateRunRootFor(manifest: unknown, artifacts: ArtifactsPort): Promise<RunRoot | null> {
+const VALIDATOR_NAMED_REFUSALS: readonly RunRootRefusalReason[] = ["unsafe_provider_id", "unsafe_run_id"];
+
+const RUN_ROOT_REFUSAL_SUMMARIES: Readonly<Record<RunRootRefusalReason, string>> = {
+  unsafe_provider_id: "The provider id cannot be a run-root path component.",
+  unsafe_run_id: "The run id cannot be a run-root path component.",
+  provider_id_too_long: "The provider id is too long to be a run-root path component.",
+  run_root_outside_base: "The run root for this provider run is not inside the pool the harness allocates from.",
+};
+
+const REALLOCATE_RUN_ROOT: Remediation = {
+  id: "let-the-harness-allocate-the-run-root",
+  kind: "manual_action",
+  summary: "Remove the run-root path, re-run the provider so the harness allocates it, and resubmit.",
+};
+
+type RunRootAllocation =
+  | { readonly ok: true; readonly runRoot: RunRoot }
+  /** `blocker: null` means the validator names this one, so the rules are skipped. */
+  | { readonly ok: false; readonly blocker: Blocker | null };
+
+/**
+ * The run root for this manifest's provider run.
+ *
+ * The port's own failure is caught here rather than allowed to propagate. It
+ * raises a typed blocker for a filesystem it cannot use, and this is the one
+ * call in the submission that reaches the filesystem outside a guard — an
+ * over-long path or an unwritable pool would otherwise leave `submitManifest`
+ * by throwing, which is not a shape any caller of this function handles.
+ */
+async function allocateRunRootFor(manifest: unknown, artifacts: ArtifactsPort): Promise<RunRootAllocation> {
   const providerId = readPath(manifest, "provider.id");
   const runId = readPath(manifest, "provider.runId");
-  if (typeof providerId !== "string" || typeof runId !== "string") return null;
-  const allocation = await artifacts.allocateRunRoot({ providerId, runId });
-  return allocation.ok ? allocation.runRoot : null;
+  // Not strings at all: the closed grammar rejects that, so there is nothing
+  // for a run-root rule to add.
+  if (typeof providerId !== "string" || typeof runId !== "string") return { ok: false, blocker: null };
+
+  let allocation: RunRootResolution;
+  try {
+    allocation = await artifacts.allocateRunRoot({ providerId, runId });
+  } catch (error) {
+    if (!(error instanceof BlockedError)) throw error;
+    const [first] = error.blockers;
+    return { ok: false, blocker: first ?? runRootBlocker("run_root_outside_base", `${providerId}/${runId}`) };
+  }
+
+  if (allocation.ok) return { ok: true, runRoot: allocation.runRoot };
+  if (VALIDATOR_NAMED_REFUSALS.includes(allocation.reason)) return { ok: false, blocker: null };
+  return { ok: false, blocker: runRootBlocker(allocation.reason, `${providerId}/${runId}`) };
+}
+
+function runRootBlocker(reason: RunRootRefusalReason, coordinates: string): Blocker {
+  return submissionBlocker(reason, RUN_ROOT_REFUSAL_SUMMARIES[reason], coordinates, REALLOCATE_RUN_ROOT);
 }
 
 // ── Publication ────────────────────────────────────────────────────────────
 
+/**
+ * The record's candidate binding, taken from the manifest — which SUB-1 has
+ * just proved describes the candidate that exists.
+ *
+ * TWO WORKSPACE IDS MEET HERE, AND THEY COME FROM DIFFERENT PLACES. The
+ * `workspaceId` on this binding is the *candidate's*, carried by the capture;
+ * the one in the record's identity tuple is the *store's*, derived by the
+ * storage resolver from the namespace root it resolved. They are normally
+ * equal and the store deliberately does not require it, so that a candidate
+ * that moved workspaces stays visible as one. The consequence for whoever
+ * wires the command surface: capture and store must be pointed at the same
+ * repository, or a record can be filed in one workspace while claiming
+ * another, and nothing here will say so.
+ */
 function recordBinding(manifest: DeliveryEvidenceManifest): RecordCandidateBinding {
   const candidate = manifest.candidate;
   return {
@@ -587,15 +655,28 @@ function recordBinding(manifest: DeliveryEvidenceManifest): RecordCandidateBindi
 /**
  * Writes one record per claim, each stamped with the shared manifest digest.
  *
- * TWO PASSES, AND WHY. The store's own publication is atomic and decides
- * idempotency-versus-conflict at the moment it links a record into place — that
- * is the authority, and nothing here replaces it. But a manifest carries
- * several claims, and discovering a conflict on the second while the first has
- * already been written would leave a rejected submission holding a record.
+ * TWO PASSES AND A ROLLBACK, AND WHY EACH IS NEEDED.
+ *
+ * The store's own publication is atomic per record and decides
+ * idempotency-versus-conflict at the moment it links one into place. That is
+ * the authority on *whether* a record may be written, and nothing here replaces
+ * it — but it is an authority over one record, and GEN-3 is a claim about a
+ * whole submission.
+ *
  * So conflicts are looked for across every claim first, and publication starts
- * only once none was found. The window between the two passes is real and the
- * store closes it: a conflict that appears inside it surfaces from `link()` as
- * the same rejection.
+ * only once none was found. That makes the ordinary case atomic. It does not
+ * make the concurrent case atomic: two submissions for the same provider run
+ * can both preflight clean, and the one that reaches a taken slot second is
+ * rejected with its earlier claims already linked into place. The store closes
+ * *detection* of that collision, not the atomicity of the submission that lost
+ * it.
+ *
+ * The rollback is what closes the rest. A rejection undoes the records this
+ * submission published — only those it created, never one it found already
+ * there, which belongs to whoever wrote it — so a rejected submission leaves
+ * the store as it found it. What remains uncovered is a crash between the two,
+ * which leaves records with no submission to speak for them; that is the record
+ * store's own orphan story and not something a caller can close from here.
  */
 async function publishClaims(
   input: SubmissionInput,
@@ -603,6 +684,7 @@ async function publishClaims(
   manifest: DeliveryEvidenceManifest,
 ): Promise<SubmissionOutcome> {
   const storage = storageOptions(options);
+  const artifacts = options.artifacts ?? createArtifactsPort();
   const digest = computeManifestDigest(manifest);
   const binding = recordBinding(manifest);
 
@@ -619,11 +701,12 @@ async function publishClaims(
     },
   }));
 
+  const records: SubmissionRecord[] = [];
+
   try {
     const conflicts = await findConflicts(input, storage, inputs);
     if (conflicts.length > 0) return rejectedOutcome(conflicts);
 
-    const records: SubmissionRecord[] = [];
     for (const publishInput of inputs) {
       const published = await publishRecord(input.rootDir, publishInput, storage);
       records.push({
@@ -637,12 +720,33 @@ async function publishClaims(
     return { status: "accepted", manifestDigest: digest, records: nonEmpty(records, "records") };
   } catch (error) {
     if (!(error instanceof BlockedError)) throw error;
+    await rollBack(records, artifacts);
     // The store raised it, so it is the authority: a conflict is SUB-4's
     // rejection, and anything else the store refuses — an unwritable directory,
     // a namespace it will not resolve — is a blocker, because no manifest rule
     // describes it.
     if (!error.blockers.some((blocker) => blocker.code === "record_conflict")) return blockedOutcome(error.blockers);
     return rejectedOutcome([{ code: "record_conflict", rule: "SUB-4", pointer: "", message: CONFLICT_MESSAGE }]);
+  }
+}
+
+/**
+ * Removes the records this submission created, so a rejection leaves the store
+ * as it found it (GEN-3).
+ *
+ * ONLY THE ONES IT CREATED. A record the store reported as `idempotent` was
+ * already on disk when this submission ran: it is another submission's, it is
+ * byte-identical to what this one would have written, and deleting it would
+ * make a failed submission destroy an accepted one's evidence.
+ *
+ * Best-effort by construction. The rejection it is cleaning up after is the
+ * answer the caller needs, and a cleanup that threw would replace that answer
+ * with its own failure.
+ */
+async function rollBack(records: readonly SubmissionRecord[], artifacts: ArtifactsPort): Promise<void> {
+  for (const record of records) {
+    if (record.status !== "published") continue;
+    await artifacts.removeFile(record.path);
   }
 }
 

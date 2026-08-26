@@ -498,8 +498,9 @@ async function submitVector(
   const capture: CandidateCapture = prepared ? { ok: true, candidate: captured } : UNPREPARED_CAPTURE;
 
   // A real receipt for the candidate the capture reports. Without one the
-  // recorder blocks before it judges anything, which is the ordering U16
-  // installed; publishing it here is what a prepare step does in production.
+  // recorder blocks before it judges anything, which is the ordering the
+  // receipt gate installs; publishing it here is what a prepare step does in
+  // production.
   if (prepared) {
     await publishPreparationReceipt(workspace.rootDir, { config, candidate: captured }, { storageRoot: workspace.storageRoot });
   }

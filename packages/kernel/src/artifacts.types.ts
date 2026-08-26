@@ -53,12 +53,28 @@ export interface RunRoot {
 }
 
 /**
- * Why a run root could not be derived. Both reasons are about the *shape* of a
- * provider-supplied identifier, which the port refuses to interpret as a path
- * before any filesystem call happens: `runId: "../run-a"` names another
- * provider's directory, and `runId: "."` names the pool itself.
+ * Why a run root could not be derived.
+ *
+ * The first two are about the *shape* of a provider-supplied identifier, which
+ * the port refuses to interpret as a path before any filesystem call happens:
+ * `runId: "../run-a"` names another provider's directory, and `runId: "."`
+ * names the pool itself. Both are also rejections the manifest validator makes
+ * under ENV-1 and ENV-2, which matters to the caller: a refusal the validator
+ * independently names can be skipped without losing a check.
+ *
+ * The last two are not. `provider_id_too_long` is a grammar-legal id — ENV-1
+ * bounds the character set and not the length — that cannot be a path
+ * component, and `run_root_outside_base` is the pool's own directory resolving
+ * somewhere the harness did not put it. Nothing else in the system names
+ * either, so a caller that treats them as "skip the run-root rules" accepts a
+ * submission whose containment was never established.
  */
-export const RUN_ROOT_REFUSAL_REASONS = ["unsafe_provider_id", "unsafe_run_id"] as const;
+export const RUN_ROOT_REFUSAL_REASONS = [
+  "unsafe_provider_id",
+  "unsafe_run_id",
+  "provider_id_too_long",
+  "run_root_outside_base",
+] as const;
 
 export type RunRootRefusalReason = (typeof RUN_ROOT_REFUSAL_REASONS)[number];
 
@@ -146,4 +162,12 @@ export interface ArtifactsPort {
   readTextFile(target: string): Promise<string>;
   /** Writes a UTF-8 text file atomically, creating parent directories. */
   writeTextFile(target: string, contents: string, options?: WriteFileOptions): Promise<void>;
+  /**
+   * Removes a file, treating an absent one as success.
+   *
+   * Its caller is a rejection undoing records it published before discovering a
+   * conflict on a later claim, so it must not fail the operation it is cleaning
+   * up after: it reports whether the file is gone rather than throwing.
+   */
+  removeFile(target: string): Promise<boolean>;
 }
