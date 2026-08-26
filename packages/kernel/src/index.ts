@@ -210,6 +210,48 @@ export {
   type PublishedPreparationReceipt,
 } from "./preparation.ts";
 
+// Who is running the gate, and what that entitles them to. The classifier reads
+// a *given* environment snapshot rather than the ambient process, so a caller
+// decides what the gate is allowed to see.
+export {
+  EXECUTION_CONTEXT_KINDS,
+  UNKNOWN_CONTEXT_REASONS,
+  classifyExecutionContext,
+  isEnvSignalPresent,
+  type AgentExecutionContext,
+  type CiExecutionContext,
+  type ClassifyExecutionContextInput,
+  type EnvSnapshot,
+  type ExecutionContext,
+  type ExecutionContextKind,
+  type HumanExecutionContext,
+  type UnknownContextReason,
+  type UnknownExecutionContext,
+} from "./context.ts";
+
+// The pure gate evaluator: six outcomes that never stand in for one another,
+// freshness judged by deliverable identity, and the waiver's narrow door.
+export {
+  RESOLUTION_OUTCOMES,
+  enforceAllowedResolution,
+  evaluateGate,
+  isRecordFreshForCandidate,
+  type BlockedResolution,
+  type DelegatedResolution,
+  type EvaluateGateInput,
+  type GateDecision,
+  type LiveProviderFinding,
+  type LiveProviderResult,
+  type NotApplicableResolution,
+  type ObligationFinding,
+  type ObligationResolution,
+  type ResolutionOutcome,
+  type SatisfiedEvidenceResolution,
+  type SatisfiedLiveFactResolution,
+  type UnreadableRecordInput,
+  type WaivedResolution,
+} from "./evaluator.ts";
+
 // The filesystem port. Run roots, containment, artifact observation and one
 // atomic write — the only place the submission path opens a file, which is what
 // makes the no-ad-hoc-fs rule over the recorder enforceable.
