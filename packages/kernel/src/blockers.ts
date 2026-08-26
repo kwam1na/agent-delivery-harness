@@ -413,8 +413,16 @@ function sanitizedLine(value: unknown, label: string): string {
  * Details keep their newlines — a stack or a provider report is unreadable as
  * one line — but are redacted and bounded here rather than at the renderer, so
  * no stored or serialized form can retain more than the operator was shown.
+ *
+ * Exported because blockers are not the only operator-facing text built from
+ * untrusted bytes: the evidence store's quarantine diagnostics quote the file
+ * they refuse, and a credential planted in such a file must not survive the
+ * quote. Redaction happens at construction there for the same reason it does
+ * here — every retained copy descends from the constructed value. Callers get
+ * *this* chain rather than a second one; two redaction implementations would
+ * drift, and the weaker one would be the one that mattered.
  */
-function sanitizedDetail(value: unknown, label: string): string {
+export function sanitizedDetail(value: unknown, label: string): string {
   const raw = requireString(value, label);
   const redacted = redactSecrets(windowed(raw, MAX_BLOCKER_DETAIL_LENGTH)).trim();
   return bounded(redacted, MAX_BLOCKER_DETAIL_LENGTH);
