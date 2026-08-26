@@ -91,6 +91,20 @@ describe("the two error channels", () => {
   });
 });
 
+describe("requests and notifications", () => {
+  it("never answers a message with no id member", async () => {
+    expect(await answer({ jsonrpc: "2.0", method: "ping" })).toBeNull();
+    expect(await answer({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
+  });
+
+  it("answers a message whose id is explicitly null rather than leaving it hanging", async () => {
+    const response = await answer({ jsonrpc: "2.0", id: null, method: "ping" });
+    expect(response).not.toBeNull();
+    expect(response?.id).toBeNull();
+    expect(response?.result).toEqual({});
+  });
+});
+
 describe("the tool list", () => {
   it("advertises the two tools with their schemas", async () => {
     const response = await answer(request("tools/list"));

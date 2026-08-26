@@ -79,10 +79,14 @@ function idOf(message: Record<string, unknown>): JsonRpcId {
   return null;
 }
 
-/** A request carries an id; a notification does not, and is never answered. */
+/**
+ * A notification is a message with no `id` *member* — not a message whose id
+ * happens to be null. The distinction matters: answering an explicit null id
+ * with silence would hang a client that is waiting for a response it is
+ * entitled to.
+ */
 function isNotification(message: Record<string, unknown>): boolean {
-  const id = message["id"];
-  return id === undefined || id === null;
+  return !Object.prototype.hasOwnProperty.call(message, "id");
 }
 
 function negotiate(requested: unknown): string {
