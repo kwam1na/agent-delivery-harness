@@ -82,23 +82,76 @@
 #              The re-delivery IS the polling loop: nothing waits in-process, so
 #              nothing burns a runner minute waiting for a human.
 #
-#   jobs:
-#     verify-delivery-record:
-#       runs-on: ubuntu-latest
-#       permissions:
-#         contents: read          # read-only: this job must never be able to push
-#       steps:
-#         - uses: actions/setup-node@v4
-#           with: { node-version: "22" }
-#         - uses: ./packages/action     # or the published action reference
+# ```yaml
+# on: pull_request
 #
-# Two things follow that are easy to get wrong:
+# jobs:
+#   verify-delivery-record:
+#     runs-on: ubuntu-latest
+#     permissions:
+#       contents: read
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: actions/setup-node@v4
+#         with:
+#           node-version: "22"
+#       - uses: ./packages/action
+# ```
+#
+# The first `actions/checkout` is not optional and is not the same one this
+# action performs internally: GitHub resolves a *local* action reference
+# (`uses: ./…`) from the workspace on disk, so without a checkout the workflow
+# fails before this action is ever loaded. The action then re-checks-out the
+# head by sha itself, which is what pins what gets verified.
+#
+# Two more things that are easy to get wrong:
 #
 #   * Do not add `pull_request_target`. It runs with the base repository's
 #     privileges against an unreviewed head. `main.ts` refuses that event by
 #     name rather than trusting a workflow author to have thought it through.
 #   * Do not make this job `continue-on-error`. A verification that cannot fail
 #     the merge is documentation, not a gate.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# HOW THIS ACTION RESOLVES ITS OWN CODE, AND THE v1 BOUNDARY
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The harness ships as TypeScript source and imports `@delivery-harness/kernel`
+# by package name. That name resolves only through an npm workspace install, and
+# the internal `actions/checkout` below runs with `clean` at its default — which
+# deletes an untracked `node_modules`, including one a caller installed before
+# calling this action. So the verify step installs the harness workspace itself.
+# It installs in the root of the ACTION's own checkout — walked up from
+# `$GITHUB_ACTION_PATH`, which is where this action's code actually sits — and
+# not in `$GITHUB_WORKSPACE`, which a `working-directory` input can point
+# somewhere else entirely. `--ignore-scripts`, because the tree being installed
+# is the pull request's own and a lifecycle script in an untrusted head has no
+# business running inside the verifier.
+#
+# SELF-HOSTED FORM. With `uses: ./packages/action` the action's code and the
+# repository under verification are one checkout, so `$GITHUB_ACTION_PATH` is
+# `$GITHUB_WORKSPACE/packages/action`, the walk finds the workspace root two
+# levels up, and the install produces the `node_modules/@delivery-harness/*`
+# links the kernel import resolves through. Node resolves those links to their
+# real paths under `packages/`, which is also why type stripping works: the file
+# it strips is not, in the end, under `node_modules`.
+#
+# One consequence of the self-hosted form is worth saying plainly rather than
+# leaving to be discovered: the pull request being verified supplies the verifier
+# that judges it. That is inherent to a repository gating itself with its own
+# tool, not a defect of this action — a pull request can weaken its own gate, and
+# the mitigation (pinning the action to a ref from the base rather than from the
+# head) belongs to the self-hosting workflow, not here.
+#
+# PUBLISHED FORM — A KNOWN v1 BOUNDARY. Referencing this action as
+# `owner/repo/packages/action@ref` does not work today, and the step says so
+# rather than failing with a module-resolution stack: the published action is
+# fetched on its own, with no workspace root above it to install, and even with
+# one, Node refuses to strip types from files under `node_modules`
+# (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). Both are fixed the same way —
+# by shipping a compiled, dependency-inlined bundle — and bundling is release
+# mechanics, which the release unit owns. Until then the supported form is the
+# self-hosted one.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # ATTESTATION HONESTY
@@ -178,15 +231,59 @@ runs:
         DELIVERY_HARNESS_ACTION_PATH: ${{ github.action_path }}
         DELIVERY_HARNESS_WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
-        set -euo pipefail
-        if [ -n "${DELIVERY_HARNESS_WORKING_DIRECTORY}" ]; then
-          export GITHUB_WORKSPACE="${DELIVERY_HARNESS_WORKING_DIRECTORY}"
+        set -eu
+
+        # The action's own npm workspace root — the one whose node_modules the
+        # kernel import resolves through. Walked up from the action directory
+        # rather than assumed to be the workspace, so a layout this action was
+        # not designed for fails loudly instead of installing somewhere
+        # unrelated. Four levels is generous: the action sits two below its root.
+        harness_root=""
+        candidate="${DELIVERY_HARNESS_ACTION_PATH}"
+        for _ in 1 2 3 4; do
+          candidate="$(cd "${candidate}/.." && pwd)"
+          if [ -f "${candidate}/package.json" ] && grep -q '"workspaces"' "${candidate}/package.json"; then
+            harness_root="${candidate}"
+            break
+          fi
+        done
+
+        if [ -z "${harness_root}" ]; then
+          # The published-action shape. Say so in the harness's own voice: an
+          # operator who gets ERR_MODULE_NOT_FOUND here learns nothing, while
+          # this names the boundary and the supported form.
+          message="delivery-harness: this action runs from TypeScript source and needs its own npm workspace root above ${DELIVERY_HARNESS_ACTION_PATH}, which does not exist. The published-action form is not supported in v1 (it also hits ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING); use the self-hosted form, 'uses: ./packages/action', from a checkout of the harness repository."
+          printf '%s\n' "${message}" >&2
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            printf '## Delivery record verification\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          exit 1
         fi
-        cd "${GITHUB_WORKSPACE}"
-        # The harness is TypeScript and ships as source. Node 23.6+ strips types
-        # by default; 22.18+ needs the flag. The flag is still accepted on newer
-        # majors, so one invocation covers the supported range — and a runtime
-        # that supports neither fails loudly here rather than skipping the check.
-        node --experimental-strip-types \
-             --disable-warning=ExperimentalWarning \
-             "${DELIVERY_HARNESS_ACTION_PATH}/src/main.ts"
+
+        # The checkout above uses actions/checkout's `clean` default, which
+        # removes an untracked node_modules — so on a normal run this install is
+        # what makes the kernel resolvable at all. Skipped when the harness is
+        # already linked at that root, which is what keeps this step cheap for a
+        # caller that installed first and what keeps it offline in tests.
+        # --ignore-scripts: the tree being installed is the pull request's own.
+        if [ ! -e "${harness_root}/node_modules/@delivery-harness/kernel" ]; then
+          ( cd "${harness_root}" && npm ci --ignore-scripts )
+        fi
+
+        workspace="${GITHUB_WORKSPACE:-$PWD}"
+        if [ -n "${DELIVERY_HARNESS_WORKING_DIRECTORY:-}" ]; then
+          workspace="${DELIVERY_HARNESS_WORKING_DIRECTORY}"
+        fi
+        export GITHUB_WORKSPACE="${workspace}"
+        cd "${workspace}"
+
+        # The harness ships as source. Node 23.6+ strips types by default; 22.18+
+        # needs the flag. Probed rather than assumed so the invocation keeps
+        # working if a future major drops the flag — and a runtime that supports
+        # neither fails loudly here rather than skipping the check.
+        node_flags="--disable-warning=ExperimentalWarning"
+        if node --experimental-strip-types --version >/dev/null 2>&1; then
+          node_flags="--experimental-strip-types ${node_flags}"
+        fi
+        # shellcheck disable=SC2086
+        node ${node_flags} "${DELIVERY_HARNESS_ACTION_PATH}/src/main.ts"

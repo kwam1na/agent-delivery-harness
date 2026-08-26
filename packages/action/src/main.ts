@@ -50,6 +50,7 @@
  * skip: a check that reports success because it could not run is worse than no
  * check, because it looks like one.
  */
+import { realpathSync } from "node:fs";
 import { access, appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -100,12 +101,17 @@ export const ACTION_EXIT_POLICY = 1;
  * `delegated-authority` is a claim, made by passing the `ci-policy-id` input,
  * that this job is the repository-authorized automation a declared CI policy
  * names. The claim is checked through `classifyExecutionContext` against the
- * consumer's own policies, and it is checked *exactly*: a near miss is
- * `unauthorized_automation`, never a quiet downgrade back to `verify`. That
- * asymmetry is the whole reason the mode exists — an automation with a
- * half-configured environment must not acquire whatever rights it lands next to.
+ * consumer's own policies, and it is checked *exactly*.
+ *
+ * `delegation-refused` is what a failed claim reports, and it is a distinct mode
+ * rather than a fall back to `verify` for the reason the whole ladder exists: a
+ * refused claim reported as `verify` IS the quiet downgrade. An operator reading
+ * `verify` on a job they configured to run under a policy would conclude the
+ * policy was irrelevant rather than that it did not hold, and a dashboard
+ * grouping runs by mode would file the refusal alongside every ordinary check.
+ * The mode names what happened; the blocker says why.
  */
-export const ACTION_MODES = ["verify", "delegated-authority"] as const;
+export const ACTION_MODES = ["verify", "delegated-authority", "delegation-refused"] as const;
 export type ActionMode = (typeof ACTION_MODES)[number];
 
 /**
@@ -225,6 +231,18 @@ const IDENTITY_DRIFT_CLASS: (typeof DELIVERY_RECORD_DRIFT_CLASSES)[number] = "de
 const ID_GRAMMAR = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const TOKEN_GRAMMAR = /^[A-Za-z0-9._/-]{1,80}$/;
 const SHA_GRAMMAR = /^[0-9a-f]{7,64}$/;
+
+/**
+ * What a head sha must look like at the payload boundary: a *full* object name.
+ *
+ * Wider than the display grammar on purpose. GitHub always sends 40 hex in
+ * `pull_request.head.sha`, so an abbreviation arriving there is a rewritten or
+ * hand-assembled payload, and an abbreviation is ambiguous by construction —
+ * `git rev-parse` would happily resolve it to whichever object happens to share
+ * the prefix. The commit whose tree an entire verification hangs on is the last
+ * place to accept a value that git gets to interpret.
+ */
+const HEAD_SHA_GRAMMAR = /^[0-9a-f]{40}$/;
 const DIGEST_GRAMMAR = /^[0-9a-f]{64}$/;
 
 const UNPRINTABLE = "[unprintable]";
@@ -338,7 +356,7 @@ async function resolvePullRequestEvent(runtime: ActionRuntime): Promise<EventRes
 
   const pullRequest = readMember(payload, "pull_request");
   const headSha = readMember(readMember(pullRequest, "head"), "sha");
-  if (typeof headSha !== "string" || !SHA_GRAMMAR.test(headSha)) {
+  if (typeof headSha !== "string" || !HEAD_SHA_GRAMMAR.test(headSha)) {
     return unreadable(`the payload carries no usable pull_request.head.sha (${JSON.stringify(headSha ?? null)})`);
   }
   const headRef = readMember(readMember(pullRequest, "head"), "ref");
@@ -391,8 +409,12 @@ function resolveMode(runtime: ActionRuntime, config: HarnessConfig): ModeResolut
     ?.requiredEnv.map((requirement) => `${requirement.variable}=${JSON.stringify(requirement.equals)}`)
     .join(", ");
   return {
-    mode: "verify",
-    policyId: null,
+    // Never `verify`. The claim was made and refused, and the mode has to say
+    // so — reporting the refusal as an ordinary unprivileged run is the quiet
+    // downgrade this whole path exists to prevent. The claimed id is carried so
+    // the summary can name what was refused rather than only that something was.
+    mode: "delegation-refused",
+    policyId,
     blockers: [
       actionBlocker({
         code: "unauthorized_automation",
@@ -474,7 +496,14 @@ interface DiscoveredRecords {
  */
 async function readTrackedRecords(git: GitPort, headSha: string, config: HarnessConfig): Promise<DiscoveredRecords> {
   const shape = recordNameShape(config);
-  const listing = await git(["ls-tree", "-r", "--name-only", "-z", headSha]);
+  // `--full-tree` for the same reason the identity computation uses it: without
+  // it, `ls-tree` is scoped to git's current directory and reports paths
+  // relative to it. Run under a `working-directory` below the repository root,
+  // discovery would then match a record at a truncated name and read its content
+  // from a root-level path of that name — a path/content confusion. The two
+  // sides of this check must be anchored identically or they are not comparing
+  // the same tree.
+  const listing = await git(["ls-tree", "-r", "--name-only", "-z", "--full-tree", headSha]);
   if (listing.exitCode !== 0) {
     return {
       files: [],
@@ -578,11 +607,27 @@ function renderSummary(input: SummaryInput, config: HarnessConfig | null): strin
   lines.push("");
   lines.push("| | |");
   lines.push("| --- | --- |");
-  lines.push(`| Mode | \`${input.mode}\`${input.policyId === null ? "" : ` (policy \`${printable(input.policyId, ID_GRAMMAR)}\`)`} |`);
-  lines.push(`| Verified commit | \`${input.headSha === null ? UNPRINTABLE : printable(input.headSha, SHA_GRAMMAR)}\` (pull request head${input.headRef === null ? "" : `, \`${printable(input.headRef, TOKEN_GRAMMAR)}\``}) |`);
-  lines.push(
-    `| Not verified | \`${input.mergeRefSha === null ? "—" : printable(input.mergeRefSha, SHA_GRAMMAR)}\` (\`GITHUB_SHA\`, the synthetic merge commit) |`,
-  );
+  // The refused case names the claim it refused, not a policy it holds — the
+  // difference between "running under this policy" and "asked to, and was told
+  // no" is the whole content of the cell.
+  const policyNote =
+    input.policyId === null
+      ? ""
+      : input.mode === "delegation-refused"
+        ? ` (refused claim \`${printable(input.policyId, ID_GRAMMAR)}\`)`
+        : ` (policy \`${printable(input.policyId, ID_GRAMMAR)}\`)`;
+  lines.push(`| Mode | \`${input.mode}\`${policyNote} |`);
+  // Omitted rather than filled with a placeholder when the run never got a head:
+  // "Verified commit [unprintable]" reads as a commit that could not be printed,
+  // when the truth is that nothing was verified at all.
+  if (input.headSha !== null) {
+    lines.push(
+      `| Verified commit | \`${printable(input.headSha, SHA_GRAMMAR)}\` (pull request head${input.headRef === null ? "" : `, \`${printable(input.headRef, TOKEN_GRAMMAR)}\``}) |`,
+    );
+    lines.push(
+      `| Not verified | \`${input.mergeRefSha === null ? "—" : printable(input.mergeRefSha, SHA_GRAMMAR)}\` (\`GITHUB_SHA\`, the synthetic merge commit) |`,
+    );
+  }
   if (input.deliverableDigest !== null) {
     lines.push(`| Deliverable identity | \`${printable(input.deliverableDigest, DIGEST_GRAMMAR)}\` (\`${printable(input.identityToken, TOKEN_GRAMMAR)}\`) |`);
   }
@@ -718,6 +763,10 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
     }
 
     const git = gitPortFor(runtime);
+    // The repository root, so repo-relative paths resolve the same way whether
+    // the action runs at the root or under a `working-directory`.
+    const topLevel = await git(["rev-parse", "--show-toplevel"]);
+    const repoRoot = topLevel.exitCode === 0 ? topLevel.stdout.trim() : runtime.workspace;
 
     // The head's tree, resolved from the head sha in the payload. Never
     // `GITHUB_SHA`, never `HEAD`, never the working directory.
@@ -803,7 +852,7 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
         return await settle();
       }
       if (discovered.trackedCount === 0) {
-        const exists = await workspaceHas(runtime, expectedPath);
+        const exists = await workspaceHas(runtime, repoRoot, expectedPath);
         blockers.push(
           exists
             ? actionBlocker({
@@ -845,6 +894,60 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
       return await settle();
     }
 
+    // NO SILENT TIE-BREAK.
+    //
+    // `selectDeliveryRecordForIdentity` sorts by path so its answer is
+    // deterministic, which is a property of the *function* and not a licence for
+    // the caller to treat first-by-name as authoritative. Two tracked files
+    // claiming one identity is not a choice to make: a record planted at a name
+    // that sorts early would win the tie and publish its own claims table while
+    // the honest record — the one at the path the digest derives — went
+    // unmentioned. And a lone record that binds the identity from some *other*
+    // name is not the file this config's naming rule produces, so accepting it
+    // would accept a record whose name and content were assembled separately.
+    //
+    // Both are refused before any claim is published, and neither can be reached
+    // by an honest loop: `record` writes exactly one file, at exactly this path.
+    const bindingRecords = discovered.files.filter(
+      (entry) =>
+        entry.record.candidateBinding.deliverableDigest === identity.deliverableDigest &&
+        entry.record.candidateBinding.identityToken === identity.identityToken,
+    );
+    if (bindingRecords.length > 1) {
+      blockers.push(
+        actionBlocker({
+          code: "ambiguous_delivery_records",
+          summary: "More than one tracked delivery record claims the deliverable identity recomputed from the head.",
+          details: [`expected exactly ${expectedPath}`, ...bindingRecords.map((entry) => `also ${entry.path}`)].join("\n"),
+          remediations: [
+            {
+              id: "remove-the-duplicate-records",
+              kind: "manual_action",
+              summary: "Leave exactly one delivery record for this deliverable — the one at its derived path — and remove the rest.",
+            },
+          ],
+        }),
+      );
+      return await settle();
+    }
+    if (selected.path !== expectedPath) {
+      blockers.push(
+        actionBlocker({
+          code: "delivery_record_path_unexpected",
+          summary: "The tracked delivery record binding this deliverable is not at the path its identity derives.",
+          details: `found ${selected.path}; the record for this deliverable is ${expectedPath}`,
+          remediations: [
+            {
+              id: "restore-the-derived-record-path",
+              kind: "manual_action",
+              summary: "Remove the renamed record and re-run `delivery-harness record`, which writes the record at its derived path.",
+            },
+          ],
+        }),
+      );
+      return await settle();
+    }
+
     recordPath = selected.path;
     check = verifyDeliveryRecord(config, selected.record, identity, base);
     blockers.push(...check.blockers);
@@ -861,8 +964,16 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
   }
 }
 
-async function workspaceHas(runtime: ActionRuntime, relativePath: string): Promise<boolean> {
-  const absolute = path.join(runtime.workspace, relativePath);
+/**
+ * Whether a repo-relative path exists on disk.
+ *
+ * Joined against the repository *root*, not against `runtime.workspace`: under a
+ * `working-directory` the two differ, and a record path is repo-relative by
+ * definition. Anchoring on the working directory would look for the record in a
+ * place it never lives and report "missing" where "untracked" was the truth.
+ */
+async function workspaceHas(runtime: ActionRuntime, repoRoot: string, relativePath: string): Promise<boolean> {
+  const absolute = path.join(repoRoot, relativePath);
   if (runtime.pathExists !== undefined) return runtime.pathExists(absolute);
   try {
     await access(absolute);
@@ -937,9 +1048,28 @@ export function defaultRuntime(): ActionRuntime {
   };
 }
 
-/** Resolves an argv entry to the href form `import.meta.url` carries. */
+/**
+ * Resolves an argv entry to the href form `import.meta.url` carries.
+ *
+ * RESOLVED THROUGH THE FILESYSTEM, not merely made absolute. `import.meta.url`
+ * is built from the module's realpath, while argv carries whatever spelling the
+ * caller used — and this action is invoked by absolute path, from a workspace
+ * that is very often reached through a symlink (a runner's action path, an npm
+ * workspace link, `/tmp` on macOS). A textual comparison then decides this
+ * module was not the entry, `main` never runs, the event loop drains, and the
+ * process exits 0 having verified nothing. A silently passing gate is the worst
+ * failure this file can have, so the comparison resolves both sides.
+ */
 export function entryHref(argvEntry: string): string {
-  return pathToFileURL(argvEntry).href;
+  let resolved = argvEntry;
+  try {
+    resolved = realpathSync(argvEntry);
+  } catch {
+    // Not on disk, or unreadable. The textual form is still correct wherever no
+    // symlink is involved, and a wrong answer here can only under-match — which
+    // the `process.exitCode` floor below turns into a failure, never a pass.
+  }
+  return pathToFileURL(resolved).href;
 }
 
 /**

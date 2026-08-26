@@ -17,11 +17,11 @@
  *     no implementation that resolved it could survive.
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
-import { rmSync } from "node:fs";
+import { mkdtemp, readFile, symlink, writeFile, mkdir } from "node:fs/promises";
+import { realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -38,7 +38,7 @@ import {
   type HarnessConfig,
   type HarnessConfigInput,
 } from "@delivery-harness/kernel";
-import { ACTION_EXIT_OK, ACTION_EXIT_POLICY, runAction, type ActionRuntime } from "./main.ts";
+import { ACTION_EXIT_OK, ACTION_EXIT_POLICY, invokedDirectly, runAction, type ActionRuntime } from "./main.ts";
 
 const run = promisify(execFile);
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "events");
@@ -249,6 +249,8 @@ interface Driven {
   readonly runtime: ActionRuntime;
   readonly summaries: string[];
   readonly logs: string[];
+  /** What a runner would have written to `$GITHUB_OUTPUT`. */
+  readonly outputs: Record<string, string>[];
 }
 
 interface DriveOptions {
@@ -259,6 +261,10 @@ interface DriveOptions {
   readonly mergeSha?: string;
   readonly baseSha?: string;
   readonly env?: Record<string, string>;
+  /** Drives git from somewhere other than the repository root. */
+  readonly workspace?: string;
+  /** Wraps the real git port so one command can be made to fail. */
+  readonly git?: (real: typeof runGitCommand) => typeof runGitCommand;
 }
 
 async function driveRuntime(dir: string, options: DriveOptions = {}): Promise<Driven> {
@@ -277,19 +283,23 @@ async function driveRuntime(dir: string, options: DriveOptions = {}): Promise<Dr
 
   const summaries: string[] = [];
   const logs: string[] = [];
+  const outputs: Record<string, string>[] = [];
   const config = options.config ?? makeConfig();
   const runtime: ActionRuntime = {
     env: { ...fixture.env, ...(options.env ?? {}) },
-    workspace: dir,
-    git: runGitCommand,
+    workspace: options.workspace ?? dir,
+    git: options.git === undefined ? runGitCommand : options.git(runGitCommand),
     readFile: (absolutePath) => readFile(absolutePath, "utf8"),
     loadConfig: options.loadConfig ?? (async () => config),
     writeSummary: async (markdown) => {
       summaries.push(markdown);
     },
+    writeOutputs: async (written) => {
+      outputs.push({ ...written });
+    },
     log: (line) => logs.push(line),
   };
-  return { runtime, summaries, logs };
+  return { runtime, summaries, logs, outputs };
 }
 
 function codesOf(blockers: readonly { readonly code: string }[]): string[] {
@@ -788,5 +798,257 @@ describe("the check summary", () => {
     const { runtime, summaries } = await driveRuntime(dir, { config });
     await runAction(runtime);
     expect(summaries.join("")).toContain("stale");
+  });
+});
+
+// ── Review round 1: refused delegation is its own mode ───────────────────────
+
+describe("a refused delegation claim is never reported as verify mode", () => {
+  it("names the refused claim in the summary and in the step outputs", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    await commitRecord(dir, config, digest, await buildRecord(dir, config, digest));
+
+    const { runtime, summaries, outputs } = await driveRuntime(dir, {
+      fixture: "pull-request-delegation-near-miss.json",
+      config,
+    });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(false);
+    // "verify" would be the exact quiet downgrade the refusal exists to prevent.
+    expect(result.mode).toBe("delegation-refused");
+    expect(outputs[0]?.["mode"]).toBe("delegation-refused");
+    expect(outputs[0]?.["verified"]).toBe("false");
+    const summary = summaries.join("");
+    expect(summary).toContain("delegation-refused");
+    expect(summary).toContain("github-actions");
+    expect(summary).not.toContain("| Mode | `verify` |");
+  });
+
+  it("reports plain verify mode only when no claim was made", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    await commitRecord(dir, config, digest, await buildRecord(dir, config, digest));
+    const { runtime, outputs } = await driveRuntime(dir, { config });
+    const result = await runAction(runtime);
+    expect(result.mode).toBe("verify");
+    expect(outputs[0]?.["mode"]).toBe("verify");
+  });
+});
+
+// ── Review round 1: no silent tie-break between records ──────────────────────
+
+describe("two records binding one identity are never tie-broken", () => {
+  it("blocks when a second record binds the head's identity under another name", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    const honest = await buildRecord(dir, config, digest);
+    // A plant that sorts first lexicographically and claims the same identity.
+    // Under a `[0]` tie-break its claims table would be the one published.
+    const planted = { ...honest, claims: [{ ...honest.claims[0], recordId: "f".repeat(64) }] } as typeof honest;
+    await commitRecord(dir, config, "0".repeat(64), planted);
+    await commitRecord(dir, config, digest, honest);
+
+    const { runtime, summaries } = await driveRuntime(dir, { config });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("ambiguous_delivery_records");
+    // Nothing from either record is published as a verified claim.
+    expect(summaries.join("")).not.toContain("### Claims");
+  });
+
+  it("blocks a lone record that binds the identity from an unexpected path", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    await commitRecord(dir, config, "0".repeat(64), await buildRecord(dir, config, digest));
+
+    const { runtime } = await driveRuntime(dir, { config });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("delivery_record_path_unexpected");
+  });
+
+  it("still passes the honest record sitting at its own derived path", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    const expectedPath = deliveryRecordPathFor(config, digest);
+    await commitRecord(dir, config, digest, await buildRecord(dir, config, digest));
+
+    const { runtime } = await driveRuntime(dir, { config });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(true);
+    expect(result.recordPath).toBe(expectedPath);
+  });
+});
+
+// ── Review round 1: discovery is anchored at the repository root ─────────────
+
+describe("record discovery does not depend on the directory git runs in", () => {
+  it("finds the record when the action runs from a subdirectory", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    await writeAt(dir, "packages/app/index.ts", "export const x = 1;\n");
+    await commit(dir, "nested work");
+    const digest = await identityOf(dir, config, "HEAD");
+    await commitRecord(dir, config, digest, await buildRecord(dir, config, digest));
+
+    // What `working-directory` produces: git invoked below the repository root.
+    const { runtime } = await driveRuntime(dir, { config, workspace: path.join(dir, "packages", "app") });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(true);
+    expect(result.recordPath).toBe(deliveryRecordPathFor(config, digest));
+  });
+});
+
+// ── Review round 1: the remaining implemented failure classes ────────────────
+
+describe("failure classes that only a repository can produce", () => {
+  it("fails closed when the head and the base share no history", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig({ baseRef: "unrelated" });
+    // An orphan branch: a second root commit, no merge base with anything.
+    await git(dir, "checkout", "--quiet", "--orphan", "unrelated");
+    await git(dir, "rm", "-rq", "--cached", ".");
+    await writeAt(dir, "unrelated.txt", "another history\n");
+    await commit(dir, "unrelated root");
+    await git(dir, "checkout", "--quiet", "feature");
+
+    const { runtime } = await driveRuntime(dir, { config });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("merge_base_unavailable");
+  });
+
+  it("fails closed when the head's tree cannot be listed", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const { runtime } = await driveRuntime(dir, {
+      config,
+      // Everything stays real except the one listing, so the failure is the one
+      // under test rather than a repository that was never usable.
+      git: (real) => (command, options) =>
+        command.includes("ls-tree") && command.includes("--name-only")
+          ? Promise.resolve({ exitCode: 128, stdout: "", stderr: "fatal: not a tree object" })
+          : real(command, options),
+    });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("tracked_tree_unreadable");
+  });
+
+  it("fails closed when a discovered record's blob cannot be read", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    await commitRecord(dir, config, digest, await buildRecord(dir, config, digest));
+
+    const { runtime } = await driveRuntime(dir, {
+      config,
+      git: (real) => (command, options) =>
+        command.includes("cat-file")
+          ? Promise.resolve({ exitCode: 128, stdout: "", stderr: "fatal: bad object" })
+          : real(command, options),
+    });
+    const result = await runAction(runtime);
+
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("delivery_record_unreadable");
+  });
+});
+
+// ── Review round 1: the attestation label is unconditional ───────────────────
+
+describe("the honest attestation label", () => {
+  it("appears on every shape the summary can take, blocked ones included", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+
+    const shapes: { readonly name: string; readonly drive: () => Promise<Driven> }[] = [
+      { name: "not a pull request", drive: () => driveRuntime(dir, { fixture: "push.json", config }) },
+      { name: "pull_request_target", drive: () => driveRuntime(dir, { fixture: "pull-request-target.json", config }) },
+      { name: "headless payload", drive: () => driveRuntime(dir, { fixture: "pull-request-headless-payload.json", config }) },
+      { name: "record missing", drive: () => driveRuntime(dir, { config }) },
+      { name: "head absent", drive: () => driveRuntime(dir, { config, headSha: "1".repeat(40) }) },
+      { name: "base unresolvable", drive: () => driveRuntime(dir, { config: makeConfig({ baseRef: "origin/nope" }) }) },
+      { name: "delegation refused", drive: () => driveRuntime(dir, { fixture: "pull-request-delegation-near-miss.json", config }) },
+    ];
+
+    for (const shape of shapes) {
+      const { runtime, summaries } = await shape.drive();
+      const result = await runAction(runtime);
+      expect(result.ok, shape.name).toBe(false);
+      expect(summaries.join(""), shape.name).toContain(ATTESTATION_LABEL);
+    }
+
+    // And on the passing shape, so the assertion is not only about failures.
+    await commitRecord(dir, config, digest, await buildRecord(dir, config, digest));
+    const { runtime, summaries } = await driveRuntime(dir, { config });
+    expect((await runAction(runtime)).ok).toBe(true);
+    expect(summaries.join("")).toContain(ATTESTATION_LABEL);
+  });
+});
+
+// ── Review round 1: summary and payload polish ───────────────────────────────
+
+describe("the summary says nothing it does not know", () => {
+  it("omits the verified-commit row entirely when there was no head", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const { runtime, summaries } = await driveRuntime(dir, { fixture: "push.json" });
+    await runAction(runtime);
+    const summary = summaries.join("");
+    expect(summary).not.toContain("Verified commit");
+    expect(summary).not.toContain("[unprintable]");
+  });
+
+  it("refuses a head sha that is not a full object name", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const full = await git(dir, "rev-parse", "HEAD");
+    const { runtime } = await driveRuntime(dir, { config, headSha: full.slice(0, 12) });
+    const result = await runAction(runtime);
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("event_payload_unreadable");
+  });
+});
+
+// ── Review round 1: the entry guard cannot fail silently ─────────────────────
+
+describe("the executable entry guard", () => {
+  it("matches through a symlinked invocation path", TIMEOUT, async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-entry-"));
+    cleanups.push(dir);
+    const real = path.join(dir, "real");
+    await mkdir(real, { recursive: true });
+    const modulePath = path.join(real, "module.ts");
+    await writeFile(modulePath, "export const x = 1;\n", "utf8");
+    const linkedDir = path.join(dir, "linked");
+    await symlink(real, linkedDir);
+
+    // Realpathed, because that is what `import.meta.url` carries: Node resolves
+    // a module's own URL through the filesystem. The temp root itself sits
+    // behind a symlink on macOS, so building the href any other way would test
+    // a shape production never sees.
+    const moduleHref = pathToFileURL(realpathSync(modulePath)).href;
+    // How a runner invokes this action: an absolute path through whatever
+    // symlink the workspace happens to sit behind. A guard that compared the
+    // spellings would decide this module was not the entry, skip `main`, and
+    // exit 0 having verified nothing.
+    expect(invokedDirectly(path.join(linkedDir, "module.ts"), moduleHref)).toBe(true);
+    expect(invokedDirectly(path.join(real, "module.ts"), moduleHref)).toBe(true);
+    expect(invokedDirectly(path.join(real, "other.ts"), moduleHref)).toBe(false);
+    expect(invokedDirectly(undefined, moduleHref)).toBe(false);
   });
 });
