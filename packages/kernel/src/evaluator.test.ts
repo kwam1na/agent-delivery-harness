@@ -421,10 +421,19 @@ describe("freshness is deliverable identity, not the raw tree", () => {
     expect(only(evaluate({ config: testConfig(), records: [moved] })).kind).toBe("satisfied_evidence");
   });
 
+  /**
+   * Two codes, not one, and both are load-bearing: the record that was found is
+   * stale, *and* the approved provider consequently has nothing fresh. An
+   * operator who is only told the second would go looking for a record that is
+   * sitting right there.
+   */
   it("rejects a record whose deliverable moved under an unchanged raw tree", () => {
     const moved = evidence({ binding: boundTo({ deliverableDigest: "e".repeat(64) }) });
     expect(isRecordFreshForCandidate(testConfig(), moved.candidateBinding, CANDIDATE)).toBe(false);
-    expect(codesOf(evaluate({ config: testConfig(), records: [moved] }))).toEqual(["stale_evidence"]);
+    expect(codesOf(evaluate({ config: testConfig(), records: [moved] }))).toEqual([
+      "stale_evidence",
+      "review_evidence_missing",
+    ]);
   });
 
   it.each([
@@ -436,14 +445,20 @@ describe("freshness is deliverable identity, not the raw tree", () => {
     { member: "deliverableDigest (empty)", binding: boundTo({ deliverableDigest: "" }) },
   ])("stales a record whose $member differs", ({ binding }) => {
     expect(isRecordFreshForCandidate(testConfig(), binding, CANDIDATE)).toBe(false);
-    expect(codesOf(evaluate({ config: testConfig(), records: [evidence({ binding })] }))).toEqual(["stale_evidence"]);
+    expect(codesOf(evaluate({ config: testConfig(), records: [evidence({ binding })] }))).toEqual([
+      "stale_evidence",
+      "review_evidence_missing",
+    ]);
   });
 
   it("fails closed when the candidate names an identity token the config does not accept", () => {
     const foreign: CandidateBinding = { ...CANDIDATE, deliverable: { ...CANDIDATE.deliverable, identity: "unknown-tree/v9" } };
     const record = evidence({ binding: boundTo({ identityToken: "unknown-tree/v9" }, foreign) });
     expect(isRecordFreshForCandidate(testConfig(), record.candidateBinding, foreign)).toBe(false);
-    expect(codesOf(evaluate({ config: testConfig(), candidate: foreign, records: [record] }))).toEqual(["stale_evidence"]);
+    expect(codesOf(evaluate({ config: testConfig(), candidate: foreign, records: [record] }))).toEqual([
+      "stale_evidence",
+      "review_evidence_missing",
+    ]);
   });
 
   /**
