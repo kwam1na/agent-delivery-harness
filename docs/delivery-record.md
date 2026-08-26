@@ -93,10 +93,11 @@ advanced, or the merge base moved:
   relaxation and the drift classes it covered** — a relaxed pass never looks
   like a clean one.
 
-Two properties keep the policy honest. It is read by exactly one function —
+Two properties keep the policy honest. Exactly one decision path consults it —
 the pure `verifyDeliveryRecord` core that the CLI `verify` command and the
-Action share — so the local gate can never be more permissive than CI or vice
-versa. And the gate evaluator never reads it at all: a base-drift obligation
+Action share; surfaces like `check` and the Action summary *display* the
+setting but decide nothing by it — so the local gate can never be more
+permissive than CI or vice versa. And the gate evaluator never reads it at all: a base-drift obligation
 blocks identically under either policy. The policy governs *record
 verification*, never *gate admission*. Deliverable-identity mismatch is never
 relaxed under any policy.

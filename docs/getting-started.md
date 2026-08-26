@@ -11,7 +11,7 @@ prepare ──▶ review-context ──▶ submit-evidence ──▶ gate ──
 (receipt)   (what to review)   (manifest → records) (admit)  (tracked)  (recompute)
 ```
 
-Everything on this page is executed, not illustrated: the test suite
+Every command on this page is executed, not illustrated: the test suite
 ([`docs-examples.test.ts`](docs-examples.test.ts)) parses the fenced code
 blocks out of this file and runs them verbatim against a fixture repository —
 the `ts` blocks (each headed by a `// <relative-path>` comment) become files,

@@ -195,13 +195,20 @@ describe("the getting-started walkthrough", () => {
     expect(stdout).toContain(ATTESTATION_LABEL);
 
     // FLAG COUPLING, WITHOUT DUPLICATION. The CLI accepts a lone positional
-    // where a flag is optional, so merely executing the walkthrough can survive
-    // a flag rename. The authority on what the flags are called is the CLI's
-    // own usage error — so ask it: run `submit-evidence` with no arguments
-    // through the shim the walkthrough installed, and require every flag the
-    // CLI names in its usage message to appear in the guide's shell blocks.
-    // Rename a flag in the CLI (message and all, as a real rename does) without
-    // updating the guide, and this goes red.
+    // where a flag is optional, and every command other than `submit-evidence`
+    // ignores its argv entirely — so merely executing the walkthrough survives
+    // a renamed flag on either side and an invented flag on the guide's part.
+    // The authority on what the flags are called is the CLI's own usage error:
+    // run `submit-evidence` with no arguments through the shim the walkthrough
+    // installed and collect the flags its message names. Compare as EXACT token
+    // sets, in BOTH directions — every usage-named flag must appear as a token
+    // on one of the guide's `delivery-harness` lines, and every flag token the
+    // guide passes to `delivery-harness` must be one the CLI named (for the six
+    // argument-less commands that means their guide lines carry no flags at
+    // all). Substring containment would let `--manifest` hide inside
+    // `--manifest-file` and `--man` inside `--manifest`; token equality does
+    // not. All data is derived at runtime from the guide and the CLI's own
+    // output — nothing is duplicated here.
     const shim = path.join(repo, ".delivery-harness/bin/delivery-harness");
     const usage = await run(shim, ["submit-evidence"], { cwd: repo, env, timeout: 60_000 }).catch(
       (error: Error & { stdout?: string; stderr?: string; code?: number }) => error,
@@ -209,10 +216,24 @@ describe("the getting-started walkthrough", () => {
     const usageExit = usage instanceof Error ? usage.code : 0;
     expect(usageExit, "submit-evidence with no arguments is a usage error (exit 2)").toBe(2);
     const usageText = "stderr" in usage && typeof usage.stderr === "string" ? usage.stderr : "";
-    const flags = [...usageText.matchAll(/--[a-z][a-z-]*/g)].map((match) => match[0]);
-    expect(flags.length, `the usage message names its flags: ${JSON.stringify(usageText)}`).toBeGreaterThan(0);
-    for (const flag of flags) {
-      expect(script, `the guide's shell blocks use the CLI's ${flag} flag`).toContain(flag);
+
+    const FLAG_TOKEN = /^--[a-z][a-z-]*$/;
+    const guideFlagTokens = new Set<string>();
+    for (const line of script.split("\n")) {
+      const tokens = line.trim().split(/\s+/);
+      const command = tokens.indexOf("delivery-harness");
+      if (command === -1) continue;
+      for (const token of tokens.slice(command + 1)) {
+        if (FLAG_TOKEN.test(token)) guideFlagTokens.add(token);
+      }
+    }
+    const usageFlagTokens = new Set([...usageText.matchAll(/--[a-z][a-z-]*/g)].map((match) => match[0]));
+    expect(usageFlagTokens.size, `the usage message names its flags: ${JSON.stringify(usageText)}`).toBeGreaterThan(0);
+    for (const flag of usageFlagTokens) {
+      expect([...guideFlagTokens], `the guide passes the CLI's ${flag} flag on a delivery-harness line`).toContain(flag);
+    }
+    for (const flag of guideFlagTokens) {
+      expect([...usageFlagTokens], `the guide's ${flag} flag is one the CLI actually names`).toContain(flag);
     }
   });
 });
