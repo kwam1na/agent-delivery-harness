@@ -1,0 +1,16 @@
+{
+  "name": "nested-neutral-prefix-stripped",
+  "why": "`nested-neutral-prefix` with every neutral path deleted and nothing else touched. Its tree sha differs — the repository really did change — and its digest must not, which is the whole point of the neutral set: writing narration after the work it describes cannot invalidate the review of that work. Capturing this from Athena rather than asserting it against the port is what makes it evidence instead of a restatement of the port's own filter.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [
+    { "mode": "100644", "path": "docs/keep.md", "content": "reviewed documentation\n" },
+    { "mode": "100644", "path": "src/keep.ts", "content": "export const keep = 1;\n" }
+  ],
+  "expected": { "treeSha": "aef6b1f60ffb2e8abeded46f4de3dd7497f56e50", "digest": "f125e0d4691e6aff6816515834a53514b42956b22497c543f96906e952184623" }
+}

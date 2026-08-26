@@ -1,0 +1,20 @@
+{
+  "name": "mode-variants",
+  "why": "Every mode a recursive tree listing can carry: a regular file, an executable, a symlink whose blob holds its target, and a gitlink naming a commit this repository does not have. The gitlink also proves the listing's type column is not what the digest reads — its type is `commit`, not `blob`, and the digest takes the mode instead.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [
+    { "mode": "100644", "path": "src/app.ts", "content": "export const app = 1;\n" },
+    { "mode": "100755", "path": "scripts/run.sh", "content": "#!/bin/sh\necho run\n" },
+    { "mode": "120000", "path": "src/alias.ts", "content": "app.ts" },
+    { "mode": "160000", "path": "vendor/sub", "objectSha": "1111111111111111111111111111111111111111" },
+    { "mode": "100644", "path": "twins/plain.txt", "content": "same bytes\n" },
+    { "mode": "100755", "path": "twins/exec.txt", "content": "same bytes\n" }
+  ],
+  "expected": { "treeSha": "86f2b95ca038d0a6e1319890be3360cda8327139", "digest": "347837cbdfdec431dad72639e291529c260caabeb705f55065d55e0b0ef011fc" }
+}

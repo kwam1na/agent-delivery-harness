@@ -168,6 +168,27 @@ export {
   type CandidateCommandRunner,
 } from "./candidate.ts";
 
+// The deliverable identity: the digest review evidence is bound to, and the two
+// neutral predicates. Only `reviewNeutral` reaches the digest; `recordNeutral`
+// is exported beside it so the difference is read in one place rather than
+// re-derived. Byte-compatible with Athena's `deliverable-tree/v1` under that
+// token's narration set, which the goldens corpus pins.
+export {
+  IDENTITY_DOMAIN,
+  IDENTITY_FINDING_CODES,
+  computeDeliverableIdentity,
+  digestDeliverableEntries,
+  identityDefinitionOf,
+  isRecordNeutralPath,
+  isReviewNeutralPath,
+  parseTreeEntries,
+  withDeliverableIdentity,
+  type DeliverableIdentityDefinition,
+  type DeliverableIdentityOptions,
+  type DeliverableTreeEntry,
+  type IdentityFindingCode,
+} from "./identity.ts";
+
 // Preparation receipts: the ordering mechanism the review context and the gate
 // both consult before anything else.
 export {

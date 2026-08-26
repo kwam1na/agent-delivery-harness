@@ -1,0 +1,22 @@
+{
+  "name": "ordering-case-and-punctuation",
+  "why": "Paths whose order a collator and a code-unit comparison disagree about. `localeCompare` in an English locale puts `a.txt` before `A.txt` and treats `_` as ignorable punctuation; code-unit order puts every uppercase letter first and sorts `_` (0x5F) below every letter. The digest is a stream, so a different order is different bytes — and a collator's answer depends on the host's ICU build, which would make one tree digest two ways on two machines. This golden is what the localeCompare control in the suite is measured against.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [
+    { "mode": "100644", "path": "A.txt", "content": "upper a\n" },
+    { "mode": "100644", "path": "Z.txt", "content": "upper z\n" },
+    { "mode": "100644", "path": "_x.txt", "content": "underscore\n" },
+    { "mode": "100644", "path": "a-b.txt", "content": "hyphen\n" },
+    { "mode": "100644", "path": "a.txt", "content": "lower a\n" },
+    { "mode": "100644", "path": "ab.txt", "content": "no hyphen\n" },
+    { "mode": "100644", "path": "ax.txt", "content": "ax\n" },
+    { "mode": "100644", "path": "z.txt", "content": "lower z\n" }
+  ],
+  "expected": { "treeSha": "82dbb9de2ca0a9c88680a5117ecebc2903fb9bc1", "digest": "aec2d9e706aa67373a1951bbdbe32df79b8c183dacf26081670031ecd2ef3859" }
+}
