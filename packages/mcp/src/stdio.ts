@@ -25,7 +25,7 @@
  * JSON-RPC batching in 2025-03-26 — a server speaking that revision must accept
  * an array of messages — and removed it again in 2025-06-18. This transport
  * refuses arrays outright, so 2025-03-26 is deliberately absent from the
- * advertised list: a client asking for it is answered with 2025-06-18, where
+ * advertised list: a client asking for it is answered with a revision where
  * the refusal is the truth. 2024-11-05 predates batching entirely and carries
  * no such requirement, so it stays. Advertising a revision whose requirements
  * this file does not meet would be the one protocol lie that costs a client its
