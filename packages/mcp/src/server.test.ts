@@ -329,7 +329,8 @@ describe("parity table: the same repository state through both paths", () => {
       // raised by the command itself crosses identically.
       await assertParity(dir, config, artifacts, ["review-context"], "review-context", {}, { outcome: "blocked" });
 
-      // SUB family: a submission for a candidate nobody prepared (SUB-2).
+      // A submission before anything is prepared: the receipt gate, not a
+      // manifest rule, and it has to cross identically too.
       const unpreparedManifest = await buildSubmission(dir, config, artifacts);
       await assertParity(
         dir,
@@ -338,13 +339,29 @@ describe("parity table: the same repository state through both paths", () => {
         ["submit-evidence", "--manifest", unpreparedManifest],
         "submit-evidence",
         { manifest: unpreparedManifest },
-        { outcome: "blocked", witnesses: ["candidate_unprepared"] },
+        { outcome: "blocked", witnesses: ["preparation_missing"] },
       );
 
       expect(await runCli(["prepare"], cliRuntime(dir, config, artifacts))).toBe(EXIT_OK);
 
       // review-context on a prepared candidate: the accept side of the command.
       await assertParity(dir, config, artifacts, ["review-context"], "review-context", {}, { outcome: "ok" });
+
+      // SUB family: a working tree with uncommitted work has no candidate to
+      // compare against, and SUB-2 refuses the submission (candidate_unprepared).
+      const subManifest = await buildSubmission(dir, config, artifacts);
+      writeFileSync(path.join(dir, "src.txt"), "uncommitted\n", "utf8");
+      await assertParity(
+        dir,
+        config,
+        artifacts,
+        ["submit-evidence", "--manifest", subManifest],
+        "submit-evidence",
+        { manifest: subManifest },
+        { outcome: "blocked", witnesses: ["candidate_unprepared"] },
+      );
+      // Back to the prepared tree the remaining rows are bound to.
+      writeFileSync(path.join(dir, "src.txt"), "hello world\n", "utf8");
 
       // GEN family: a member this version's grammar does not define (GEN-1).
       const genManifest = await buildSubmission(dir, config, artifacts, (manifest) => ({ ...manifest, surprise: true }));
@@ -412,10 +429,13 @@ describe("parity table: the same repository state through both paths", () => {
 
     expect(await runCli(["prepare"], cliRuntime(dir, config, artifacts))).toBe(EXIT_OK);
     const manifestPath = await buildSubmission(dir, config, artifacts);
-    // The tree moves after the manifest was bound to it.
+    // The tree moves after the manifest was bound to it, and the new candidate
+    // is prepared in turn — so the receipt is current and SUB-1 is what the
+    // submission runs into: evidence for a candidate that no longer exists.
     writeFileSync(path.join(dir, "src.txt"), "edited\n", "utf8");
     await git(dir, "add", "src.txt");
     await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "edit");
+    expect(await runCli(["prepare"], cliRuntime(dir, config, artifacts))).toBe(EXIT_OK);
 
     await assertParity(
       dir,
@@ -535,9 +555,11 @@ describe("hostile text arrives neutralized in tool results", () => {
     );
     expect(raw.status).toBe("rejected");
     const rawText = JSON.stringify(raw.status === "rejected" ? raw.blockers : []);
-    expect(rawText).toContain("\\u001b[31m");
-    expect(rawText).toContain("\\u202e");
-    expect(rawText).toContain("\\u200b");
+    // `JSON.stringify` escapes the C0 escape and leaves the two invisibles as
+    // themselves; both forms are the hostile bytes still present.
+    expect(rawText, "the ANSI escape must still reach the unrendered blocker").toContain("\\u001b[31m");
+    expect(rawText, "the bidi override must still reach the unrendered blocker").toContain("‮");
+    expect(rawText, "the zero-width space must still reach the unrendered blocker").toContain("​");
 
     await resetRecords(dir, config);
     const { outcome } = await throughMcp(dir, config, artifacts, "submit-evidence", { manifest: manifestPath });
