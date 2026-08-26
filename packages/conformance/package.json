@@ -1,9 +1,9 @@
 {
   "name": "@delivery-harness/conformance",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
   "description": "delivery-evidence/1 conformance kit (89 golden vectors) and its generator",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
   },
@@ -12,6 +12,9 @@
   },
   "files": [
     "src",
-    "vectors"
+    "!src/**/*.test.ts",
+    "vectors",
+    "LICENSE",
+    "NOTICE"
   ]
 }

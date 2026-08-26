@@ -1,28 +1,33 @@
 /**
- * This repository's own harness configuration.
+ * This repository's own harness configuration — the gate its pull requests run.
  *
- * SKELETON. The gate this declares is not the gate this repository will run:
- * the obligation, its provider, and the delivery-record path are placeholders,
- * marked as such below, and are replaced when the repository starts gating its
- * own pull requests. What is real from day one is the *shape* — every invariant
- * the loader enforces is satisfied here, so the file cannot drift into an
- * unloadable state while the placeholders wait for their replacements.
+ * The loop this file drives is the one docs/getting-started.md walks a consumer
+ * through, performed here for real: the local gate admits a candidate, `record`
+ * writes the tracked delivery record under `delivery/records/`, and
+ * `.github/workflows/gate.yml` verifies that record against the pull request
+ * head with the Action in `packages/action`. One obligation, deliberately: a
+ * green code review, submitted as `review.green/1` evidence by this
+ * repository's review provider.
  *
- * WHY THE IDENTITY TOKEN IS ALREADY FINAL. `deliverable-tree/v1` is defined over
- * one specific narration set. This repository's review-neutral set is that set
- * plus the directory the tracked delivery record lives in — the record must be
- * neutral to both predicates, and the only way to get there is to widen the
- * review-neutral set. A widened set is a different identity function, so it gets
- * its own token: `delivery-harness-tree/v1`. Choosing it now rather than later
- * is deliberate. An identity token revision cascades — every record computed
- * under the old token stops matching — and doing it before any gate exists costs
- * nothing, while doing it afterwards would invalidate real evidence.
+ * WHY THE IDENTITY TOKEN IS CONSUMER-OWNED. `deliverable-tree/v1` is defined
+ * over one specific narration set. This repository's review-neutral set is that
+ * set plus the directory the tracked delivery record lives in — the record must
+ * be neutral to both predicates, and the only way to get there is to widen the
+ * review-neutral set. A widened set is a different identity function, so it
+ * carries its own token: `delivery-harness-tree/v1`. The token was chosen while
+ * this config was still a skeleton, deliberately: an identity token revision
+ * cascades — every record computed under the old token stops matching — and
+ * committing to the token before any gate existed cost nothing, while revising
+ * it now that `gate.yml` verifies records would invalidate real evidence.
  */
 import { defineHarnessConfig } from "@delivery-harness/kernel";
 
 export default defineHarnessConfig({
   gateId: "delivery-harness.pr-admission",
   baseRef: "origin/main",
+  // Git-private evidence storage, under `git rev-parse --git-path` of this
+  // namespace. Per the config guidance: a name git does not own, and one the
+  // tracked tree does not also use.
   storageNamespace: "delivery-harness/",
 
   acceptedEnvelopeSpecs: ["delivery-evidence/1"],
@@ -67,35 +72,38 @@ export default defineHarnessConfig({
 
   preparationWiringPaths: ["harness.config.ts"],
 
-  // PLACEHOLDER: one obligation with one provider, replaced when this repository
-  // starts gating its own pull requests.
-  providers: [{ id: "placeholder.provider", findingCodes: ["placeholder-finding"] }],
+  providers: [{ id: "claude-code.ce-code-review", findingCodes: [] }],
   obligations: [
     {
-      id: "placeholder.obligation",
+      id: "review.green",
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
-      providers: ["placeholder.provider"],
+      providers: ["claude-code.ce-code-review"],
       acceptedPayloadSpecs: ["review.green/1"],
       allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
       humanWaiverAllowed: true,
       minimumAttestationLevel: "self",
+      // No delegation: the Action runs in verify mode on pull requests, which
+      // grants nothing and needs no authorization.
       ciDelegationPolicyIds: [],
       remediation: {
         default: [
           {
-            id: "replace-placeholder-obligation",
-            kind: "code_change",
-            summary: "Replace the placeholder obligation in harness.config.ts with this repository's real gate.",
+            id: "run-the-review",
+            kind: "manual_action",
+            summary: "Run the code review and submit its evidence manifest with `delivery-harness submit-evidence`.",
           },
         ],
       },
+      // Every finding code the gate can emit for this obligation, each in
+      // exactly one list. The judgement-shaped codes are waivable by an
+      // interactive human; the codes describing a store or record the harness
+      // cannot trust are not.
       waivableCodes: [
         "review_evidence_missing",
         "stale_evidence",
         "evidence_not_green",
         "unresolved_actionable_findings",
-        "placeholder-finding",
       ],
       nonWaivableCodes: [
         "ambiguous_records",
@@ -109,9 +117,11 @@ export default defineHarnessConfig({
     },
   ],
 
-  // PLACEHOLDER: neutral to both predicates, which is the property that matters
-  // and the one the loader checks. The final name is chosen when records start
-  // being written.
-  deliveryRecordPath: "delivery/records/placeholder.json",
+  // The tracked record: the one artifact that crosses from the git-private
+  // workspace into the tree. Neutral to both predicates — writing it can
+  // neither change the identity it attests nor bind a candidate to its own
+  // record. The digest is spliced into the filename at record time, so parallel
+  // branches never conflict.
+  deliveryRecordPath: "delivery/records/record.json",
   deliveryRecordVerification: { baseMovement: "stale" },
 });

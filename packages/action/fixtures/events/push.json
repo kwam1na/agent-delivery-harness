@@ -6,7 +6,7 @@
     "GITHUB_EVENT_NAME": "push",
     "GITHUB_EVENT_PATH": "{{EVENT_PATH}}",
     "GITHUB_WORKSPACE": "{{WORKSPACE}}",
-    "GITHUB_REPOSITORY": "kwam1na/delivery-harness",
+    "GITHUB_REPOSITORY": "kwam1na/agent-delivery-harness",
     "GITHUB_SHA": "{{HEAD_SHA}}",
     "GITHUB_REF": "refs/heads/main"
   },
@@ -14,6 +14,6 @@
     "ref": "refs/heads/main",
     "before": "{{BASE_SHA}}",
     "after": "{{HEAD_SHA}}",
-    "repository": { "full_name": "kwam1na/delivery-harness", "default_branch": "main" }
+    "repository": { "full_name": "kwam1na/agent-delivery-harness", "default_branch": "main" }
   }
 }

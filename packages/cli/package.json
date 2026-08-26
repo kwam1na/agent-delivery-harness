@@ -1,9 +1,9 @@
 {
   "name": "@delivery-harness/cli",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
   "description": "Delivery harness CLI: prepare, review-context, submit-evidence, gate, record, verify, check",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
   },
@@ -11,6 +11,9 @@
     ".": "./src/index.ts"
   },
   "files": [
-    "src"
+    "src",
+    "!src/**/*.test.ts",
+    "LICENSE",
+    "NOTICE"
   ]
 }

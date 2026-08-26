@@ -14,7 +14,7 @@
  * dimension map itself is checked for completeness against the config's members
  * so a newly added member cannot escape the assertion by not being listed.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -286,9 +286,9 @@ describe("the second config", () => {
 
 // ── This repository's own configuration ────────────────────────────────────
 
-describe("the self-hosting skeleton", () => {
+describe("this repository's own gate", () => {
   it("satisfies the double-neutrality the delivery record depends on", () => {
-    const both = validateHarnessConfig({ ...harnessConfig, deliveryRecordPath: "docs/reports/placeholder.json" });
+    const both = validateHarnessConfig({ ...harnessConfig, deliveryRecordPath: "docs/reports/elsewhere.json" });
     // Review-neutral but not record-neutral: the case the rule exists for.
     expect(both.ok ? [] : both.blockers.map((blocker) => blocker.code)).toContain("config_delivery_record_not_neutral");
     expect(harnessConfig.deliveryRecordPath.startsWith("delivery/records/")).toBe(true);
@@ -306,11 +306,23 @@ describe("the self-hosting skeleton", () => {
     );
   });
 
-  it("declares placeholders that are marked as placeholders", () => {
-    // The skeleton is honest about being one: the names say so, which is what
-    // makes the replacement obvious rather than archaeological.
-    expect(harnessConfig.obligations.map((obligation) => obligation.id)).toEqual(["placeholder.obligation"]);
-    expect(harnessConfig.providers.map((provider) => provider.id)).toEqual(["placeholder.provider"]);
-    expect(harnessConfig.deliveryRecordPath).toContain("placeholder");
+  it("declares the real gate: no placeholder survives", () => {
+    // The skeleton this file used to describe held the config's *shape* loadable
+    // while the gate waited for its real declaration. That declaration is in
+    // force now, so a placeholder anywhere in it is a regression, not a stage.
+    expect(harnessConfig.obligations.map((obligation) => obligation.id)).toEqual(["review.green"]);
+    expect(harnessConfig.providers.map((provider) => provider.id)).toEqual(["claude-code.ce-code-review"]);
+    expect(harnessConfig.deliveryRecordPath).toBe("delivery/records/record.json");
+    expect(JSON.stringify(harnessConfig)).not.toContain("placeholder");
+  });
+
+  it("keeps the evidence store out of git's own namespace, per the config guidance", () => {
+    // The getting-started guidance: pick a storage namespace git does not own,
+    // and one the tracked tree does not also use.
+    const gitOwned = ["objects/", "refs/", "hooks/", "info/", "logs/", "worktrees/", "branches/"];
+    expect(gitOwned).not.toContain(harnessConfig.storageNamespace);
+    const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const treeName = harnessConfig.storageNamespace.replace(/\/+$/u, "");
+    expect(existsSync(path.join(repoRoot, treeName))).toBe(false);
   });
 });
