@@ -125,6 +125,15 @@ function git(cwd: string, args: readonly string[], stdin?: Buffer): Promise<Buff
         resolve(stdout);
       },
     );
+    // Several of the recipes below run a git command that reads no stdin, and a
+    // busy machine lets git exit before this write reaches it — an EPIPE on a
+    // pipe nobody was listening to. Unhandled, it surfaces as a run-level error
+    // even though every assertion passed. The command's own exit status stays
+    // the verdict: a real failure arrives through the callback above. That
+    // covers the recipes that *do* read stdin too — a write truncated by a
+    // vanished reader produces a different tree, and the pinned golden shas are
+    // what catch it, rather than an error on a pipe.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(stdin ?? Buffer.alloc(0));
   });
 }
