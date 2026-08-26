@@ -60,6 +60,9 @@ jobs:
       - name: Import-boundary sensor
         run: npm run sensor
 
+      - name: CLI-inventory sensor
+        run: npm run sensor:cli
+
       # R8: Bun is a supported runtime, never a required one. These two steps
       # execute repo code with Bun as the actual interpreter. (`vitest` below is
       # launched by Bun but still forks Node workers, so it does not by itself
@@ -67,6 +70,10 @@ jobs:
       - name: Import-boundary sensor (Bun runtime)
         if: matrix.bun
         run: bun scripts/check-import-boundaries.ts
+
+      - name: CLI-inventory sensor (Bun runtime)
+        if: matrix.bun
+        run: bun scripts/check-cli-inventory.ts
 
       - name: Conformance kit regenerates byte-identically (Bun runtime)
         if: matrix.bun

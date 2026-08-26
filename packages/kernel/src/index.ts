@@ -298,3 +298,30 @@ export {
   type WaiverPrompt,
   type WaiverPromptOutcome,
 } from "./admission.ts";
+
+// The tracked delivery record (`delivery-record/1`): the produce-only projection
+// the `record` command writes through the fs port, and the pure verification
+// core the `verify` command and the GitHub Action share.
+export {
+  ATTESTATION_LABEL,
+  DELIVERY_RECORD_DRIFT_CLASSES,
+  DELIVERY_RECORD_VERSION,
+  bindingOf,
+  buildDeliveryRecord,
+  deliveryRecordBytes,
+  deliveryRecordPathFor,
+  parseDeliveryRecord,
+  selectDeliveryRecordForIdentity,
+  verifyDeliveryRecord,
+  type BuildDeliveryRecordInput,
+  type BuildDeliveryRecordResult,
+  type DeliveryRecord,
+  type DeliveryRecordAttestation,
+  type DeliveryRecordCheck,
+  type DeliveryRecordClaim,
+  type DeliveryRecordDriftClass,
+  type DeliveryRecordFile,
+  type ParseDeliveryRecordResult,
+  type RecomputedIdentity,
+  type VerificationBase,
+} from "./delivery-record.ts";
