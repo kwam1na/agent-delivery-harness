@@ -45,7 +45,7 @@ import {
 import { canonicalize } from "./canonical.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
 import type { EvidenceRecord, RecordCandidateBinding } from "./records.types.ts";
-import type { GateDecision, ResolutionOutcome } from "./evaluator.ts";
+import { RESOLUTION_OUTCOMES, type GateDecision, type ResolutionOutcome } from "./evaluator.ts";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -255,24 +255,20 @@ export function deliveryRecordBytes(record: DeliveryRecord): string {
 }
 
 /**
- * The candidate-keyed path for a record, derived from `config.deliveryRecordPath`
- * by splicing the deliverable digest before its extension. Keying on the digest
- * is what makes the name both merge-conflict-free across parallel branches (a
+ * The candidate-keyed path for a record: `config.deliveryRecordPath` with the
+ * deliverable digest spliced in before its extension. Keying on the digest is
+ * what makes the name both merge-conflict-free across parallel branches (a
  * different deliverable is a different file) and exactly recomputable by the
  * Action from the PR head (the digest is a pure function of the tree under the
- * config's identity token). The splice preserves the configured path's prefix
- * and suffix, so the derived path satisfies exactly the neutral matchers the
- * loader already checked the configured path against.
+ * config's identity token).
+ *
+ * The derivation itself lives in `config.ts` and is re-exported here. It has to:
+ * the *derived* path is the one that gets written, so it is the one that must be
+ * neutral to both predicates, and the config loader — which cannot import this
+ * d2 module — validates exactly that. Splice-preservation is therefore an
+ * enforced load-time invariant rather than a property of the string operation.
  */
-export function deliveryRecordPathFor(config: HarnessConfig, deliverableDigest: string): string {
-  const configured = config.deliveryRecordPath;
-  const lastSlash = configured.lastIndexOf("/");
-  const lastDot = configured.lastIndexOf(".");
-  const hasExtension = lastDot > lastSlash;
-  const stem = hasExtension ? configured.slice(0, lastDot) : configured;
-  const extension = hasExtension ? configured.slice(lastDot) : "";
-  return `${stem}--${deliverableDigest}${extension}`;
-}
+export { deliveryRecordPathFor } from "./config.ts";
 
 // ── Parse + select ───────────────────────────────────────────────────────────
 
@@ -326,6 +322,16 @@ export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
   for (const claim of claims) {
     if (!isRecord(claim) || !isNonEmptyString(claim["obligationId"]) || !isNonEmptyString(claim["outcome"])) {
       return malformed("a claim is missing its obligation id or outcome");
+    }
+    // An outcome is the vocabulary the verifier reasons about, not free-form
+    // text. A committed record is editable, so a value outside the resolution
+    // universe — `rubber_stamped`, or anything else invented — has to be a
+    // malformed record. Accepting "some non-empty string" would let a tampered
+    // record verify clean on an outcome that means nothing to the evaluator.
+    if (!(RESOLUTION_OUTCOMES as readonly string[]).includes(claim["outcome"] as string)) {
+      return malformed(
+        `claim for ${JSON.stringify(claim["obligationId"])} carries outcome ${JSON.stringify(claim["outcome"])}, which is not a resolution outcome`,
+      );
     }
   }
 

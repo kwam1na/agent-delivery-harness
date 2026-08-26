@@ -18,8 +18,8 @@
  *   2    a usage error (unknown command, missing or malformed arguments)
  *   130  interruption (SIGINT) — the shell convention 128 + SIGINT(2)
  *
- * REPO COHERENCE (the U8 carry-forward). Capture and the evidence store must
- * address the same repository. The boundary is where both are wired, from one
+ * REPO COHERENCE. Capture and the evidence store must address the same
+ * repository — the recorder's coherence requirement. Both are wired here, from one
  * `rootDir`, with the store's own `workspaceId` handed to the capture — so a
  * captured candidate can never disagree with the store about which workspace it
  * belongs to. Admission still guards `workspace_incoherent`; this makes the

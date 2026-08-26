@@ -8,7 +8,7 @@
  * verify core agree about one repository. Nothing here stubs git.
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,11 +17,14 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   BlockedError,
   captureGitCandidate,
+  classifyExecutionContext,
   createArtifactsPort,
   createBlocker,
   defineHarnessConfig,
   deliveryRecordPathFor,
+  parseDeliveryRecord,
   resolveRecordStorage,
+  runAdmission,
   sha256Hex,
   withDeliverableIdentity,
   type ArtifactsPort,
@@ -36,6 +39,7 @@ import {
   EXIT_OK,
   EXIT_POLICY,
   EXIT_USAGE,
+  recordCommand,
   runCli,
   runCliBoundary,
   wireRepo,
@@ -344,7 +348,7 @@ describe("runCliBoundary exit codes", () => {
   });
 });
 
-// ── U8 coherence ─────────────────────────────────────────────────────────────
+// ── Repo coherence ───────────────────────────────────────────────────────────
 
 describe("repo wiring coherence", () => {
   it("wires capture and the store from one root so their workspace ids agree", { timeout: 60000 }, async () => {
@@ -449,6 +453,25 @@ describe("waiver wiring", () => {
     expect(prompt).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks with exit 1 and writes no waiver record when the operator declines", { timeout: 60000 }, async () => {
+    // The decline path is also the EOF path: `createWaiverPrompt` resolves false
+    // on Ctrl-D, and a declined waiver must be a policy block with nothing
+    // written — never the silent success a never-settling prompt produced.
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const prompt: WaiverPrompt = vi.fn(async () => false);
+    const { runtime } = makeRuntime(dir, config, artifacts, { stdinIsTTY: true, stdoutIsTTY: true, promptForWaiver: prompt });
+
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["gate"], runtime)).toBe(EXIT_POLICY);
+    expect(prompt).toHaveBeenCalledTimes(1);
+
+    const storage = await resolveRecordStorage(dir, { storageNamespace: config.storageNamespace });
+    const stored = await readdir(storage.storageDir).catch(() => [] as string[]);
+    expect(stored.filter((name) => name.endsWith(".json"))).toHaveLength(0);
+  });
+
   it("returns 130 when the operator interrupts the waiver prompt", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
@@ -526,13 +549,36 @@ describe("error paths", () => {
     expect(await runCli(["record"], runtime)).toBe(EXIT_POLICY);
   });
 
-  it("check on a non-repository blocks with a typed store finding", { timeout: 60000 }, async () => {
+  it("check outside a repository blocks with a typed store finding", { timeout: 60000 }, async () => {
     const notARepo = await mkdtemp(path.join(await os.tmpdir(), "dh-norepo-"));
     cleanups.push(notARepo);
     const config = makeConfig();
     const artifacts = await makeArtifacts();
-    const { runtime } = makeRuntime(notARepo, config, artifacts);
+    const { runtime, err } = makeRuntime(notARepo, config, artifacts);
     expect(await runCli(["check"], runtime)).toBe(EXIT_POLICY);
+    // The rendered blocker names the store, so an operator learns which of the
+    // two preflight halves failed rather than only that one did.
+    expect(err.join("")).toMatch(/store|storage|repository/i);
+    expect(err.join("")).toContain("Remediation:");
+  });
+
+  it("check on an unwritable store blocks with a typed finding", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime, err } = makeRuntime(dir, config, artifacts);
+
+    // Plant a regular file where the storage namespace directory must be. Every
+    // mkdir beneath it then fails with ENOTDIR — deterministically, and without
+    // depending on the uid the suite runs as (a chmod-based fixture is a no-op
+    // for root, which is exactly how this scenario rots in CI).
+    const storage = await resolveRecordStorage(dir, { storageNamespace: config.storageNamespace });
+    await rm(storage.storageRoot, { recursive: true, force: true });
+    await mkdir(path.dirname(storage.storageRoot), { recursive: true });
+    await writeFile(storage.storageRoot, "not a directory\n", "utf8");
+
+    expect(await runCli(["check"], runtime)).toBe(EXIT_POLICY);
+    expect(err.join("")).toContain("Remediation:");
   });
 
   it("an invalid config is a typed policy block", { timeout: 60000 }, async () => {
@@ -567,19 +613,132 @@ describe("error paths", () => {
 // ── Concurrency ──────────────────────────────────────────────────────────────
 
 describe("concurrent record writes", () => {
-  it("two branches with different deliverables write non-conflicting record files", { timeout: 60000 }, async () => {
+  it("two branches each write a record and both files coexist and parse", { timeout: 120000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
-    const digestMain = await captureDigest(dir, config);
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
 
-    // A second branch with a different deliverable.
+    // Branch one: the full loop through a written record.
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const manifestMain = await buildAcceptSubmission(dir, config, artifacts);
+    expect(await runCli(["submit-evidence", "--manifest", manifestMain], runtime)).toBe(EXIT_OK);
+    const digestMain = await captureDigest(dir, config);
+    expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+    await commitRecord(dir);
+
+    // Branch two: a different deliverable, its own loop, its own record. The
+    // first branch's record file is carried along, which is what makes this the
+    // collision test rather than two independent writes.
     await git(dir, "checkout", "--quiet", "-b", "feature");
     writeFileSync(path.join(dir, "feature.txt"), "feature work\n", "utf8");
     await git(dir, "add", "feature.txt");
     await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "feature");
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const manifestFeature = await buildAcceptSubmission(dir, config, artifacts);
+    expect(await runCli(["submit-evidence", "--manifest", manifestFeature], runtime)).toBe(EXIT_OK);
     const digestFeature = await captureDigest(dir, config);
+    expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+    await commitRecord(dir);
 
     expect(digestFeature).not.toBe(digestMain);
-    expect(deliveryRecordPathFor(config, digestMain)).not.toBe(deliveryRecordPathFor(config, digestFeature));
+    const pathMain = deliveryRecordPathFor(config, digestMain);
+    const pathFeature = deliveryRecordPathFor(config, digestFeature);
+    expect(pathMain).not.toBe(pathFeature);
+
+    // Both files exist side by side — no overwrite, no merge conflict — and both
+    // are readable records bound to their own candidate.
+    for (const [relative, digest] of [
+      [pathMain, digestMain],
+      [pathFeature, digestFeature],
+    ] as const) {
+      const parsed = parseDeliveryRecord(await readFile(path.join(dir, relative), "utf8"));
+      expect(parsed.ok, `expected ${relative} to parse`).toBe(true);
+      if (!parsed.ok) continue;
+      expect(parsed.record.candidateBinding.deliverableDigest).toBe(digest);
+    }
+
+    // And the feature branch verifies against its own record with both present.
+    expect(await runCli(["verify"], runtime)).toBe(EXIT_OK);
+  });
+});
+
+// ── The record-identity guard, witnessed directly ────────────────────────────
+
+describe("record refuses when the identity moves under it", () => {
+  /**
+   * Drives the command with a wiring whose capture returns a *different*
+   * deliverable digest on the recheck than it did for the gate. The loop-level
+   * test cannot reach this guard: dirtying a real tree makes the candidate
+   * unprepared, so capture fails first and the guard is never consulted. This
+   * is the only witness that the recheck itself refuses.
+   */
+  it("blocks with record_identity_changed when the recheck capture disagrees", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const manifestPath = await buildAcceptSubmission(dir, config, artifacts);
+    expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_OK);
+
+    const wiring = await wireRepo(dir, config);
+
+    // How many captures admission itself consumes, measured rather than guessed:
+    // the recheck is the command's *next* capture after that, and hard-coding an
+    // index would silently stop targeting it the moment admission's own capture
+    // count changed.
+    let admissionCaptures = 0;
+    await runAdmission(
+      { rootDir: dir, config, context: classifyExecutionContext({ config, env: {}, stdinIsTTY: false, stdoutIsTTY: false }) },
+      {
+        captureCandidate: async () => {
+          admissionCaptures += 1;
+          return wiring.captureCandidate();
+        },
+        projectActivation: wiring.projectActivation,
+        ...wiring.storageOptions,
+      },
+    );
+
+    let calls = 0;
+    const drifting: typeof wiring.captureCandidate = async () => {
+      const capture = await wiring.captureCandidate();
+      calls += 1;
+      // Admission's captures pass through untouched; the recheck — the first
+      // capture after them — reports a moved deliverable.
+      if (!capture.ok || calls <= admissionCaptures) return capture;
+      return {
+        ...capture,
+        candidate: {
+          ...capture.candidate,
+          deliverable: { ...capture.candidate.deliverable, digest: "f".repeat(64) },
+        },
+      };
+    };
+
+    const blockers: string[] = [];
+    const result = await recordCommand.run({
+      rootDir: dir,
+      config,
+      env: {},
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      args: [],
+      wire: async () => ({ ...wiring, captureCandidate: drifting }),
+      artifacts,
+      write: () => {},
+      classifyContext: () => classifyExecutionContext({ config, env: {}, stdinIsTTY: false, stdoutIsTTY: false }),
+    });
+
+    if (result.kind === "blocked") blockers.push(...result.blockers.map((blocker) => blocker.code));
+    expect(result.kind).toBe("blocked");
+    expect(blockers).toContain("record_identity_changed");
+
+    // Nothing was written for the drifted identity.
+    const recordDir = path.join(dir, "telemetry/delivery-runs");
+    const written = await readdir(recordDir).catch(() => [] as string[]);
+    expect(written.some((name) => name.includes("f".repeat(64)))).toBe(false);
   });
 });

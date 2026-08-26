@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { defineHarnessConfig, type HarnessConfig, type HarnessConfigInput } from "./config.ts";
-import type { GateDecision, ObligationResolution } from "./evaluator.ts";
+import { RESOLUTION_OUTCOMES, type GateDecision, type ObligationResolution } from "./evaluator.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
 import type { EvidenceRecord, RecordCandidateBinding } from "./records.types.ts";
 import {
@@ -271,6 +271,31 @@ describe("parseDeliveryRecord", () => {
   it("rejects a structurally broken record", () => {
     const parsed = parseDeliveryRecord(JSON.stringify({ version: DELIVERY_RECORD_VERSION }));
     expect(parsed.ok).toBe(false);
+  });
+
+  // A committed record is operator-editable text. An outcome is not free-form
+  // prose — it is the vocabulary the verifier reasons about — so a value outside
+  // the resolution universe must be a malformed record rather than something the
+  // verifier waves through because it merely "is a non-empty string".
+  it("rejects an invented claim outcome", () => {
+    const record = buildFreshRecord();
+    const tampered = {
+      ...record,
+      claims: [{ ...record.claims[0], outcome: "rubber_stamped" }],
+    };
+    const parsed = parseDeliveryRecord(`${JSON.stringify(tampered)}\n`);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.blockers[0]?.code).toBe("delivery_record_malformed");
+  });
+
+  it("accepts every outcome the evaluator can actually produce", () => {
+    const record = buildFreshRecord();
+    for (const outcome of RESOLUTION_OUTCOMES.filter((kind) => kind !== "blocked")) {
+      const rewritten = { ...record, claims: [{ ...record.claims[0], outcome }] };
+      const parsed = parseDeliveryRecord(`${JSON.stringify(rewritten)}\n`);
+      expect(parsed.ok, `expected ${outcome} to parse`).toBe(true);
+    }
   });
 });
 

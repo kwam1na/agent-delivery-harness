@@ -962,6 +962,48 @@ export function matchesNeutralSet(matchers: readonly NeutralMatcher[], path: str
 }
 
 /**
+ * The candidate-keyed delivery-record path: `deliveryRecordPath` with the
+ * deliverable digest spliced in before its extension.
+ *
+ * WHY THIS LIVES IN CONFIG AND NOT BESIDE THE RECORD. The derived path is what
+ * actually gets written, so it — not the configured path — is what has to be
+ * neutral to both predicates. The loader must therefore be able to check it, and
+ * the loader cannot import the delivery-record module (it is d2; this file is
+ * d1). The derivation is pure string work over a member this file already owns,
+ * so it belongs here and the record module consumes it from here. One
+ * derivation, one place, checked at load time.
+ *
+ * THE DOT AT POSITION ZERO IS NOT AN EXTENSION. `.deliveryrecord` is a dotfile
+ * whose whole basename is its name; reading the leading dot as an extension
+ * separator would leave an empty stem and splice the digest into a file named
+ * `--<digest>.deliveryrecord` — a different basename in a different directory
+ * than the operator configured. Only a dot *after* the first character of the
+ * basename separates an extension.
+ */
+export function deriveDeliveryRecordPath(deliveryRecordPath: string, deliverableDigest: string): string {
+  const lastSlash = deliveryRecordPath.lastIndexOf("/");
+  const lastDot = deliveryRecordPath.lastIndexOf(".");
+  // `lastDot > lastSlash + 1` rather than `> lastSlash`: the extra character is
+  // the basename's first, which a dot may not occupy and still be a separator.
+  const hasExtension = lastDot > lastSlash + 1;
+  const stem = hasExtension ? deliveryRecordPath.slice(0, lastDot) : deliveryRecordPath;
+  const extension = hasExtension ? deliveryRecordPath.slice(lastDot) : "";
+  return `${stem}--${deliverableDigest}${extension}`;
+}
+
+/** {@link deriveDeliveryRecordPath} over a loaded config's own record path. */
+export function deliveryRecordPathFor(config: HarnessConfig, deliverableDigest: string): string {
+  return deriveDeliveryRecordPath(config.deliveryRecordPath, deliverableDigest);
+}
+
+/**
+ * A digest-shaped probe for load-time validation. Any 64-hex value derives the
+ * same *shape* of path, so one representative proves the derived path is neutral
+ * for every candidate the gate will ever record.
+ */
+const PROBE_DIGEST = "0".repeat(64);
+
+/**
  * Whether every path `narrow` matches is also matched by `wide`. Conservative on
  * purpose: a narrow matcher with no suffix under a wide matcher that has one
  * matches strictly more, so it is not subsumed even though most concrete paths
@@ -1153,17 +1195,35 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
 
   // The delivery record is the one sanctioned crossing out of the git-private
   // store, so writing it must move neither predicate.
-  const reviewNeutralRecord = matchesNeutralSet(config.reviewNeutral, config.deliveryRecordPath);
-  const recordNeutralRecord = matchesNeutralSet(config.recordNeutral, config.deliveryRecordPath);
-  if (!reviewNeutralRecord || !recordNeutralRecord) {
+  //
+  // BOTH THE CONFIGURED PATH AND THE PATH THAT IS ACTUALLY WRITTEN. Records are
+  // candidate-keyed: the digest is spliced into the configured path, and it is
+  // the *derived* path that lands in the tree. Checking only the configured one
+  // accepts configs whose real writes escape — a matcher naming the file exactly
+  // (`delivery/record.json`), a prefix+suffix pair pinning the basename, a
+  // dotfile — each double-neutral as configured and neutral to nothing once the
+  // digest is spliced in. Such a config authorizes a write that changes the very
+  // identity the record attests, which is the deadlock the two neutral sets
+  // exist to prevent.
+  for (const [member, candidatePath] of [
+    ["deliveryRecordPath", config.deliveryRecordPath],
+    ["deliveryRecordPath (derived)", deriveDeliveryRecordPath(config.deliveryRecordPath, PROBE_DIGEST)],
+  ] as const) {
+    const reviewNeutralRecord = matchesNeutralSet(config.reviewNeutral, candidatePath);
+    const recordNeutralRecord = matchesNeutralSet(config.recordNeutral, candidatePath);
+    if (reviewNeutralRecord && recordNeutralRecord) continue;
+    const derivedNote =
+      member === "deliveryRecordPath"
+        ? ""
+        : ` — records are candidate-keyed, so ${JSON.stringify(config.deliveryRecordPath)} is written as this path`;
     findings.add(
       "config_delivery_record_not_neutral",
-      "deliveryRecordPath",
+      member,
       reviewNeutralRecord
-        ? `${JSON.stringify(config.deliveryRecordPath)} is review-neutral but not record-neutral; writing the record would change what records bind to`
+        ? `${JSON.stringify(candidatePath)} is review-neutral but not record-neutral; writing the record would change what records bind to${derivedNote}`
         : recordNeutralRecord
-          ? `${JSON.stringify(config.deliveryRecordPath)} is record-neutral but not review-neutral; writing the record would change the deliverable identity`
-          : `${JSON.stringify(config.deliveryRecordPath)} is neutral to neither set; writing the record would invalidate the evidence it records`,
+          ? `${JSON.stringify(candidatePath)} is record-neutral but not review-neutral; writing the record would change the deliverable identity${derivedNote}`
+          : `${JSON.stringify(candidatePath)} is neutral to neither set; writing the record would invalidate the evidence it records${derivedNote}`,
     );
   }
 

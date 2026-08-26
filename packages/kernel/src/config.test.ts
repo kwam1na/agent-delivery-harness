@@ -30,6 +30,7 @@ import {
   DELIVERABLE_TREE_V1,
   DELIVERABLE_TREE_V1_NARRATION_SET,
   defineHarnessConfig,
+  deriveDeliveryRecordPath,
   emittableFindingCodes,
   matchesNeutralSet,
   validateHarnessConfig,
@@ -549,6 +550,122 @@ describe("the two neutral sets", () => {
         input.deliveryRecordPath = "packages/kernel/delivery-record.json";
       }),
       "config_delivery_record_not_neutral",
+    );
+  });
+
+  // ── The DERIVED path is what gets written ────────────────────────────────
+  //
+  // Records are candidate-keyed: the digest is spliced into the configured path,
+  // and it is that derived path that lands in the tree. A configured path can be
+  // double-neutral while its derived form is not — and then the write the config
+  // authorized is a write that moves the identity it attests. Each row below is a
+  // config the loader accepts on the configured path alone.
+
+  it("rejects a record path whose derived form escapes an exact-file neutral matcher", () => {
+    expectOnly(
+      withInput((input) => {
+        // Matchers naming the file exactly: the configured path matches by
+        // prefix, but `record--<digest>.json` does not start with `record.json`.
+        input.reviewNeutral = [...input.reviewNeutral, { prefix: "delivery/record.json" }];
+        input.recordNeutral = [{ prefix: "delivery/record.json" }];
+        input.identityVersions = ["delivery-harness-tree/v1"];
+        input.computingIdentityVersion = "delivery-harness-tree/v1";
+        input.deliveryRecordPath = "delivery/record.json";
+      }),
+      "config_delivery_record_not_neutral",
+    );
+  });
+
+  it("rejects a record path whose derived form escapes a prefix+suffix neutral matcher", () => {
+    expectOnly(
+      withInput((input) => {
+        // The suffix pins the basename, which the splice necessarily changes.
+        input.reviewNeutral = [...input.reviewNeutral, { prefix: "delivery/", suffix: "record.json" }];
+        input.recordNeutral = [{ prefix: "delivery/", suffix: "record.json" }];
+        input.identityVersions = ["delivery-harness-tree/v1"];
+        input.computingIdentityVersion = "delivery-harness-tree/v1";
+        input.deliveryRecordPath = "delivery/record.json";
+      }),
+      "config_delivery_record_not_neutral",
+    );
+  });
+
+  it("accepts an extensionless dotfile record path, whose derived form keeps its name", () => {
+    // The third shape the derived-path check was written for. It escaped only
+    // because a leading dot was read as an extension separator, which left an
+    // empty stem and put the record at the repository root as
+    // `--<digest>.deliveryrecord`. With the derivation corrected the digest
+    // appends instead, the name is preserved, and the config is sound — so the
+    // right assertion here is that it loads. The loader would still have caught
+    // it: point the derivation back at the bug and this row goes red.
+    const result = validateHarnessConfig(
+      withInput((input) => {
+        input.reviewNeutral = [...input.reviewNeutral, { prefix: ".deliveryrecord" }];
+        input.recordNeutral = [{ prefix: ".deliveryrecord" }];
+        input.identityVersions = ["delivery-harness-tree/v1"];
+        input.computingIdentityVersion = "delivery-harness-tree/v1";
+        input.deliveryRecordPath = ".deliveryrecord";
+      }),
+    );
+    expect(result.ok ? [] : result.blockers.map((blocker) => blocker.code)).toEqual([]);
+    expect(deriveDeliveryRecordPath(".deliveryrecord", "a".repeat(64))).toBe(`.deliveryrecord--${"a".repeat(64)}`);
+  });
+
+  it("rejects a dotfile record path whose derived form leaves an exact-name matcher", () => {
+    expectOnly(
+      withInput((input) => {
+        // The same dotfile shape under a matcher that pins the full name: the
+        // splice necessarily changes it, so the derived write escapes.
+        input.reviewNeutral = [...input.reviewNeutral, { prefix: "delivery/", suffix: ".record" }];
+        input.recordNeutral = [{ prefix: "delivery/", suffix: ".record" }];
+        input.identityVersions = ["delivery-harness-tree/v1"];
+        input.computingIdentityVersion = "delivery-harness-tree/v1";
+        input.deliveryRecordPath = "delivery/.record";
+      }),
+      "config_delivery_record_not_neutral",
+    );
+  });
+
+  it("still accepts the directory-prefix shape, whose derived form stays neutral", () => {
+    const result = validateHarnessConfig(
+      withInput((input) => {
+        input.deliveryRecordPath = "docs/reports/delivery-record.json";
+      }),
+    );
+    expect(result.ok ? [] : result.blockers.map((blocker) => blocker.code)).toEqual([]);
+  });
+});
+
+// ── Candidate-keyed path derivation ────────────────────────────────────────
+
+describe("deriveDeliveryRecordPath", () => {
+  const DIGEST = "a".repeat(64);
+
+  it("splices the digest before a real extension", () => {
+    expect(deriveDeliveryRecordPath("docs/reports/record.json", DIGEST)).toBe(`docs/reports/record--${DIGEST}.json`);
+  });
+
+  it("appends when there is no extension", () => {
+    expect(deriveDeliveryRecordPath("docs/reports/record", DIGEST)).toBe(`docs/reports/record--${DIGEST}`);
+  });
+
+  it("does not read a leading dot as an extension separator", () => {
+    // The bug this pins: `.deliveryrecord` read as stem "" + extension
+    // ".deliveryrecord" derives `--<digest>.deliveryrecord` at the repo root.
+    expect(deriveDeliveryRecordPath(".deliveryrecord", DIGEST)).toBe(`.deliveryrecord--${DIGEST}`);
+  });
+
+  it("does not read a dotfile's leading dot as a separator inside a directory", () => {
+    expect(deriveDeliveryRecordPath("delivery/.record", DIGEST)).toBe(`delivery/.record--${DIGEST}`);
+  });
+
+  it("keeps a dotfile's real extension", () => {
+    expect(deriveDeliveryRecordPath("delivery/.record.json", DIGEST)).toBe(`delivery/.record--${DIGEST}.json`);
+  });
+
+  it("keys distinct deliverables to distinct paths", () => {
+    expect(deriveDeliveryRecordPath("docs/reports/r.json", "a".repeat(64))).not.toBe(
+      deriveDeliveryRecordPath("docs/reports/r.json", "b".repeat(64)),
     );
   });
 });
