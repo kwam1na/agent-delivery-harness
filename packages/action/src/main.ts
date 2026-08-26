@@ -53,7 +53,7 @@
 import { realpathSync } from "node:fs";
 import { access, appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ATTESTATION_LABEL,
   BlockedError,
@@ -1048,45 +1048,43 @@ export function defaultRuntime(): ActionRuntime {
   };
 }
 
-/**
- * Resolves an argv entry to the href form `import.meta.url` carries.
- *
- * RESOLVED THROUGH THE FILESYSTEM, not merely made absolute. `import.meta.url`
- * is built from the module's realpath, while argv carries whatever spelling the
- * caller used — and this action is invoked by absolute path, from a workspace
- * that is very often reached through a symlink (a runner's action path, an npm
- * workspace link, `/tmp` on macOS). A textual comparison then decides this
- * module was not the entry, `main` never runs, the event loop drains, and the
- * process exits 0 having verified nothing. A silently passing gate is the worst
- * failure this file can have, so the comparison resolves both sides.
- */
-export function entryHref(argvEntry: string): string {
-  let resolved = argvEntry;
+/** The spelling the filesystem can vouch for: the realpath where it can answer, the spelling itself where it cannot. */
+function canonicalEntryPath(entryPath: string): string {
   try {
-    resolved = realpathSync(argvEntry);
+    return realpathSync(entryPath);
   } catch {
-    // Not on disk, or unreadable — and a path Node cannot resolve is a path
-    // Node cannot have loaded this module from, so under-matching is the right
-    // answer rather than a tolerated one. The textual form is kept because it
-    // is still exactly right wherever no symlink is involved.
-    //
-    // Note what is NOT claimed here: the `process.exitCode` floor below sits
-    // inside the `invokedDirectly` guard, so an under-match exits 0 in silence.
-    // The floor cannot be hoisted above the guard — that would stamp a failing
-    // exit code on every process that merely *imports* this module. Correctness
-    // on this path rests on the argument above, not on a safety net.
+    return entryPath;
   }
-  return pathToFileURL(resolved).href;
 }
 
 /**
- * Whether this module is the entry the process was started with. Built with
- * `pathToFileURL` rather than by interpolating into a `file://` string: a `#` or
- * `?` in any directory name would terminate the interpolated form early, the
- * href would stop matching, and the Action would exit 0 having verified nothing.
+ * Whether this module is the entry the process was started with.
+ *
+ * argv and `import.meta.url` may spell the same file differently: argv is the
+ * caller's spelling, and Node builds the module URL from the realpath by
+ * default but from the caller's spelling under `--preserve-symlinks-main`. So
+ * each side is canonicalized independently and the canonical forms compared:
+ * a symlinked spelling matches its realpath whenever the link can be read
+ * (`/tmp` → `/private/tmp` on macOS, a runner's action path, a pnpm workspace
+ * link), and equal spellings still match when neither side resolves.
+ *
+ * What is NOT claimed: a symlink the filesystem cannot resolve cannot be seen
+ * through, and the failing-exit-code floor below sits inside this guard, so an
+ * under-match exits 0 in silence — the Action reporting success having
+ * verified nothing. The floor cannot be hoisted above the guard: that would
+ * stamp a failing exit code on every process that merely *imports* this
+ * module. And a non-`file:` module href (a bundled or single-executable
+ * build) never matches — such a build must invoke `main` explicitly.
  */
 export function invokedDirectly(argvEntry: string | undefined, moduleHref: string): boolean {
-  return argvEntry !== undefined && entryHref(argvEntry) === moduleHref;
+  if (argvEntry === undefined) return false;
+  let modulePath: string;
+  try {
+    modulePath = fileURLToPath(moduleHref);
+  } catch {
+    return false;
+  }
+  return canonicalEntryPath(argvEntry) === canonicalEntryPath(modulePath);
 }
 
 export async function main(): Promise<number> {

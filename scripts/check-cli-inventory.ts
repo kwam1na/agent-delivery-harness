@@ -24,9 +24,9 @@
  * the file's own import bindings, so a comment or a string that merely mentions a
  * command name changes nothing.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 // ── Registry ─────────────────────────────────────────────────────────────────
@@ -323,5 +323,21 @@ function main(): void {
   process.exitCode = 1;
 }
 
-const invokedDirectly = process.argv[1] !== undefined && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+/** The spelling the filesystem can vouch for: the realpath where it can answer, the spelling itself where it cannot. */
+function canonicalEntryPath(entryPath: string): string {
+  try {
+    return realpathSync(entryPath);
+  } catch {
+    return entryPath;
+  }
+}
+
+// argv and `import.meta.url` may spell this file differently: argv carries the
+// caller's spelling while Node builds the module URL from the realpath (or,
+// under `--preserve-symlinks-main`, from the caller's spelling). A sensor that
+// under-matches here no-ops and exits 0 — a green sensor run that scanned
+// nothing — so each side is canonicalized independently and compared as paths.
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  canonicalEntryPath(path.resolve(process.argv[1])) === canonicalEntryPath(fileURLToPath(import.meta.url));
 if (invokedDirectly) main();

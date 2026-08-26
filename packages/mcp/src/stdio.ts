@@ -45,8 +45,9 @@
  * this file does not meet would be the one protocol lie that costs a client its
  * ability to reason about the connection at all.
  */
+import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   HANDSHAKE_PROTOCOL_VERSIONS,
   LOG_LEVELS,
@@ -437,12 +438,44 @@ export function defaultToolRuntime(): ToolHostRuntime {
   return { cwd: process.cwd(), env: process.env };
 }
 
-export function entryHref(entryPath: string): string {
-  return pathToFileURL(entryPath).href;
+/** The spelling the filesystem can vouch for: the realpath where it can answer, the spelling itself where it cannot. */
+function canonicalEntryPath(entryPath: string): string {
+  try {
+    return realpathSync(entryPath);
+  } catch {
+    return entryPath;
+  }
 }
 
+/**
+ * Whether this module is the entry the process was started with.
+ *
+ * argv and `import.meta.url` may spell the same file differently: argv is the
+ * caller's spelling, and Node builds the module URL from the realpath by
+ * default but from the caller's spelling under `--preserve-symlinks-main`. So
+ * each side is canonicalized independently and the canonical forms compared:
+ * a symlinked spelling matches its realpath whenever the link can be read
+ * (`/tmp` → `/private/tmp` on macOS, a client config's stored path, a pnpm
+ * workspace link), and equal spellings still match when neither side resolves.
+ *
+ * What is NOT claimed: a symlink the filesystem cannot resolve cannot be seen
+ * through, and the failing-exit-code floor below sits inside this guard, so an
+ * under-match exits 0 in silence — the server exiting without ever serving,
+ * a dead transport where the client expected one. The floor cannot be hoisted
+ * above the guard: that would stamp a failing exit code on every process that
+ * merely *imports* this module. And a non-`file:` module href (a bundled or
+ * single-executable build) never matches — such a build must invoke `main`
+ * explicitly.
+ */
 export function invokedDirectly(argvEntry: string | undefined, moduleHref: string): boolean {
-  return argvEntry !== undefined && entryHref(argvEntry) === moduleHref;
+  if (argvEntry === undefined) return false;
+  let modulePath: string;
+  try {
+    modulePath = fileURLToPath(moduleHref);
+  } catch {
+    return false;
+  }
+  return canonicalEntryPath(argvEntry) === canonicalEntryPath(modulePath);
 }
 
 export async function main(): Promise<void> {

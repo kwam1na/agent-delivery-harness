@@ -13,13 +13,20 @@
  * settles, and the process starts from a failing exit code that only a real
  * verdict overwrites.
  */
+import { spawn } from "node:child_process";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
-import { createWaiverPrompt, entryHref, invokedDirectly } from "./main.ts";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { realpathSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, describe, expect, it, onTestFinished } from "vitest";
+import { createWaiverPrompt, invokedDirectly } from "./main.ts";
 import { CliInterruption } from "./index.ts";
 import type { GateDecision } from "@agent-delivery-harness/kernel";
 
 const ETX = String.fromCharCode(3);
+
 
 const DECISION = { gateId: "test.gate", admitted: false, resolutions: [], diagnostics: [], blockers: [] } as unknown as GateDecision;
 
@@ -109,25 +116,116 @@ describe("createWaiverPrompt", () => {
 });
 
 describe("invokedDirectly", () => {
-  it("recognizes the entry path", () => {
-    expect(invokedDirectly("/repo/packages/cli/src/main.ts", entryHref("/repo/packages/cli/src/main.ts"))).toBe(true);
+  const cleanups: string[] = [];
+  afterAll(() => {
+    for (const dir of cleanups) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("survives a path containing a URL-significant character", () => {
-    // A `#` or `?` in a directory name truncates a naively built file:// URL, so
-    // the entry never matches, `main` never runs, and the process exits 0 having
-    // done nothing — every command silently "passing".
-    const hashPath = "/repo/a#b/packages/cli/src/main.ts";
-    expect(invokedDirectly(hashPath, entryHref(hashPath))).toBe(true);
-    const queryPath = "/repo/a?b/packages/cli/src/main.ts";
-    expect(invokedDirectly(queryPath, entryHref(queryPath))).toBe(true);
+  it("survives a path containing a URL-significant character", async () => {
+    // A `#` or `?` in a directory name truncates a naively built file:// URL,
+    // so the entry never matches, `main` never runs, and the process exits 0
+    // having done nothing — every command silently "passing". A real on-disk
+    // fixture, so the resolved branch is the one exercised.
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-cli-entry-url-"));
+    cleanups.push(dir);
+    const weird = path.join(dir, "a#b");
+    await mkdir(weird, { recursive: true });
+    const modulePath = path.join(weird, "main.ts");
+    await writeFile(modulePath, "export const x = 1;\n", "utf8");
+    expect(invokedDirectly(modulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
   });
 
-  it("does not match a different module", () => {
-    expect(invokedDirectly("/repo/other.ts", entryHref("/repo/packages/cli/src/main.ts"))).toBe(false);
+  it("matches through a symlinked invocation path, under either symlink regime", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-cli-entry-"));
+    cleanups.push(dir);
+    const real = path.join(dir, "real");
+    await mkdir(real, { recursive: true });
+    const modulePath = path.join(real, "module.ts");
+    await writeFile(modulePath, "export const x = 1;\n", "utf8");
+    const linkedDir = path.join(dir, "linked");
+    await symlink(real, linkedDir, "dir");
+    const linkedModulePath = path.join(linkedDir, "module.ts");
+
+    // Under default module resolution `import.meta.url` carries the module's
+    // realpath while argv carries the caller's spelling — the symlink, for a
+    // checkout reached through one (`/tmp` → `/private/tmp` on macOS).
+    expect(invokedDirectly(linkedModulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
+    // Under `--preserve-symlinks-main` the regime flips: `import.meta.url`
+    // keeps the symlink spelling. A guard that realpathed only the argv side
+    // would under-match here — same silent exit 0, opposite configuration.
+    const linkedHref = pathToFileURL(linkedModulePath).href;
+    expect(invokedDirectly(linkedModulePath, linkedHref)).toBe(true);
+    expect(invokedDirectly(modulePath, linkedHref)).toBe(true);
+    // A different module never matches, and neither does a missing argv entry.
+    const otherPath = path.join(real, "other.ts");
+    await writeFile(otherPath, "export const y = 2;\n", "utf8");
+    expect(invokedDirectly(linkedModulePath, pathToFileURL(otherPath).href)).toBe(false);
+    expect(invokedDirectly(undefined, linkedHref)).toBe(false);
   });
 
-  it("is false when there is no argv entry", () => {
-    expect(invokedDirectly(undefined, entryHref("/repo/packages/cli/src/main.ts"))).toBe(false);
+  it("falls back to comparing the spellings when a side cannot be resolved", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-cli-entry-fallback-"));
+    cleanups.push(dir);
+    const real = path.join(dir, "real");
+    await mkdir(real, { recursive: true });
+    const linkedDir = path.join(dir, "linked");
+    await symlink(real, linkedDir, "dir");
+
+    // Neither path exists, so both realpaths throw and the comparison falls
+    // back to the spellings — which match, exactly as they would have before
+    // any resolution was attempted, URL-significant characters included.
+    // Deleting the fallback turns this row into a thrown error, not a wrong
+    // answer.
+    const ghost = path.join(real, "gh#ost.ts");
+    expect(invokedDirectly(ghost, pathToFileURL(ghost).href)).toBe(true);
+    // A side that cannot be resolved cannot be seen through: the only
+    // difference between these two spellings is the link, and with no
+    // filesystem entry to resolve it, the guard honestly under-matches.
+    expect(invokedDirectly(path.join(linkedDir, "gh#ost.ts"), pathToFileURL(ghost).href)).toBe(false);
+    // Each side is canonicalized independently, so one unresolvable side does
+    // not discard the other side's resolution — in either direction.
+    const modulePath = path.join(real, "module.ts");
+    await writeFile(modulePath, "export const x = 1;\n", "utf8");
+    expect(invokedDirectly(path.join(linkedDir, "module.ts"), pathToFileURL(path.join(real, "missing.ts")).href)).toBe(false);
+    expect(invokedDirectly(path.join(linkedDir, "missing.ts"), pathToFileURL(realpathSync(modulePath)).href)).toBe(false);
+    // A module href that is not a file: URL is never this module.
+    expect(invokedDirectly(modulePath, "data:text/javascript,export{}")).toBe(false);
   });
+
+  /**
+   * The guard exercised the way a caller exercises it: a spawned process,
+   * launched by absolute path through a symlink. The guard's failing-exit-code
+   * floor sits inside the guard itself, so an under-match is invisible to
+   * every in-process test — the process just exits 0 with no output, a
+   * wrongful pass at a gate binary. This spawn is the tripwire.
+   */
+  it("runs the CLI when launched through a symlinked path", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-cli-entry-e2e-"));
+    cleanups.push(dir);
+    const repoRoot = path.resolve(import.meta.dirname, "../../..");
+    const linkedRepo = path.join(dir, "linked-repo");
+    await symlink(repoRoot, linkedRepo, "dir");
+
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", path.join(linkedRepo, "packages/cli/src/main.ts"), "--help"],
+      { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    onTestFinished(() => {
+      child.kill("SIGKILL");
+    });
+    child.on("error", () => {});
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const exitCode = await new Promise<number | null>((resolve) => child.on("close", resolve));
+
+    const output = Buffer.concat(stdout).toString("utf8");
+    const diagnostics = Buffer.concat(stderr).toString("utf8");
+    expect(exitCode, diagnostics).toBe(0);
+    // Empty output with exit 0 is the exact under-match signature this
+    // tripwire exists for: the guard declined the entry and nothing ran.
+    expect(output, `entry guard skipped main; stderr: ${diagnostics}`).toContain("Usage:");
+  }, 30_000);
 });
