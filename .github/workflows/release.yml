@@ -1,0 +1,78 @@
+# Release checks.
+#
+# The two halves of "this workspace is publishable", run together:
+#
+#   static  — scripts/check-release.ts: one version across the root and every
+#             workspace package, HARNESS_VERSION in lockstep with the kernel
+#             manifest (the fingerprint rule packages/kernel/src/preparation.ts
+#             states), LICENSE present and actually the Apache License 2.0,
+#             every manifest's `license` field agreeing with it, workspace
+#             packages packable (not private) while the root stays private.
+#             Each rule is falsified in scripts/check-release.test.ts, so the
+#             ordinary CI suite already fails a pull request that breaks one;
+#             this workflow re-runs the same sensor as its own named check.
+#
+#   dry-run — `npm publish --dry-run` per package, one step each so a failure
+#             names the package that cannot pack. Dry-run only: nothing here
+#             publishes, tags, or authenticates. Actual publication (and the
+#             compiled Action bundle the published-action form needs — see the
+#             v1 boundary note in packages/action/action.yml) is deliberate
+#             future release mechanics, not this workflow.
+#
+# Triggers: every pull request that touches release surfaces, so a version or
+# license regression is red before it merges rather than at release time; and
+# workflow_dispatch, so the full set can be run on demand against any ref.
+
+name: Release checks
+
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "packages/*/package.json"
+      - "LICENSE"
+      - "NOTICE"
+      - "packages/kernel/src/preparation.ts"
+      - "scripts/check-release.ts"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Static release sensor
+        run: node --import tsx scripts/check-release.ts
+
+      - name: Publish dry-run (kernel)
+        run: npm publish --dry-run --workspace "@delivery-harness/kernel"
+
+      - name: Publish dry-run (conformance)
+        run: npm publish --dry-run --workspace "@delivery-harness/conformance"
+
+      - name: Publish dry-run (cli)
+        run: npm publish --dry-run --workspace "@delivery-harness/cli"
+
+      - name: Publish dry-run (mcp)
+        run: npm publish --dry-run --workspace "@delivery-harness/mcp"
+
+      - name: Publish dry-run (action)
+        run: npm publish --dry-run --workspace "@delivery-harness/action"

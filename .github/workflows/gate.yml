@@ -1,0 +1,78 @@
+# The gate this repository runs on itself.
+#
+# Every pull request must carry a tracked delivery record — produced by the
+# local `delivery-harness record` loop under `harness.config.ts` and committed
+# with the change — and this workflow verifies that record against the pull
+# request HEAD (never GitHub's synthetic merge commit) with the Action in
+# `packages/action`. This is the self-hosted form that Action documents: the
+# pull request's own checkout supplies both the repository under verification
+# and the verifier. That means a pull request can weaken its own gate — that is
+# inherent to a repository gating itself with its own tool; the mitigation
+# (pinning the action to a base ref) is deliberately not taken here, because
+# dogfooding the in-tree Action is this workflow's entire point.
+#
+# ── THE BOOTSTRAP EXEMPTION, EXPLICIT ────────────────────────────────────────
+#
+# The pull request that INTRODUCES this workflow is bootstrap-exempt, and its
+# red check is the exemption's record — not a malfunction, and not something
+# this file may paper over:
+#
+#   * A delivery record attests a candidate under the config that names the
+#     record path and the identity token. On the introducing pull request the
+#     workflow, the completed config, or both are still part of the change
+#     under review, so no record verified by this gate can exist yet. The same
+#     holds for any future pull request that revises the consumer's identity
+#     token (`delivery-harness-tree/v1`): the revision cascades, and every
+#     record computed under the old token stops matching by design.
+#   * The exemption is therefore granted OUTSIDE this file: a repository
+#     administrator merges the introducing pull request with this check
+#     failing, and the pull request itself records that this was done and why.
+#     There is deliberately no `bootstrap` input, no path filter, no
+#     `continue-on-error`, and no conditional that would let this workflow —
+#     or any later pull request claiming to be "first" — grant the exemption
+#     to itself. An exemption the gate could grant is one an author can
+#     request forever; one only an administrator can grant, once, leaves a
+#     trail.
+#   * On that introducing pull request this check runs and fails CLOSED with a
+#     typed blocker naming the missing record. Exempt-and-says-so: the honest
+#     outcome is a red check merged over by a human, never a green one.
+#
+# Every subsequent pull request is gated: the check goes green only when the
+# head carries a record whose recomputed deliverable identity, base coordinates
+# (base movement stales the record, per this config's policy), and obligation
+# coverage all verify. Both directions were proven by simulated webhook events
+# against this repository's own configuration BEFORE this workflow landed —
+# `packages/action/src/self-hosting.test.ts` — which is what earns the
+# fail-closed posture here.
+#
+# The job is a read-only poller: `permissions: contents: read`, no credentials
+# persisted, re-run by GitHub's `synchronize` delivery when the producer pushes
+# the record. The producer/poller split, the head-vs-merge-ref contract, and
+# the L0 attestation honesty line are documented at length in
+# packages/action/action.yml.
+
+name: Delivery gate
+
+on: pull_request
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-delivery-record:
+    runs-on: ubuntu-latest
+    steps:
+      # Resolves the local action reference from the workspace; the action then
+      # re-checks-out the pull request head by sha itself, which is what pins
+      # what gets verified.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: ./packages/action
