@@ -88,7 +88,18 @@ export const RESOLUTION_OUTCOMES = [
 
 export type ResolutionOutcome = (typeof RESOLUTION_OUTCOMES)[number];
 
-/** A provider's own account of what it found. Its `code` is config-declared. */
+/**
+ * A provider's own account of what it found.
+ *
+ * Both fields are provider-authored, and the `code` is the one that lands
+ * somewhere structural: it becomes a blocker code, which has a grammar, and it
+ * is what an obligation's waivable / non-waivable partition is applied to. So
+ * it is checked rather than trusted — only a code the *registered* provider
+ * declares in its `findingCodes` is carried through as a code. Anything else,
+ * including a well-formed code the config never declared and a summary with no
+ * text in it, becomes a structural `live_provider_failed` blocker with the
+ * reported text kept as detail. See `providerFinding` below for why.
+ */
 export interface LiveProviderFinding {
   readonly code: string;
   readonly summary: string;
@@ -196,6 +207,14 @@ export interface EvaluateGateInput {
   readonly config: HarnessConfig;
   readonly candidate: CandidateBinding;
   readonly projection: ReviewActivationProjection;
+  /**
+   * Supplied by the admission adapter, which obtains it from `context.ts` —
+   * this is a classification the harness computed, never a value that crossed a
+   * process boundary. A caller who could forge a `human` context here could
+   * already have called `classifyExecutionContext` with a snapshot of their
+   * choosing, so this member widens nothing: it is the same trust boundary,
+   * named in one place instead of two.
+   */
   readonly context: ExecutionContext;
   /** Well-formed records the store served, of both resolution kinds. */
   readonly records: readonly EvidenceRecord[];
@@ -211,6 +230,17 @@ export interface EvaluateGateInput {
    * content-addressed id cannot carry, so the invocation's own grants are named
    * explicitly instead. Absent means "this invocation granted none", which is
    * the fail-closed reading: an unlisted invocation waiver is inert.
+   *
+   * SUPPLIER AND TRUST BOUNDARY. The admission adapter's second pass, and only
+   * it: these are the ids it minted a moment earlier when it published the
+   * waivers a human accepted. Nothing external reaches this member, and a
+   * forged entry buys very little — an id here does not create a waiver, it
+   * only stops one that is *already stored* from being treated as a leftover.
+   * That stored record still has to name this gate and this obligation, still
+   * has to pass the same freshness comparison as every other record, and still
+   * cannot cover a finding the config classifies non-waivable. The one thing an
+   * attacker gains is the ability to re-use a waiver they already held for this
+   * exact candidate — which is precisely what a `durable` waiver grants openly.
    */
   readonly invocationWaiverRecordIds?: readonly string[];
 }
@@ -314,26 +344,55 @@ export function isRecordFreshForCandidate(config: HarnessConfig, recorded: Recor
 // ── The provider quantifier ────────────────────────────────────────────────
 
 /**
- * Whether *every* provider an obligation names must be satisfied, or any one of
- * them suffices.
+ * Which of an obligation's providers are still unaccounted for, given the set
+ * that produced something acceptable.
  *
- * HARDCODED TO "every", DELIBERATELY, UNTIL THE CONFIG SAYS OTHERWISE. Athena's
- * obligations carry a `providerPolicy` quantifier (`"all"` or existential); the
- * standalone config surface has no such member yet — it is specified as the
- * pending `ObligationPolicy.providerPolicy` addition, alongside the
- * per-obligation activation bindings, and is not invented here. Until it lands,
- * the quantifier is the fail-closed one: an obligation that names two providers
- * is not satisfied by one of them, because the reverse default would silently
- * admit a candidate on half the evidence its config asked for.
+ * THE QUANTIFIER LIVES HERE AND NOWHERE ELSE, AND IT IS HARDCODED TO "every".
+ * Athena's obligations carry a `providerPolicy` quantifier (`"all"` or
+ * existential); the standalone config surface has no such member yet — it is
+ * specified as the pending `ObligationPolicy.providerPolicy` addition, alongside
+ * the per-obligation activation bindings, and is not invented here. Until it
+ * lands, the quantifier is the fail-closed one: an obligation that names two
+ * providers is not satisfied by one of them, because the reverse default would
+ * silently admit a candidate on half the evidence its config asked for.
  *
- * This function is the only place the answer is decided. When the member lands,
- * its body becomes a read of `obligation.providerPolicy` and the two call sites
- * below acquire their second arm; nothing else in this module moves. The
- * existential arm is deliberately unwritten rather than written-and-unreachable:
- * a policy branch no configuration can select is a branch no test can falsify.
+ * The shape is a residue rather than a boolean switch on purpose. Both call
+ * sites ask the same question — who is missing — so neither carries a branch,
+ * and when the member lands the existential reading is expressed *here* (an
+ * existential obligation with at least one covered provider has no residue).
+ * A branch no configuration can select is a branch no test can falsify, so
+ * there is no such branch to find in this module.
  */
-function everyProviderMustBeSatisfied(_obligation: ObligationPolicy): boolean {
-  return true;
+function unsatisfiedProviders(obligation: ObligationPolicy, covered: ReadonlySet<string>): readonly string[] {
+  return obligation.providers.filter((providerId) => !covered.has(providerId));
+}
+
+/**
+ * Whether a provider may report under this code.
+ *
+ * A live result is provider-authored, and its `code` is applied to two closed
+ * vocabularies: the blocker grammar, which throws on a violation, and the
+ * obligation's waivable / non-waivable partition, which is computed over the
+ * codes the config declares. An unchecked code therefore has two ways to do
+ * damage — it can turn a policy block into a crash, and it can arrive at the
+ * waiver check classified as neither waivable nor non-waivable, escaping a
+ * partition the config loader went to some trouble to make exact.
+ *
+ * So the config's own declaration is the gate. A code the registered provider
+ * lists is well-formed by construction (the loader validates `findingCodes`
+ * against the same grammar the blocker contract enforces) and is inside the
+ * partition by construction (the universe is built from exactly these lists).
+ * Everything else is data, not vocabulary.
+ */
+function providerDeclaresCode(config: HarnessConfig, providerId: string, code: unknown): boolean {
+  if (typeof code !== "string") return false;
+  const registered = config.providers.find((provider) => provider.id === providerId);
+  return registered !== undefined && registered.findingCodes.includes(code);
+}
+
+/** Operator-facing text needs text in it; a blank summary is not a diagnostic. */
+function hasReportableSummary(summary: unknown): boolean {
+  return typeof summary === "string" && summary.trim() !== "";
 }
 
 // ── Live obligations ───────────────────────────────────────────────────────
@@ -371,11 +430,26 @@ function evaluateLiveObligation(input: EvaluateGateInput, obligation: Obligation
         continue;
       }
       for (const reported of result.findings) {
+        if (providerDeclaresCode(input.config, providerId, reported.code) && hasReportableSummary(reported.summary)) {
+          findings.push(
+            finding(obligation, reported.code, reported.summary, {
+              providerId,
+              fromProvider: providerId,
+              ...(reported.details === undefined ? {} : { details: reported.details }),
+            }),
+          );
+          continue;
+        }
+        // Refused as vocabulary, kept as evidence. The operator still reads
+        // exactly what the provider said — one indent below the structural code
+        // that vouches for it — and the blocker contract's own redaction and
+        // bounding apply to it on the way through.
         findings.push(
-          finding(obligation, reported.code, reported.summary, {
+          finding(obligation, "live_provider_failed", `Live provider ${providerId} reported a finding this config does not declare.`, {
             providerId,
-            fromProvider: providerId,
-            ...(reported.details === undefined ? {} : { details: reported.details }),
+            details: `Reported code: ${JSON.stringify(reported.code)}\nReported summary: ${String(reported.summary)}${
+              reported.details === undefined ? "" : `\nReported details: ${String(reported.details)}`
+            }`,
           }),
         );
       }
@@ -384,9 +458,8 @@ function evaluateLiveObligation(input: EvaluateGateInput, obligation: Obligation
     green.push(result);
   }
 
-  const satisfied = everyProviderMustBeSatisfied(obligation)
-    ? obligation.providers.length > 0 && green.length === obligation.providers.length
-    : green.length > 0;
+  const covered = new Set(green.map((result) => result.providerId));
+  const satisfied = obligation.providers.length > 0 && unsatisfiedProviders(obligation, covered).length === 0;
 
   if (satisfied) {
     const first = green[0] as LiveProviderResult;
@@ -494,13 +567,9 @@ function scanEvidence(input: EvaluateGateInput, obligation: ObligationPolicy): E
   fresh.sort((left, right) => left.resolution.providerId.localeCompare(right.resolution.providerId) || left.recordId.localeCompare(right.recordId));
 
   const covered = new Set(fresh.map((record) => record.resolution.providerId));
-  const missing = everyProviderMustBeSatisfied(obligation)
-    ? obligation.providers
-        .filter((providerId) => !covered.has(providerId))
-        .map((providerId) =>
-          finding(obligation, "review_evidence_missing", `Approved provider ${providerId} has no fresh final-green evidence for this candidate.`, { providerId }),
-        )
-    : [];
+  const missing = unsatisfiedProviders(obligation, covered).map((providerId) =>
+    finding(obligation, "review_evidence_missing", `Approved provider ${providerId} has no fresh final-green evidence for this candidate.`, { providerId }),
+  );
 
   const satisfied = missing.length === 0 && fresh.length > 0;
   return {

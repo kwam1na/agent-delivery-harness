@@ -316,3 +316,79 @@ describe("everything the classifier reads is config", () => {
     });
   });
 });
+
+// ── Corroboration must be possible, not merely satisfied ───────────────────
+
+describe("a policy that declares no corroborating environment", () => {
+  const bare = (): HarnessConfig =>
+    testConfig({
+      ciPolicies: [{ id: "bare", requiredEnv: [] }],
+      obligations: [{ ...testConfig().obligations[0]!, ciDelegationPolicyIds: ["bare"] }],
+    });
+
+  /**
+   * "Every requirement holds" is vacuously true of no requirements, so a policy
+   * with an empty `requiredEnv` would be corroborated by naming it and nothing
+   * else — a full CI context, and with it a delegated obligation, conferred by
+   * one environment variable anybody can export. Authorization needs something
+   * to check, so a policy that offers nothing to check cannot grant it.
+   */
+  it("is not authorized by being named", () => {
+    expect(classify({ TEST_HARNESS_CI_POLICY: "bare" }, false, bare())).toEqual({
+      kind: "unknown",
+      reason: "unauthorized_automation",
+    });
+  });
+
+  it("is not authorized by being named from a terminal either", () => {
+    expect(classify({ TEST_HARNESS_CI_POLICY: "bare" }, true, bare())).toEqual({
+      kind: "unknown",
+      reason: "unauthorized_automation",
+    });
+  });
+
+  /**
+   * The other half of the coherence: an empty requirement list raises no claim
+   * on its own, so an unrelated shell is still an ordinary shell.
+   */
+  it("raises no automation claim of its own", () => {
+    expect(classify({}, true, bare())).toEqual({ kind: "human", interactive: true });
+    expect(classify({ TEST_AGENT: "1" }, false, bare())).toEqual({ kind: "agent", signal: "TEST_AGENT" });
+  });
+
+  it("does not disturb a policy whose corroboration is real and complete", () => {
+    expect(classify(AUTHORIZED_CI).kind).toBe("ci");
+  });
+});
+
+// ── Signals come from the environment, not from the prototype ──────────────
+
+describe("environment lookups that are not environment values", () => {
+  /**
+   * A snapshot is an ordinary object, so `env["__proto__"]`, `env["toString"]`
+   * and friends answer with something inherited rather than with `undefined`.
+   * Each of those names is a legal environment-variable identifier, so a config
+   * may declare one, and an inherited value that is not a string would
+   * otherwise read as a present signal and confer the agent rung on an
+   * environment that declares nothing at all.
+   */
+  it("does not read an inherited member as a present signal", () => {
+    const inherited = testConfig({ agentEnvSignals: ["__proto__", "constructor", "toString"] });
+    expect(classify({}, true, inherited)).toEqual({ kind: "human", interactive: true });
+    expect(classify({}, false, inherited)).toEqual({ kind: "unknown", reason: "noninteractive_unrecognized" });
+  });
+
+  it.each([
+    ["an object", {}],
+    ["a function", (): void => {}],
+    ["a number", 1],
+    ["null", null],
+  ])("reads %s as absent", (_name, value) => {
+    expect(isEnvSignalPresent(value as unknown as string | undefined)).toBe(false);
+  });
+
+  it("still reads a declared string signal as present", () => {
+    const inherited = testConfig({ agentEnvSignals: ["__proto__", "TEST_AGENT"] });
+    expect(classify({ TEST_AGENT: "1" }, false, inherited)).toEqual({ kind: "agent", signal: "TEST_AGENT" });
+  });
+});

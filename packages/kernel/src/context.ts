@@ -100,12 +100,30 @@ export interface ClassifyExecutionContextInput {
  * switched off rather than absent — an unset variable, an empty one, and the
  * two falsey words CI systems write. Treating `AGENT=false` as "an agent is
  * present" would let a switched-off signal confer a rung.
+ *
+ * The type check is not redundant with the type. A snapshot is an ordinary
+ * object, so a lookup of `__proto__`, `constructor` or `toString` answers with
+ * something inherited rather than with `undefined` — and every one of those is
+ * a legal environment-variable name a config may declare as a signal. Without
+ * the check, an environment that sets nothing at all would confer the agent
+ * rung, which is the rung that can never be waived out of.
  */
 export function isEnvSignalPresent(value: string | undefined): boolean {
-  return value !== undefined && value !== "" && value !== "0" && value !== "false";
+  return typeof value === "string" && value !== "" && value !== "0" && value !== "false";
 }
 
+/**
+ * Whether the environment stands where the policy says its job stands.
+ *
+ * A policy that requires nothing is refused rather than trivially corroborated.
+ * "Every requirement holds" is vacuously true of no requirements, so an empty
+ * `requiredEnv` would make naming the policy the whole of the proof — one
+ * exported variable, anybody's to export, conferring a full CI context and with
+ * it every obligation that policy is allowed to answer for. Authorization needs
+ * something to check, so a policy offering nothing to check cannot grant it.
+ */
 function isCorroborated(requiredEnv: readonly EnvironmentRequirement[], env: EnvSnapshot): boolean {
+  if (requiredEnv.length === 0) return false;
   return requiredEnv.every((requirement) => env[requirement.variable] === requirement.equals);
 }
 
@@ -121,6 +139,10 @@ function isCorroborated(requiredEnv: readonly EnvironmentRequirement[], env: Env
  * classified as an unauthorized automation rather than as a person — which is
  * the fail-closed direction, and is repaired by unsetting the variable rather
  * than by weakening the rule.
+ *
+ * Coherent with `isCorroborated` at the other end: a policy that declares no
+ * corroboration raises no claim here either, so it is reachable only by being
+ * named — and being named is exactly what will not authorize it.
  */
 function claimsAutomation(config: HarnessConfig, env: EnvSnapshot): boolean {
   return config.ciPolicies.some((policy) =>
@@ -136,7 +158,8 @@ export function classifyExecutionContext({ config, env, stdinIsTTY, stdoutIsTTY 
     // Two halves, and both must hold: the run has to *name* the policy it is
     // running under, and the environment has to agree. Naming without
     // corroboration is a copied variable; corroboration without naming is a job
-    // that never declared itself. Neither is authorization.
+    // that never declared itself. Neither is authorization — and neither is a
+    // policy with nothing to corroborate, which `isCorroborated` refuses.
     const named = config.ciPolicies.find((policy) => policy.id === declared);
     if (named !== undefined && isCorroborated(named.requiredEnv, env)) {
       return { kind: "ci", policyId: named.id, requiredEnv: named.requiredEnv };

@@ -54,6 +54,7 @@ import {
   isRecordFreshForCandidate,
   type EvaluateGateInput,
   type GateDecision,
+  type LiveProviderFinding,
   type LiveProviderResult,
   type ObligationResolution,
   type UnreadableRecordInput,
@@ -630,6 +631,96 @@ describe("live provider results", () => {
       liveResults: [GREEN_RESULT, { providerId: "second.provider", runId: "live-2", status: "failed", findings: [] }],
     });
     expect(only(decision).kind).toBe("satisfied_live_fact");
+  });
+});
+
+// ── Provider-authored text is data, not vocabulary ─────────────────────────
+
+/**
+ * A live result is the one input to this module that a provider authored, and
+ * both of its text fields land somewhere structural: the code becomes a blocker
+ * code, which has a grammar, and it is also what the config's waivable /
+ * non-waivable partition is applied to. Neither can be taken on trust.
+ *
+ * A code the registered provider did not declare is refused for the same reason
+ * an ill-formed one is: the partition is computed over the codes the config
+ * declares, so a code outside that set is a finding no obligation ever
+ * classified, and it would reach the waiver check as neither waivable nor
+ * non-waivable. Refusing it keeps the emittable universe closed.
+ */
+describe("a provider's own finding codes", () => {
+  const liveConfig = testConfig({ obligations: [obligation({ freshness: "live" })] });
+
+  function reporting(reported: LiveProviderFinding): GateDecision {
+    return evaluate({
+      config: liveConfig,
+      liveResults: [{ providerId: "review.provider", runId: "live-1", status: "failed", findings: [reported] }],
+    });
+  }
+
+  it.each([
+    { name: "capitals and a space", reported: { code: "Review Failed", summary: "Two files were never opened." } },
+    { name: "an empty code", reported: { code: "", summary: "Two files were never opened." } },
+    { name: "a doubled separator", reported: { code: "review..bad", summary: "Two files were never opened." } },
+    { name: "a trailing separator", reported: { code: "review-incomplete-", summary: "Two files were never opened." } },
+    { name: "an empty summary", reported: { code: "review-incomplete", summary: "" } },
+    { name: "a whitespace-only summary", reported: { code: "review-incomplete", summary: "   " } },
+    { name: "a well-formed code the provider never declared", reported: { code: "not-declared", summary: "Something else." } },
+  ])("reports $name structurally instead of throwing", ({ reported }) => {
+    let decision: GateDecision | undefined;
+    expect(() => {
+      decision = reporting(reported);
+    }).not.toThrow();
+    const settled = decision as GateDecision;
+    expect(only(settled).kind).toBe("blocked");
+    expect(codesOf(settled)).toEqual(["live_provider_failed"]);
+  });
+
+  it("keeps the refused text as operator-facing detail rather than discarding it", () => {
+    const decision = reporting({ code: "not-declared", summary: "The provider had its own opinion." });
+    const rendered = renderBlockers(decision.blockers);
+    expect(rendered).toContain("not-declared");
+    expect(rendered).toContain("The provider had its own opinion.");
+  });
+
+  it("never lets an undeclared code out as a blocker code", () => {
+    const decision = reporting({ code: "not-declared", summary: "Something else." });
+    expect(codesOf(decision)).not.toContain("not-declared");
+    const universe = new Set(emittableFindingCodes(liveConfig, "review.green"));
+    for (const code of codesOf(decision)) expect([...universe]).toContain(code);
+  });
+
+  /**
+   * The escape this closes: `not-declared` is in neither list, so a waiver
+   * check that saw it would have to decide about a code the config never
+   * classified. Refused at the door, the pending finding is
+   * `live_provider_failed`, which the fixture classifies waivable — so the
+   * human path stays open for a *classified* failure and closed for an
+   * unclassifiable one.
+   */
+  it("keeps a refused code inside the config's partition", () => {
+    const obligationPolicy = liveConfig.obligations[0] as (typeof liveConfig.obligations)[number];
+    expect(obligationPolicy.waivableCodes).not.toContain("not-declared");
+    expect(obligationPolicy.nonWaivableCodes).not.toContain("not-declared");
+    const decision = evaluate({
+      config: liveConfig,
+      context: HUMAN,
+      liveResults: [{ providerId: "review.provider", runId: "live-1", status: "failed", findings: [{ code: "not-declared", summary: "Something else." }] }],
+      records: [waiver({ scope: "invocation" })],
+      invocationWaiverRecordIds: ["waiver-1"],
+    });
+    expect(only(decision).kind).toBe("waived");
+  });
+
+  it("still accepts a code the registered provider declares", () => {
+    const decision = reporting({ code: "review-incomplete", summary: "Two files were never opened." });
+    expect(codesOf(decision)).toEqual(["review-incomplete"]);
+    expect(decision.blockers[0]?.source).toEqual({ kind: "provider", id: "review.provider" });
+  });
+
+  it("refuses a code another provider declares but this one does not", () => {
+    const decision = reporting({ code: "second-incomplete", summary: "Borrowed from the other provider." });
+    expect(codesOf(decision)).toEqual(["live_provider_failed"]);
   });
 });
 
