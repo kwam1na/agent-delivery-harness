@@ -98,17 +98,20 @@ export interface CapturedCandidate extends CandidateBinding {
  * the operator's next action differs for every one of them: stage the work,
  * finish the merge, fetch the base, re-run, or look at the repository itself.
  *
- * `candidate_base_missing` and `candidate_base_unrelated` are the fail-closed
- * pair. A base that cannot be resolved must never degrade into "nothing
- * changed" — an empty changed set is a legitimate answer (a candidate whose tip
- * equals its base) and reporting an unresolvable base as one would admit an
- * unreviewed change through the activation threshold.
+ * The three `candidate_base_*` codes are the fail-closed set. A base that
+ * cannot be resolved must never degrade into "nothing changed" — an empty
+ * changed set is a legitimate answer (a candidate whose tip equals its base)
+ * and reporting an unresolvable base as one would admit an unreviewed change
+ * through the activation threshold. They are three rather than one because
+ * their remedies are unrelated: fetch the ref, deepen the clone, or reconcile
+ * two histories that genuinely have nothing in common.
  */
 export const CANDIDATE_CAPTURE_CODES = [
   "candidate_unprepared",
   "candidate_merge_in_progress",
   "candidate_ambiguous",
   "candidate_base_missing",
+  "candidate_base_shallow",
   "candidate_base_unrelated",
   "candidate_repository_unreadable",
 ] as const;
@@ -316,6 +319,15 @@ export interface ReviewActivationProjection {
   readonly sensitivePathIds: readonly string[];
   readonly hasRelevantBinaryChange: boolean;
   /**
+   * Whether a reviewable path changed in a way that adds and removes no lines
+   * at all: a permission bit flipped to executable, a file moved with its
+   * contents intact. Recorded for the same reason as a binary change — the
+   * count is zero because lines are the wrong unit for this change, not because
+   * nothing happened, and `chmod +x` on a script is not a change a line
+   * threshold should be allowed to wave through.
+   */
+  readonly hasRelevantZeroLineChange: boolean;
+  /**
    * How many entries the diff carried at all. Zero is the legitimate
    * empty-diff case — a candidate whose tree already matches its base — and is
    * distinguishable here from a base that could not be resolved, which never
@@ -334,9 +346,20 @@ function entryPaths(entry: CandidateDiffEntry): readonly string[] {
   return entry.oldPath === undefined ? [entry.path] : [entry.oldPath, entry.path];
 }
 
+/**
+ * SENSITIVE GROUPS ARE COLLECTED BEFORE THE RELEVANCE CHECK, deliberately. A
+ * path can be both sensitive and excluded — a generated client for an
+ * authentication API, a test fixture holding a signing key — and in that case
+ * the sensitive group still names it and the obligation still activates. The
+ * exclusion says "these lines are not worth counting", which is a statement
+ * about volume; a sensitive group says "changes here are reviewed regardless",
+ * which is a statement about risk. Letting the first silence the second would
+ * make a config's own classification into a way around its own policy.
+ */
 export function projectReviewActivation(entries: readonly CandidateDiffEntry[], config: HarnessConfig): ReviewActivationProjection {
   let relevantLineCount = 0;
   let hasRelevantBinaryChange = false;
+  let hasRelevantZeroLineChange = false;
   const relevantPaths = new Set<string>();
   const excludedPaths = new Set<string>();
   const binaryPaths = new Set<string>();
@@ -362,6 +385,7 @@ export function projectReviewActivation(entries: readonly CandidateDiffEntry[], 
       hasRelevantBinaryChange = true;
       continue;
     }
+    if (entry.additions + entry.deletions === 0) hasRelevantZeroLineChange = true;
     relevantLineCount += entry.additions + entry.deletions;
   }
 
@@ -372,6 +396,7 @@ export function projectReviewActivation(entries: readonly CandidateDiffEntry[], 
     binaryPaths: [...binaryPaths].sort(),
     sensitivePathIds: [...sensitivePathIds].sort(),
     hasRelevantBinaryChange,
+    hasRelevantZeroLineChange,
     changedEntryCount: entries.length,
   };
 }
@@ -380,17 +405,27 @@ export function projectReviewActivation(entries: readonly CandidateDiffEntry[], 
  * Whether an obligation applies to the candidate this projection describes.
  *
  * An `always` obligation ignores the projection entirely. A `relevant_change`
- * obligation activates on any of three independent signals: enough reviewable
- * lines, a reviewable binary change, or a touched sensitive path. They are
- * independent on purpose — a one-line change to an authentication path is
- * exactly the change a line threshold would wave through.
+ * obligation activates on any of four independent signals: enough reviewable
+ * lines, a reviewable binary change, a reviewable change that counts no lines,
+ * or a touched sensitive path. They are independent on purpose — a one-line
+ * change to an authentication path is exactly the change a line threshold would
+ * wave through.
  *
- * ONE GROUP, ONE ANSWER. Every declared sensitive group activates every
- * `relevant_change` obligation, because the config surface binds sensitive
- * groups to the repository rather than to an obligation. Splitting them per
- * obligation needs a config member that does not exist yet; until it does, the
- * honest reading of a declared sensitive group is "this always needs review",
- * and the same holds for a reviewable binary change.
+ * TWO SIGNALS ARE WIDER THAN THEY SHOULD BE, for want of a config member to
+ * narrow them with:
+ *
+ *   - Every declared sensitive group activates every `relevant_change`
+ *     obligation. The config surface binds sensitive groups to the repository,
+ *     not to an obligation; narrowing this needs a per-obligation member naming
+ *     the group ids that obligation answers for.
+ *   - A reviewable binary change — and equally a reviewable zero-line change —
+ *     activates unconditionally. Narrowing this needs a per-obligation flag of
+ *     the `relevantBinaryChangeActivates` kind, letting an obligation say the
+ *     signal is not one it answers for.
+ *
+ * Until those members exist, the honest reading of a declared sensitive group
+ * or an uncountable change is "this needs review", which is the reading that
+ * fails closed.
  */
 export function isObligationActive(
   activation: ObligationActivation,
@@ -400,5 +435,6 @@ export function isObligationActive(
   if (activation.kind === "always") return true;
   if (projection.relevantLineCount >= activationThreshold) return true;
   if (projection.hasRelevantBinaryChange) return true;
+  if (projection.hasRelevantZeroLineChange) return true;
   return projection.sensitivePathIds.length > 0;
 }

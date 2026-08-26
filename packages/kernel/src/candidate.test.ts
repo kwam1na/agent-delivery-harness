@@ -7,14 +7,14 @@
  * half-finished, an index whose tree matches HEAD, a remote-tracking ref that
  * has gone missing — and those states are the entire subject of the unit.
  *
- * The command runner is injected in exactly three places, all of them cases a
- * repository cannot be *left* in: two observations disagreeing mid-capture, and
- * a status shape no sequence of git commands produces. Those tests still run
- * against a real repository; only the one observation being provoked is
- * synthetic.
+ * The command runner is injected only where a repository cannot be *left* in
+ * the state under test: two observations disagreeing mid-capture, a status
+ * shape no sequence of git commands produces, and a probe that fails to start
+ * at all. Those tests still run against a real repository; only the one
+ * observation being provoked is synthetic.
  */
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -124,6 +124,36 @@ async function preparedFixture(): Promise<Fixture> {
   await drive(work, ["remote", "add", "origin", remote]);
   await drive(work, ["push", "--quiet", "origin", "main"]);
 
+  return { root, work, remote };
+}
+
+/**
+ * The shape a CI checkout actually arrives in: a depth-1 clone of one branch,
+ * with the base ref fetched to depth 1 as well, so the two tips share history
+ * only beyond the graft. `merge-base` cannot answer here, and the answer it
+ * gives is indistinguishable from genuinely unrelated histories.
+ */
+async function shallowFixture(): Promise<Fixture> {
+  const root = await makeRoot();
+  const remote = path.join(root, "origin");
+  const work = path.join(root, "work");
+  await mkdir(remote, { recursive: true });
+  await drive(root, ["init", "--initial-branch=main", remote]);
+  await write(remote, "src/app.ts", lines(10, "app"));
+  await drive(remote, ["add", "--all"]);
+  await drive(remote, ["commit", "--no-gpg-sign", "-m", "shared"]);
+  await drive(remote, ["checkout", "--quiet", "-b", "feature"]);
+  await write(remote, "src/feature.ts", lines(10, "feature"));
+  await drive(remote, ["add", "--all"]);
+  await drive(remote, ["commit", "--no-gpg-sign", "-m", "feature"]);
+  await drive(remote, ["checkout", "--quiet", "main"]);
+  await write(remote, "src/app.ts", lines(20, "app"));
+  await drive(remote, ["commit", "--no-gpg-sign", "-am", "trunk one"]);
+  await write(remote, "src/app.ts", lines(30, "app"));
+  await drive(remote, ["commit", "--no-gpg-sign", "-am", "trunk two"]);
+
+  await drive(root, ["clone", "--quiet", "--depth", "1", "--branch", "feature", `file://${remote}`, work]);
+  await drive(work, ["fetch", "--quiet", "--depth", "1", "origin", "main:refs/remotes/origin/main"]);
   return { root, work, remote };
 }
 
@@ -417,6 +447,77 @@ describe("candidate capture refuses unprepared workspaces", () => {
     expect(result.code).toBe("candidate_merge_in_progress");
   });
 
+  it("refuses a conflicted rebase, naming the operation", async () => {
+    const { work } = await preparedFixture();
+    await drive(work, ["checkout", "--quiet", "-b", "side"]);
+    await write(work, "src/app.ts", lines(10, "side"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "side"]);
+    await drive(work, ["checkout", "--quiet", "main"]);
+    await write(work, "src/app.ts", lines(10, "trunk"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "trunk"]);
+    await drive(work, ["rebase", "side"]).catch(() => undefined);
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_merge_in_progress");
+    expect(result.blockers[0].summary).toContain("rebase");
+  });
+
+  it("refuses a rebase interrupted with a clean worktree", async () => {
+    const { work } = await preparedFixture();
+    await drive(work, ["checkout", "--quiet", "-b", "side"]);
+    await write(work, "src/side.ts", lines(5, "side"));
+    await drive(work, ["add", "--all"]);
+    await drive(work, ["commit", "--no-gpg-sign", "-m", "side"]);
+    await drive(work, ["checkout", "--quiet", "main"]);
+    await write(work, "src/trunk.ts", lines(5, "trunk"));
+    await drive(work, ["add", "--all"]);
+    await drive(work, ["commit", "--no-gpg-sign", "-m", "trunk"]);
+    // A rebase stopped by a failing `--exec` leaves no REBASE_HEAD, a clean
+    // status, and a writable index tree: every signal says prepared, and the
+    // repository is halfway through rewriting the branch.
+    await drive(work, ["rebase", "--exec", "exit 1", "side"]).catch(() => undefined);
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_merge_in_progress");
+    expect(result.blockers[0].summary).toContain("rebase");
+  });
+
+  it("refuses a conflicted cherry-pick, naming the operation", async () => {
+    const { work } = await preparedFixture();
+    await drive(work, ["checkout", "--quiet", "-b", "side"]);
+    await write(work, "src/app.ts", lines(10, "side"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "side"]);
+    await drive(work, ["checkout", "--quiet", "main"]);
+    await write(work, "src/app.ts", lines(10, "trunk"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "trunk"]);
+    await drive(work, ["cherry-pick", "side"]).catch(() => undefined);
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_merge_in_progress");
+    expect(result.blockers[0].summary).toContain("cherry-pick");
+  });
+
+  it("refuses a conflicted revert, naming the operation", async () => {
+    const { work } = await preparedFixture();
+    await write(work, "src/app.ts", lines(10, "second"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "second"]);
+    await write(work, "src/app.ts", lines(10, "third"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "third"]);
+    await drive(work, ["revert", "--no-edit", "HEAD~1"]).catch(() => undefined);
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_merge_in_progress");
+    expect(result.blockers[0].summary).toContain("revert");
+  });
+
   it("refuses a non-clean status whose index defines no distinct tree", async () => {
     const { work } = await preparedFixture();
     // No sequence of git commands leaves a repository in this state — every
@@ -468,6 +569,24 @@ describe("candidate capture fails closed on the base", () => {
     expect(result.code).toBe("candidate_base_unrelated");
   });
 
+  it("names a shallow boundary rather than calling the histories unrelated", async () => {
+    const { work } = await shallowFixture();
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_base_shallow");
+    expect(result.blockers[0].summary).toContain("shallow");
+    // The way out is deepening the clone, never rebasing onto a base the
+    // repository has simply not been given the history for.
+    expect(result.blockers[0].remediations.map((remediation) => remediation.id)).toContain("deepen-the-clone");
+    expect(result.blockers[0].remediations.flatMap((remediation) => ("command" in remediation && remediation.command !== undefined ? remediation.command : []))).toEqual([
+      "git",
+      "fetch",
+      "--unshallow",
+    ]);
+  });
+
   it("blocks when the directory is not a repository", async () => {
     const root = await makeRoot();
 
@@ -484,6 +603,40 @@ describe("candidate capture fails closed on the base", () => {
     await drive(root, ["init", "--initial-branch=main", work]);
 
     const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_repository_unreadable");
+  });
+});
+
+// ── Capture: probes that never ran ─────────────────────────────────────────
+
+describe("a probe that fails to start is not an answer", () => {
+  /** What the runner reports when the command could not be spawned at all. */
+  function unstartable(match: string): CandidateCommandRunner {
+    return async (command, options) => {
+      if (command.includes(match)) return { exitCode: -1, stdout: "", stderr: "spawn git ENOENT" };
+      return runGitCommand(command, options);
+    };
+  }
+
+  it("does not read a failed in-progress probe as no operation in progress", async () => {
+    const { work } = await preparedFixture();
+
+    const result = await captureGitCandidate(captureOptions(work, { run: unstartable("MERGE_HEAD") }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_repository_unreadable");
+  });
+
+  it("does not read a failed unstaged-change probe as a dirty worktree", async () => {
+    const { work } = await preparedFixture();
+    const run: CandidateCommandRunner = async (command, options) => {
+      if (command.includes("--quiet") && command.includes("diff")) return { exitCode: -1, stdout: "", stderr: "spawn git ENOENT" };
+      return runGitCommand(command, options);
+    };
+
+    const result = await captureGitCandidate(captureOptions(work, { run }));
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.code).toBe("candidate_repository_unreadable");
@@ -569,6 +722,18 @@ describe("numstat parsing", () => {
 
   it("reads an empty diff as no entries", () => {
     expect(parseCandidateNumstat("")).toEqual([]);
+  });
+
+  it("throws on a rename announcement whose second path never arrives", () => {
+    // The stream splits into a trailing empty string rather than running out,
+    // so a missing path is present-and-empty rather than absent.
+    expect(() => parseCandidateNumstat("1\t2\t\0only-one\0")).toThrow(/rename/);
+  });
+
+  it("throws on counts that are not plain decimal integers", () => {
+    for (const counts of ["0x10\t1", "1e3\t1", " 7 \t1", "\t1", "-5\t1", "1\t0x2"]) {
+      expect(() => parseCandidateNumstat(`${counts}\tsrc/app.ts\0`), counts).toThrow();
+    }
   });
 });
 
@@ -657,6 +822,19 @@ describe("the activation projection", () => {
     expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(false);
   });
 
+  it("activates on a reviewable change that touches no lines at all", () => {
+    const projection = projectReviewActivation([counted("src/app.ts", 0)], config);
+    expect(projection.relevantLineCount).toBe(0);
+    expect(projection.hasRelevantZeroLineChange).toBe(true);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(true);
+  });
+
+  it("does not activate on a zero-line change to an excluded path", () => {
+    const projection = projectReviewActivation([counted("generated/output.ts", 0)], config);
+    expect(projection.hasRelevantZeroLineChange).toBe(false);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(false);
+  });
+
   it("names the sensitive group a touched path falls inside", () => {
     const projection = projectReviewActivation([counted("packages/auth/token.ts", 1)], config);
     expect(projection.sensitivePathIds).toEqual(["auth"]);
@@ -707,6 +885,48 @@ describe("projecting a captured candidate", () => {
     expect(projection.excludedPaths).toEqual(["generated/output.ts", "src/app.test.ts"]);
     expect(projection.changedEntryCount).toBe(3);
     expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(true);
+  });
+
+  it("activates on a staged mode change that touches no lines", async () => {
+    const { work } = await preparedFixture();
+    await chmod(path.join(work, "src/app.ts"), 0o755);
+    await drive(work, ["add", "src/app.ts"]);
+
+    const config = testConfig();
+    const result = await captureGitCandidate(captureOptions(work, { config }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const projection = await evaluateCandidateActivation({ rootDir: work, candidate: result.candidate, config });
+    expect(projection.relevantLineCount).toBe(0);
+    expect(projection.hasRelevantZeroLineChange).toBe(true);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(true);
+  });
+
+  it("activates on a pure rename of a reviewable file", async () => {
+    const { work } = await preparedFixture();
+    await drive(work, ["mv", "src/app.ts", "src/renamed.ts"]);
+
+    const config = testConfig();
+    const result = await captureGitCandidate(captureOptions(work, { config }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const projection = await evaluateCandidateActivation({ rootDir: work, candidate: result.candidate, config });
+    expect(projection.relevantLineCount).toBe(0);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(true);
+  });
+
+  it("does not activate on a mode change to an excluded path", async () => {
+    const { work } = await preparedFixture();
+    await chmod(path.join(work, "generated/output.ts"), 0o755);
+    await drive(work, ["add", "generated/output.ts"]);
+
+    const config = testConfig();
+    const result = await captureGitCandidate(captureOptions(work, { config }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const projection = await evaluateCandidateActivation({ rootDir: work, candidate: result.candidate, config });
+    expect(projection.excludedPaths).toEqual(["generated/output.ts"]);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(false);
   });
 
   it("blocks rather than reporting an empty diff when the diff cannot be read", async () => {

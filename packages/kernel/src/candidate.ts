@@ -33,11 +33,22 @@
  * argument to be re-parsed by, and the pipes are drained to completion so a
  * verbose command cannot deadlock on a full buffer.
  *
+ * WHERE THE ENVIRONMENT SCRUB STOPS. `HOME` is kept, so the user's global git
+ * configuration still applies — including settings that execute programs, such
+ * as `core.fsmonitor`. That is deliberate rather than overlooked: the harness
+ * runs as the user, from the user's shell, against the user's repository, and a
+ * global config the user wrote is not a boundary this module is defending. What
+ * it defends against is the narrower and genuinely surprising case — inherited
+ * `GIT_` variables that silently point the same commands at a different
+ * repository, which no amount of trusting the launcher makes correct.
+ *
  * THE PURE HALF IS NEXT DOOR. Shapes, classification, projection, activation
  * and drift live in `candidate.types.ts`, which imports no process and no
  * filesystem; this file is only the part that has to talk to git.
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 import { BlockedError, createBlocker, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
 import type { HarnessConfig } from "./config.ts";
@@ -214,6 +225,32 @@ function movedFields(before: Observation, after: Observation): readonly string[]
 
 type ObservationResult = { readonly ok: true; readonly observation: Observation } | Extract<CandidateCapture, { ok: false }>;
 
+/**
+ * The operations git can be part-way through, and the state each one leaves in
+ * the git directory. Every entry is asked for by `--git-path` and answered by
+ * whether the file or directory is there, which is how git itself decides —
+ * `MERGE_HEAD` and its siblings are plain files, not refs that need resolving,
+ * and one `rev-parse` can name all six paths at once.
+ *
+ * The two directories are not redundant with `REBASE_HEAD`. A rebase that
+ * *conflicts* writes `REBASE_HEAD`; a rebase that merely *stops* — a failing
+ * `--exec`, an `edit` or `break` instruction — writes none, leaves a clean
+ * status and a perfectly writable index tree, and would otherwise capture as a
+ * healthy candidate while the branch is half rewritten.
+ *
+ * Order matters only for the message: the first match names the operation, and
+ * a rebase implemented as a sequence of cherry-picks would otherwise be
+ * reported as a cherry-pick.
+ */
+const IN_PROGRESS_STATES: readonly { readonly gitPath: string; readonly operation: string }[] = [
+  { gitPath: "rebase-merge", operation: "rebase" },
+  { gitPath: "rebase-apply", operation: "rebase" },
+  { gitPath: "REBASE_HEAD", operation: "rebase" },
+  { gitPath: "MERGE_HEAD", operation: "merge" },
+  { gitPath: "CHERRY_PICK_HEAD", operation: "cherry-pick" },
+  { gitPath: "REVERT_HEAD", operation: "revert" },
+];
+
 async function observe(
   run: CandidateCommandRunner,
   rootDir: string,
@@ -249,21 +286,42 @@ async function observe(
     ]);
   }
 
-  // Probed before the index tree is written, because a conflicted merge makes
-  // `write-tree` fail with a message about unmerged paths — true, but not the
-  // thing the author needs to be told.
-  const mergeHead = await git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
-  if (mergeHead.exitCode === 0) {
+  // Probed before the index tree is written. A conflicted merge, rebase,
+  // cherry-pick or revert makes `write-tree` fail with a message about unmerged
+  // paths — true, but not the thing the author needs to be told — and an
+  // operation that stopped without conflicting would not fail it at all.
+  const statePaths = await git(["rev-parse", ...IN_PROGRESS_STATES.flatMap((state) => ["--git-path", state.gitPath])]);
+  if (statePaths.exitCode !== 0) {
+    return blocked(
+      config,
+      "candidate_repository_unreadable",
+      "the repository would not say whether an operation is in progress",
+      statePaths.stderr,
+      [
+        {
+          id: "repair-repository",
+          kind: "manual_action",
+          summary: "Repair the repository: its git directory could not be located.",
+        },
+      ],
+    );
+  }
+  const stateLines = statePaths.stdout.split("\n").map((line) => line.trim());
+  const inProgress = IN_PROGRESS_STATES.find((state, index) => {
+    const line = stateLines[index];
+    return line !== undefined && line !== "" && existsSync(path.resolve(rootDir, line));
+  });
+  if (inProgress !== undefined) {
     return blocked(
       config,
       "candidate_merge_in_progress",
-      "a merge is in progress, so the index does not yet describe a finished change",
-      mergeHead.stdout,
+      `a ${inProgress.operation} is in progress, so the index does not yet describe a finished change`,
+      `state left by the ${inProgress.operation}: ${inProgress.gitPath}`,
       [
         {
-          id: "conclude-merge",
+          id: "conclude-in-progress-operation",
           kind: "manual_action",
-          summary: "Conclude the merge — resolve and commit it, or abandon it — before preparing a candidate.",
+          summary: `Conclude the ${inProgress.operation} — finish it or abandon it — before preparing a candidate.`,
         },
         INSPECT_STATUS,
       ],
@@ -309,6 +367,42 @@ async function observe(
 
   const mergeBase = await git(["merge-base", config.baseRef, "HEAD"]);
   if (mergeBase.exitCode === 1) {
+    // "No merge base" and "no merge base *that this clone has been given*" are
+    // the same exit code and the same silence, and they call for opposite
+    // actions. A depth-1 clone is what `actions/checkout` produces by default,
+    // so the second case is the common one in CI — and telling that operator to
+    // rebase onto the base would have them rewrite a branch to fix a fetch.
+    const shallow = await git(["rev-parse", "--is-shallow-repository"]);
+    if (shallow.exitCode !== 0) {
+      return blocked(config, "candidate_repository_unreadable", "the repository would not say whether it is shallow", shallow.stderr, [
+        {
+          id: "repair-repository",
+          kind: "manual_action",
+          summary: "Repair the repository: whether it is a shallow clone could not be determined.",
+        },
+      ]);
+    }
+    if (shallow.stdout.trim() === "true") {
+      return blocked(
+        config,
+        "candidate_base_shallow",
+        `this is a shallow clone, and any history HEAD shares with ${JSON.stringify(config.baseRef)} lies beyond its boundary`,
+        mergeBase.stderr,
+        [
+          {
+            id: "deepen-the-clone",
+            kind: "command",
+            command: ["git", "fetch", "--unshallow"],
+            summary: "Deepen the clone so the merge base with the configured base ref is present.",
+          },
+          {
+            id: "check-out-with-full-history",
+            kind: "manual_action",
+            summary: "Check the repository out with full history — in CI, the checkout step's fetch depth.",
+          },
+        ],
+      );
+    }
     return blocked(
       config,
       "candidate_base_unrelated",
@@ -348,9 +442,13 @@ async function observe(
   }
 
   // Exit 1 is the answer "yes, the worktree differs from the index"; anything
-  // above it is a failure to answer, which must not read as "clean".
+  // else is a failure to answer, which must not read as "clean" — and a
+  // negative code is the command never having run at all, which would otherwise
+  // slip past an upper bound and be reported to the author as a dirty worktree
+  // they cannot find. Every other probe above rejects on `!== 0` for the same
+  // reason; this is the one that has a second legal code to admit.
   const unstaged = await git(["diff", "--quiet"]);
-  if (unstaged.exitCode > 1) {
+  if (unstaged.exitCode > 1 || unstaged.exitCode < 0) {
     return blocked(config, "candidate_repository_unreadable", "unstaged changes could not be determined", unstaged.stderr, [
       { id: "repair-repository", kind: "manual_action", summary: "Repair the repository: its unstaged changes could not be determined." },
     ]);
@@ -407,6 +505,8 @@ function parseStatusEntries(output: string): readonly CandidateStatusEntry[] {
  * entry is a silently smaller diff, and a smaller diff is a change that fails
  * to reach the review threshold.
  */
+const DECIMAL_COUNT = /^\d+$/;
+
 export function parseCandidateNumstat(output: string): CandidateDiffEntry[] {
   const records = output.split("\0");
   const entries: CandidateDiffEntry[] = [];
@@ -425,25 +525,30 @@ export function parseCandidateNumstat(output: string): CandidateDiffEntry[] {
     let repoPath = inlinePath;
     let oldPath: string | undefined;
     if (inlinePath === "") {
+      // A truncated stream splits into an empty final field rather than running
+      // out of fields, so "missing" here is present-and-empty. Checking only
+      // for absence would let a half-written rename through as an entry whose
+      // path is the empty string, which matches no classifier and no sensitive
+      // group — a change that quietly reviews as nothing.
       const origin = records[index + 1];
       const destination = records[index + 2];
-      if (origin === undefined || destination === undefined) {
-        throw new Error(`numstat record ${JSON.stringify(record)} announces a rename with no paths`);
+      if (origin === undefined || origin === "" || destination === undefined || destination === "") {
+        throw new Error(`numstat record ${JSON.stringify(record)} announces a rename whose paths are missing`);
       }
       oldPath = origin;
       repoPath = destination;
       index += 2;
     }
 
+    // Git writes plain decimal counts, so anything else is not git's output.
+    // `Number` would happily read `0x10`, `1e3`, ` 7 ` and `""`, each of which
+    // turns a malformed stream into a plausible-looking line count.
     const binary = additionsText === "-" || deletionsText === "-";
+    if (!binary && !(DECIMAL_COUNT.test(additionsText) && DECIMAL_COUNT.test(deletionsText))) {
+      throw new Error(`numstat record ${JSON.stringify(record)} carries counts that are not plain decimal integers`);
+    }
     const additions = binary ? null : Number(additionsText);
     const deletions = binary ? null : Number(deletionsText);
-    if (additions !== null && !Number.isInteger(additions)) {
-      throw new Error(`numstat record ${JSON.stringify(record)} carries an unreadable addition count`);
-    }
-    if (deletions !== null && !Number.isInteger(deletions)) {
-      throw new Error(`numstat record ${JSON.stringify(record)} carries an unreadable deletion count`);
-    }
     entries.push({ path: repoPath, ...(oldPath === undefined ? {} : { oldPath }), additions, deletions, binary });
   }
   return entries;
