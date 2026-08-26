@@ -1065,9 +1065,16 @@ export function entryHref(argvEntry: string): string {
   try {
     resolved = realpathSync(argvEntry);
   } catch {
-    // Not on disk, or unreadable. The textual form is still correct wherever no
-    // symlink is involved, and a wrong answer here can only under-match — which
-    // the `process.exitCode` floor below turns into a failure, never a pass.
+    // Not on disk, or unreadable — and a path Node cannot resolve is a path
+    // Node cannot have loaded this module from, so under-matching is the right
+    // answer rather than a tolerated one. The textual form is kept because it
+    // is still exactly right wherever no symlink is involved.
+    //
+    // Note what is NOT claimed here: the `process.exitCode` floor below sits
+    // inside the `invokedDirectly` guard, so an under-match exits 0 in silence.
+    // The floor cannot be hoisted above the guard — that would stamp a failing
+    // exit code on every process that merely *imports* this module. Correctness
+    // on this path rests on the argument above, not on a safety net.
   }
   return pathToFileURL(resolved).href;
 }

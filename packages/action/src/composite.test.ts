@@ -21,6 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
+import { ATTESTATION_LABEL } from "@delivery-harness/kernel";
 
 const run = promisify(execFile);
 const ACTION_PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -262,7 +263,15 @@ describe("the composite step can reach the verification code", () => {
     // is explaining them — but node must never have been the one to speak.
     expect(result.stderr).not.toContain("node:internal/modules");
     expect(result.stderr).not.toContain("Error [ERR_MODULE_NOT_FOUND]");
-    expect(await readFile(summaryPath, "utf8")).toContain("delivery-harness");
+    const summary = await readFile(summaryPath, "utf8");
+    expect(summary).toContain("delivery-harness");
+    // Every block published under this heading carries the honest attestation
+    // label. This one is written by shell rather than by the renderer — the
+    // kernel is exactly what could not be loaded — so the literal in the script
+    // is pinned against the kernel's own constant here, where they can be
+    // compared. A heading without the label is a summary shape that quietly
+    // claims more than the others.
+    expect(summary).toContain(ATTESTATION_LABEL);
   });
 });
 

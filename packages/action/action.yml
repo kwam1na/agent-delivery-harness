@@ -197,7 +197,12 @@ outputs:
     description: "`true` when the check passed."
     value: ${{ steps.verify.outputs.verified }}
   mode:
-    description: "`verify` or `delegated-authority`."
+    description: >-
+      One of `verify` (no delegation was claimed), `delegated-authority` (a
+      claim was made and corroborated completely), or `delegation-refused` (a
+      claim was made and refused — never reported as `verify`, so a consumer
+      grouping runs by mode sees the refusal as its own class rather than
+      filed among ordinary unprivileged checks).
     value: ${{ steps.verify.outputs.mode }}
   head-sha:
     description: "The pull request head commit whose tree was verified."
@@ -255,7 +260,13 @@ runs:
           message="delivery-harness: this action runs from TypeScript source and needs its own npm workspace root above ${DELIVERY_HARNESS_ACTION_PATH}, which does not exist. The published-action form is not supported in v1 (it also hits ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING); use the self-hosted form, 'uses: ./packages/action', from a checkout of the harness repository."
           printf '%s\n' "${message}" >&2
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            printf '## Delivery record verification\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
+            # The attestation label, spelled out because the module that owns it
+            # is the one thing that could not be loaded. Every block published
+            # under this heading carries it, and this block is no exception: a
+            # summary that dropped the label would be the only one under that
+            # heading implying more than L0. The literal is pinned against the
+            # kernel's ATTESTATION_LABEL by the composite test suite.
+            printf '## Delivery record verification\n\n%s\n\n_Attestation level is L0: self / workspace-scoped — process discipline and freshness, not provenance._\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
           fi
           exit 1
         fi
