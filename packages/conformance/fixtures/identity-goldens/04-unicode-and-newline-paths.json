@@ -1,0 +1,22 @@
+{
+  "name": "unicode-and-newline-paths",
+  "why": "The paths that break a line-oriented reader and a locale-aware sort at once. A newline, a tab, a quote, a space and a literal backslash all have to survive NUL parsing byte for byte. The two `z/` entries are the ordering case that matters: U+1F600 is the surrogate pair D83D DE00, so its first code unit sorts *below* the fullwidth U+FF26, while its UTF-8 bytes sort above them. A digest built on a code-point sort or on UTF-8 byte order disagrees with this golden; UTF-16 code-unit order — the ECMAScript relational operator — is what Athena computed and therefore what the token means.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [
+    { "mode": "100644", "path": "docs/café.md", "content": "precomposed\n" },
+    { "mode": "100644", "path": "z/😀.md", "content": "astral\n" },
+    { "mode": "100644", "path": "z/Ｆ.md", "content": "fullwidth\n" },
+    { "mode": "100644", "path": "weird/line\nbreak.md", "content": "newline in the path\n" },
+    { "mode": "100644", "path": "weird/ta\tb.md", "content": "tab in the path\n" },
+    { "mode": "100644", "path": "weird/quo\"te.md", "content": "quote in the path\n" },
+    { "mode": "100644", "path": "weird/spa ce.md", "content": "space in the path\n" },
+    { "mode": "100644", "path": "weird/back\\slash.md", "content": "backslash in the path\n" }
+  ],
+  "expected": { "treeSha": "80aa4c95a5abf7aaaac8f2da135dafb6c5e623f3", "digest": "08f236d7b974ca7a2c5168b65d9e029fe1a7b3decdcd2a4e8823ac0d91c16e42" }
+}

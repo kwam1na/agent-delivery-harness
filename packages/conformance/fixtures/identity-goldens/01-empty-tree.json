@@ -1,0 +1,13 @@
+{
+  "name": "empty-tree",
+  "why": "The digest of no entries at all. It is not the empty sha256: the domain separator is written before any entry is, so an empty deliverable still says which function produced it. A port that only hashed entries would agree with every other golden and disagree here.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [],
+  "expected": { "treeSha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "digest": "6d72b28013a11b0231038fc6abdbcb513fcd28022fdc48d5036cdc8d18790b89" }
+}
