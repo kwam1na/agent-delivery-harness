@@ -1,0 +1,20 @@
+{
+  "name": "nested-neutral-prefix",
+  "why": "Narration nested well below the prefix that names it — a dated report directory, a solution note under a subsystem folder, a run record under a year. A prefix matcher covers the whole subtree or it covers nothing useful, because narration is never written flat.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [
+    { "mode": "100644", "path": "docs/keep.md", "content": "reviewed documentation\n" },
+    { "mode": "100644", "path": "docs/reports/2026/08/landed-change.html", "content": "narration\n" },
+    { "mode": "100644", "path": "docs/reports/index.md", "content": "narration\n" },
+    { "mode": "100644", "path": "docs/solutions/harness/note-2026-08-25.md", "content": "narration\n" },
+    { "mode": "100644", "path": "src/keep.ts", "content": "export const keep = 1;\n" },
+    { "mode": "100644", "path": "telemetry/delivery-runs/2026/08/run.json", "content": "{\"run\":1}\n" }
+  ],
+  "expected": { "treeSha": "9621ae8738f7cb138ab1b79443ec4e130726476c", "digest": "f125e0d4691e6aff6816515834a53514b42956b22497c543f96906e952184623" }
+}

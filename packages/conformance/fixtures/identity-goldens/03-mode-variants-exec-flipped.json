@@ -1,0 +1,20 @@
+{
+  "name": "mode-variants-exec-flipped",
+  "why": "`mode-variants` with one bit changed and nothing else: `src/app.ts` is executable here. Same paths, same blobs, same tree order — so the two goldens' digests differ if and only if the mode is really part of the hashed record. Making a script executable is a change a reviewer should see, and a digest that ignored the mode would call the two trees the same deliverable.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [
+    { "mode": "100755", "path": "src/app.ts", "content": "export const app = 1;\n" },
+    { "mode": "100755", "path": "scripts/run.sh", "content": "#!/bin/sh\necho run\n" },
+    { "mode": "120000", "path": "src/alias.ts", "content": "app.ts" },
+    { "mode": "160000", "path": "vendor/sub", "objectSha": "1111111111111111111111111111111111111111" },
+    { "mode": "100644", "path": "twins/plain.txt", "content": "same bytes\n" },
+    { "mode": "100755", "path": "twins/exec.txt", "content": "same bytes\n" }
+  ],
+  "expected": { "treeSha": "eef4f1c40431173c5510c002f1438b36544edec5", "digest": "12da4d7e0b6fdf7d7e94eccc89ba589b012a52259c910d5c49ee304baa162416" }
+}

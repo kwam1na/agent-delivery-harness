@@ -1,0 +1,22 @@
+{
+  "name": "neutral-boundaries",
+  "why": "The near misses, all in one tree, because each of them is a way a deliverable could silently leave review. `docs-internal/` is not `docs/`. `docs/reportsx.md` is not inside `docs/reports/`. `telemetry/delivery-runsX/` is a different directory from `telemetry/delivery-runs/`. And `docs\\reports\\x.html` is one file name containing backslashes — a legal, distinct path that no separator rewriting may fold onto the excluded `docs/reports/x.html`, because folding it would drop a real file out of the reviewed deliverable entirely.",
+  "capturedFrom": "athena:scripts/harness-review-identity.ts@2864580c — computeDeliverableTreeIdentity over a real repository built from `entries`",
+  "identityToken": "deliverable-tree/v1",
+  "reviewNeutral": [
+    { "prefix": "docs/reports/" },
+    { "prefix": "docs/solutions/" },
+    { "prefix": "telemetry/delivery-runs/" }
+  ],
+  "entries": [
+    { "mode": "100644", "path": "docs-internal/x.md", "content": "reviewed\n" },
+    { "mode": "100644", "path": "docs/reports/x.html", "content": "narration\n" },
+    { "mode": "100644", "path": "docs/reportsx.md", "content": "reviewed\n" },
+    { "mode": "100644", "path": "docs/solutions.md", "content": "reviewed\n" },
+    { "mode": "100644", "path": "docs\\reports\\x.html", "content": "reviewed\n" },
+    { "mode": "100644", "path": "telemetry/delivery-runs/x.json", "content": "record\n" },
+    { "mode": "100644", "path": "telemetry/delivery-runsX/x.json", "content": "reviewed\n" },
+    { "mode": "100644", "path": "telemetry/other.json", "content": "reviewed\n" }
+  ],
+  "expected": { "treeSha": "f7115321bafa68c124241a6e55fe7a30b6e7a1e1", "digest": "02fce4146848f0c456b01715b4398e31fc36e68d85c2f0c7c382ff659febdce6" }
+}
