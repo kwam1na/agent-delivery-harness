@@ -14,10 +14,27 @@
  * allocates, the record store a second submission collides with, and the
  * artifact bytes it verifies through its fs port. That is a scope boundary, not
  * a limit of what a manifest expresses, and integration mode is where those five
- * are covered. Until then they are enumerated by name in
- * `RECORDER_DEPENDENT_VECTORS` and skipped here, loudly: a name that has
- * vanished from the kit fails the run rather than quietly reducing coverage,
- * which is the failure mode an unnamed skip list has.
+ * are covered. In unit mode they are enumerated by name in
+ * `RECORDER_DEPENDENT_VECTORS` and skipped, loudly: a name that has vanished
+ * from the kit fails the run rather than quietly reducing coverage, which is the
+ * failure mode an unnamed skip list has.
+ *
+ * INTEGRATION MODE. The kit README's "Running a vector" protocol, performed for
+ * real: a run root is allocated for `provider.runId`, every artifact is
+ * materialized at its path with the vector's exact bytes, the manifest is placed
+ * inside that root, and the whole thing is submitted through the recorder. All
+ * 89 vectors are decided — nothing is skipped — and the assertions are wider
+ * than unit mode's, because there is now state to check. An accepted submission
+ * must have written exactly one record per claim, all stamped with the manifest
+ * digest; a rejected one must have written none at all (GEN-3). The two
+ * multi-step vectors get the extra protocol their `extra` member declares.
+ *
+ * WHAT INTEGRATION MODE STUBS, AND WHAT IT DOES NOT. Candidate capture is a
+ * port, and the vectors declare what it returns — that is the one substitution,
+ * and it is the one the kit's `environment.currentCandidate` exists to make.
+ * Everything else is the real thing: a real preparation receipt published into a
+ * real store, real bytes in a real run root, real records linked into place by
+ * the record store's own atomic publication.
  *
  * CONFIGURATION IS A PARAMETER. The kit ships its own repository configuration
  * and the vectors are bound to it, so it is the default — but it arrives through
@@ -34,9 +51,21 @@
  * an unregistered code means the validator invented vocabulary.
  */
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isManifestRejectionCode, validateManifest, type HarnessConfig } from "@delivery-harness/kernel";
+import {
+  createArtifactsPort,
+  isManifestRejectionCode,
+  publishPreparationReceipt,
+  submitManifest,
+  validateManifest,
+  type CandidateCapture,
+  type CapturedCandidate,
+  type HarnessConfig,
+  type SubmissionOutcome,
+} from "@delivery-harness/kernel";
 import { loadKitRepoConfig } from "../fixtures/repo-config-adapter.ts";
 
 // ── The kit's own shapes ───────────────────────────────────────────────────
@@ -303,4 +332,356 @@ export function runKitUnitMode(options: KitRunOptions = {}): KitRunResult {
 /** One line per failing vector, for a test failure message that names what broke. */
 export function describeFailures(result: KitRunResult): string {
   return result.failed.map((outcome) => `${outcome.id}: ${outcome.failures.join("; ")}`).join("\n");
+}
+
+// ── Integration mode ───────────────────────────────────────────────────────
+
+/**
+ * The submission environment one vector runs in.
+ *
+ * Every vector gets its own, and that is not merely hygiene: run roots are
+ * keyed by provider and run id, and the whole corpus shares one run id, so a
+ * single shared base directory would have 89 vectors overwriting each other's
+ * artifacts. The base is an injected port parameter for exactly this reason.
+ */
+interface VectorWorkspace {
+  /** The repository root: where wiring files live and where stores are resolved from. */
+  readonly rootDir: string;
+  /** The injected evidence/receipt storage root, so no git repository is needed. */
+  readonly storageRoot: string;
+  /** The base run roots are allocated under. */
+  readonly runRootBase: string;
+  /** Where a manifest goes when it must not be inside the run root. */
+  readonly outsideDir: string;
+}
+
+async function createWorkspace(base: string, config: HarnessConfig): Promise<VectorWorkspace> {
+  const rootDir = path.join(base, "workspace");
+  const workspace: VectorWorkspace = {
+    rootDir,
+    storageRoot: path.join(base, "store"),
+    runRootBase: path.join(base, "runs"),
+    outsideDir: path.join(base, "outside"),
+  };
+  await mkdir(workspace.rootDir, { recursive: true });
+  await mkdir(workspace.storageRoot, { recursive: true });
+  await mkdir(workspace.runRootBase, { recursive: true });
+  await mkdir(workspace.outsideDir, { recursive: true });
+
+  // The declared wiring files must exist before a receipt can be published: a
+  // wiring path that is not a readable file is a typed blocker, never a hashed
+  // absence. Their contents are irrelevant to every vector — what matters is
+  // that the fingerprint has something real to be over.
+  for (const repoPath of config.preparationWiringPaths) {
+    const target = path.resolve(workspace.rootDir, repoPath);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, `// conformance wiring fixture: ${repoPath}\n`, "utf8");
+  }
+  return workspace;
+}
+
+/**
+ * The vector's declared `currentCandidate`, in the shape a capture returns.
+ *
+ * `mode` and the two observation lists are not vector data: the kit describes a
+ * candidate's *coordinates*, and a prepared workspace is clean by construction.
+ * A vector missing a coordinate is a kit change this harness has not been
+ * taught, so it throws rather than substituting a default that would quietly
+ * change what SUB-1 compares.
+ */
+export function capturedFromKitCandidate(value: unknown, vectorId: string): CapturedCandidate {
+  const read = (holder: unknown, name: string): unknown =>
+    typeof holder === "object" && holder !== null && !Array.isArray(holder) ? (holder as Record<string, unknown>)[name] : undefined;
+  const readString = (holder: unknown, name: string, at: string): string => {
+    const member = read(holder, name);
+    if (typeof member !== "string") {
+      throw new Error(`vector ${vectorId}: currentCandidate.${at} is not a string; the kit's environment shape has changed`);
+    }
+    return member;
+  };
+
+  const deliverable = read(value, "deliverable");
+  const base = read(value, "base");
+  return {
+    vcs: readString(value, "vcs", "vcs") as CapturedCandidate["vcs"],
+    treeSha: readString(value, "treeSha", "treeSha"),
+    headSha: readString(value, "headSha", "headSha"),
+    deliverable: {
+      digest: readString(deliverable, "digest", "deliverable.digest"),
+      identity: readString(deliverable, "identity", "deliverable.identity"),
+    },
+    base: {
+      ref: readString(base, "ref", "base.ref"),
+      tipSha: readString(base, "tipSha", "base.tipSha"),
+      mergeBaseSha: readString(base, "mergeBaseSha", "base.mergeBaseSha"),
+    },
+    workspaceId: readString(value, "workspaceId", "workspaceId"),
+    mode: "clean",
+    statusEntries: [],
+    untrackedFiles: [],
+  };
+}
+
+/**
+ * The unprepared capture. `prepared: false` in the kit means the capture reports
+ * an unprepared state — not that a caller passed a flag — so this is what the
+ * port returns, and SUB-2's rejection follows from it rather than from a switch.
+ */
+const UNPREPARED_CAPTURE: CandidateCapture = {
+  ok: false,
+  code: "candidate_unprepared",
+  blockers: [
+    {
+      code: "candidate_unprepared",
+      source: { kind: "candidate", id: "conformance" },
+      summary: "The workspace is not in a prepared state.",
+      remediations: [{ id: "prepare-the-candidate", kind: "manual_action", summary: "Stage or commit the work and prepare again." }],
+    },
+  ],
+};
+
+/** How many record files the store holds, across every gate and obligation. */
+async function countRecords(storageRoot: string): Promise<number> {
+  try {
+    const entries = await readdir(path.join(storageRoot, "records"));
+    // Publisher temporaries are dot-prefixed and are not records.
+    return entries.filter((entry) => !entry.startsWith(".")).length;
+  } catch {
+    return 0;
+  }
+}
+
+interface SubmissionAttempt {
+  readonly outcome: SubmissionOutcome;
+  /** Records in the store before this submission ran. */
+  readonly recordsBefore: number;
+  readonly recordsAfter: number;
+}
+
+/** The kit's outcome view of a submission. A blocked submission has no codes to compare. */
+function outcomeOf(outcome: SubmissionOutcome): ValidatorOutcome | null {
+  if (outcome.status === "accepted") return { accepted: true, codes: [] };
+  if (outcome.status === "rejected") return { accepted: false, codes: outcome.rejections.map((rejection) => rejection.code) };
+  return null;
+}
+
+function blockedCodes(outcome: SubmissionOutcome): readonly string[] {
+  return outcome.status === "blocked" ? outcome.blockers.map((blocker) => blocker.code) : [];
+}
+
+/**
+ * Runs one vector's submission protocol and reports what happened at each step.
+ *
+ * The materialization rules are the kit README's. An artifact path that is
+ * itself invalid is part of the vector's point, so it is *not* materialized —
+ * writing `../outside.json` would put a file outside the run root to prove that
+ * a path outside the run root is rejected, which proves nothing and litters the
+ * temp directory. The validator rejects those on shape before any file access.
+ */
+async function submitVector(
+  vector: KitVector,
+  config: HarnessConfig,
+  environment: KitEnvironment,
+  base: string,
+): Promise<readonly SubmissionAttempt[]> {
+  const workspace = await createWorkspace(base, config);
+  const artifacts = createArtifactsPort({ runRootBase: workspace.runRootBase });
+
+  const overrides = vector.environment ?? {};
+  const currentCandidate = Object.prototype.hasOwnProperty.call(overrides, "currentCandidate")
+    ? overrides["currentCandidate"]
+    : environment.currentCandidate;
+  const prepared = Object.prototype.hasOwnProperty.call(overrides, "prepared") ? overrides["prepared"] === true : environment.prepared;
+  const outsideRunRoot = overrides["manifestLocation"] === "outside-run-root";
+
+  const captured = capturedFromKitCandidate(currentCandidate, vector.id);
+  const capture: CandidateCapture = prepared ? { ok: true, candidate: captured } : UNPREPARED_CAPTURE;
+
+  // A real receipt for the candidate the capture reports. Without one the
+  // recorder blocks before it judges anything, which is the ordering the
+  // receipt gate installs; publishing it here is what a prepare step does in
+  // production.
+  if (prepared) {
+    await publishPreparationReceipt(workspace.rootDir, { config, candidate: captured }, { storageRoot: workspace.storageRoot });
+  }
+
+  const provider = (vector.manifest as { provider?: { id?: unknown; runId?: unknown } }).provider ?? {};
+  const allocation =
+    typeof provider.id === "string" && typeof provider.runId === "string"
+      ? await artifacts.allocateRunRoot({ providerId: provider.id, runId: provider.runId })
+      : ({ ok: false } as const);
+
+  // A run id the port refuses is a run root that does not exist. The manifest
+  // still has to live somewhere, and outside is the truthful place for it.
+  const runRootPath = allocation.ok ? allocation.runRoot.path : workspace.outsideDir;
+
+  for (const [declaredPath, contents] of Object.entries(vector.artifacts ?? {})) {
+    const segments = declaredPath.split(/[/\\]/);
+    if (declaredPath.startsWith("/") || segments.includes("..") || segments.includes("")) continue;
+    const target = path.join(runRootPath, declaredPath);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, contents, "utf8");
+  }
+
+  const manifestPath = path.join(outsideRunRoot ? workspace.outsideDir : runRootPath, "manifest.json");
+  await mkdir(path.dirname(manifestPath), { recursive: true });
+
+  const submissions: unknown[] = [];
+  const extra = vector.extra ?? {};
+  if (Object.prototype.hasOwnProperty.call(extra, "submitFirst")) submissions.push(extra["submitFirst"]);
+  submissions.push(vector.manifest);
+  if (extra["submitTwice"] === true) submissions.push(vector.manifest);
+
+  const attempts: SubmissionAttempt[] = [];
+  for (const manifest of submissions) {
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const recordsBefore = await countRecords(workspace.storageRoot);
+    const outcome = await submitManifest(
+      { rootDir: workspace.rootDir, manifestPath, config },
+      { captureCandidate: async () => capture, artifacts, storageRoot: workspace.storageRoot },
+    );
+    attempts.push({ outcome, recordsBefore, recordsAfter: await countRecords(workspace.storageRoot) });
+  }
+  return attempts;
+}
+
+/**
+ * The assertions integration mode adds to the kit's expectation semantics.
+ *
+ * Unit mode can only compare codes. Here the submission left a store behind, so
+ * the claims the spec makes about that store are checkable: SUB-4's one record
+ * per claim, each stamped with the shared manifest digest, and GEN-3's promise
+ * that a rejected submission wrote nothing at all.
+ */
+function verifyEffects(vector: KitVector, attempt: SubmissionAttempt): readonly string[] {
+  const failures: string[] = [];
+  const { outcome, recordsBefore, recordsAfter } = attempt;
+
+  if (outcome.status === "accepted") {
+    const claims = (vector.manifest as { claims?: readonly { obligation?: unknown }[] }).claims ?? [];
+    const obligations = claims.map((claim) => claim.obligation);
+    const written = outcome.records.map((record) => record.obligationId);
+    if (written.length !== obligations.length || obligations.some((id) => !written.includes(id as string))) {
+      failures.push(`expected one record per claim [${obligations.join(", ")}], got [${written.join(", ")}]`);
+    }
+    for (const record of outcome.records) {
+      if (record.record.resolution.kind !== "evidence" || record.record.resolution.manifestDigest !== outcome.manifestDigest) {
+        failures.push(`record for ${record.obligationId} is not stamped with the submission's manifest digest`);
+      }
+    }
+    if (recordsAfter < recordsBefore) failures.push("an accepted submission removed records from the store");
+    return failures;
+  }
+
+  if (outcome.status === "rejected" && recordsAfter !== recordsBefore) {
+    // GEN-3 and SUB-5 both say it: a rejection writes nothing.
+    failures.push(`a rejected submission changed the store from ${recordsBefore} to ${recordsAfter} records`);
+  }
+  return failures;
+}
+
+/** The extra protocol the two multi-step vectors declare, checked across attempts. */
+function verifyMultiStep(vector: KitVector, attempts: readonly SubmissionAttempt[]): readonly string[] {
+  const failures: string[] = [];
+  const extra = vector.extra ?? {};
+
+  if (extra["submitTwice"] === true) {
+    const [first, second] = attempts;
+    if (first === undefined || second === undefined) return ["submitTwice expects two submissions"];
+    if (first.outcome.status !== "accepted" || second.outcome.status !== "accepted") {
+      return [`both submissions must succeed; got ${first.outcome.status} then ${second.outcome.status}`];
+    }
+    const firstIds = first.outcome.records.map((record) => record.recordId).sort();
+    const secondIds = second.outcome.records.map((record) => record.recordId).sort();
+    if (firstIds.join(",") !== secondIds.join(",")) {
+      failures.push(`record ids differ across identical submissions: [${firstIds.join(", ")}] then [${secondIds.join(", ")}]`);
+    }
+    if (second.outcome.records.some((record) => record.status !== "idempotent")) {
+      failures.push("the second identical submission published a new record instead of finding its own");
+    }
+    if (second.recordsAfter !== second.recordsBefore) {
+      failures.push("an idempotent resubmission changed how many records the store holds");
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(extra, "submitFirst")) {
+    const [first] = attempts;
+    if (first === undefined) return ["submitFirst expects a preceding submission"];
+    if (first.outcome.status !== "accepted") {
+      failures.push(`extra.submitFirst must be accepted before the vector's manifest; it was ${first.outcome.status}`);
+    }
+  }
+
+  return failures;
+}
+
+export interface KitIntegrationOptions extends KitRunOptions {
+  /** Where per-vector workspaces are created. Defaults to a fresh temp directory. */
+  readonly workDir?: string;
+  /** Keeps the workspaces after the run, for inspecting a failure. */
+  readonly keepWorkspaces?: boolean;
+}
+
+/**
+ * Runs the whole kit through the recorder. Nothing is skipped: the five vectors
+ * unit mode defers are exactly the ones this mode exists to decide.
+ */
+export async function runKitIntegrationMode(options: KitIntegrationOptions = {}): Promise<KitRunResult> {
+  const root = options.root ?? kitRoot();
+  const config = options.config ?? loadKitRepoConfig();
+  const environment = loadKitEnvironment(root);
+  const vectors = loadKitVectors(root);
+
+  const base = options.workDir ?? (await mkdtemp(path.join(tmpdir(), "delivery-harness-kit-")));
+  const outcomes: KitOutcome[] = [];
+
+  try {
+    for (const [index, vector] of vectors.entries()) {
+      // Padded so the directory listing sorts the way the kit index reads.
+      const workspaceBase = path.join(base, `${String(index).padStart(3, "0")}-${vector.id}`);
+      let actual: ValidatorOutcome;
+      let failures: readonly string[];
+      try {
+        const attempts = await submitVector(vector, config, environment, workspaceBase);
+        const final = attempts.at(-1);
+        if (final === undefined) throw new Error("no submission was attempted");
+        const observed = outcomeOf(final.outcome);
+        if (observed === null) {
+          // A blocked submission is not a rejection with different words: it
+          // means the recorder could not judge the manifest at all, and no
+          // vector expects that. Reporting it as a failure with its blocker
+          // codes is what keeps it from being read as a lenient pass.
+          actual = { accepted: false, codes: [] };
+          failures = [`submission was blocked by [${blockedCodes(final.outcome).join(", ")}] rather than judged`];
+        } else {
+          actual = observed;
+          failures = [
+            ...compareOutcome(vector.expect, observed),
+            ...verifyEffects(vector, final),
+            ...verifyMultiStep(vector, attempts),
+          ];
+        }
+      } catch (error) {
+        actual = { accepted: false, codes: [] };
+        failures = [`submission threw: ${error instanceof Error ? error.message : String(error)}`];
+      }
+      outcomes.push({
+        id: vector.id,
+        status: failures.length === 0 ? "passed" : "failed",
+        codes: actual.codes,
+        failures,
+      });
+    }
+  } finally {
+    if (options.workDir === undefined && options.keepWorkspaces !== true) {
+      await rm(base, { recursive: true, force: true });
+    }
+  }
+
+  return {
+    outcomes,
+    passed: outcomes.filter((outcome) => outcome.status === "passed").map((outcome) => outcome.id),
+    failed: outcomes.filter((outcome) => outcome.status === "failed"),
+    skipped: [],
+  };
 }

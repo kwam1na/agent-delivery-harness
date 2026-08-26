@@ -251,3 +251,38 @@ export {
   type UnreadableRecordInput,
   type WaivedResolution,
 } from "./evaluator.ts";
+
+// The filesystem port. Run roots, containment, artifact observation and one
+// atomic write — the only place the submission path opens a file, which is what
+// makes the no-ad-hoc-fs rule over the recorder enforceable.
+export {
+  ARTIFACT_OBSERVATION_STATUSES,
+  RUN_ROOT_LEAF,
+  RUN_ROOT_NAMESPACE,
+  RUN_ROOT_REFUSAL_REASONS,
+  createArtifactsPort,
+  defaultRunRootBase,
+  isInsideResolved,
+  isSafeRelativePath,
+  type ArtifactObservation,
+  type ArtifactObservationStatus,
+  type ArtifactsPort,
+  type ArtifactsPortOptions,
+  type RunRoot,
+  type RunRootRefusalReason,
+  type RunRootRequest,
+  type RunRootResolution,
+  type WriteFileOptions,
+} from "./artifacts.ts";
+
+// The submission flow: spec §8.3 from a manifest on disk to published records.
+export {
+  SUBMISSION_CANDIDATE_FIELDS,
+  compareSubmissionCandidate,
+  submitManifest,
+  type CandidateComparison,
+  type SubmissionInput,
+  type SubmissionOptions,
+  type SubmissionOutcome,
+  type SubmissionRecord,
+} from "./recorder.ts";

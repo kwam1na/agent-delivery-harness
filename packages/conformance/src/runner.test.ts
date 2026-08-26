@@ -21,8 +21,17 @@
  *   THE OUTCOMES FOLLOW THE SPEC, NOT ONE CONFIGURATION. The same run under the
  *   kit-variant configuration — every dimension varied except the ones the
  *   vectors are bound to — produces the same result.
+ *
+ * And, once the recorder exists, a fourth:
+ *
+ *   THE WHOLE CORPUS IS DECIDED AGAINST A REAL SUBMISSION PATH. Integration
+ *   mode runs all 89 — including the five unit mode defers — through run-root
+ *   allocation, artifact materialization, the recorder, and the record store,
+ *   under both configurations. Nothing is skipped and no expectation is
+ *   relaxed: the deferred five are the reason this mode exists, and the other 84
+ *   must produce exactly what they produced without a filesystem.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { RECORDER_EMITTED_CODES, manifestDigest, type HarnessConfig } from "@delivery-harness/kernel";
 import { loadKitRepoConfig } from "../fixtures/repo-config-adapter.ts";
 import { kitVariantConfig } from "../fixtures/kit-variant-config.ts";
@@ -34,6 +43,7 @@ import {
   loadKitEnvironment,
   loadKitIndex,
   loadKitVectors,
+  runKitIntegrationMode,
   runKitUnitMode,
 } from "./runner.ts";
 
@@ -129,6 +139,78 @@ describe("unit mode under the kit's own configuration", () => {
     const outcome = result.outcomes.find((candidate) => candidate.id === "env-8-repository-required");
     expect(outcome?.codes).toEqual(expect.arrayContaining(["repository_required", "unsupported_attestation"]));
   });
+});
+
+// ── Integration mode ───────────────────────────────────────────────────────
+
+describe("integration mode under the kit's own configuration", () => {
+  /**
+   * One run, several claims. Each `it` below names a separable property of the
+   * same result rather than re-driving 89 submissions per assertion — the
+   * submissions touch a real filesystem, and re-running them would buy
+   * repetition rather than independence.
+   */
+  let result: Awaited<ReturnType<typeof runKitIntegrationMode>>;
+
+  beforeAll(async () => {
+    result = await runKitIntegrationMode();
+  }, 120_000);
+
+  it("decides all 89 vectors, skipping none", () => {
+    expect(describeFailures(result)).toBe("");
+    expect(result.skipped).toEqual([]);
+    expect(result.passed).toHaveLength(89);
+    expect(result.outcomes).toHaveLength(89);
+  });
+
+  it("decides the five vectors unit mode defers", () => {
+    // The unit's whole reason for existing, stated as a claim rather than
+    // inferred from a total: these five were skipped by name, and here they are
+    // passing under the same expectations.
+    for (const id of DEFERRED_IDS) {
+      const outcome = result.outcomes.find((candidate) => candidate.id === id);
+      expect(outcome?.status, id).toBe("passed");
+    }
+  });
+
+  it("accepts every accept vector with no rejection codes at all", () => {
+    const accepts = index.vectors.filter((entry) => entry.expect.result === "accepted");
+    expect(accepts).toHaveLength(8);
+    for (const entry of accepts) {
+      const outcome = result.outcomes.find((candidate) => candidate.id === entry.id);
+      expect(outcome?.status, entry.id).toBe("passed");
+      expect(outcome?.codes, entry.id).toEqual([]);
+    }
+  });
+
+  it("reaches the three recorder-emitted codes the kit exercises, and names the fourth", () => {
+    // Anti-vacuity for the mode itself: if integration mode were quietly
+    // producing the same codes unit mode produces, every vector could still be
+    // green while the recorder's surface went unexercised.
+    const reached = new Set(result.outcomes.flatMap((outcome) => outcome.codes));
+    for (const code of ["manifest_outside_run_root", "record_conflict", "artifact_digest_mismatch"]) {
+      expect([...reached], `no vector produced ${code}`).toContain(code);
+    }
+
+    // The fourth is `artifact_outside_run_root`, and the kit reaches it in
+    // neither mode: its ENV-10 vector declares `../outside.json`, which is
+    // refused on path shape before any file is touched. Reaching the realpath
+    // clause needs a *shape-legal* path that resolves outside the run root —
+    // a symlink — which no vector constructs, because a vector is a JSON
+    // document and a symlink is not expressible in one. It is covered in
+    // `recorder.test.ts` instead. Asserting it here would mean either a vector
+    // that does not exist or a code emitted where it is not warranted.
+    expect(RECORDER_EMITTED_CODES.filter((code) => !reached.has(code))).toEqual(["artifact_outside_run_root"]);
+  });
+});
+
+describe("integration mode under the kit-variant configuration", () => {
+  it("produces the same result with every vector-independent dimension varied", async () => {
+    const result = await runKitIntegrationMode({ config: kitVariantConfig });
+    expect(describeFailures(result)).toBe("");
+    expect(result.passed).toHaveLength(89);
+    expect(result.skipped).toEqual([]);
+  }, 120_000);
 });
 
 // ── Expectation semantics ──────────────────────────────────────────────────
