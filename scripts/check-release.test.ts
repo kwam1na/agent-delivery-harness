@@ -37,6 +37,9 @@ const APACHE_LICENSE_STUB = `${LICENSE_TEXT_MARKERS.join("\n")}\n`;
  */
 const STUB_PACK = (): readonly string[] => ["package.json", "LICENSE", "NOTICE", "src/index.ts"];
 
+/** The scope fixture packages live under, so their sibling edges are recognised. */
+const FIXTURE_SCOPE = "@fixture";
+
 interface FixtureOptions {
   readonly rootVersion?: string;
   readonly rootLicense?: string | undefined;
@@ -47,6 +50,11 @@ interface FixtureOptions {
     readonly version?: string;
     readonly license?: string | undefined;
     readonly isPrivate?: boolean;
+    readonly dependencies?: Readonly<Record<string, string>>;
+    /** Body of the package's published `src/index.ts`. */
+    readonly source?: string;
+    /** Extra files written under the package dir, e.g. a test the tarball excludes. */
+    readonly extraFiles?: Readonly<Record<string, string>>;
   }[];
 }
 
@@ -76,9 +84,27 @@ function makeFixture(options: FixtureOptions = {}): string {
     const manifest: Record<string, unknown> = { name: pkg.name, version: pkg.version ?? "1.2.3" };
     manifest["license"] = pkg.license === undefined ? EXPECTED_LICENSE_ID : pkg.license;
     if (pkg.isPrivate === true) manifest["private"] = true;
+    if (pkg.dependencies !== undefined) manifest["dependencies"] = pkg.dependencies;
     writeFileSync(path.join(pkgDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    // The published source the dependency-closure rule parses. STUB_PACK reports
+    // `src/index.ts`, so it has to actually exist: the rule reads the packed
+    // files off disk rather than trusting the manifest's `files` globs.
+    mkdirSync(path.join(pkgDir, "src"), { recursive: true });
+    writeFileSync(path.join(pkgDir, "src", "index.ts"), pkg.source ?? `export const PACKAGE_NAME = ${JSON.stringify(pkg.name)};\n`, "utf8");
+
+    for (const [relPath, contents] of Object.entries(pkg.extraFiles ?? {})) {
+      const abs = path.join(pkgDir, relPath);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      writeFileSync(abs, contents, "utf8");
+    }
   }
   return dir;
+}
+
+/** Every fixture run shares the injected version, pack shape, and fixture scope. */
+function runFixture(dir: string, packFiles: (packageDir: string) => readonly string[] = STUB_PACK): ReturnType<typeof runReleaseChecks> {
+  return runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles, packageScope: FIXTURE_SCOPE });
 }
 
 function rulesOf(findings: readonly ReleaseFinding[]): string[] {
@@ -198,6 +224,110 @@ describe("license-coherence", () => {
     const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
     expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
     expect(result.findings[0]!.file).toBe("package.json");
+  });
+});
+
+describe("dependency-closure", () => {
+  const importsB = `import { thing } from "@fixture/b";\nexport const PACKAGE_NAME = "@fixture/a";\nexport { thing };\n`;
+
+  it("flags a sibling the published source imports but the manifest does not declare", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [{ name: "@fixture/a", source: importsB }, { name: "@fixture/b" }],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["dependency-undeclared"]);
+    expect(result.findings[0]!.file).toBe("packages/a/package.json");
+    expect(result.findings[0]!.message).toContain("@fixture/b");
+    expect(result.findings[0]!.message).toContain("ERR_MODULE_NOT_FOUND");
+  });
+
+  it("flags a declaration pinned to anything but the sibling's own version", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", source: importsB, dependencies: { "@fixture/b": "^1.2.3" } },
+        { name: "@fixture/b" },
+      ],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["dependency-version-drift"]);
+    expect(result.findings[0]!.message).toContain('"^1.2.3"');
+    expect(result.findings[0]!.message).toContain('"1.2.3"');
+  });
+
+  it("flags a declared sibling no published file imports", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [{ name: "@fixture/a", dependencies: { "@fixture/b": "1.2.3" } }, { name: "@fixture/b" }],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["dependency-unused"]);
+    expect(result.findings[0]!.file).toBe("packages/a/package.json");
+  });
+
+  it("accepts an exact pin at the lockstep version", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", source: importsB, dependencies: { "@fixture/b": "1.2.3" } },
+        { name: "@fixture/b" },
+      ],
+    });
+    expect(runFixture(dir).findings).toEqual([]);
+  });
+
+  it("counts a type-only import: these packages publish source, so a consumer's tsc must resolve it", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", source: `import type { Thing } from "@fixture/b";\nexport type Alias = Thing;\n` },
+        { name: "@fixture/b" },
+      ],
+    });
+    expect(rulesOf(runFixture(dir).findings)).toEqual(["dependency-undeclared"]);
+  });
+
+  it("does not count a package naming itself in a string constant", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      // The self-naming constant every package in this workspace carries, plus a
+      // comment mentioning a sibling. Neither is an import.
+      packages: [
+        {
+          name: "@fixture/a",
+          source: `// See @fixture/b for the counterpart.\nexport const PACKAGE_NAME = "@fixture/a";\nexport const OTHER = "@fixture/b";\n`,
+        },
+        { name: "@fixture/b" },
+      ],
+    });
+    expect(runFixture(dir).findings).toEqual([]);
+  });
+
+  it("does not count an import from a file the tarball excludes", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", extraFiles: { "src/a.test.ts": `import { thing } from "@fixture/b";\nconsole.log(thing);\n` } },
+        { name: "@fixture/b" },
+      ],
+    });
+    // STUB_PACK reports no test file, mirroring `!src/**/*.test.ts` in `files`.
+    expect(runFixture(dir).findings).toEqual([]);
+  });
+
+  it("a tarball carrying no source is a finding, not a vacuous pass", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, packages: [{ name: "@fixture/a" }] });
+    const result = runFixture(dir, () => ["package.json", "LICENSE", "NOTICE"]);
+    expect(rulesOf(result.findings)).toEqual(["anti-vacuity"]);
+    expect(result.findings[0]!.file).toBe("packages/a/package.json");
+  });
+
+  it("a packed file that cannot be read is a finding, not a skip", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, packages: [{ name: "@fixture/a" }] });
+    const result = runFixture(dir, () => ["package.json", "LICENSE", "NOTICE", "src/vanished.ts"]);
+    expect(rulesOf(result.findings)).toEqual(["anti-vacuity"]);
+    expect(result.findings[0]!.file).toBe("packages/a/src/vanished.ts");
   });
 });
 
