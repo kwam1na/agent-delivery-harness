@@ -56,9 +56,9 @@ import {
   META_CLIENT_CAPABILITIES,
   META_LOG_LEVEL,
   META_PROTOCOL_VERSION,
+  META_RESERVED_PREFIX,
   META_SERVER_INFO,
   STATELESS_PROTOCOL_VERSIONS,
-  SUPPORTED_PROTOCOL_VERSIONS,
   TOOL_LIST_CACHE_SCOPE,
   TOOL_LIST_TTL_MS,
   callTool,
@@ -172,23 +172,25 @@ function negotiate(requested: unknown): string {
 // ── The stateless revision ───────────────────────────────────────────────────
 
 /**
- * The protocol version a request declares, or `undefined` if it declares none.
- * The distinction is load-bearing: a declared `null` is a *declaration* of the
- * wrong shape, and routes into the stateless path to be rejected there, while
- * an absent member is a handshake-era request.
+ * Whether a request carries stateless per-request metadata.
  *
- * This one member decides the era, per request and nothing else: "A dual-era
- * server selects its behavior from how the client opens ... A request carrying
- * modern per-request `_meta` is served statelessly according to this revision.
- * An `initialize` request selects legacy semantics." Nothing is remembered
- * between requests, which is the point of the revision — "Servers **MUST NOT**
- * rely on prior requests over the same connection to establish context".
+ * The era selector is the spec's: "A dual-era server selects its behavior from
+ * how the client opens ... A request carrying modern per-request `_meta` is
+ * served statelessly according to this revision. An `initialize` request
+ * selects legacy semantics." The test is the presence of *any* key under the
+ * reserved `io.modelcontextprotocol/` prefix, not of the protocol version
+ * alone — a request that carries `clientCapabilities` and forgot the version is
+ * still unmistakably a stateless request, and it must be told so with a -32602
+ * rather than handed a legacy-shaped success for a revision it never asked for.
+ * Whatever is or is not there, the answer comes from this request only:
+ * "Servers **MUST NOT** rely on prior requests over the same connection to
+ * establish context".
  */
-function declaredProtocolVersion(params: unknown): unknown {
-  if (!isRecord(params)) return undefined;
+function isStatelessRequest(params: unknown): boolean {
+  if (!isRecord(params)) return false;
   const meta = params["_meta"];
-  if (!isRecord(meta)) return undefined;
-  return meta[META_PROTOCOL_VERSION];
+  if (!isRecord(meta)) return false;
+  return Object.keys(meta).some((key) => key.startsWith(META_RESERVED_PREFIX));
 }
 
 function metaOf(params: unknown): Record<string, unknown> {
@@ -241,14 +243,14 @@ async function handleStateless(
   requested: unknown,
   host: ToolHostRuntime,
 ): Promise<JsonRpcResponse> {
-  // A declared version that is not even a string is a malformed request, not an
-  // unsupported revision: -32022 means "this version is one I do not
-  // implement", and a number is not a version at all. It falls under the same
-  // rule as any other required field of the wrong shape — "A request missing
+  // A version that is absent, or present but not a string, is a malformed
+  // request rather than an unsupported revision: -32022 means "this version is
+  // one I do not implement", and a missing member names no version at all. Both
+  // fall under the same rule as any other required field — "A request missing
   // any required field is malformed; the server MUST reject it with JSON-RPC
   // error code -32602".
   if (typeof requested !== "string") {
-    return fail(id, INVALID_PARAMS, `${META_PROTOCOL_VERSION} must be a protocol version string.`);
+    return fail(id, INVALID_PARAMS, `A stateless request must carry ${META_PROTOCOL_VERSION} in _meta as a protocol version string.`);
   }
 
   if (!STATELESS_PROTOCOL_VERSIONS.includes(requested)) {
@@ -283,7 +285,7 @@ async function handleStateless(
     return ok(
       id,
       statelessResult({
-        supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+        supportedVersions: STATELESS_PROTOCOL_VERSIONS,
         capabilities: MCP_SERVER_CAPABILITIES,
         ...CACHE_HINTS,
       }),
@@ -362,8 +364,7 @@ export async function handleRpcMessage(message: unknown, host: ToolHostRuntime, 
     });
   }
 
-  const declared = declaredProtocolVersion(params);
-  if (declared !== undefined) return handleStateless(method, id, params, declared, host);
+  if (isStatelessRequest(params)) return handleStateless(method, id, params, metaOf(params)[META_PROTOCOL_VERSION], host);
 
   if (method === "ping") return ok(id, {});
 

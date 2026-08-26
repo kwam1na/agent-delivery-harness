@@ -118,28 +118,6 @@ describe("initialize", () => {
       expect((response?.result as { protocolVersion: string }).protocolVersion).toBe(version);
     }
   });
-
-  /**
-   * SEP-1303 (2025-11-25, minor change 5): "Clarify that input validation
-   * errors should be returned as Tool Execution Errors rather than Protocol
-   * Errors to enable model self-correction." The revision's tools page keeps
-   * "Input validation errors" under Tool Execution Errors, reported "in tool
-   * results with `isError: true`".
-   *
-   * This server already reports a manifest argument of the wrong type that way
-   * — it is the usage class, exit 2, rendered like every other blocker — and
-   * this row is what keeps the two channels from being swapped later. The
-   * malformed *manifest file* is the same story one layer down: `submit-evidence`
-   * rejects it through the command core, so its rejection reaches the client as
-   * a tool result too, never as a JSON-RPC error.
-   */
-  it("reports an input validation error as a tool execution error, per SEP-1303", async () => {
-    const response = await answer(request("tools/call", { name: "submit-evidence", arguments: { manifest: 42 } }));
-    expect(response?.error).toBeUndefined();
-    const result = response?.result as { isError: boolean; structuredContent: { outcome: string; exitCode: number } };
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toMatchObject({ outcome: "usage", exitCode: 2 });
-  });
 });
 
 describe("the two error channels", () => {
@@ -170,6 +148,28 @@ describe("the two error channels", () => {
     expect((await handleRpcLine("{ not json", host, session))?.error?.code).toBe(PARSE_ERROR);
     // The session survives: the next line is answered normally.
     expect((await handleRpcLine(JSON.stringify(request("ping")), host, session))?.result).toEqual({});
+  });
+
+  /**
+   * SEP-1303 (2025-11-25, minor change 5): "Clarify that input validation
+   * errors should be returned as Tool Execution Errors rather than Protocol
+   * Errors to enable model self-correction." The revision's tools page keeps
+   * "Input validation errors" under Tool Execution Errors, reported "in tool
+   * results with `isError: true`".
+   *
+   * This server already reports a manifest argument of the wrong type that way
+   * — it is the usage class, exit 2, rendered like every other blocker — and
+   * this row is what keeps the two channels from being swapped later. The
+   * malformed *manifest file* is the same story one layer down: `submit-evidence`
+   * rejects it through the command core, so its rejection reaches the client as
+   * a tool result too, never as a JSON-RPC error.
+   */
+  it("reports an input validation error as a tool execution error, per SEP-1303", async () => {
+    const response = await answer(request("tools/call", { name: "submit-evidence", arguments: { manifest: 42 } }));
+    expect(response?.error).toBeUndefined();
+    const result = response?.result as { isError: boolean; structuredContent: { outcome: string; exitCode: number } };
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ outcome: "usage", exitCode: 2 });
   });
 
   it("reports a refused tool call as a tool result, not a protocol error", async () => {
@@ -343,7 +343,7 @@ describe("the stateless revision", () => {
     expect(response?.error).toBeUndefined();
     expect(response?.result).toEqual({
       resultType: "complete",
-      supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+      supportedVersions: STATELESS_PROTOCOL_VERSIONS,
       capabilities: { tools: { listChanged: false } },
       ttlMs: TOOL_LIST_TTL_MS,
       cacheScope: TOOL_LIST_CACHE_SCOPE,
@@ -352,15 +352,30 @@ describe("the stateless revision", () => {
   });
 
   /**
-   * The probe answer names every revision this server speaks, handshake ones
-   * included, because `supportedVersions` is "Protocol versions the server
-   * supports" and a dual-era client's whole reason to probe is to learn whether
-   * falling back to `initialize` will work.
+   * The probe answer names only the revisions a client can select and *keep
+   * going* with, which on this channel is the stateless one.
+   *
+   * `supportedVersions` is not a catalogue: "Protocol versions the server
+   * supports. The client should choose one of these for subsequent requests",
+   * and on stdio, "The server returns a `DiscoverResult`: the server is modern.
+   * Select a mutually supported version from `supportedVersions` and continue."
+   * There is no branch back to `initialize` from there — a `DiscoverResult`
+   * arriving is itself the signal to stay modern. So a handshake revision named
+   * here is a trap: a conforming client selects 2024-11-05, continues modern,
+   * and earns a guaranteed -32022. It is the same loop-avoidance that keeps the
+   * error's `supported` list narrow, and the two fields must agree.
    */
-  it("names the handshake revisions in the probe answer so a dual-era client can fall back", async () => {
+  it("names no revision in the probe answer that the stateless channel cannot then serve", async () => {
     const response = await answer(statelessRequest("server/discover"));
     const versions = (response?.result as { supportedVersions: readonly string[] }).supportedVersions;
-    for (const version of HANDSHAKE_PROTOCOL_VERSIONS) expect(versions).toContain(version);
+    expect(versions).toEqual(STATELESS_PROTOCOL_VERSIONS);
+    for (const version of HANDSHAKE_PROTOCOL_VERSIONS) expect(versions).not.toContain(version);
+
+    // The field means what it says: every version it names is servable here.
+    for (const version of versions) {
+      const served = await answer(statelessRequest("tools/list", {}, statelessMeta({ [META_PROTOCOL_VERSION]: version })));
+      expect(served?.error, `server/discover named ${version} but the stateless channel refused it`).toBeUndefined();
+    }
   });
 
   /**
@@ -499,6 +514,45 @@ describe("the stateless revision", () => {
   });
 
   /**
+   * A `_meta` carrying a reserved `io.modelcontextprotocol/` key but no
+   * protocol version is a malformed stateless request, not a handshake one.
+   *
+   * The era selector is "A request carrying modern per-request `_meta`", and
+   * these keys are exactly that: no handshake revision defines any of them, so
+   * their presence identifies the era on its own. Once the request is modern,
+   * "A request missing any required field is malformed; the server **MUST**
+   * reject it with JSON-RPC error code `-32602`" applies — and the alternative
+   * is worse than an error: the client gets a legacy-shaped success with no
+   * `resultType` and no `_meta`, which is this server answering a 2026-07-28
+   * request in a revision the client never asked for.
+   */
+  it("rejects a request whose _meta is modern but declares no protocol version", async () => {
+    for (const key of [META_CLIENT_CAPABILITIES, META_CLIENT_INFO, META_LOG_LEVEL]) {
+      const response = await answer(request("tools/list", { _meta: { [key]: key === META_LOG_LEVEL ? "debug" : {} } }));
+      expect(response?.result, `a _meta carrying ${key} must not be served as a handshake request`).toBeUndefined();
+      expect(response?.error?.code).toBe(INVALID_PARAMS);
+    }
+  });
+
+  /**
+   * The counterweight, and the reason the rule keys on the reserved prefix
+   * rather than on "`_meta` is present at all". `progressToken` is a `_meta`
+   * key the handshake revisions have always defined, and the OpenTelemetry
+   * keys are carved out of the prefix rule by the spec itself. A request
+   * carrying only those is a handshake request and must be answered exactly as
+   * it was before this server knew 2026-07-28 existed.
+   */
+  it("still serves a handshake request whose _meta carries only handshake-era keys", async () => {
+    const bare = encodeResponse((await answer(request("tools/list"))) as JsonRpcResponse);
+    for (const meta of [{ progressToken: "p-1" }, { traceparent: "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01" }, {}]) {
+      const response = await answer(request("tools/list", { _meta: meta }));
+      expect(response?.error, `a _meta of ${JSON.stringify(meta)} must stay handshake-era`).toBeUndefined();
+      // Byte-identical to the same request with no `_meta` at all.
+      expect(encodeResponse(response as JsonRpcResponse)).toBe(bare);
+    }
+  });
+
+  /**
    * "The server **MUST NOT** emit `notifications/message` for a request that
    * does not include this field." This server emits none at all — it declares
    * no `logging` capability, and the revision that introduced the field
@@ -605,18 +659,33 @@ describe("dual-era coexistence", () => {
    */
   it("returns byte-identical tool text on every revision it speaks", async () => {
     const call = { name: "submit-evidence", arguments: { manifest: 42 } };
-    const textOf = (response: JsonRpcResponse | null): string =>
-      ((response?.result as { content: readonly { text: string }[] }).content[0]?.text ?? "");
+    const payloadOf = (response: JsonRpcResponse | null): Record<string, unknown> => {
+      const result = response?.result as Record<string, unknown>;
+      return { content: result["content"], isError: result["isError"], structuredContent: result["structuredContent"] };
+    };
 
-    const handshake = await answer(request("tools/call", call));
-    const stateless = await answer(statelessRequest("tools/call", call));
-    expect(textOf(stateless)).toBe(textOf(handshake));
+    // Each handshake revision reached the way a client of that revision reaches
+    // it: negotiate first, then call on the same session.
+    const perRevision: Record<string, Record<string, unknown>> = {};
+    for (const version of HANDSHAKE_PROTOCOL_VERSIONS) {
+      const session = createSession();
+      const negotiated = await handleRpcMessage(request("initialize", { protocolVersion: version }), host, session);
+      expect((negotiated?.result as { protocolVersion: string }).protocolVersion).toBe(version);
+      perRevision[version] = payloadOf(await handleRpcMessage(request("tools/call", call, 2), host, session));
+    }
+    for (const version of STATELESS_PROTOCOL_VERSIONS) {
+      const meta = statelessMeta({ [META_PROTOCOL_VERSION]: version });
+      perRevision[version] = payloadOf(await answer(statelessRequest("tools/call", call, meta)));
+    }
 
-    const handshakeResult = handshake?.result as Record<string, unknown>;
-    const statelessResult = stateless?.result as Record<string, unknown>;
-    expect(statelessResult["content"]).toEqual(handshakeResult["content"]);
-    expect(statelessResult["isError"]).toEqual(handshakeResult["isError"]);
-    expect(statelessResult["structuredContent"]).toEqual(handshakeResult["structuredContent"]);
+    expect(Object.keys(perRevision).sort()).toEqual([...SUPPORTED_PROTOCOL_VERSIONS].sort());
+    const [first, ...rest] = SUPPORTED_PROTOCOL_VERSIONS;
+    const baseline = perRevision[first as string];
+    // The rendered text really is multi-line, so this compares something.
+    expect(JSON.stringify(baseline)).toContain("\\n");
+    for (const version of rest) {
+      expect(perRevision[version], `${version} diverged from ${first}`).toEqual(baseline);
+    }
   });
 
   /**

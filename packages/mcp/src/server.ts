@@ -83,18 +83,40 @@ export const MCP_STATELESS_PROTOCOL_VERSION = "2026-07-28";
 export const STATELESS_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_STATELESS_PROTOCOL_VERSION]);
 
 /**
- * Everything this server speaks, newest first — the answer `server/discover`
- * gives to "Protocol versions the server supports".
+ * Everything this server speaks, newest first — for documentation and for tests
+ * that need the whole set.
  *
- * It deliberately spans both eras. A dual-era client probes with
- * `server/discover` precisely to learn whether falling back to `initialize`
- * will work, and a list naming only the stateless revision would hide the three
- * revisions this server still serves that way.
+ * NOT WHAT `server/discover` ANSWERS. That field is `supportedVersions`:
+ * "Protocol versions the server supports. The client should choose one of these
+ * for subsequent requests" — and on stdio, "The server returns a
+ * `DiscoverResult`: the server is modern. Select a mutually supported version
+ * from `supportedVersions` and continue." There is no branch back to
+ * `initialize` from there; a `DiscoverResult` arriving is itself what tells the
+ * client to stay modern. A handshake revision named in that field would
+ * therefore be a trap — a conforming client selects 2024-11-05, continues
+ * modern, and earns a guaranteed `UnsupportedProtocolVersionError`. So the
+ * probe answers `STATELESS_PROTOCOL_VERSIONS`, the same list the error carries,
+ * for the same loop-avoidance reason. What a handshake client can reach is
+ * discovered the way it always was: by sending `initialize`.
  */
 export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
   ...STATELESS_PROTOCOL_VERSIONS,
   ...HANDSHAKE_PROTOCOL_VERSIONS,
 ]);
+
+/**
+ * The reserved `_meta` prefix that identifies a request as stateless.
+ *
+ * No handshake revision defines any `_meta` key under it, so a request carrying
+ * one is "a request carrying modern per-request `_meta`" — the spec's own era
+ * selector — whether or not it also remembered the protocol version. Keying on
+ * the prefix rather than on the version member alone is what stops a modern
+ * request that omitted a required field from being quietly served as a legacy
+ * one. `progressToken` and the OpenTelemetry keys (`traceparent`, `tracestate`,
+ * `baggage`, carved out of the prefix rule by the spec) are deliberately
+ * outside it: those are handshake-era `_meta` and must stay handshake-era.
+ */
+export const META_RESERVED_PREFIX = "io.modelcontextprotocol/";
 
 /** Version tracks the package; the release mechanics keep the two in step. */
 export const MCP_SERVER_INFO = { name: "delivery-harness", version: "0.0.0" } as const;
