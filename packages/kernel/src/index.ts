@@ -8,7 +8,7 @@
  * that creates one has to promote it to an enforced protected class.
  */
 
-export const PACKAGE_NAME = "@delivery-harness/kernel";
+export const PACKAGE_NAME = "@agent-delivery-harness/kernel";
 
 // RFC 8785 canonical JSON and the digest helpers built on it.
 export {

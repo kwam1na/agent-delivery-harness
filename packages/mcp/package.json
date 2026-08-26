@@ -1,5 +1,5 @@
 {
-  "name": "@delivery-harness/mcp",
+  "name": "@agent-delivery-harness/mcp",
   "version": "0.0.0",
   "type": "module",
   "description": "MCP server exposing the delivery harness submission surface",

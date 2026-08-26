@@ -7,7 +7,7 @@
  * workflow's tests, and anything that wants to drive the verification from a
  * simulated event without a runner.
  */
-export const PACKAGE_NAME = "@delivery-harness/action";
+export const PACKAGE_NAME = "@agent-delivery-harness/action";
 
 export {
   ACTION_EXIT_OK,

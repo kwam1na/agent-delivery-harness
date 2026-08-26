@@ -9,7 +9,7 @@
  * arrives with the recorder.
  */
 
-export const PACKAGE_NAME = "@delivery-harness/conformance";
+export const PACKAGE_NAME = "@agent-delivery-harness/conformance";
 
 export {
   RECORDER_DEPENDENT_VECTORS,

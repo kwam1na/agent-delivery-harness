@@ -18,7 +18,7 @@ import {
   discoverRecords,
   runAdmission,
   type EvidenceRecord,
-} from "@delivery-harness/kernel";
+} from "@agent-delivery-harness/kernel";
 import path from "node:path";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";

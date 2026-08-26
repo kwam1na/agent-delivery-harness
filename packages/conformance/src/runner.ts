@@ -65,7 +65,7 @@ import {
   type CapturedCandidate,
   type HarnessConfig,
   type SubmissionOutcome,
-} from "@delivery-harness/kernel";
+} from "@agent-delivery-harness/kernel";
 import { loadKitRepoConfig } from "../fixtures/repo-config-adapter.ts";
 
 // ── The kit's own shapes ───────────────────────────────────────────────────

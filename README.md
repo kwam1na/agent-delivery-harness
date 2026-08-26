@@ -34,20 +34,21 @@ cannot drift from the tool.
 
 ## The packages
 
-- **`@delivery-harness/kernel`** — pure validator for the
+- **`@agent-delivery-harness/kernel`** — pure validator for the
   `delivery-evidence/1` envelope and `review.green/1` payload, candidate
   capture, `deliverable-tree/v1` identity, content-addressed evidence records,
   preparation receipts, gate evaluator with six resolution kinds,
   execution-context trust asymmetry (agents can never waive), and the
   `delivery-record/1` verify core.
-- **`@delivery-harness/conformance`** — the 89-vector golden conformance kit
-  (8 accept / 81 reject) and its table-driven generator, runnable in unit and
-  integration modes.
-- **`@delivery-harness/cli`** — the seven-command operator surface: `prepare`,
-  `review-context`, `submit-evidence`, `gate`, `record`, `verify`, `check`.
-- **`@delivery-harness/mcp`** — MCP server exposing `review-context` and
+- **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
+  kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
+  and integration modes.
+- **`@agent-delivery-harness/cli`** — the seven-command operator surface:
+  `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
+  `check`.
+- **`@agent-delivery-harness/mcp`** — MCP server exposing `review-context` and
   `submit-evidence` to agent frameworks at strict CLI parity.
-- **`@delivery-harness/action`** — GitHub Action verifying the tracked
+- **`@agent-delivery-harness/action`** — GitHub Action verifying the tracked
   delivery record on pull requests, against the PR head, never the synthetic
   merge commit.
 

@@ -17,7 +17,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { createWaiverPrompt, entryHref, invokedDirectly } from "./main.ts";
 import { CliInterruption } from "./index.ts";
-import type { GateDecision } from "@delivery-harness/kernel";
+import type { GateDecision } from "@agent-delivery-harness/kernel";
 
 const ETX = String.fromCharCode(3);
 

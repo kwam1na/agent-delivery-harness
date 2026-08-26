@@ -30,17 +30,17 @@ goes red.
 
 ## 0. Consuming the harness pre-v1
 
-The `@delivery-harness/*` packages are not published yet. Until they are, you
-consume them from a checkout of this repository (with `npm ci` run inside it),
-pointed at by `$DELIVERY_HARNESS_CHECKOUT`. Two things need wiring: a
-`delivery-harness` command on your `PATH`, and `@delivery-harness/kernel`
+The `@agent-delivery-harness/*` packages are not published yet. Until they are,
+you consume them from a checkout of this repository (with `npm ci` run inside
+it), pointed at by `$DELIVERY_HARNESS_CHECKOUT`. Two things need wiring: a
+`delivery-harness` command on your `PATH`, and `@agent-delivery-harness/kernel`
 resolvable from your repository root (your `harness.config.ts` imports it).
 
 ```sh
 # From your repository root. DELIVERY_HARNESS_CHECKOUT is a checkout of the
 # delivery-harness repository with `npm ci` already run inside it.
-mkdir -p .delivery-harness/bin node_modules/@delivery-harness
-ln -sfn "$DELIVERY_HARNESS_CHECKOUT/packages/kernel" node_modules/@delivery-harness/kernel
+mkdir -p .delivery-harness/bin node_modules/@agent-delivery-harness
+ln -sfn "$DELIVERY_HARNESS_CHECKOUT/packages/kernel" node_modules/@agent-delivery-harness/kernel
 printf '#!/bin/sh\nexec "%s/node_modules/.bin/tsx" "%s/packages/cli/src/main.ts" "$@"\n' \
   "$DELIVERY_HARNESS_CHECKOUT" "$DELIVERY_HARNESS_CHECKOUT" > .delivery-harness/bin/delivery-harness
 chmod +x .delivery-harness/bin/delivery-harness
@@ -63,7 +63,7 @@ defaults for policy.
 
 ```ts
 // harness.config.ts
-import { defineHarnessConfig } from "@delivery-harness/kernel";
+import { defineHarnessConfig } from "@agent-delivery-harness/kernel";
 
 export default defineHarnessConfig({
   gateId: "example.pr-admission",
@@ -182,8 +182,8 @@ Three members deserve a moment before moving on:
 ## 2. A provider, in one file
 
 Evidence is submitted by a **provider** — normally an agent framework or review
-orchestrator (the MCP server in `@delivery-harness/mcp` exposes exactly this
-surface to agents). To make the walkthrough self-contained, here is the
+orchestrator (the MCP server in `@agent-delivery-harness/mcp` exposes exactly
+this surface to agents). To make the walkthrough self-contained, here is the
 smallest honest provider: a script that captures the candidate, allocates its
 run root, writes one reviewer-approval artifact, and emits a
 [`delivery-evidence/1`](spec/delivery-evidence-1.md) manifest for a green
@@ -203,7 +203,7 @@ import {
   resolveRecordStorage,
   sha256Hex,
   withDeliverableIdentity,
-} from "@delivery-harness/kernel";
+} from "@agent-delivery-harness/kernel";
 import config from "../harness.config.ts";
 
 const rootDir = process.cwd();

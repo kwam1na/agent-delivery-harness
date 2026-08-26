@@ -5,7 +5,7 @@
  * stale one blocks with its own distinct class. Only once the receipt is current
  * does the command report what a provider should review and submit evidence for.
  */
-import { evaluatePreparationReceipt } from "@delivery-harness/kernel";
+import { evaluatePreparationReceipt } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
