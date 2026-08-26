@@ -542,9 +542,38 @@ describe("the stateless revision", () => {
    * carrying only those is a handshake request and must be answered exactly as
    * it was before this server knew 2026-07-28 existed.
    */
+  /**
+   * `io.modelcontextprotocol/related-task` is the counterexample that decides
+   * how the era is detected, and it is a *handshake-era* key.
+   *
+   * 2025-11-25's tasks feature reserves it under the same prefix the stateless
+   * revision uses — "All requests, notifications, and responses related to a
+   * task **MUST** include the `io.modelcontextprotocol/related-task` key in
+   * their `_meta` field" — so the reserved prefix marks MCP ownership, not the
+   * modern era, and cannot be what selects the era. Worse, the same page binds
+   * this server directly: "Receivers that do not declare the task capability
+   * for a request type **MUST** process requests of that type normally,
+   * ignoring any task-augmentation metadata if present." This server declares
+   * no `tasks` capability, so a request carrying that key must be *served*,
+   * not rejected — the one thing a prefix test would do to it.
+   */
+  it("serves a task-augmented handshake request rather than rejecting metadata it must ignore", async () => {
+    const bare = encodeResponse((await answer(request("tools/list"))) as JsonRpcResponse);
+    const related = { "io.modelcontextprotocol/related-task": { taskId: "t-1" } };
+    const response = await answer(request("tools/list", { _meta: related }));
+    expect(response?.error, "task-augmentation metadata must be ignored, not rejected").toBeUndefined();
+    expect(encodeResponse(response as JsonRpcResponse)).toBe(bare);
+  });
+
   it("still serves a handshake request whose _meta carries only handshake-era keys", async () => {
     const bare = encodeResponse((await answer(request("tools/list"))) as JsonRpcResponse);
-    for (const meta of [{ progressToken: "p-1" }, { traceparent: "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01" }, {}]) {
+    for (const meta of [
+      { progressToken: "p-1" },
+      { traceparent: "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01" },
+      { "io.modelcontextprotocol/related-task": { taskId: "t-1" } },
+      { progressToken: "p-2", "io.modelcontextprotocol/related-task": { taskId: "t-2" } },
+      {},
+    ]) {
       const response = await answer(request("tools/list", { _meta: meta }));
       expect(response?.error, `a _meta of ${JSON.stringify(meta)} must stay handshake-era`).toBeUndefined();
       // Byte-identical to the same request with no `_meta` at all.

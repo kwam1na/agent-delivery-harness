@@ -69,7 +69,8 @@ cannot drift from the tool.
   `check`.
 - **`@agent-delivery-harness/mcp`** — MCP server exposing `review-context` and
   `submit-evidence` to agent frameworks over stdio, at strict CLI parity across
-  all four supported protocol revisions (`2026-07-28` back to `2024-11-05`).
+  the four protocol revisions it speaks (`2026-07-28`, `2025-11-25`,
+  `2025-06-18`, `2024-11-05`).
 - **`@agent-delivery-harness/action`** — GitHub Action verifying the tracked
   delivery record on pull requests, against the PR head, never the synthetic
   merge commit.

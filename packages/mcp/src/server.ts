@@ -104,20 +104,6 @@ export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
   ...HANDSHAKE_PROTOCOL_VERSIONS,
 ]);
 
-/**
- * The reserved `_meta` prefix that identifies a request as stateless.
- *
- * No handshake revision defines any `_meta` key under it, so a request carrying
- * one is "a request carrying modern per-request `_meta`" — the spec's own era
- * selector — whether or not it also remembered the protocol version. Keying on
- * the prefix rather than on the version member alone is what stops a modern
- * request that omitted a required field from being quietly served as a legacy
- * one. `progressToken` and the OpenTelemetry keys (`traceparent`, `tracestate`,
- * `baggage`, carved out of the prefix rule by the spec) are deliberately
- * outside it: those are handshake-era `_meta` and must stay handshake-era.
- */
-export const META_RESERVED_PREFIX = "io.modelcontextprotocol/";
-
 /** Version tracks the package; the release mechanics keep the two in step. */
 export const MCP_SERVER_INFO = { name: "delivery-harness", version: "0.0.0" } as const;
 
@@ -133,6 +119,36 @@ export const META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo";
 export const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
 export const META_LOG_LEVEL = "io.modelcontextprotocol/logLevel";
 export const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
+
+/**
+ * The `_meta` members whose presence identifies a request as stateless: the
+ * four per-request protocol fields 2026-07-28 defines, and nothing else.
+ *
+ * WHY NOT THE `io.modelcontextprotocol/` PREFIX. Because that prefix marks MCP
+ * ownership, not the modern era, and the two are not the same set.
+ * 2025-11-25's tasks feature reserves a key under it — "All requests,
+ * notifications, and responses related to a task **MUST** include the
+ * `io.modelcontextprotocol/related-task` key in their `_meta` field" — so a
+ * handshake-era request can carry a prefixed key perfectly legitimately. A
+ * prefix test would route that request into the stateless path and reject it
+ * for a missing protocol version, which is exactly what the same page forbids:
+ * "Receivers that do not declare the task capability for a request type
+ * **MUST** process requests of that type normally, ignoring any
+ * task-augmentation metadata if present." This server declares no `tasks`
+ * capability, so that MUST binds it, and enumerating the four modern members is
+ * what keeps it honoured.
+ *
+ * Keying on the set rather than on `protocolVersion` alone is still what stops
+ * a modern request that omitted a required field from being quietly served as a
+ * legacy one — a request carrying `clientCapabilities` and no version is
+ * unmistakably modern and gets told so.
+ */
+export const META_STATELESS_KEYS: readonly string[] = Object.freeze([
+  META_PROTOCOL_VERSION,
+  META_CLIENT_INFO,
+  META_CLIENT_CAPABILITIES,
+  META_LOG_LEVEL,
+]);
 
 /** RFC 5424 severities, as the logging utility enumerates them. */
 export const LOG_LEVELS: readonly string[] = Object.freeze([

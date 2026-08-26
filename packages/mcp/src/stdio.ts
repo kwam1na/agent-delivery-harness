@@ -56,8 +56,8 @@ import {
   META_CLIENT_CAPABILITIES,
   META_LOG_LEVEL,
   META_PROTOCOL_VERSION,
-  META_RESERVED_PREFIX,
   META_SERVER_INFO,
+  META_STATELESS_KEYS,
   STATELESS_PROTOCOL_VERSIONS,
   TOOL_LIST_CACHE_SCOPE,
   TOOL_LIST_TTL_MS,
@@ -177,20 +177,22 @@ function negotiate(requested: unknown): string {
  * The era selector is the spec's: "A dual-era server selects its behavior from
  * how the client opens ... A request carrying modern per-request `_meta` is
  * served statelessly according to this revision. An `initialize` request
- * selects legacy semantics." The test is the presence of *any* key under the
- * reserved `io.modelcontextprotocol/` prefix, not of the protocol version
- * alone — a request that carries `clientCapabilities` and forgot the version is
- * still unmistakably a stateless request, and it must be told so with a -32602
- * rather than handed a legacy-shaped success for a revision it never asked for.
- * Whatever is or is not there, the answer comes from this request only:
- * "Servers **MUST NOT** rely on prior requests over the same connection to
- * establish context".
+ * selects legacy semantics." The test is the presence of any of the four
+ * per-request protocol fields that revision defines, not of the protocol
+ * version alone — a request that carries `clientCapabilities` and forgot the
+ * version is still unmistakably a stateless request, and it must be told so
+ * with a -32602 rather than handed a legacy-shaped success for a revision it
+ * never asked for. It is deliberately *not* a test on the
+ * `io.modelcontextprotocol/` prefix, which a handshake-era task-augmented
+ * request may also carry; see `META_STATELESS_KEYS`. Whatever is or is not
+ * there, the answer comes from this request only: "Servers **MUST NOT** rely on
+ * prior requests over the same connection to establish context".
  */
 function isStatelessRequest(params: unknown): boolean {
   if (!isRecord(params)) return false;
   const meta = params["_meta"];
   if (!isRecord(meta)) return false;
-  return Object.keys(meta).some((key) => key.startsWith(META_RESERVED_PREFIX));
+  return META_STATELESS_KEYS.some((key) => Object.prototype.hasOwnProperty.call(meta, key));
 }
 
 function metaOf(params: unknown): Record<string, unknown> {
