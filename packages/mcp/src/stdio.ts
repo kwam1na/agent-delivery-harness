@@ -172,7 +172,10 @@ function negotiate(requested: unknown): string {
 // ── The stateless revision ───────────────────────────────────────────────────
 
 /**
- * The protocol version a request declares, or `null` if it declares none.
+ * The protocol version a request declares, or `undefined` if it declares none.
+ * The distinction is load-bearing: a declared `null` is a *declaration* of the
+ * wrong shape, and routes into the stateless path to be rejected there, while
+ * an absent member is a handshake-era request.
  *
  * This one member decides the era, per request and nothing else: "A dual-era
  * server selects its behavior from how the client opens ... A request carrying
