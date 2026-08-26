@@ -38,7 +38,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { HARNESS_VERSION } from "@delivery-harness/kernel";
+import { HARNESS_VERSION } from "@agent-delivery-harness/kernel";
 
 // ── Registry ─────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 {
-  "name": "@delivery-harness/cli",
+  "name": "@agent-delivery-harness/cli",
   "version": "0.0.0",
   "type": "module",
   "description": "Delivery harness CLI: prepare, review-context, submit-evidence, gate, record, verify, check",

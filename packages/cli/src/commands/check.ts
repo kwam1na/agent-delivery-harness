@@ -10,7 +10,7 @@
  * behind. An unresolvable or unwritable store is a typed block, never a crash.
  */
 import path from "node:path";
-import { resolveRecordStorage, BlockedError } from "@delivery-harness/kernel";
+import { resolveRecordStorage, BlockedError } from "@agent-delivery-harness/kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
 /** Named so an interrupted run leaves something obviously disposable. */

@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { validateHarnessConfig, type HarnessConfig } from "@delivery-harness/kernel";
+import { validateHarnessConfig, type HarnessConfig } from "@agent-delivery-harness/kernel";
 import harnessConfig from "../../../harness.config.ts";
 import {
   KIT_DEFAULTED_DIMENSIONS,

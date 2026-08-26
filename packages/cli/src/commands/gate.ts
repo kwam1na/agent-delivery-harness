@@ -9,7 +9,7 @@
  * only ever offers a waiver to a `human` context, all-or-nothing over waivable
  * findings; the CLI adds no waiver logic of its own.
  */
-import { runAdmission } from "@delivery-harness/kernel";
+import { runAdmission } from "@agent-delivery-harness/kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
 export const gateCommand: CommandDescriptor = {
