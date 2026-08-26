@@ -997,11 +997,25 @@ export function deliveryRecordPathFor(config: HarnessConfig, deliverableDigest: 
 }
 
 /**
- * A digest-shaped probe for load-time validation. Any 64-hex value derives the
- * same *shape* of path, so one representative proves the derived path is neutral
- * for every candidate the gate will ever record.
+ * Digest-shaped probes for load-time validation, and why there are two of them.
+ *
+ * The splice *position* is digest-independent — every 64-hex digest lands in the
+ * same place — so a matcher's prefix is decided identically under any probe. A
+ * matcher's suffix is not. A suffix that reaches backwards past the extension
+ * into the digest region asserts something about digest *characters*, and a
+ * single probe answers that assertion only for itself: an all-zeros probe
+ * satisfies exactly the suffixes made of zeros, so `record00.json` under suffix
+ * `00.json` validates at load and then writes real records outside the neutral
+ * set — the write moves the identity it attests, `verify` reports the record
+ * missing, and the loop cannot be closed.
+ *
+ * Two probes differing in *every* position close that: a suffix reaching k > 0
+ * characters into the digest region would have to be simultaneously `0` and `f`
+ * at the same offset, which no string is. So a suffix survives both probes only
+ * by staying entirely outside the digest region — which is exactly the property
+ * that makes it digest-independent, and therefore true for every real candidate.
  */
-const PROBE_DIGEST = "0".repeat(64);
+const PROBE_DIGESTS: readonly string[] = ["0".repeat(64), "f".repeat(64)];
 
 /**
  * Whether every path `narrow` matches is also matched by `wide`. Conservative on
@@ -1205,17 +1219,26 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
   // digest is spliced in. Such a config authorizes a write that changes the very
   // identity the record attests, which is the deadlock the two neutral sets
   // exist to prevent.
-  for (const [member, candidatePath] of [
+  // The derived path is checked under two probes that differ in every position,
+  // so a matcher can only pass by being neutral independently of the digest —
+  // see PROBE_DIGESTS. One finding is emitted for the derived path however many
+  // probes it fails: the defect is the matcher, not the probe that caught it.
+  const derivedProbePaths = PROBE_DIGESTS.map((probe) => deriveDeliveryRecordPath(config.deliveryRecordPath, probe));
+  const candidatePaths: readonly (readonly [string, string])[] = [
     ["deliveryRecordPath", config.deliveryRecordPath],
-    ["deliveryRecordPath (derived)", deriveDeliveryRecordPath(config.deliveryRecordPath, PROBE_DIGEST)],
-  ] as const) {
+    ...derivedProbePaths.map((derived) => ["deliveryRecordPath (derived)", derived] as const),
+  ];
+  let derivedReported = false;
+  for (const [member, candidatePath] of candidatePaths) {
+    const isDerived = member !== "deliveryRecordPath";
+    if (isDerived && derivedReported) continue;
     const reviewNeutralRecord = matchesNeutralSet(config.reviewNeutral, candidatePath);
     const recordNeutralRecord = matchesNeutralSet(config.recordNeutral, candidatePath);
     if (reviewNeutralRecord && recordNeutralRecord) continue;
-    const derivedNote =
-      member === "deliveryRecordPath"
-        ? ""
-        : ` — records are candidate-keyed, so ${JSON.stringify(config.deliveryRecordPath)} is written as this path`;
+    if (isDerived) derivedReported = true;
+    const derivedNote = isDerived
+      ? ` — records are candidate-keyed, so ${JSON.stringify(config.deliveryRecordPath)} is written as this path`
+      : "";
     findings.add(
       "config_delivery_record_not_neutral",
       member,

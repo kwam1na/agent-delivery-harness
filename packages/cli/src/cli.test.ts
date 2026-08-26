@@ -578,7 +578,14 @@ describe("error paths", () => {
     await writeFile(storage.storageRoot, "not a directory\n", "utf8");
 
     expect(await runCli(["check"], runtime)).toBe(EXIT_POLICY);
-    expect(err.join("")).toContain("Remediation:");
+    const text = err.join("");
+    // A typed store finding, not an internal error. The distinction is the whole
+    // point of the preflight: an unusable store is a condition the operator can
+    // act on, and reporting it as an unexpected crash tells them nothing and
+    // implicates the harness instead of their checkout.
+    expect(text).toContain("artifact_write_failed");
+    expect(text).not.toContain("internal_error");
+    expect(text).toContain("Remediation:");
   });
 
   it("an invalid config is a typed policy block", { timeout: 60000 }, async () => {

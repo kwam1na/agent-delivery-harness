@@ -611,6 +611,49 @@ describe("the two neutral sets", () => {
     expect(deriveDeliveryRecordPath(".deliveryrecord", "a".repeat(64))).toBe(`.deliveryrecord--${"a".repeat(64)}`);
   });
 
+  // ── The probe must not be able to *be* the digest ────────────────────────
+  //
+  // The derived path is checked with a stand-in digest, and the splice position
+  // is digest-independent — so the prefix side of a matcher is safe under any
+  // probe. A suffix is not. A suffix that reaches backwards past the extension
+  // into the digest region is asserting something about digest *characters*, and
+  // an all-zeros probe satisfies exactly the suffixes made of zeros. The loader
+  // then accepts a config whose real records — written under real digests — land
+  // outside the neutral set: the write moves the identity it attests, `verify`
+  // reports the record missing, and the loop cannot be closed at all.
+
+  it("rejects a record path whose neutral suffix reaches into the digest region", () => {
+    expectOnly(
+      withInput((input) => {
+        // Derived under an all-zeros probe: `record--00…00.json`, which ends
+        // with "00.json" and passes. Under a real digest it ends with that
+        // digest's own last two characters, and almost never with "00".
+        input.reviewNeutral = [...input.reviewNeutral, { prefix: "telemetry/runs/", suffix: "00.json" }];
+        input.recordNeutral = [{ prefix: "telemetry/runs/", suffix: "00.json" }];
+        input.identityVersions = ["delivery-harness-tree/v1"];
+        input.computingIdentityVersion = "delivery-harness-tree/v1";
+        input.deliveryRecordPath = "telemetry/runs/record00.json";
+      }),
+      "config_delivery_record_not_neutral",
+    );
+  });
+
+  it("rejects an extensionless record path whose neutral suffix reaches into the digest region", () => {
+    expectOnly(
+      withInput((input) => {
+        // The same trap without an extension: the derived path ends in the raw
+        // digest, so a suffix of "000" is a claim about the digest's last three
+        // characters that only the zeros probe satisfies.
+        input.reviewNeutral = [...input.reviewNeutral, { prefix: "telemetry/runs/", suffix: "000" }];
+        input.recordNeutral = [{ prefix: "telemetry/runs/", suffix: "000" }];
+        input.identityVersions = ["delivery-harness-tree/v1"];
+        input.computingIdentityVersion = "delivery-harness-tree/v1";
+        input.deliveryRecordPath = "telemetry/runs/record000";
+      }),
+      "config_delivery_record_not_neutral",
+    );
+  });
+
   it("rejects a dotfile record path whose derived form leaves an exact-name matcher", () => {
     expectOnly(
       withInput((input) => {

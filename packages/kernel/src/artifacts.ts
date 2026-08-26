@@ -426,7 +426,21 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
         // rather than by whichever command happens to produce it.
         await rename(temporary, target);
       } catch (error) {
-        await rm(temporary, { force: true });
+        // THE CLEANUP MUST NOT REPLACE THE FAILURE IT IS CLEANING UP AFTER.
+        //
+        // `force: true` ignores a missing file, but not every failure: when the
+        // directory itself is unusable — a regular file planted where the store
+        // belongs, so `mkdir` failed with ENOTDIR — the removal fails the same
+        // way, and an unguarded `rm` throws *its* error out of the catch block.
+        // The typed `artifact_write_failed` below is then never constructed, and
+        // the caller sees an untyped throw surface as `internal_error`: an
+        // operator-actionable condition reported as a harness crash.
+        try {
+          await rm(temporary, { force: true });
+        } catch {
+          // Best-effort. A temporary that could not be removed is a stray file,
+          // never a reason to lose the real diagnostic.
+        }
         throw artifactsBlocker(
           "artifact_write_failed",
           "A file could not be written.",
