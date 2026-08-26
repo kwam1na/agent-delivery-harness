@@ -15,7 +15,7 @@ implementation:
 
 - **CLI**: `delivery-harness review-context`, then
   `delivery-harness submit-evidence --manifest <path>`.
-- **MCP** (`@delivery-harness/mcp`, stdio): tools named `review-context` and
+- **MCP** (`@agent-delivery-harness/mcp`, stdio): tools named `review-context` and
   `submit-evidence` (the latter takes `manifest`, the path to the manifest
   file). Rejections arrive as structured, typed blockers; malformed tool
   arguments are the same usage-error class the CLI reports as exit 2.

@@ -50,7 +50,7 @@ import {
   type NonEmptyTuple,
   type ReviewActivationProjection,
   type WaiverPrompt,
-} from "@delivery-harness/kernel";
+} from "@agent-delivery-harness/kernel";
 
 // ── Exit codes ───────────────────────────────────────────────────────────────
 

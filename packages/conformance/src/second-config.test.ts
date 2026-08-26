@@ -43,7 +43,7 @@ import {
   type ExecutionContext,
   type GateDecision,
   type ReviewActivationProjection,
-} from "@delivery-harness/kernel";
+} from "@agent-delivery-harness/kernel";
 import { secondConfig } from "../fixtures/second-config.ts";
 
 const run = promisify(execFile);

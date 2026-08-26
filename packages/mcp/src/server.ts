@@ -37,7 +37,7 @@ import {
   submitEvidenceCommand,
   type CliRuntime,
   type CommandDescriptor,
-} from "@delivery-harness/cli";
+} from "@agent-delivery-harness/cli";
 import {
   BlockedError,
   createInternalErrorBlocker,
@@ -49,7 +49,7 @@ import {
   type HarnessConfig,
   type LiveProviderResult,
   type SerializedBlockers,
-} from "@delivery-harness/kernel";
+} from "@agent-delivery-harness/kernel";
 
 // ── Protocol identity ────────────────────────────────────────────────────────
 

@@ -63,16 +63,16 @@ jobs:
         run: node --import tsx scripts/check-release.ts
 
       - name: Publish dry-run (kernel)
-        run: npm publish --dry-run --workspace "@delivery-harness/kernel"
+        run: npm publish --dry-run --workspace "@agent-delivery-harness/kernel"
 
       - name: Publish dry-run (conformance)
-        run: npm publish --dry-run --workspace "@delivery-harness/conformance"
+        run: npm publish --dry-run --workspace "@agent-delivery-harness/conformance"
 
       - name: Publish dry-run (cli)
-        run: npm publish --dry-run --workspace "@delivery-harness/cli"
+        run: npm publish --dry-run --workspace "@agent-delivery-harness/cli"
 
       - name: Publish dry-run (mcp)
-        run: npm publish --dry-run --workspace "@delivery-harness/mcp"
+        run: npm publish --dry-run --workspace "@agent-delivery-harness/mcp"
 
       - name: Publish dry-run (action)
-        run: npm publish --dry-run --workspace "@delivery-harness/action"
+        run: npm publish --dry-run --workspace "@agent-delivery-harness/action"

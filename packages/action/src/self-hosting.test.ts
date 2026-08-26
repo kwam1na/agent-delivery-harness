@@ -26,7 +26,7 @@ import {
   deliveryRecordPathFor,
   runGitCommand,
   type DeliveryRecord,
-} from "@delivery-harness/kernel";
+} from "@agent-delivery-harness/kernel";
 import harnessConfig from "../../../harness.config.ts";
 import { ACTION_EXIT_OK, runAction, type ActionRuntime } from "./main.ts";
 

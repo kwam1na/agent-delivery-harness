@@ -21,7 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
-import { ATTESTATION_LABEL } from "@delivery-harness/kernel";
+import { ATTESTATION_LABEL } from "@agent-delivery-harness/kernel";
 
 const run = promisify(execFile);
 const ACTION_PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -124,8 +124,8 @@ async function npmShim(options: { readonly logPath: string; readonly installs: b
     `printf '%s\\n' "$PWD $*" >> ${JSON.stringify(options.logPath)}`,
     ...(options.installs
       ? [
-          'mkdir -p "$PWD/node_modules/@delivery-harness"',
-          'ln -sfn "$PWD/packages/kernel" "$PWD/node_modules/@delivery-harness/kernel"',
+          'mkdir -p "$PWD/node_modules/@agent-delivery-harness"',
+          'ln -sfn "$PWD/packages/kernel" "$PWD/node_modules/@agent-delivery-harness/kernel"',
         ]
       : ["exit 3"]),
     "exit 0",
@@ -185,8 +185,8 @@ async function harnessRoot(options: { readonly installed: boolean }): Promise<st
   await cp(ACTION_PACKAGE, path.join(root, "packages", "action"), { recursive: true });
   await cp(path.join(ACTION_PACKAGE, "..", "kernel"), path.join(root, "packages", "kernel"), { recursive: true });
   if (options.installed) {
-    await mkdir(path.join(root, "node_modules", "@delivery-harness"), { recursive: true });
-    await symlink(path.join(root, "packages", "kernel"), path.join(root, "node_modules", "@delivery-harness", "kernel"));
+    await mkdir(path.join(root, "node_modules", "@agent-delivery-harness"), { recursive: true });
+    await symlink(path.join(root, "packages", "kernel"), path.join(root, "node_modules", "@agent-delivery-harness", "kernel"));
   }
   return root;
 }

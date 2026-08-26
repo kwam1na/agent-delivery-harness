@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { ATTESTATION_LABEL } from "@delivery-harness/kernel";
+import { ATTESTATION_LABEL } from "@agent-delivery-harness/kernel";
 
 const run = promisify(execFile);
 
