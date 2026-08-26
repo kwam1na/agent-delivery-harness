@@ -1,0 +1,25 @@
+{
+  "description": "A run claiming delegated authority: the ci-policy-id input names a declared policy and the environment corroborates it completely.",
+  "env": {
+    "CI": "true",
+    "GITHUB_ACTIONS": "true",
+    "GITHUB_EVENT_NAME": "pull_request",
+    "GITHUB_EVENT_PATH": "{{EVENT_PATH}}",
+    "GITHUB_WORKSPACE": "{{WORKSPACE}}",
+    "GITHUB_REPOSITORY": "kwam1na/delivery-harness",
+    "GITHUB_SHA": "{{MERGE_SHA}}",
+    "GITHUB_REF": "refs/pull/42/merge",
+    "DELIVERY_HARNESS_CI_POLICY_ID": "github-actions"
+  },
+  "event": {
+    "action": "synchronize",
+    "number": 42,
+    "pull_request": {
+      "number": 42,
+      "draft": false,
+      "head": { "sha": "{{HEAD_SHA}}", "ref": "codex/feature" },
+      "base": { "sha": "{{BASE_SHA}}", "ref": "main" }
+    },
+    "repository": { "full_name": "kwam1na/delivery-harness", "default_branch": "main" }
+  }
+}

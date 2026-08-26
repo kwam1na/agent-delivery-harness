@@ -1,0 +1,23 @@
+{
+  "description": "A pull_request delivery whose payload carries no head sha — a truncated or rewritten event file. Fail closed: no head means nothing to recompute an identity from.",
+  "env": {
+    "CI": "true",
+    "GITHUB_ACTIONS": "true",
+    "GITHUB_EVENT_NAME": "pull_request",
+    "GITHUB_EVENT_PATH": "{{EVENT_PATH}}",
+    "GITHUB_WORKSPACE": "{{WORKSPACE}}",
+    "GITHUB_REPOSITORY": "kwam1na/delivery-harness",
+    "GITHUB_SHA": "{{MERGE_SHA}}",
+    "GITHUB_REF": "refs/pull/42/merge"
+  },
+  "event": {
+    "action": "synchronize",
+    "number": 42,
+    "pull_request": {
+      "number": 42,
+      "draft": false,
+      "base": { "sha": "{{BASE_SHA}}", "ref": "main" }
+    },
+    "repository": { "full_name": "kwam1na/delivery-harness", "default_branch": "main" }
+  }
+}
