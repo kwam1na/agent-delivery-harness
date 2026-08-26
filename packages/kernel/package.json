@@ -1,9 +1,9 @@
 {
   "name": "@delivery-harness/kernel",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
   "description": "Config-driven delivery-evidence kernel: validator, identity, records, gate evaluator",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
   },

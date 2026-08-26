@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Fail-closed merge admission for AI coding agents",
+  "license": "Apache-2.0",
   "workspaces": [
     "packages/*"
   ],
