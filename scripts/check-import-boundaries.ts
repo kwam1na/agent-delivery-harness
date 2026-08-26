@@ -146,7 +146,7 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "present" },
   { id: "kernel-context", path: "packages/kernel/src/context.ts", kind: "file", rules: ["d1"], status: "present" },
   { id: "kernel-recorder", path: "packages/kernel/src/recorder.ts", kind: "file", rules: ["d2", "e"], status: "present" },
-  { id: "kernel-admission", path: "packages/kernel/src/admission.ts", kind: "file", rules: ["d2", "e"], status: "pending" },
+  { id: "kernel-admission", path: "packages/kernel/src/admission.ts", kind: "file", rules: ["d2", "e"], status: "present" },
   { id: "kernel-delivery-record", path: "packages/kernel/src/delivery-record.ts", kind: "file", rules: ["d2", "e"], status: "pending" },
   { id: "action-main", path: "packages/action/src/main.ts", kind: "file", rules: ["e"], status: "pending" },
   // On the d1 kernel-import allowlist below, which means d1-pure modules may

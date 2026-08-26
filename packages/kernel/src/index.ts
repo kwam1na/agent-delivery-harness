@@ -286,3 +286,15 @@ export {
   type SubmissionOutcome,
   type SubmissionRecord,
 } from "./recorder.ts";
+
+// The effectful admission adapter: store + context + caller-supplied live
+// results mapped into the pure evaluator, with the two-pass waiver evaluation.
+export {
+  INVOCATION_WAIVER_SCOPE,
+  runAdmission,
+  type AdmissionInput,
+  type AdmissionOptions,
+  type AdmissionResult,
+  type WaiverPrompt,
+  type WaiverPromptOutcome,
+} from "./admission.ts";
