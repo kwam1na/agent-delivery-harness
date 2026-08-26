@@ -1,4 +1,4 @@
-# delivery-harness
+# agent-delivery-harness
 
 Fail-closed merge admission for AI coding agents.
 
@@ -7,11 +7,32 @@ gated agent-delivered merges in a live monorepo since mid-2026. It defines what
 counts as admissible evidence that an autonomous agent's change was reviewed and
 validated against an exact repository candidate — and refuses everything else.
 
-**Status: pre-v1.** All five packages and the documentation are in place; the
-remaining v1 unit is self-hosting (this repository gating its own pull requests
-with its own Action) plus release mechanics — until that lands the packages are
-unpublished and consumed from a checkout. The build is tracked as Linear epic
-V26-1328; the authoritative plan is
+**This repository gates its own pull requests with its own harness, and every
+pull request carries a delivery record the Action verifies against the head
+commit.** The gate is [`harness.config.ts`](harness.config.ts) at the root and
+[`.github/workflows/gate.yml`](.github/workflows/gate.yml); the records it
+verifies are tracked in [`delivery/records/`](delivery/records). The pull
+request that introduced the workflow was bootstrap-exempt — it merged with that
+check red, because no record verified by a gate still under review can exist,
+and the exemption is granted by an administrator rather than by any code path in
+the Action. Every pull request merged since then has carried its own delivery
+record, bound to its own candidate — the file in `delivery/records/` today is
+the most recent one.
+
+**Three names, one thing.** The repository is `agent-delivery-harness`; the
+packages carry the `@agent-delivery-harness/*` npm scope; the command you type
+(and the git-private storage namespace it writes under) is the shorter
+`delivery-harness`. Nothing is being renamed — the three are the same project at
+three different granularities.
+
+**Publication state.** The packages are **not on npm yet**. Release checks —
+including `npm publish --dry-run` for all five — run in CI, but nothing has been
+published, so today you adopt the harness from a checkout of this repository
+(see [step 0 of the getting-started guide](docs/getting-started.md#0-consuming-the-harness-pre-v1)).
+The published-action form of the GitHub Action ships with release mechanics; the
+supported form today is self-hosted, `uses: ./packages/action`.
+
+How it was built, unit by unit, is recorded in the vendored plan at
 [docs/plans/2026-08-25-001-feat-delivery-harness-standalone-v1-plan.md](docs/plans/2026-08-25-001-feat-delivery-harness-standalone-v1-plan.md).
 
 ## Adopting it
@@ -63,6 +84,7 @@ control uses `node:child_process`; Bun-only APIs are banned by static sensor.
 npm ci             # install (npm workspaces, ESM throughout)
 npm run typecheck  # tsc, strict
 npm run sensor     # import-boundary / env / Bun / purity / time sensor
+npm run sensor:cli # CLI-inventory sensor
 npm test           # vitest (DELIVERY_HARNESS_MAX_WORKERS caps concurrency)
 npm run check      # all of the above, in order
 ```
@@ -79,4 +101,20 @@ free of surface-package imports and of `harness.config`, bans import-time
 modules to true purity and the recorder/admission/delivery-record modules to the
 filesystem port, and enforces the spec's GEN-5 clock ban in decision paths.
 `scripts/check-cli-inventory.ts` keeps every CLI command registered with the
-blocker contract.
+blocker contract. `scripts/check-release.ts` is the release-mechanics sensor:
+one version across the root manifest and every workspace package, the kernel's
+`HARNESS_VERSION` fingerprint constant in lockstep with that version, license
+coherence — the root `LICENSE` carries the Apache License 2.0 text rather than a
+stub that names it, and every manifest's `license` field agrees, checked against
+the actual
+`npm pack --dry-run` file list so each tarball really carries `LICENSE` and
+`NOTICE` — and the publishability split: no workspace package private, the root
+manifest private. Every rule is falsified by a test, and
+[`.github/workflows/release.yml`](.github/workflows/release.yml) re-runs the
+sensor alongside a per-package `npm publish --dry-run`.
+
+## License
+
+Apache-2.0. [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) sit at the repository
+root, and the release sensor above verifies that both files are present in every
+package tarball rather than assuming npm will include them.
