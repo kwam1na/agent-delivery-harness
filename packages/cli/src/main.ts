@@ -11,7 +11,7 @@
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { CliInterruption, EXIT_POLICY, runCli, type CliRuntime } from "./index.ts";
-import type { WaiverPrompt } from "@delivery-harness/kernel";
+import type { WaiverPrompt } from "@v26labs/delivery-harness-kernel";
 
 /**
  * Reads a yes/no answer after naming every obligation the waiver would cover.

@@ -44,7 +44,7 @@ import {
   defineHarnessConfig,
   type HarnessConfig,
   type HarnessConfigInput,
-} from "@delivery-harness/kernel";
+} from "@v26labs/delivery-harness-kernel";
 
 /** The kit's own file format, as declared in `context/repo-config.json`. */
 export interface KitRepoConfig {

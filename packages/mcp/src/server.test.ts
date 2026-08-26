@@ -39,8 +39,8 @@ import {
   type CapturedCandidate,
   type HarnessConfig,
   type HarnessConfigInput,
-} from "@delivery-harness/kernel";
-import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "@delivery-harness/cli";
+} from "@v26labs/delivery-harness-kernel";
+import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "@v26labs/delivery-harness-cli";
 import { callTool, listTools, toolResultFor, type ToolHostRuntime, type ToolOutcome } from "./server.ts";
 
 const run = promisify(execFile);

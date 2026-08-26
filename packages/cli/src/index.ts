@@ -20,7 +20,7 @@ import { submitEvidenceCommand } from "./commands/submit-evidence.ts";
 import { verifyCommand } from "./commands/verify.ts";
 import { runCliBoundary, type CliRuntime, type CommandDescriptor } from "./boundary.ts";
 
-export const PACKAGE_NAME = "@delivery-harness/cli";
+export const PACKAGE_NAME = "@v26labs/delivery-harness-cli";
 
 /**
  * The command registry. The order here is the order `--help` lists them, and it

@@ -21,7 +21,7 @@
  * named `code.reviewed` accepting `review.green/1` is exactly the shape a
  * consumer with its own vocabulary will write.
  */
-import { defineHarnessConfig, type HarnessConfig } from "@delivery-harness/kernel";
+import { defineHarnessConfig, type HarnessConfig } from "@v26labs/delivery-harness-kernel";
 
 /**
  * The only dimensions this config shares with the kit's. Everything outside this

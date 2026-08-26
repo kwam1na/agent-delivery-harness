@@ -7,7 +7,7 @@
  * submission outcomes onto exit codes. Rejections and blocks both surface their
  * typed blockers; an acceptance reports the digest and the records it wrote.
  */
-import { submitManifest } from "@delivery-harness/kernel";
+import { submitManifest } from "@v26labs/delivery-harness-kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
 function manifestPathFrom(args: readonly string[]): string | undefined {

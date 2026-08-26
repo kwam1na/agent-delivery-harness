@@ -1,5 +1,5 @@
 {
-  "name": "@delivery-harness/conformance",
+  "name": "@v26labs/delivery-harness-conformance",
   "version": "0.0.0",
   "type": "module",
   "description": "delivery-evidence/1 conformance kit (89 golden vectors) and its generator",

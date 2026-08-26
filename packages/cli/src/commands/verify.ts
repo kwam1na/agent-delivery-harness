@@ -10,7 +10,7 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { deliveryRecordPathFor, parseDeliveryRecord, verifyDeliveryRecord } from "@delivery-harness/kernel";
+import { deliveryRecordPathFor, parseDeliveryRecord, verifyDeliveryRecord } from "@v26labs/delivery-harness-kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 

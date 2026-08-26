@@ -1,5 +1,5 @@
 {
-  "name": "@delivery-harness/kernel",
+  "name": "@v26labs/delivery-harness-kernel",
   "version": "0.0.0",
   "type": "module",
   "description": "Config-driven delivery-evidence kernel: validator, identity, records, gate evaluator",

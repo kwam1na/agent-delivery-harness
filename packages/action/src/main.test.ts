@@ -37,7 +37,7 @@ import {
   type DeliveryRecord,
   type HarnessConfig,
   type HarnessConfigInput,
-} from "@delivery-harness/kernel";
+} from "@v26labs/delivery-harness-kernel";
 import { ACTION_EXIT_OK, ACTION_EXIT_POLICY, invokedDirectly, runAction, type ActionRuntime } from "./main.ts";
 
 const run = promisify(execFile);

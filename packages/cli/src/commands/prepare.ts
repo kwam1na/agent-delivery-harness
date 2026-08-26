@@ -5,7 +5,7 @@
  * admission. Capturing an unprepared tree (dirty or with untracked files) is a
  * typed block, not a silent skip.
  */
-import { publishPreparationReceipt } from "@delivery-harness/kernel";
+import { publishPreparationReceipt } from "@v26labs/delivery-harness-kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
 export const prepareCommand: CommandDescriptor = {

@@ -32,7 +32,7 @@ import {
   type HarnessConfig,
   type HarnessConfigInput,
   type WaiverPrompt,
-} from "@delivery-harness/kernel";
+} from "@v26labs/delivery-harness-kernel";
 import {
   CliInterruption,
   EXIT_INTERRUPTED,

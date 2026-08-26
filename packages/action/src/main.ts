@@ -80,7 +80,7 @@ import {
   type HarnessConfig,
   type NonEmptyTuple,
   type Remediation,
-} from "@delivery-harness/kernel";
+} from "@v26labs/delivery-harness-kernel";
 
 // ── Exit codes ───────────────────────────────────────────────────────────────
 

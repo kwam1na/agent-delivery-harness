@@ -29,7 +29,7 @@
  * Everything not in `KIT_VARIANT_FIXED_DIMENSIONS` diverges, and the test beside
  * this file asserts that divergence rather than trusting this comment.
  */
-import { DELIVERABLE_TREE_V1_NARRATION_SET, defineHarnessConfig, type HarnessConfig } from "@delivery-harness/kernel";
+import { DELIVERABLE_TREE_V1_NARRATION_SET, defineHarnessConfig, type HarnessConfig } from "@v26labs/delivery-harness-kernel";
 
 /**
  * The dimensions this config is not free to vary: those the kit's vectors bind,

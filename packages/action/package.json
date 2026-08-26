@@ -1,5 +1,5 @@
 {
-  "name": "@delivery-harness/action",
+  "name": "@v26labs/delivery-harness-action",
   "version": "0.0.0",
   "type": "module",
   "description": "GitHub Action verifying a tracked delivery record on pull requests",

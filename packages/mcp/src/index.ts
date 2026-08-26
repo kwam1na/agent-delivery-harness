@@ -6,7 +6,7 @@
  * JSON-RPC 2.0, hand-rolled, no runtime dependency.
  */
 
-export const PACKAGE_NAME = "@delivery-harness/mcp";
+export const PACKAGE_NAME = "@v26labs/delivery-harness-mcp";
 
 export {
   MCP_PROTOCOL_VERSION,

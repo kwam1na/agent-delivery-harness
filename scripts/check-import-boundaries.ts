@@ -139,7 +139,7 @@ export const SCAN_ROOTS: readonly string[] = [
 export const KERNEL_SRC = "packages/kernel/src";
 
 /** The kernel's workspace specifier — its barrel, reachable without a relative path. */
-export const KERNEL_PACKAGE = "@delivery-harness/kernel";
+export const KERNEL_PACKAGE = "@v26labs/delivery-harness-kernel";
 
 export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
   { id: "kernel-validator", path: "packages/kernel/src/validator", kind: "dir", rules: ["d1", "e"], status: "present" },
@@ -383,7 +383,7 @@ function checkKernelBoundary(
     const spec = edge.specifier;
 
     for (const pkg of FORBIDDEN_KERNEL_PACKAGES) {
-      if (spec === `@delivery-harness/${pkg}` || spec.startsWith(`@delivery-harness/${pkg}/`)) {
+      if (spec === `@v26labs/delivery-harness-${pkg}` || spec.startsWith(`@v26labs/delivery-harness-${pkg}/`)) {
         emit("a-kernel-boundary", edge.node, `kernel imports "${spec}"; the kernel must not depend on the ${pkg} package`);
       }
     }

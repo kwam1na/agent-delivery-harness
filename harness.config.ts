@@ -20,7 +20,7 @@
  * committing to the token before any gate existed cost nothing, while revising
  * it now that `gate.yml` verifies records would invalidate real evidence.
  */
-import { defineHarnessConfig } from "@delivery-harness/kernel";
+import { defineHarnessConfig } from "@v26labs/delivery-harness-kernel";
 
 export default defineHarnessConfig({
   gateId: "delivery-harness.pr-admission",

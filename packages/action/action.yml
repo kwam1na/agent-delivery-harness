@@ -116,11 +116,12 @@
 # HOW THIS ACTION RESOLVES ITS OWN CODE, AND THE v1 BOUNDARY
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# The harness ships as TypeScript source and imports `@delivery-harness/kernel`
-# by package name. That name resolves only through an npm workspace install, and
-# the internal `actions/checkout` below runs with `clean` at its default — which
-# deletes an untracked `node_modules`, including one a caller installed before
-# calling this action. So the verify step installs the harness workspace itself.
+# The harness ships as TypeScript source and imports
+# `@v26labs/delivery-harness-kernel` by package name. That name resolves only
+# through an npm workspace install, and the internal `actions/checkout` below
+# runs with `clean` at its default — which deletes an untracked `node_modules`,
+# including one a caller installed before calling this action. So the verify
+# step installs the harness workspace itself.
 # It installs in the root of the ACTION's own checkout — walked up from
 # `$GITHUB_ACTION_PATH`, which is where this action's code actually sits — and
 # not in `$GITHUB_WORKSPACE`, which a `working-directory` input can point
@@ -131,10 +132,11 @@
 # SELF-HOSTED FORM. With `uses: ./packages/action` the action's code and the
 # repository under verification are one checkout, so `$GITHUB_ACTION_PATH` is
 # `$GITHUB_WORKSPACE/packages/action`, the walk finds the workspace root two
-# levels up, and the install produces the `node_modules/@delivery-harness/*`
-# links the kernel import resolves through. Node resolves those links to their
-# real paths under `packages/`, which is also why type stripping works: the file
-# it strips is not, in the end, under `node_modules`.
+# levels up, and the install produces the
+# `node_modules/@v26labs/delivery-harness-*` links the kernel import resolves
+# through. Node resolves those links to their real paths under `packages/`,
+# which is also why type stripping works: the file it strips is not, in the end,
+# under `node_modules`.
 #
 # One consequence of the self-hosted form is worth saying plainly rather than
 # leaving to be discovered: the pull request being verified supplies the verifier
@@ -277,7 +279,7 @@ runs:
         # already linked at that root, which is what keeps this step cheap for a
         # caller that installed first and what keeps it offline in tests.
         # --ignore-scripts: the tree being installed is the pull request's own.
-        if [ ! -e "${harness_root}/node_modules/@delivery-harness/kernel" ]; then
+        if [ ! -e "${harness_root}/node_modules/@v26labs/delivery-harness-kernel" ]; then
           ( cd "${harness_root}" && npm ci --ignore-scripts )
         fi
 

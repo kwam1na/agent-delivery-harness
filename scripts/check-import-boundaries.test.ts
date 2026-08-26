@@ -208,7 +208,7 @@ describe("rule a — kernel boundary", () => {
   it("rejects a kernel import of the cli package", () => {
     const findings = expectFalsified(
       "a-kernel-boundary",
-      { "packages/kernel/src/records.ts": `import { render } from "@delivery-harness/cli";\nexport const publish = (): string => render();\n` },
+      { "packages/kernel/src/records.ts": `import { render } from "@v26labs/delivery-harness-cli";\nexport const publish = (): string => render();\n` },
       "packages/kernel/src/records.ts",
     );
     expect(findings[0]?.message).toContain("cli");
@@ -234,7 +234,7 @@ describe("rule a — kernel boundary", () => {
   it("still catches the boundary inside a kernel test file", () => {
     expectFalsified(
       "a-kernel-boundary",
-      { "packages/kernel/src/records.test.ts": `import { render } from "@delivery-harness/mcp";\nexport const t = render;\n` },
+      { "packages/kernel/src/records.test.ts": `import { render } from "@v26labs/delivery-harness-mcp";\nexport const t = render;\n` },
       "packages/kernel/src/records.test.ts",
     );
   });
@@ -432,7 +432,7 @@ describe("rule d1 — true purity", () => {
   it("rejects the kernel barrel specifier, which no allowlist entry names", () => {
     const findings = expectFalsified(
       "d1-kernel-purity",
-      { "packages/kernel/src/evaluator.ts": `import { sha256 } from "@delivery-harness/kernel";\nexport const evaluate = (s: string): string => sha256(s);\n` },
+      { "packages/kernel/src/evaluator.ts": `import { sha256 } from "@v26labs/delivery-harness-kernel";\nexport const evaluate = (s: string): string => sha256(s);\n` },
       "packages/kernel/src/evaluator.ts",
     );
     expect(findings[0]?.message).toContain("kernel barrel");
@@ -441,7 +441,7 @@ describe("rule d1 — true purity", () => {
   it("rejects a subpath of the kernel barrel too", () => {
     expectFalsified(
       "d1-kernel-purity",
-      { "packages/kernel/src/context.ts": `import { lsTree } from "@delivery-harness/kernel/identity";\nexport const classify = (): string => lsTree();\n` },
+      { "packages/kernel/src/context.ts": `import { lsTree } from "@v26labs/delivery-harness-kernel/identity";\nexport const classify = (): string => lsTree();\n` },
       "packages/kernel/src/context.ts",
     );
   });

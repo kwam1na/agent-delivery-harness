@@ -32,7 +32,7 @@
  *   must produce exactly what they produced without a filesystem.
  */
 import { beforeAll, describe, expect, it } from "vitest";
-import { RECORDER_EMITTED_CODES, manifestDigest, type HarnessConfig } from "@delivery-harness/kernel";
+import { RECORDER_EMITTED_CODES, manifestDigest, type HarnessConfig } from "@v26labs/delivery-harness-kernel";
 import { loadKitRepoConfig } from "../fixtures/repo-config-adapter.ts";
 import { kitVariantConfig } from "../fixtures/kit-variant-config.ts";
 import {
