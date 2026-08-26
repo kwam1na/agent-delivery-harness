@@ -51,11 +51,14 @@
  * one the token means.
  *
  * ONE THING ATHENA DOES THAT THIS DOES NOT. Its implementation strips a leading
- * `./` from every path before matching and before hashing. A recursive
- * `--full-tree` listing cannot produce such a path — git rejects a `.` path
- * component outright — so the rule is unreachable from the only input either
- * implementation is given, and the digests are identical on every listing git
- * can emit. It is left out because a second, private path normalization here
+ * `./` from every path before matching and before hashing. No tree this module
+ * is ever handed can contain such a path: identity is computed over trees that
+ * came through an index (`write-tree`) or HEAD, and git refuses a `.` component
+ * at every index boundary (`update-index` and `read-tree` reject it;
+ * `fsck --strict` flags it as `hasDot`). Only `git mktree` can synthesize a
+ * tree with a `.` subtree, and such a tree cannot be read back into an index —
+ * so the rule is unreachable from the capture surface, and the digests are
+ * identical on every listing that surface can emit. It is left out because a second, private path normalization here
  * would be one the config's matchers do not share, and two normalizations that
  * can disagree about what a path is are worse than none.
  *
