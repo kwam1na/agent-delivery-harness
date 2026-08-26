@@ -83,3 +83,49 @@ export {
   validateReviewGreenClaim,
   type ReviewGreenClaimInput,
 } from "./validator/review-green.ts";
+
+// The candidate: what is about to be reviewed. The shapes and every decision
+// that can be made about a candidate without touching a repository come from
+// `candidate.types.ts`; the git-bound capture and projection sit beside them.
+export {
+  CANDIDATE_CAPTURE_CODES,
+  CANDIDATE_DIFF_UNREADABLE,
+  CANDIDATE_DRIFT_CLASSES,
+  CANDIDATE_MODES,
+  CANDIDATE_PATH_CLASSES,
+  CANDIDATE_VCS,
+  classifyCandidateDrift,
+  classifyCandidatePath,
+  isObligationActive,
+  matchesPathMatcher,
+  projectReviewActivation,
+  sensitiveGroupsFor,
+  type CandidateBase,
+  type CandidateBinding,
+  type CandidateCapture,
+  type CandidateCaptureCode,
+  type CandidateDeliverable,
+  type CandidateDiffEntry,
+  type CandidateDriftClass,
+  type CandidateMode,
+  type CandidatePathClass,
+  type CandidateStatusEntry,
+  type CandidateVcs,
+  type CaptureCandidate,
+  type CapturedCandidate,
+  type ComputeIdentity,
+  type DeliverableIdentityRequest,
+  type ReviewActivationProjection,
+} from "./candidate.types.ts";
+export {
+  DEFAULT_CAPTURE_ATTEMPTS,
+  captureGitCandidate,
+  createCandidateCapture,
+  evaluateCandidateActivation,
+  parseCandidateNumstat,
+  runGitCommand,
+  type CandidateActivationOptions,
+  type CandidateCaptureOptions,
+  type CandidateCommandResult,
+  type CandidateCommandRunner,
+} from "./candidate.ts";

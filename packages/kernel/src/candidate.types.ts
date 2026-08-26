@@ -115,6 +115,14 @@ export const CANDIDATE_CAPTURE_CODES = [
 
 export type CandidateCaptureCode = (typeof CANDIDATE_CAPTURE_CODES)[number];
 
+/**
+ * Not a capture code: it is emitted after a candidate has been captured, when
+ * the diff that the projection reads cannot be produced. It shares the
+ * fail-closed reasoning — an unreadable diff must never present itself as a
+ * diff containing nothing.
+ */
+export const CANDIDATE_DIFF_UNREADABLE = "candidate_diff_unreadable" as const;
+
 export type CandidateCapture =
   | { readonly ok: true; readonly candidate: CapturedCandidate }
   | { readonly ok: false; readonly code: CandidateCaptureCode; readonly blockers: NonEmptyTuple<Blocker> };
