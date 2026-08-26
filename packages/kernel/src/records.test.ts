@@ -43,7 +43,7 @@ import {
   recordFileName,
   resolveRecordStorage,
 } from "./records.ts";
-import type { PublishRecordInput, RecordCandidateBinding } from "./records.types.ts";
+import type { EvidenceResolution, PublishRecordInput, RecordCandidateBinding } from "./records.types.ts";
 
 const run = promisify(execFile);
 
@@ -63,17 +63,25 @@ const BINDING: RecordCandidateBinding = {
   workspaceId: "e".repeat(64),
 };
 
+const RESOLUTION: EvidenceResolution = {
+  kind: "evidence",
+  providerId: "claude-code.ce-code-review",
+  runId: "run-0001",
+  finalPassId: "pass-3",
+  manifestDigest: "f".repeat(64),
+};
+
 const EVIDENCE: PublishRecordInput = {
   gateId: "delivery",
   obligationId: "review.green",
   candidateBinding: BINDING,
-  resolution: {
-    kind: "evidence",
-    providerId: "claude-code.ce-code-review",
-    runId: "run-0001",
-    finalPassId: "pass-3",
-    manifestDigest: "f".repeat(64),
-  },
+  resolution: RESOLUTION,
+};
+
+/** The same evidence record with only its payload moved — identity is unchanged. */
+const REPAID: PublishRecordInput = {
+  ...EVIDENCE,
+  resolution: { ...RESOLUTION, manifestDigest: "0".repeat(64) },
 };
 
 const WAIVER: PublishRecordInput = {
@@ -131,10 +139,8 @@ interface ChildOutcome {
  * it — by path, in a fresh interpreter.
  */
 const CHILD_SOURCE = `
-import { pathToFileURL } from "node:url";
 const { publishRecord } = await import(process.env["DH_RECORDS_MODULE"]);
 const { BlockedError } = await import(process.env["DH_BLOCKERS_MODULE"]);
-void pathToFileURL;
 
 const job = JSON.parse(process.argv[2]);
 if (typeof job.startAt === "number") {
@@ -272,30 +278,9 @@ describe("record identity — evidence variant", () => {
     ["workspaceId", () => computeRecordId("8".repeat(64), EVIDENCE)],
     ["gateId", () => computeRecordId(WORKSPACE, { ...EVIDENCE, gateId: "other-gate" })],
     ["obligationId", () => computeRecordId(WORKSPACE, { ...EVIDENCE, obligationId: "review.other" })],
-    [
-      "providerId",
-      () =>
-        computeRecordId(WORKSPACE, {
-          ...EVIDENCE,
-          resolution: { ...EVIDENCE.resolution, kind: "evidence", providerId: "other-provider" } as never,
-        }),
-    ],
-    [
-      "runId",
-      () =>
-        computeRecordId(WORKSPACE, {
-          ...EVIDENCE,
-          resolution: { ...EVIDENCE.resolution, kind: "evidence", runId: "run-0002" } as never,
-        }),
-    ],
-    [
-      "finalPassId",
-      () =>
-        computeRecordId(WORKSPACE, {
-          ...EVIDENCE,
-          resolution: { ...EVIDENCE.resolution, kind: "evidence", finalPassId: "pass-4" } as never,
-        }),
-    ],
+    ["providerId", () => computeRecordId(WORKSPACE, { ...EVIDENCE, resolution: { ...RESOLUTION, providerId: "other-provider" } })],
+    ["runId", () => computeRecordId(WORKSPACE, { ...EVIDENCE, resolution: { ...RESOLUTION, runId: "run-0002" } })],
+    ["finalPassId", () => computeRecordId(WORKSPACE, { ...EVIDENCE, resolution: { ...RESOLUTION, finalPassId: "pass-4" } })],
   ];
 
   for (const [member, mutate] of tupleMutations) {
@@ -334,11 +319,7 @@ describe("record identity — evidence variant", () => {
   });
 
   it("does not move when only the payload moves — that is what makes republish a conflict", () => {
-    const repaid = computeRecordId(WORKSPACE, {
-      ...EVIDENCE,
-      resolution: { ...EVIDENCE.resolution, kind: "evidence", manifestDigest: "0".repeat(64) } as never,
-    });
-    expect(repaid).toBe(baseline);
+    expect(computeRecordId(WORKSPACE, REPAID)).toBe(baseline);
   });
 });
 
@@ -420,13 +401,7 @@ describe("publication", () => {
     const storageRoot = tempStorageRoot();
     await publishRecord(storageRoot, EVIDENCE, { storageRoot });
 
-    const code = await captureBlocker(() =>
-      publishRecord(
-        storageRoot,
-        { ...EVIDENCE, resolution: { ...EVIDENCE.resolution, kind: "evidence", manifestDigest: "0".repeat(64) } as never },
-        { storageRoot },
-      ),
-    );
+    const code = await captureBlocker(() => publishRecord(storageRoot, REPAID, { storageRoot }));
     expect(code).toBe("record_conflict");
   });
 
@@ -596,16 +571,12 @@ describe("concurrency, in real child processes", () => {
   it("admits exactly one publisher, and blocks the rest, when contents disagree", async () => {
     const storageRoot = tempStorageRoot("conflict-race");
     const startAt = Date.now() + 700;
-    const other: PublishRecordInput = {
-      ...EVIDENCE,
-      resolution: { ...EVIDENCE.resolution, kind: "evidence", manifestDigest: "0".repeat(64) },
-    };
     const outcomes = await Promise.all(
       Array.from({ length: RACERS }, (_unused, index) =>
         spawnPublisher({
           rootDir: storageRoot,
           storageRoot,
-          input: index % 2 === 0 ? EVIDENCE : other,
+          input: index % 2 === 0 ? EVIDENCE : REPAID,
           startAt,
         }),
       ),

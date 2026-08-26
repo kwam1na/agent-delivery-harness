@@ -37,6 +37,44 @@ export * from "./blockers.ts";
 // the neutral-matcher primitive the identity computation shares with it.
 export * from "./config.ts";
 
+// The git-private evidence record store, and the fs-free shapes pure modules
+// read it through. The store owns the storage-dir resolver — records and
+// preparation receipts are two leaves of one workspace namespace.
+export {
+  RECORDS_LEAF,
+  RECORD_SCHEMA_VERSION,
+  computeRecordId,
+  discoverRecords,
+  publishRecord,
+  recordFileName,
+  recordIdentity,
+  resolveRecordStorage,
+  type GitRunner,
+  type PublishOptions,
+  type RecordSelector,
+  type RecordStorageOptions,
+} from "./records.ts";
+export type {
+  EvidenceRecord,
+  EvidenceRecordIdentity,
+  EvidenceResolution,
+  IgnoredStoreEntry,
+  PublishRecordInput,
+  PublishStatus,
+  PublishedRecord,
+  QuarantinedRecord,
+  RecordCandidateBinding,
+  RecordDiscovery,
+  RecordIdentity,
+  RecordQuarantineReason,
+  RecordResolution,
+  WaiverResolution,
+  WaiverScope,
+  WaiverRecordIdentity,
+  WorkspaceStorage,
+} from "./records.types.ts";
+export { RECORD_QUARANTINE_REASONS, WAIVER_SCOPES } from "./records.types.ts";
+
 // The normative manifest validator: the rejection-code registry, the
 // delivery-evidence/1 envelope, and the review.green/1 payload. The published
 // JSON Schemas sit beside them in validator/schemas/ and are cross-checked
