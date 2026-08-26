@@ -183,14 +183,24 @@ describe("integration mode under the kit's own configuration", () => {
     }
   });
 
-  it("reaches the four recorder-emitted codes the pure validator cannot", () => {
+  it("reaches the three recorder-emitted codes the kit exercises, and names the fourth", () => {
     // Anti-vacuity for the mode itself: if integration mode were quietly
     // producing the same codes unit mode produces, every vector could still be
     // green while the recorder's surface went unexercised.
     const reached = new Set(result.outcomes.flatMap((outcome) => outcome.codes));
-    for (const code of RECORDER_EMITTED_CODES) {
+    for (const code of ["manifest_outside_run_root", "record_conflict", "artifact_digest_mismatch"]) {
       expect([...reached], `no vector produced ${code}`).toContain(code);
     }
+
+    // The fourth is `artifact_outside_run_root`, and the kit reaches it in
+    // neither mode: its ENV-10 vector declares `../outside.json`, which is
+    // refused on path shape before any file is touched. Reaching the realpath
+    // clause needs a *shape-legal* path that resolves outside the run root —
+    // a symlink — which no vector constructs, because a vector is a JSON
+    // document and a symlink is not expressible in one. It is covered in
+    // `recorder.test.ts` instead. Asserting it here would mean either a vector
+    // that does not exist or a code emitted where it is not warranted.
+    expect(RECORDER_EMITTED_CODES.filter((code) => !reached.has(code))).toEqual(["artifact_outside_run_root"]);
   });
 });
 
