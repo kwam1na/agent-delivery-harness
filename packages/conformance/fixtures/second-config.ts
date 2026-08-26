@@ -70,8 +70,17 @@ export const secondConfig: HarnessConfig = defineHarnessConfig({
       // whose meaning is specified.
       acceptedPayloadSpecs: ["review.green/1"],
       minimumAttestationLevel: "self",
-      // Divergent.
-      activation: { kind: "always" },
+      // Divergent. The activation narrowing members are inert on an `always`
+      // obligation but declared so the new dimensions diverge from the kit's
+      // absent defaults; the empty binding is the opt-out-of-the-sensitive-
+      // signal spelling, and the quantifier is the explicit spelling of "all".
+      activation: {
+        kind: "always",
+        sensitiveGroupIds: [],
+        relevantBinaryChangeActivates: true,
+        relevantZeroLineChangeActivates: false,
+      },
+      providerPolicy: "all",
       freshness: "live",
       providers: ["second.auditor"],
       allowedResolutionKinds: ["satisfied_live_fact", "waived", "delegated"],
