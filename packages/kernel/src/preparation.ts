@@ -47,8 +47,8 @@
 import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { BlockedError, createBlocker, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
-import { classifyCandidateDrift, type CandidateBinding, type CandidateMode } from "./candidate.types.ts";
+import { BlockedError, createBlocker, sanitizedDetail, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
+import { CANDIDATE_MODES, classifyCandidateDrift, type CandidateBinding, type CandidateMode } from "./candidate.types.ts";
 import type { HarnessConfig } from "./config.ts";
 import { digestCanonical } from "./digest.ts";
 import { resolveRecordStorage, type RecordStorageOptions } from "./records.ts";
@@ -75,6 +75,12 @@ export const PREPARATION_RECEIPT_LEAF = "preparation";
  * dependency the import boundary exists to keep out. The cost is that this
  * constant can drift from the manifest, so a test asserts the two agree — the
  * drift is caught mechanically instead of being trusted.
+ *
+ * THE RELEASE WORKFLOW MUST BUMP THIS IN LOCKSTEP WITH
+ * `packages/kernel/package.json`. Publishing a version whose fingerprint input
+ * still names the previous one would let a receipt survive the upgrade it is
+ * supposed to be invalidated by; the manifest-equality test is what makes the
+ * omission a red run rather than a silent one.
  */
 export const HARNESS_VERSION = "0.0.0";
 
@@ -314,10 +320,18 @@ export function resolveReceiptStorage(rootDir: string, options: PreparationOptio
  * is a real answer given for a non-reason.
  *
  * HASHED THROUGH THE CANONICALIZER, not through ad-hoc framing. Each path
- * contributes its own name and its own content digest, so no rearrangement of
- * bytes across files can collide: concatenating file contents with a separator
- * is exactly the construction where a file containing the separator forges
- * another file's contribution.
+ * contributes its own name and its own content digest, and the pairs are
+ * digested as a canonical-JSON object. Framing raw file bytes with a NUL
+ * separator instead is not injective: `path1\0abc\0path2\0def` reads two ways
+ * the moment a wiring file contains a NUL of its own, so two different wirings
+ * could produce one fingerprint. Pairing each digest with its declared path
+ * also keeps two identical files distinguishable — moving a gate's wiring
+ * between declared paths is a wiring change.
+ *
+ * NO VERSION MEMBER RIDES IN THE INPUT. A receipt this harness cannot read is
+ * rejected at the `invalid` step, which is decided before any fingerprint is
+ * compared, so a schema version inside the digest would be a second copy of a
+ * check that has already run — with bump semantics nothing would define.
  *
  * A path that cannot be read as a file throws. See the module note — a hashed
  * absence would make deletion a stable input.
@@ -344,11 +358,7 @@ export async function computePreparationFingerprint(
     wiring.push({ path: repoPath, digest: digestCanonical(contents.toString("base64")) });
   }
 
-  return digestCanonical({
-    fingerprintVersion: PREPARATION_RECEIPT_SCHEMA_VERSION,
-    harnessVersion: options.harnessVersion ?? HARNESS_VERSION,
-    wiring,
-  });
+  return digestCanonical({ harnessVersion: options.harnessVersion ?? HARNESS_VERSION, wiring });
 }
 
 // ── Publication ────────────────────────────────────────────────────────────
@@ -458,8 +468,6 @@ const RECEIPT_MEMBERS = [
   "preparationFingerprint",
 ] as const;
 
-const RECEIPT_MODES: readonly CandidateMode[] = ["clean", "staged-index"];
-
 /**
  * A total shape check: exact members, no extras, every string non-empty.
  *
@@ -478,7 +486,10 @@ function parseReceipt(value: unknown): PreparationReceipt | string {
   if (record["schemaVersion"] !== PREPARATION_RECEIPT_SCHEMA_VERSION) {
     return `the receipt declares schema version ${String(record["schemaVersion"])}, and this harness reads ${PREPARATION_RECEIPT_SCHEMA_VERSION}`;
   }
-  if (!RECEIPT_MODES.includes(record["mode"] as CandidateMode)) {
+  // The candidate vocabulary itself, never a local restatement of it: a subset
+  // literal would typecheck clean forever and start rejecting legitimate
+  // receipts as `invalid` the day a mode is added next door.
+  if (!(CANDIDATE_MODES as readonly string[]).includes(record["mode"] as string)) {
     return `the receipt declares an unsupported mode ${JSON.stringify(record["mode"])}`;
   }
   for (const member of RECEIPT_MEMBERS) {
@@ -504,13 +515,40 @@ function parseReceipt(value: unknown): PreparationReceipt | string {
   };
 }
 
+/**
+ * Every reason below quotes bytes that came off disk — a gate id, a base ref,
+ * an identity token, a parser's complaint about the file it was handed — and a
+ * receipt is a file anything on the machine can write. So the reason is
+ * sanitized here, once, and the *same* string becomes both the returned member
+ * and the blocker's detail.
+ *
+ * Once matters in both directions. Sanitizing only inside the blocker leaves
+ * the raw bytes on `reason`, which is a public member surfaces read directly:
+ * an unbounded gate id becomes an unbounded reason, and a credential planted in
+ * a receipt survives in whichever copy a caller happens to log. Sanitizing
+ * twice — separately for each — would be two chains to keep in step, and the
+ * weaker one would be the one that mattered.
+ *
+ * Neutralization is deliberately not applied here. It belongs to the renderer,
+ * which is the last thing before a display surface; what this guarantees is
+ * that the member and the blocker carry identical text, so neither can be the
+ * unprotected copy.
+ */
 function failed(
   failure: PreparationFailureClass,
   reason: string,
   receiptPath: string,
   workspaceId: string,
 ): PreparationEvaluation {
-  return { prepared: false, failure, reason, receiptPath, workspaceId, blockers: [failureBlocker(failure, reason)] };
+  const sanitized = sanitizedDetail(reason, `Preparation ${failure} reason`);
+  return {
+    prepared: false,
+    failure,
+    reason: sanitized,
+    receiptPath,
+    workspaceId,
+    blockers: [failureBlocker(failure, sanitized)],
+  };
 }
 
 /**

