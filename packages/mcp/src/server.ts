@@ -54,21 +54,139 @@ import {
 // ── Protocol identity ────────────────────────────────────────────────────────
 
 /**
- * The MCP revision this server implements, and the older revision it will still
- * speak if a client asks for one. Newest first: `initialize` echoes the
- * client's version when it is on this list and answers with the newest
- * otherwise, which is the negotiation the spec asks for.
+ * The revision the handshake settles on, and the older ones it will still speak
+ * if a client asks for one. Newest first: `initialize` echoes the client's
+ * version when it is on this list and answers with the newest otherwise, which
+ * is the negotiation the spec asks for.
  *
  * 2025-03-26 is missing on purpose. It is the one revision that requires a
  * server to accept JSON-RPC batches, and the transport refuses every array; a
- * client asking for it is answered with 2025-06-18, where that refusal is
- * true. 2024-11-05 predates batching and carries no such requirement.
+ * client asking for it is answered with the newest revision here, where that
+ * refusal is true. 2024-11-05 predates batching and carries no such
+ * requirement.
  */
-export const MCP_PROTOCOL_VERSION = "2025-06-18";
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_PROTOCOL_VERSION, "2024-11-05"]);
+export const MCP_PROTOCOL_VERSION = "2025-11-25";
+export const HANDSHAKE_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_PROTOCOL_VERSION, "2025-06-18", "2024-11-05"]);
+
+/**
+ * The stateless revision, and the list of stateless revisions — one, today.
+ *
+ * 2026-07-28 removed the handshake rather than extending it. A client no longer
+ * negotiates once and remembers; it declares its protocol version and
+ * capabilities on every request, and the server answers each request on its own
+ * terms. That makes "which revision is this connection speaking" the wrong
+ * question, and `HANDSHAKE_PROTOCOL_VERSIONS` and this list the two answers to
+ * the right one: which revisions arrive through `initialize`, and which arrive
+ * in `_meta`.
+ */
+export const MCP_STATELESS_PROTOCOL_VERSION = "2026-07-28";
+export const STATELESS_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_STATELESS_PROTOCOL_VERSION]);
+
+/**
+ * Everything this server speaks, newest first — for documentation and for tests
+ * that need the whole set.
+ *
+ * NOT WHAT `server/discover` ANSWERS. That field is `supportedVersions`:
+ * "Protocol versions the server supports. The client should choose one of these
+ * for subsequent requests" — and on stdio, "The server returns a
+ * `DiscoverResult`: the server is modern. Select a mutually supported version
+ * from `supportedVersions` and continue." There is no branch back to
+ * `initialize` from there; a `DiscoverResult` arriving is itself what tells the
+ * client to stay modern. A handshake revision named in that field would
+ * therefore be a trap — a conforming client selects 2024-11-05, continues
+ * modern, and earns a guaranteed `UnsupportedProtocolVersionError`. So the
+ * probe answers `STATELESS_PROTOCOL_VERSIONS`, the same list the error carries,
+ * for the same loop-avoidance reason. What a handshake client can reach is
+ * discovered the way it always was: by sending `initialize`.
+ */
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
+  ...STATELESS_PROTOCOL_VERSIONS,
+  ...HANDSHAKE_PROTOCOL_VERSIONS,
+]);
 
 /** Version tracks the package; the release mechanics keep the two in step. */
 export const MCP_SERVER_INFO = { name: "delivery-harness", version: "0.0.0" } as const;
+
+// ── Per-request protocol metadata ────────────────────────────────────────────
+
+/**
+ * The `_meta` keys 2026-07-28 reserves. Named rather than spelled inline
+ * because a typo in one of these is a request silently read as the wrong era —
+ * the failure mode that has no symptom until a client sees the wrong envelope.
+ */
+export const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
+export const META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo";
+export const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
+export const META_LOG_LEVEL = "io.modelcontextprotocol/logLevel";
+export const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
+
+/**
+ * The `_meta` members whose presence identifies a request as stateless: the
+ * four per-request protocol fields 2026-07-28 defines, and nothing else.
+ *
+ * WHY NOT THE `io.modelcontextprotocol/` PREFIX. Because that prefix marks MCP
+ * ownership, not the modern era, and the two are not the same set.
+ * 2025-11-25's tasks feature reserves a key under it — "All requests,
+ * notifications, and responses related to a task **MUST** include the
+ * `io.modelcontextprotocol/related-task` key in their `_meta` field" — so a
+ * handshake-era request can carry a prefixed key perfectly legitimately. A
+ * prefix test would route that request into the stateless path and reject it
+ * for a missing protocol version, which is exactly what the same page forbids:
+ * "Receivers that do not declare the task capability for a request type
+ * **MUST** process requests of that type normally, ignoring any
+ * task-augmentation metadata if present." This server declares no `tasks`
+ * capability, so that MUST binds it, and enumerating the four modern members is
+ * what keeps it honoured.
+ *
+ * Keying on the set rather than on `protocolVersion` alone is still what stops
+ * a modern request that omitted a required field from being quietly served as a
+ * legacy one — a request carrying `clientCapabilities` and no version is
+ * unmistakably modern and gets told so.
+ *
+ * WHY `logLevel` BELONGS HERE. The other three are era-exclusive by
+ * construction — no handshake revision has per-request protocol fields at all —
+ * but `logLevel` is a member a reader could plausibly imagine predating the
+ * rewrite, so the premise is named rather than assumed. It does not: through
+ * 2025-11-25 the log level travels as the `logging/setLevel` *method*, and that
+ * revision's `_meta` section defines only the key-name grammar and the reserved
+ * prefix, naming no protocol-field keys whatever. 2026-07-28 is the revision
+ * that moved it: "Log level is now set per-request via
+ * `io.modelcontextprotocol/logLevel` in `_meta`."
+ */
+export const META_STATELESS_KEYS: readonly string[] = Object.freeze([
+  META_PROTOCOL_VERSION,
+  META_CLIENT_INFO,
+  META_CLIENT_CAPABILITIES,
+  META_LOG_LEVEL,
+]);
+
+/** RFC 5424 severities, as the logging utility enumerates them. */
+export const LOG_LEVELS: readonly string[] = Object.freeze([
+  "debug",
+  "info",
+  "notice",
+  "warning",
+  "error",
+  "critical",
+  "alert",
+  "emergency",
+]);
+
+/**
+ * The caching hints on every `CacheableResult` this server returns.
+ *
+ * `"public"` is the honest scope: the advertised surface is two fixed tools,
+ * identical for every caller, carrying nothing user-specific — the spec's own
+ * example of when public is appropriate. The TTL is an hour because the list is
+ * compiled into the binary and cannot change while the process runs; it is a
+ * freshness hint, and this one is generous because there is nothing to go
+ * stale.
+ */
+export const TOOL_LIST_TTL_MS = 3_600_000;
+export const TOOL_LIST_CACHE_SCOPE = "public" as const;
+
+/** What `server/discover` and the handshake both report. */
+export const MCP_SERVER_CAPABILITIES = { tools: { listChanged: false } } as const;
 
 const MCP_SOURCE_ID = "delivery-harness.mcp";
 

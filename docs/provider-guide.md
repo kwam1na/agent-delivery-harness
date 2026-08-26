@@ -23,6 +23,47 @@ implementation:
 An MCP session never sees a waiver prompt. Waivers belong to interactive
 humans; a provider's job is to make evidence, not to excuse its absence.
 
+### Which MCP revisions the server speaks
+
+Four, across both of MCP's eras — and the two tools behave identically on every
+one of them. Only the envelope differs.
+
+| Revision     | How a client reaches it                                            |
+| ------------ | ------------------------------------------------------------------ |
+| `2026-07-28` | Stateless. Every request declares `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in `_meta`. |
+| `2025-11-25` | `initialize` handshake. This is what the handshake settles on by default. |
+| `2025-06-18` | `initialize` handshake.                                            |
+| `2024-11-05` | `initialize` handshake.                                            |
+
+`2025-03-26` is **deliberately absent**: it is the one revision that requires a
+server to accept JSON-RPC batches, and this transport refuses every array. A
+client asking for it through the handshake is answered with a revision where
+that refusal is the truth.
+
+Under `2026-07-28` the server implements `server/discover` (mandatory in that
+revision, and the client's backward-compatibility probe on stdio), stamps
+`resultType: "complete"` and `_meta["io.modelcontextprotocol/serverInfo"]` on
+every result, carries `ttlMs` and `cacheScope` on `server/discover` and
+`tools/list`, and answers an unsupported per-request version with
+`UnsupportedProtocolVersionError` (`-32022`). `ping` exists on the three
+handshake revisions and is gone under `2026-07-28`, which removed it.
+
+Two consequences worth knowing before you write a client:
+
+- **`initialize` will not negotiate `2026-07-28`.** That revision has no
+  handshake, so echoing it would promise a session the revision abolished. A
+  client that opens with `initialize` is served the handshake revision it names,
+  and one naming `2026-07-28` — or anything else this server does not speak — is
+  served `2025-11-25`. To reach the stateless revision, probe with
+  `server/discover` first: exactly what the spec recommends a dual-era stdio
+  client do. (`initialize` is answered as a handshake even if your transport
+  attaches per-request `_meta` to it, so that fallback always works.)
+- **The server emits no `notifications/message`, on any revision.** It declares
+  no `logging` capability and writes diagnostics to stderr, which is what the
+  revision that deprecated the Logging feature directs stdio servers to do. A
+  request may still carry `io.modelcontextprotocol/logLevel`; an unrecognized
+  value is rejected with `-32602`.
+
 ## The lifecycle
 
 ```
