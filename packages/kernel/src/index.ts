@@ -188,3 +188,24 @@ export {
   type DeliverableTreeEntry,
   type IdentityFindingCode,
 } from "./identity.ts";
+
+// Preparation receipts: the ordering mechanism the review context and the gate
+// both consult before anything else.
+export {
+  HARNESS_VERSION,
+  PREPARATION_FAILURE_CLASSES,
+  PREPARATION_RECEIPT_LEAF,
+  PREPARATION_RECEIPT_SCHEMA_VERSION,
+  computePreparationFingerprint,
+  evaluatePreparationReceipt,
+  publishPreparationReceipt,
+  receiptFileName,
+  resolveReceiptStorage,
+  type PreparationCandidate,
+  type PreparationEvaluation,
+  type PreparationFailureClass,
+  type PreparationInput,
+  type PreparationOptions,
+  type PreparationReceipt,
+  type PublishedPreparationReceipt,
+} from "./preparation.ts";
