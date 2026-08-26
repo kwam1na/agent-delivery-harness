@@ -67,7 +67,7 @@ import {
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_PROTOCOL_VERSION, "2024-11-05"]);
 
-/** Version tracks the package; U14 owns keeping the two in step at release. */
+/** Version tracks the package; the release mechanics keep the two in step. */
 export const MCP_SERVER_INFO = { name: "delivery-harness", version: "0.0.0" } as const;
 
 const MCP_SOURCE_ID = "delivery-harness.mcp";
