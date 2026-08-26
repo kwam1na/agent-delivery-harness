@@ -68,10 +68,77 @@ import {
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
 export const HANDSHAKE_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_PROTOCOL_VERSION, "2025-06-18", "2024-11-05"]);
 
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([...HANDSHAKE_PROTOCOL_VERSIONS]);
+/**
+ * The stateless revision, and the list of stateless revisions — one, today.
+ *
+ * 2026-07-28 removed the handshake rather than extending it. A client no longer
+ * negotiates once and remembers; it declares its protocol version and
+ * capabilities on every request, and the server answers each request on its own
+ * terms. That makes "which revision is this connection speaking" the wrong
+ * question, and `HANDSHAKE_PROTOCOL_VERSIONS` and this list the two answers to
+ * the right one: which revisions arrive through `initialize`, and which arrive
+ * in `_meta`.
+ */
+export const MCP_STATELESS_PROTOCOL_VERSION = "2026-07-28";
+export const STATELESS_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_STATELESS_PROTOCOL_VERSION]);
+
+/**
+ * Everything this server speaks, newest first — the answer `server/discover`
+ * gives to "Protocol versions the server supports".
+ *
+ * It deliberately spans both eras. A dual-era client probes with
+ * `server/discover` precisely to learn whether falling back to `initialize`
+ * will work, and a list naming only the stateless revision would hide the three
+ * revisions this server still serves that way.
+ */
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
+  ...STATELESS_PROTOCOL_VERSIONS,
+  ...HANDSHAKE_PROTOCOL_VERSIONS,
+]);
 
 /** Version tracks the package; the release mechanics keep the two in step. */
 export const MCP_SERVER_INFO = { name: "delivery-harness", version: "0.0.0" } as const;
+
+// ── Per-request protocol metadata ────────────────────────────────────────────
+
+/**
+ * The `_meta` keys 2026-07-28 reserves. Named rather than spelled inline
+ * because a typo in one of these is a request silently read as the wrong era —
+ * the failure mode that has no symptom until a client sees the wrong envelope.
+ */
+export const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
+export const META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo";
+export const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
+export const META_LOG_LEVEL = "io.modelcontextprotocol/logLevel";
+export const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
+
+/** RFC 5424 severities, as the logging utility enumerates them. */
+export const LOG_LEVELS: readonly string[] = Object.freeze([
+  "debug",
+  "info",
+  "notice",
+  "warning",
+  "error",
+  "critical",
+  "alert",
+  "emergency",
+]);
+
+/**
+ * The caching hints on every `CacheableResult` this server returns.
+ *
+ * `"public"` is the honest scope: the advertised surface is two fixed tools,
+ * identical for every caller, carrying nothing user-specific — the spec's own
+ * example of when public is appropriate. The TTL is an hour because the list is
+ * compiled into the binary and cannot change while the process runs; it is a
+ * freshness hint, and this one is generous because there is nothing to go
+ * stale.
+ */
+export const TOOL_LIST_TTL_MS = 3_600_000;
+export const TOOL_LIST_CACHE_SCOPE = "public" as const;
+
+/** What `server/discover` and the handshake both report. */
+export const MCP_SERVER_CAPABILITIES = { tools: { listChanged: false } } as const;
 
 const MCP_SOURCE_ID = "delivery-harness.mcp";
 
