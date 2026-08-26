@@ -469,14 +469,33 @@ describe("the stateless revision", () => {
   });
 
   /**
-   * An `initialize` carrying stateless `_meta` is a contradiction: the revision
-   * it names is the one that removed the handshake. Answering it would hand the
-   * client a negotiated version under a revision that negotiates nothing.
+   * The spec gives a dual-era server two selectors, and `initialize` is the
+   * second one: "An `initialize` request selects legacy semantics." So an
+   * `initialize` is answered as a handshake even when it carries stateless
+   * `_meta` — a client whose transport attaches per-request metadata to every
+   * outgoing message must still be able to open with the handshake, or the
+   * fallback the spec tells it to take does not exist for it. It is negotiated
+   * down to the newest revision that actually has a handshake.
    */
-  it("does not answer initialize under the revision that removed it", async () => {
+  it("answers initialize as a handshake even when the request carries stateless metadata", async () => {
     const response = await answer(statelessRequest("initialize", { protocolVersion: MCP_STATELESS_PROTOCOL_VERSION }));
-    expect(response?.result).toBeUndefined();
-    expect(response?.error?.code).toBe(METHOD_NOT_FOUND);
+    expect(response?.error).toBeUndefined();
+    expect((response?.result as { protocolVersion: string }).protocolVersion).toBe(MCP_PROTOCOL_VERSION);
+  });
+
+  /**
+   * A declared version that is not a string is a malformed request rather than
+   * an unsupported revision. -32022 says "I do not implement that version"; a
+   * number is not a version at all, and answering it that way would invite a
+   * client to retry with something from a `supported` list that was never the
+   * problem.
+   */
+  it("rejects a declared protocol version that is not a string with -32602", async () => {
+    for (const bad of [5, null, {}]) {
+      const response = await answer(statelessRequest("tools/list", {}, statelessMeta({ [META_PROTOCOL_VERSION]: bad })));
+      expect(response?.result).toBeUndefined();
+      expect(response?.error?.code).toBe(INVALID_PARAMS);
+    }
   });
 
   /**

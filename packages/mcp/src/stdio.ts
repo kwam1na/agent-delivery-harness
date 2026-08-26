@@ -238,7 +238,17 @@ async function handleStateless(
   requested: unknown,
   host: ToolHostRuntime,
 ): Promise<JsonRpcResponse> {
-  if (typeof requested !== "string" || !STATELESS_PROTOCOL_VERSIONS.includes(requested)) {
+  // A declared version that is not even a string is a malformed request, not an
+  // unsupported revision: -32022 means "this version is one I do not
+  // implement", and a number is not a version at all. It falls under the same
+  // rule as any other required field of the wrong shape — "A request missing
+  // any required field is malformed; the server MUST reject it with JSON-RPC
+  // error code -32602".
+  if (typeof requested !== "string") {
+    return fail(id, INVALID_PARAMS, `${META_PROTOCOL_VERSION} must be a protocol version string.`);
+  }
+
+  if (!STATELESS_PROTOCOL_VERSIONS.includes(requested)) {
     // "the server ... MUST respond with an UnsupportedProtocolVersionError
     // listing the versions it does support". `supported` names what *this*
     // channel can serve, not everything this server speaks: the client's rule
@@ -328,15 +338,18 @@ export async function handleRpcMessage(message: unknown, host: ToolHostRuntime, 
   // swallow it and leave the client waiting.
   if (isNotification(message)) return null;
 
-  // THE ERA BRANCH. A request that declares a protocol version in `_meta` is a
-  // stateless one and is served under 2026-07-28; everything else opened the
-  // way a handshake client opens and is served under the revision `initialize`
-  // negotiated. The decision is made per request and from the request alone —
-  // a client may interleave both on one connection, and this server must not
+  // THE ERA BRANCH, AND THE ONE METHOD THAT DECIDES IT BY NAME. The spec gives
+  // a dual-era server two selectors, not one: "A request carrying modern
+  // per-request `_meta` is served statelessly according to this revision. An
+  // `initialize` request selects legacy semantics." So `initialize` is answered
+  // as a handshake first, whatever `_meta` it happens to carry — a client whose
+  // transport attaches per-request metadata to everything it sends must still
+  // be able to open with the handshake, or the fallback path the spec tells it
+  // to take does not exist. Every other method takes the era from the request:
+  // a declared protocol version means stateless, its absence means handshake.
+  // Either way the decision is made per request and from the request alone — a
+  // client may interleave both on one connection, and this server must not
   // infer the era from anything it remembers.
-  const declared = declaredProtocolVersion(params);
-  if (declared !== undefined) return handleStateless(method, id, params, declared, host);
-
   if (method === "initialize") {
     session.protocolVersion = negotiate(isRecord(params) ? params["protocolVersion"] : undefined);
     return ok(id, {
@@ -345,6 +358,9 @@ export async function handleRpcMessage(message: unknown, host: ToolHostRuntime, 
       serverInfo: MCP_SERVER_INFO,
     });
   }
+
+  const declared = declaredProtocolVersion(params);
+  if (declared !== undefined) return handleStateless(method, id, params, declared, host);
 
   if (method === "ping") return ok(id, {});
 

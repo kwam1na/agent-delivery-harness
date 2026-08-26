@@ -52,9 +52,12 @@ Two consequences worth knowing before you write a client:
 
 - **`initialize` will not negotiate `2026-07-28`.** That revision has no
   handshake, so echoing it would promise a session the revision abolished. A
-  client that opens with `initialize` is served `2025-11-25`. To reach the
-  stateless revision, probe with `server/discover` first — which is exactly
-  what the spec recommends a dual-era stdio client do.
+  client that opens with `initialize` is served the handshake revision it names,
+  and one naming `2026-07-28` — or anything else this server does not speak — is
+  served `2025-11-25`. To reach the stateless revision, probe with
+  `server/discover` first: exactly what the spec recommends a dual-era stdio
+  client do. (`initialize` is answered as a handshake even if your transport
+  attaches per-request `_meta` to it, so that fallback always works.)
 - **The server emits no `notifications/message`, on any revision.** It declares
   no `logging` capability and writes diagnostics to stderr, which is what the
   revision that deprecated the Logging feature directs stdio servers to do. A
