@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished } from "vitest";
 import {
   PROTECTED_CLASSES,
   SCAN_ROOTS,
@@ -716,6 +716,9 @@ describe("the entry guard", () => {
         ["--import", "tsx", path.join(linkedRepo, "scripts/check-import-boundaries.ts")],
         { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
       );
+      onTestFinished(() => {
+        child.kill("SIGKILL");
+      });
       child.on("error", () => {});
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
