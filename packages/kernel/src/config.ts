@@ -54,6 +54,10 @@
  *   obligations[].activation    activation projection, gate evaluator
  *   obligations[].freshness     gate evaluator
  *   obligations[].providers     gate evaluator, admission adapter
+ *   obligations[].providerPolicy
+ *                               gate evaluator — the quantifier over the
+ *                               obligation's providers; capture and projection
+ *                               never read it
  *   obligations[].acceptedPayloadSpecs
  *                               manifest validator (claim payload rule)
  *   obligations[].allowedResolutionKinds
@@ -120,6 +124,15 @@ export type ResolutionKind = (typeof RESOLUTION_KINDS)[number];
 /** When an obligation applies to a candidate. */
 export const ACTIVATION_KINDS = ["always", "relevant_change"] as const;
 export type ActivationKind = (typeof ACTIVATION_KINDS)[number];
+
+/**
+ * The evaluator's quantifier over an obligation's providers. `"all"` demands
+ * every approved provider be accounted for; `"existential"` is satisfied by any
+ * one of them. Absent means `"all"` — the fail-closed reading, and the only
+ * quantifier the evaluator implemented before this member existed.
+ */
+export const PROVIDER_POLICIES = ["all", "existential"] as const;
+export type ProviderPolicy = (typeof PROVIDER_POLICIES)[number];
 
 /**
  * What evidence must be bound to. `exact_candidate` obligations are satisfied by
@@ -202,8 +215,35 @@ export interface RemediationCatalog {
   readonly byCode?: Readonly<Record<string, readonly Remediation[]>>;
 }
 
+/**
+ * When an obligation applies, and how the `relevant_change` signals may be
+ * narrowed. The three optional members are read by the activation projection's
+ * `isObligationActive` and nothing else, and every one of them defaults to the
+ * widened, fail-closed reading:
+ *
+ *   `sensitiveGroupIds`  absent: every declared sensitive-path group activates
+ *                        this obligation. Present: only the named groups do —
+ *                        and an empty list opts the obligation out of the
+ *                        sensitive signal entirely. Each id must name a group
+ *                        in `sensitivePaths`; the loader rejects a dangling
+ *                        reference the same way it rejects a dangling provider.
+ *   `relevantBinaryChangeActivates`
+ *                        absent or true: a reviewable binary change activates.
+ *   `relevantZeroLineChangeActivates`
+ *                        absent or true: a reviewable change that counts no
+ *                        lines (a mode flip, a pure rename) activates.
+ *
+ * The two flags are deliberately separate members: they name independent
+ * signals. A security-review obligation may not care about a `chmod` yet care
+ * intensely about a replaced binary; a licence obligation is the reverse.
+ * None of the three narrows an `always` obligation, which ignores the
+ * projection entirely.
+ */
 export interface ObligationActivation {
   readonly kind: ActivationKind;
+  readonly sensitiveGroupIds?: readonly string[];
+  readonly relevantBinaryChangeActivates?: boolean;
+  readonly relevantZeroLineChangeActivates?: boolean;
 }
 
 export interface ObligationPolicy {
@@ -211,6 +251,12 @@ export interface ObligationPolicy {
   readonly activation: ObligationActivation;
   readonly freshness: FreshnessKind;
   readonly providers: readonly string[];
+  /**
+   * The evaluator's quantifier over `providers`. Absent means `"all"`, which is
+   * byte-for-byte the behavior the evaluator had before this member existed —
+   * the member is additive, and only `"existential"` changes anything.
+   */
+  readonly providerPolicy?: ProviderPolicy;
   readonly acceptedPayloadSpecs: readonly string[];
   readonly allowedResolutionKinds: readonly ResolutionKind[];
   readonly humanWaiverAllowed: boolean;
@@ -271,6 +317,7 @@ export const CONFIG_FINDING_CODES = [
   // References
   "config_dangling_provider",
   "config_dangling_ci_policy",
+  "config_dangling_sensitive_group",
   // Not a dangling reference: it fires on an obligation that accepts *no*
   // payload spec, so nothing can ever bind to it.
   "config_no_payload_spec",
@@ -581,7 +628,7 @@ function readRemediationCatalog(findings: FindingList, member: string, value: un
   return byCode === undefined ? { default: fallback } : { default: fallback, byCode };
 }
 
-const OBLIGATION_MEMBERS = [
+const REQUIRED_OBLIGATION_MEMBERS = [
   "id",
   "activation",
   "freshness",
@@ -596,13 +643,52 @@ const OBLIGATION_MEMBERS = [
   "nonWaivableCodes",
 ] as const;
 
+/** `providerPolicy` is the one optional member: absence means `"all"`. */
+const OBLIGATION_MEMBERS = [...REQUIRED_OBLIGATION_MEMBERS, "providerPolicy"] as const;
+
+/**
+ * `kind` is required; the three narrowing members are optional because their
+ * absence *is* the widened policy — see {@link ObligationActivation}.
+ */
+const ACTIVATION_MEMBERS = ["kind", "sensitiveGroupIds", "relevantBinaryChangeActivates", "relevantZeroLineChangeActivates"] as const;
+
+function readActivation(findings: FindingList, member: string, value: Record<string, unknown>): ObligationActivation | undefined {
+  checkClosed(findings, member, value, ACTIVATION_MEMBERS);
+  const kind = readEnum(findings, `${member}.kind`, value["kind"], ACTIVATION_KINDS);
+  const sensitiveGroupIds =
+    value["sensitiveGroupIds"] === undefined
+      ? undefined
+      : readStringArray(findings, `${member}.sensitiveGroupIds`, value["sensitiveGroupIds"], {
+          pattern: ID_PATTERN,
+          describe: "a sensitive-path group id",
+        });
+  const relevantBinaryChangeActivates =
+    value["relevantBinaryChangeActivates"] === undefined
+      ? undefined
+      : readBoolean(findings, `${member}.relevantBinaryChangeActivates`, value["relevantBinaryChangeActivates"]);
+  const relevantZeroLineChangeActivates =
+    value["relevantZeroLineChangeActivates"] === undefined
+      ? undefined
+      : readBoolean(findings, `${member}.relevantZeroLineChangeActivates`, value["relevantZeroLineChangeActivates"]);
+  if (kind === undefined) return undefined;
+  if (value["sensitiveGroupIds"] !== undefined && sensitiveGroupIds === undefined) return undefined;
+  if (value["relevantBinaryChangeActivates"] !== undefined && relevantBinaryChangeActivates === undefined) return undefined;
+  if (value["relevantZeroLineChangeActivates"] !== undefined && relevantZeroLineChangeActivates === undefined) return undefined;
+  return {
+    kind,
+    ...(sensitiveGroupIds === undefined ? {} : { sensitiveGroupIds }),
+    ...(relevantBinaryChangeActivates === undefined ? {} : { relevantBinaryChangeActivates }),
+    ...(relevantZeroLineChangeActivates === undefined ? {} : { relevantZeroLineChangeActivates }),
+  };
+}
+
 function readObligation(findings: FindingList, member: string, value: unknown): ObligationPolicy | undefined {
   if (!isRecord(value)) {
     findings.add("config_invalid_member", member, "must be an obligation object");
     return undefined;
   }
   checkClosed(findings, member, value, OBLIGATION_MEMBERS);
-  for (const name of OBLIGATION_MEMBERS) {
+  for (const name of REQUIRED_OBLIGATION_MEMBERS) {
     if (value[name] === undefined) findings.add("config_missing_member", `${member}.${name}`, "is required");
   }
 
@@ -611,14 +697,14 @@ function readObligation(findings: FindingList, member: string, value: unknown): 
 
   let activation: ObligationActivation | undefined;
   if (isRecord(value["activation"])) {
-    checkClosed(findings, `${member}.activation`, value["activation"], ["kind"]);
-    const kind = readEnum(findings, `${member}.activation.kind`, value["activation"]["kind"], ACTIVATION_KINDS);
-    if (kind !== undefined) activation = { kind };
+    activation = readActivation(findings, `${member}.activation`, value["activation"]);
   } else if (value["activation"] !== undefined) {
     findings.add("config_invalid_member", `${member}.activation`, "must be an object naming an activation kind");
   }
 
   const freshness = value["freshness"] === undefined ? undefined : readEnum(findings, `${member}.freshness`, value["freshness"], FRESHNESS_KINDS);
+  const providerPolicy =
+    value["providerPolicy"] === undefined ? undefined : readEnum(findings, `${member}.providerPolicy`, value["providerPolicy"], PROVIDER_POLICIES);
   const providers =
     value["providers"] === undefined
       ? undefined
@@ -678,6 +764,7 @@ function readObligation(findings: FindingList, member: string, value: unknown): 
     activation,
     freshness,
     providers,
+    ...(providerPolicy === undefined ? {} : { providerPolicy }),
     acceptedPayloadSpecs,
     allowedResolutionKinds,
     humanWaiverAllowed,
@@ -1096,6 +1183,7 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
 
   const providerIds = new Set(config.providers.map((provider) => provider.id));
   const policyIds = new Set(config.ciPolicies.map((policy) => policy.id));
+  const sensitiveGroupIds = new Set(config.sensitivePaths.map((group) => group.id));
 
   for (const [index, obligation] of config.obligations.entries()) {
     const at = `obligations[${index}]`;
@@ -1103,6 +1191,15 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
     for (const providerId of obligation.providers) {
       if (!providerIds.has(providerId)) {
         findings.add("config_dangling_provider", `${at}.providers`, `names ${JSON.stringify(providerId)}, which no provider registration declares`);
+      }
+    }
+    for (const groupId of obligation.activation.sensitiveGroupIds ?? []) {
+      if (!sensitiveGroupIds.has(groupId)) {
+        findings.add(
+          "config_dangling_sensitive_group",
+          `${at}.activation.sensitiveGroupIds`,
+          `names ${JSON.stringify(groupId)}, which no sensitive-path group declares`,
+        );
       }
     }
     for (const policyId of obligation.ciDelegationPolicyIds) {

@@ -865,6 +865,106 @@ describe("the activation projection", () => {
   });
 });
 
+// ── The per-obligation activation binding and opt-outs ─────────────────────
+
+describe("the activation binding and the two signal opt-outs", () => {
+  const boundConfig = testConfig({
+    sensitivePaths: [
+      { id: "auth", patterns: [{ kind: "prefix", value: "packages/auth" }] },
+      { id: "billing", patterns: [{ kind: "prefix", value: "packages/billing" }] },
+    ],
+  });
+
+  function counted(repoPath: string, total: number): CandidateDiffEntry {
+    return { path: repoPath, additions: total, deletions: 0, binary: false };
+  }
+
+  it("activates on a touched group the binding names", () => {
+    const projection = projectReviewActivation([counted("packages/auth/token.ts", 1)], boundConfig);
+    expect(projection.sensitivePathIds).toEqual(["auth"]);
+    const bound = { kind: "relevant_change", sensitiveGroupIds: ["auth"] } as const;
+    expect(isObligationActive(bound, projection, boundConfig.activationThreshold)).toBe(true);
+  });
+
+  it("does not activate on a touched group the binding does not name", () => {
+    const projection = projectReviewActivation([counted("packages/billing/invoice.ts", 1)], boundConfig);
+    expect(projection.sensitivePathIds).toEqual(["billing"]);
+    const bound = { kind: "relevant_change", sensitiveGroupIds: ["auth"] } as const;
+    expect(isObligationActive(bound, projection, boundConfig.activationThreshold)).toBe(false);
+  });
+
+  it("keeps the widened reading when the binding is absent: every declared group activates", () => {
+    const projection = projectReviewActivation([counted("packages/billing/invoice.ts", 1)], boundConfig);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, boundConfig.activationThreshold)).toBe(true);
+  });
+
+  it("treats an empty binding as opting out of the sensitive signal entirely", () => {
+    const projection = projectReviewActivation([counted("packages/auth/token.ts", 1)], boundConfig);
+    const unbound = { kind: "relevant_change", sensitiveGroupIds: [] as const } as const;
+    expect(isObligationActive(unbound, projection, boundConfig.activationThreshold)).toBe(false);
+  });
+
+  it("silences only the sensitive signal: the bound obligation still activates on line volume", () => {
+    const projection = projectReviewActivation([counted("src/app.ts", ACTIVATION_THRESHOLD)], boundConfig);
+    const bound = { kind: "relevant_change", sensitiveGroupIds: ["auth"] } as const;
+    expect(isObligationActive(bound, projection, boundConfig.activationThreshold)).toBe(true);
+  });
+
+  const binary: CandidateDiffEntry = { path: "assets/logo.png", additions: null, deletions: null, binary: true };
+
+  it("lets an obligation opt out of the binary-change signal", () => {
+    const projection = projectReviewActivation([binary], boundConfig);
+    expect(projection.hasRelevantBinaryChange).toBe(true);
+    const optedOut = { kind: "relevant_change", relevantBinaryChangeActivates: false } as const;
+    expect(isObligationActive(optedOut, projection, boundConfig.activationThreshold)).toBe(false);
+  });
+
+  it("keeps the binary signal on when the flag is absent or explicitly true", () => {
+    const projection = projectReviewActivation([binary], boundConfig);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, boundConfig.activationThreshold)).toBe(true);
+    const explicit = { kind: "relevant_change", relevantBinaryChangeActivates: true } as const;
+    expect(isObligationActive(explicit, projection, boundConfig.activationThreshold)).toBe(true);
+  });
+
+  it("lets an obligation opt out of the zero-line signal", () => {
+    const projection = projectReviewActivation([counted("src/app.ts", 0)], boundConfig);
+    expect(projection.hasRelevantZeroLineChange).toBe(true);
+    const optedOut = { kind: "relevant_change", relevantZeroLineChangeActivates: false } as const;
+    expect(isObligationActive(optedOut, projection, boundConfig.activationThreshold)).toBe(false);
+  });
+
+  it("keeps the zero-line signal on when the flag is absent or explicitly true", () => {
+    const projection = projectReviewActivation([counted("src/app.ts", 0)], boundConfig);
+    expect(isObligationActive(RELEVANT_CHANGE, projection, boundConfig.activationThreshold)).toBe(true);
+    const explicit = { kind: "relevant_change", relevantZeroLineChangeActivates: true } as const;
+    expect(isObligationActive(explicit, projection, boundConfig.activationThreshold)).toBe(true);
+  });
+
+  it("keeps the two opt-outs independent: silencing the binary signal leaves the zero-line one live, and vice versa", () => {
+    // The security-review shape: indifferent to a chmod, alert to a replaced
+    // binary — and the licence-obligation shape, which is the reverse.
+    const zeroLine = projectReviewActivation([counted("src/app.ts", 0)], boundConfig);
+    const binaryOnly = projectReviewActivation([binary], boundConfig);
+    const securityShaped = { kind: "relevant_change", relevantZeroLineChangeActivates: false } as const;
+    expect(isObligationActive(securityShaped, binaryOnly, boundConfig.activationThreshold)).toBe(true);
+    expect(isObligationActive(securityShaped, zeroLine, boundConfig.activationThreshold)).toBe(false);
+    const licenceShaped = { kind: "relevant_change", relevantBinaryChangeActivates: false } as const;
+    expect(isObligationActive(licenceShaped, zeroLine, boundConfig.activationThreshold)).toBe(true);
+    expect(isObligationActive(licenceShaped, binaryOnly, boundConfig.activationThreshold)).toBe(false);
+  });
+
+  it("never narrows an always-on obligation", () => {
+    const projection = projectReviewActivation([], boundConfig);
+    const narrowedAlways = {
+      kind: "always",
+      sensitiveGroupIds: [] as const,
+      relevantBinaryChangeActivates: false,
+      relevantZeroLineChangeActivates: false,
+    } as const;
+    expect(isObligationActive(narrowedAlways, projection, boundConfig.activationThreshold)).toBe(true);
+  });
+});
+
 // ── The projection over a real repository ──────────────────────────────────
 
 describe("projecting a captured candidate", () => {

@@ -97,6 +97,7 @@ interface ObligationSpec {
   readonly humanWaiverAllowed?: boolean;
   readonly allowedResolutionKinds?: readonly ObligationPolicy["allowedResolutionKinds"][number][];
   readonly ciDelegationPolicyIds?: readonly string[];
+  readonly providerPolicy?: ObligationPolicy["providerPolicy"];
   readonly nonWaivable?: readonly string[];
   readonly remediationByCode?: Readonly<Record<string, ObligationPolicy["remediation"]["default"]>>;
 }
@@ -117,6 +118,7 @@ function obligation(spec: ObligationSpec = {}): ObligationPolicy {
     humanWaiverAllowed,
     minimumAttestationLevel: "self",
     ciDelegationPolicyIds: [...(spec.ciDelegationPolicyIds ?? [])],
+    ...(spec.providerPolicy === undefined ? {} : { providerPolicy: spec.providerPolicy }),
     remediation: {
       default: [{ id: "complete-the-review", kind: "manual_action", summary: "Complete a final green review." }],
       ...(spec.remediationByCode === undefined ? {} : { byCode: spec.remediationByCode }),
@@ -569,6 +571,59 @@ describe("an obligation naming several providers", () => {
         }),
       ).kind,
     ).toBe("satisfied_live_fact");
+  });
+
+  it("reads an explicit \"all\" policy as exactly the default quantifier", () => {
+    const config = testConfig({
+      obligations: [obligation({ providers: ["review.provider", "second.provider"], providerPolicy: "all" })],
+    });
+    const decision = evaluate({ config, records: [evidence()] });
+    expect(only(decision).kind).toBe("blocked");
+    expect(codesOf(decision)).toEqual(["review_evidence_missing"]);
+  });
+
+  it("satisfies an existential obligation on evidence from any one approved provider", () => {
+    const config = testConfig({
+      obligations: [obligation({ providers: ["review.provider", "second.provider"], providerPolicy: "existential" })],
+    });
+    const decision = evaluate({ config, records: [evidence()] });
+    const resolution = only(decision);
+    expect(resolution.kind).toBe("satisfied_evidence");
+    if (resolution.kind !== "satisfied_evidence") return;
+    expect(resolution.providerId).toBe("review.provider");
+  });
+
+  it("still blocks an existential obligation when no approved provider is covered", () => {
+    const config = testConfig({
+      obligations: [obligation({ providers: ["review.provider", "second.provider"], providerPolicy: "existential" })],
+    });
+    const decision = evaluate({ config, records: [] });
+    expect(only(decision).kind).toBe("blocked");
+    expect(codesOf(decision)).toEqual(["review_evidence_missing", "review_evidence_missing"]);
+  });
+
+  it("satisfies an existential live obligation on one green result, keeping the other provider's absence as a diagnostic", () => {
+    const config = testConfig({
+      obligations: [obligation({ freshness: "live", providers: ["review.provider", "second.provider"], providerPolicy: "existential" })],
+    });
+    const decision = evaluate({ config, liveResults: [GREEN_RESULT] });
+    const resolution = only(decision);
+    expect(resolution.kind).toBe("satisfied_live_fact");
+    expect(decision.admitted).toBe(true);
+    // The uncovered provider is still on the record: admitted, not erased.
+    expect(decision.diagnostics.map((entry) => entry.code)).toContain("live_provider_missing");
+  });
+
+  it("still blocks an existential live obligation when every result is a failure", () => {
+    const config = testConfig({
+      obligations: [obligation({ freshness: "live", providers: ["review.provider", "second.provider"], providerPolicy: "existential" })],
+    });
+    const decision = evaluate({
+      config,
+      liveResults: [{ providerId: "review.provider", runId: "live-1", status: "failed", findings: [] }],
+    });
+    expect(only(decision).kind).toBe("blocked");
+    expect(codesOf(decision)).toEqual(["live_provider_failed", "live_provider_missing"]);
   });
 });
 

@@ -411,21 +411,22 @@ export function projectReviewActivation(entries: readonly CandidateDiffEntry[], 
  * change to an authentication path is exactly the change a line threshold would
  * wave through.
  *
- * TWO SIGNALS ARE WIDER THAN THEY SHOULD BE, for want of a config member to
- * narrow them with:
+ * THREE OF THE SIGNALS CAN BE NARROWED PER OBLIGATION, and absence of each
+ * narrowing member is the widened, fail-closed reading:
  *
- *   - Every declared sensitive group activates every `relevant_change`
- *     obligation. The config surface binds sensitive groups to the repository,
- *     not to an obligation; narrowing this needs a per-obligation member naming
- *     the group ids that obligation answers for.
- *   - A reviewable binary change — and equally a reviewable zero-line change —
- *     activates unconditionally. Narrowing this needs a per-obligation flag of
- *     the `relevantBinaryChangeActivates` kind, letting an obligation say the
- *     signal is not one it answers for.
+ *   - `sensitiveGroupIds` binds the sensitive signal to named groups. Absent,
+ *     every declared group activates every `relevant_change` obligation; an
+ *     empty binding opts the obligation out of the signal entirely. The loader
+ *     has already rejected an id no `sensitivePaths` group declares, so a
+ *     binding here never references a group that does not exist.
+ *   - `relevantBinaryChangeActivates: false` opts out of the binary signal.
+ *   - `relevantZeroLineChangeActivates: false` opts out of the zero-line one.
+ *     The two flags are separate because the signals are independent: a
+ *     security review is indifferent to a `chmod` and alert to a replaced
+ *     binary, a licence obligation the reverse.
  *
- * Until those members exist, the honest reading of a declared sensitive group
- * or an uncountable change is "this needs review", which is the reading that
- * fails closed.
+ * The line threshold has no per-obligation narrowing, and none of the members
+ * narrows an `always` obligation, which ignores the projection entirely.
  */
 export function isObligationActive(
   activation: ObligationActivation,
@@ -434,7 +435,9 @@ export function isObligationActive(
 ): boolean {
   if (activation.kind === "always") return true;
   if (projection.relevantLineCount >= activationThreshold) return true;
-  if (projection.hasRelevantBinaryChange) return true;
-  if (projection.hasRelevantZeroLineChange) return true;
-  return projection.sensitivePathIds.length > 0;
+  if ((activation.relevantBinaryChangeActivates ?? true) && projection.hasRelevantBinaryChange) return true;
+  if ((activation.relevantZeroLineChangeActivates ?? true) && projection.hasRelevantZeroLineChange) return true;
+  const binding = activation.sensitiveGroupIds;
+  if (binding === undefined) return projection.sensitivePathIds.length > 0;
+  return projection.sensitivePathIds.some((id) => binding.includes(id));
 }
