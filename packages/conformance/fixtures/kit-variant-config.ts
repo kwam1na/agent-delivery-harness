@@ -106,8 +106,20 @@ export const kitVariantConfig: HarnessConfig = defineHarnessConfig({
       acceptedPayloadSpecs: ["review.green/1"],
       providers: ["claude-code.ce-code-review", "example.second-provider"],
       minimumAttestationLevel: "self",
-      // Divergent: every policy dimension the kit does not declare.
-      activation: { kind: "always" },
+      // Divergent: every policy dimension the kit does not declare. The kit
+      // leaves the activation narrowing members and the provider quantifier
+      // absent (the widened defaults), so this config declares all four — the
+      // narrowing members are inert on an `always` obligation, but their
+      // presence is what keeps the new dimensions from silently converging.
+      activation: {
+        kind: "always",
+        sensitiveGroupIds: ["payments"],
+        relevantBinaryChangeActivates: false,
+        relevantZeroLineChangeActivates: true,
+      },
+      // Two providers, any one of which satisfies: the quantifier the kit's
+      // absent member does not select.
+      providerPolicy: "existential",
       freshness: "live",
       allowedResolutionKinds: ["satisfied_live_fact", "satisfied_evidence", "waived", "delegated", "not_applicable"],
       humanWaiverAllowed: true,
