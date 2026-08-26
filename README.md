@@ -16,8 +16,8 @@ request that introduced the workflow was bootstrap-exempt — it merged with tha
 check red, because no record verified by a gate still under review can exist,
 and the exemption is granted by an administrator rather than by any code path in
 the Action. Every pull request merged since then has carried its own delivery
-record, bound to its own candidate — the file in `delivery/records/` today is
-the most recent one.
+record, bound to its own candidate; the records accumulate in
+`delivery/records/` rather than replacing one another.
 
 **Three names, one thing.** The repository is `agent-delivery-harness`; the
 packages carry the `@agent-delivery-harness/*` npm scope; the command you type
@@ -26,7 +26,7 @@ packages carry the `@agent-delivery-harness/*` npm scope; the command you type
 three different granularities.
 
 **Publication state.** The packages are **not on npm yet**. Release checks —
-including `npm publish --dry-run` for all five — run in CI, but nothing has been
+including `npm publish --dry-run` per package — run in CI, but nothing has been
 published, so today you adopt the harness from a checkout of this repository
 (see [step 0 of the getting-started guide](docs/getting-started.md#0-consuming-the-harness-pre-v1)).
 The published-action form of the GitHub Action ships with release mechanics; the
