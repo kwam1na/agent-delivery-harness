@@ -63,6 +63,50 @@ describe("initialize", () => {
     const response = await answer(request("initialize", { protocolVersion: "2025-03-26" }));
     expect((response?.result as { protocolVersion: string }).protocolVersion).toBe(MCP_PROTOCOL_VERSION);
   });
+
+  /**
+   * 2025-11-25 is the newest handshake-based revision, so it is what the
+   * handshake settles on when the client names nothing this server speaks.
+   * Nothing in that revision is mandatory for a stdio, tools-only server —
+   * icons are optional metadata, tasks are experimental, and the elicitation,
+   * sampling and authorization changes are for features this server does not
+   * implement — so speaking it is a matter of saying so truthfully.
+   */
+  it("settles on the newest handshake-based revision by default", async () => {
+    expect(MCP_PROTOCOL_VERSION).toBe("2025-11-25");
+    expect(SUPPORTED_PROTOCOL_VERSIONS).toContain("2025-11-25");
+    const response = await answer(request("initialize", { protocolVersion: "1999-01-01" }));
+    expect((response?.result as { protocolVersion: string }).protocolVersion).toBe("2025-11-25");
+  });
+
+  it("still echoes every older handshake-based revision it advertises", async () => {
+    for (const version of ["2025-11-25", "2025-06-18", "2024-11-05"]) {
+      const response = await answer(request("initialize", { protocolVersion: version }));
+      expect((response?.result as { protocolVersion: string }).protocolVersion).toBe(version);
+    }
+  });
+
+  /**
+   * SEP-1303 (2025-11-25, minor change 5): "Clarify that input validation
+   * errors should be returned as Tool Execution Errors rather than Protocol
+   * Errors to enable model self-correction." The revision's tools page keeps
+   * "Input validation errors" under Tool Execution Errors, reported "in tool
+   * results with `isError: true`".
+   *
+   * This server already reports a manifest argument of the wrong type that way
+   * — it is the usage class, exit 2, rendered like every other blocker — and
+   * this row is what keeps the two channels from being swapped later. The
+   * malformed *manifest file* is the same story one layer down: `submit-evidence`
+   * rejects it through the command core, so its rejection reaches the client as
+   * a tool result too, never as a JSON-RPC error.
+   */
+  it("reports an input validation error as a tool execution error, per SEP-1303", async () => {
+    const response = await answer(request("tools/call", { name: "submit-evidence", arguments: { manifest: 42 } }));
+    expect(response?.error).toBeUndefined();
+    const result = response?.result as { isError: boolean; structuredContent: { outcome: string; exitCode: number } };
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ outcome: "usage", exitCode: 2 });
+  });
 });
 
 describe("the two error channels", () => {
