@@ -854,3 +854,30 @@ source extraction had flattened it:
   bare ellipsis inside a JSON block — is restored using the same string-keyed
   convention as §9.2 so the elision stays visible rather than reading as an
   intentionally empty object; it is illustrative, not normative.
+
+---
+
+## Repo-local links (non-normative)
+
+Navigation for readers of this repository; nothing here changes the contract
+above.
+
+- **Reference implementation:** the normative validator for §5–§9 lives in
+  [`packages/kernel/src/validator/`](../../packages/kernel/src/validator/);
+  the recorder implementing §8.3 in
+  [`packages/kernel/src/recorder.ts`](../../packages/kernel/src/recorder.ts);
+  the RFC 8785 canonicalizer and digests of §6 in
+  [`packages/kernel/src/canonical.ts`](../../packages/kernel/src/canonical.ts)
+  and [`packages/kernel/src/digest.ts`](../../packages/kernel/src/digest.ts).
+- **Published schemas:** Appendices A–B are shipped verbatim as
+  [`packages/kernel/src/validator/schemas/`](../../packages/kernel/src/validator/schemas/)
+  and cross-checked against every conformance vector.
+- **Conformance kit:** the 89-vector corpus this spec is tested by —
+  [`packages/conformance/vectors/`](../../packages/conformance/vectors/),
+  usage in [`docs/conformance.md`](../conformance.md).
+- **Guides:** [`docs/getting-started.md`](../getting-started.md) (the adoption
+  loop), [`docs/provider-guide.md`](../provider-guide.md) (producing a
+  conforming manifest), [`docs/delivery-record.md`](../delivery-record.md)
+  (the product-layer record outside this spec).
+- **Errata candidates:** recorded divergences between this draft's text and
+  the shipped kit/kernel reading — [`docs/spec-errata.md`](../spec-errata.md).

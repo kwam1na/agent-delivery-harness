@@ -81,7 +81,7 @@ const GITHUB_FINE_GRAINED_PAT = fragments("github", "_pat_", "11ABCDEFG0abcdefgh
 const SLACK_TOKEN = fragments("xoxb", "-123456789012-", "abcdefghijkl");
 const OPENAI_STYLE_KEY = fragments("sk", "-", "abcdefghijklmnopqrstuvwxyz0123");
 const AWS_ACCESS_KEY_ID = fragments("AKIA", "IOSFODNN7EXAMPLE");
-const JWT = fragments("eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+const JWT = fragments("eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", ".", "dBjftJeZ4CVPmB92K27uhbXJYqpxr_wW1gFWFOEjXk");
 
 const BEARER_VALUE = fragments("abc123", "def456", "ghi789");
 const BEARER_LONG_VALUE = fragments("a1b2c3d4", "e5f6g7h8", "i9j0k1l2");
