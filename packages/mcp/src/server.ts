@@ -142,6 +142,16 @@ export const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
  * a modern request that omitted a required field from being quietly served as a
  * legacy one — a request carrying `clientCapabilities` and no version is
  * unmistakably modern and gets told so.
+ *
+ * WHY `logLevel` BELONGS HERE. The other three are era-exclusive by
+ * construction — no handshake revision has per-request protocol fields at all —
+ * but `logLevel` is a member a reader could plausibly imagine predating the
+ * rewrite, so the premise is named rather than assumed. It does not: through
+ * 2025-11-25 the log level travels as the `logging/setLevel` *method*, and that
+ * revision's `_meta` section defines only the key-name grammar and the reserved
+ * prefix, naming no protocol-field keys whatever. 2026-07-28 is the revision
+ * that moved it: "Log level is now set per-request via
+ * `io.modelcontextprotocol/logLevel` in `_meta`."
  */
 export const META_STATELESS_KEYS: readonly string[] = Object.freeze([
   META_PROTOCOL_VERSION,

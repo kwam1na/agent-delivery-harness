@@ -535,14 +535,6 @@ describe("the stateless revision", () => {
   });
 
   /**
-   * The counterweight, and the reason the rule keys on the reserved prefix
-   * rather than on "`_meta` is present at all". `progressToken` is a `_meta`
-   * key the handshake revisions have always defined, and the OpenTelemetry
-   * keys are carved out of the prefix rule by the spec itself. A request
-   * carrying only those is a handshake request and must be answered exactly as
-   * it was before this server knew 2026-07-28 existed.
-   */
-  /**
    * `io.modelcontextprotocol/related-task` is the counterexample that decides
    * how the era is detected, and it is a *handshake-era* key.
    *
