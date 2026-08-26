@@ -75,6 +75,30 @@ export type DeliveryRecordDriftClass = (typeof DELIVERY_RECORD_DRIFT_CLASSES)[nu
 
 const DELIVERY_RECORD_SOURCE: BlockerSource = { kind: "delivery-record", id: "delivery-harness.delivery-record" };
 
+const RERECORD: Remediation = {
+  id: "re-run-the-loop",
+  kind: "manual_action",
+  summary: "Re-prepare, re-run the gate, and re-record for the current candidate.",
+};
+
+function drBlocker(code: string, summary: string, details?: string, remediation: Remediation = RERECORD): Blocker {
+  return createBlocker({
+    code,
+    source: DELIVERY_RECORD_SOURCE,
+    summary,
+    ...(details === undefined ? {} : { details }),
+    remediations: [remediation],
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
 // ── The record shape ─────────────────────────────────────────────────────────
 
 /**
@@ -128,7 +152,46 @@ export type BuildDeliveryRecordResult =
 
 /** Maps the evaluator's candidate shape onto the record's flat binding. */
 export function bindingOf(candidate: CandidateBinding): RecordCandidateBinding {
-  throw new Error("not implemented: bindingOf");
+  return {
+    treeSha: candidate.treeSha,
+    deliverableDigest: candidate.deliverable.digest,
+    identityToken: candidate.deliverable.identity,
+    baseRef: candidate.base.ref,
+    baseTipSha: candidate.base.tipSha,
+    mergeBaseSha: candidate.base.mergeBaseSha,
+    workspaceId: candidate.workspaceId,
+  };
+}
+
+function claimOf(
+  resolution: GateDecision["resolutions"][number],
+  manifestDigestByRecordId: ReadonlyMap<string, string>,
+): DeliveryRecordClaim {
+  switch (resolution.kind) {
+    case "satisfied_evidence": {
+      const manifestDigest = manifestDigestByRecordId.get(resolution.recordId);
+      return {
+        obligationId: resolution.obligationId,
+        outcome: resolution.kind,
+        providerId: resolution.providerId,
+        recordId: resolution.recordId,
+        runId: resolution.runId,
+        finalPassId: resolution.finalPassId,
+        ...(manifestDigest === undefined ? {} : { manifestDigest }),
+      };
+    }
+    case "satisfied_live_fact":
+      return { obligationId: resolution.obligationId, outcome: resolution.kind, providerId: resolution.providerId, runId: resolution.runId };
+    case "waived":
+      return { obligationId: resolution.obligationId, outcome: resolution.kind, recordId: resolution.waiverRecordId, scope: resolution.scope };
+    case "delegated":
+      return { obligationId: resolution.obligationId, outcome: resolution.kind, ciPolicyId: resolution.ciPolicyId };
+    case "not_applicable":
+      return { obligationId: resolution.obligationId, outcome: resolution.kind };
+    case "blocked":
+      // Unreachable: the caller refuses a decision carrying a blocked obligation.
+      return { obligationId: resolution.obligationId, outcome: resolution.kind };
+  }
 }
 
 /**
@@ -138,7 +201,48 @@ export function bindingOf(candidate: CandidateBinding): RecordCandidateBinding {
  * to write otherwise.
  */
 export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliveryRecordResult {
-  throw new Error("not implemented: buildDeliveryRecord");
+  const { config, decision, evidenceRecords } = input;
+  if (!decision.admitted) {
+    return {
+      ok: false,
+      blockers: [drBlocker("record_gate_not_admitted", "The gate did not admit; there is nothing to record.")],
+    };
+  }
+  const blocked = decision.resolutions.find((resolution) => resolution.kind === "blocked");
+  if (blocked !== undefined) {
+    return {
+      ok: false,
+      blockers: [
+        drBlocker(
+          "record_blocked_obligation",
+          "The gate result carries a blocked obligation; a record would misrepresent it.",
+          `obligation ${blocked.obligationId} is blocked`,
+        ),
+      ],
+    };
+  }
+
+  const manifestDigestByRecordId = new Map<string, string>();
+  for (const record of evidenceRecords) {
+    if (record.resolution.kind === "evidence") {
+      manifestDigestByRecordId.set(record.recordId, record.resolution.manifestDigest);
+    }
+  }
+
+  const claims = decision.resolutions.map((resolution) => claimOf(resolution, manifestDigestByRecordId));
+  const distinctManifestDigests = [...new Set(claims.flatMap((claim) => (claim.manifestDigest === undefined ? [] : [claim.manifestDigest])))];
+
+  const record: DeliveryRecord = {
+    version: DELIVERY_RECORD_VERSION,
+    gateId: config.gateId,
+    identityToken: config.computingIdentityVersion,
+    candidateBinding: bindingOf(decision.candidate),
+    claims,
+    manifestDigest: distinctManifestDigests.length === 1 ? (distinctManifestDigests[0] as string) : null,
+    workspaceId: decision.candidate.workspaceId,
+    attestation: { level: V1_ATTESTATION_LEVEL },
+  };
+  return { ok: true, record };
 }
 
 /**
@@ -147,7 +251,7 @@ export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliv
  * makes a re-record a no-op rather than a spurious diff.
  */
 export function deliveryRecordBytes(record: DeliveryRecord): string {
-  throw new Error("not implemented: deliveryRecordBytes");
+  return `${canonicalize(record)}\n`;
 }
 
 /**
@@ -161,7 +265,13 @@ export function deliveryRecordBytes(record: DeliveryRecord): string {
  * loader already checked the configured path against.
  */
 export function deliveryRecordPathFor(config: HarnessConfig, deliverableDigest: string): string {
-  throw new Error("not implemented: deliveryRecordPathFor");
+  const configured = config.deliveryRecordPath;
+  const lastSlash = configured.lastIndexOf("/");
+  const lastDot = configured.lastIndexOf(".");
+  const hasExtension = lastDot > lastSlash;
+  const stem = hasExtension ? configured.slice(0, lastDot) : configured;
+  const extension = hasExtension ? configured.slice(lastDot) : "";
+  return `${stem}--${deliverableDigest}${extension}`;
 }
 
 // ── Parse + select ───────────────────────────────────────────────────────────
@@ -176,8 +286,56 @@ export type ParseDeliveryRecordResult =
  * silently ignored a record it could not read would pass a PR whose evidence it
  * never actually inspected.
  */
+const BINDING_FIELDS: readonly (keyof RecordCandidateBinding)[] = [
+  "treeSha",
+  "deliverableDigest",
+  "identityToken",
+  "baseRef",
+  "baseTipSha",
+  "mergeBaseSha",
+  "workspaceId",
+];
+
+function malformed(detail: string): { readonly ok: false; readonly blockers: NonEmptyTuple<Blocker> } {
+  return { ok: false, blockers: [drBlocker("delivery_record_malformed", "The delivery record could not be read.", detail)] };
+}
+
 export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
-  throw new Error("not implemented: parseDeliveryRecord");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    return malformed(`not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecord(parsed)) return malformed("the record is not a JSON object");
+  if (parsed["version"] !== DELIVERY_RECORD_VERSION) {
+    return malformed(`unsupported version token ${JSON.stringify(parsed["version"])}; expected ${DELIVERY_RECORD_VERSION}`);
+  }
+  if (!isNonEmptyString(parsed["gateId"])) return malformed("missing gateId");
+  if (!isNonEmptyString(parsed["identityToken"])) return malformed("missing identityToken");
+  if (!isNonEmptyString(parsed["workspaceId"])) return malformed("missing workspaceId");
+
+  const binding = parsed["candidateBinding"];
+  if (!isRecord(binding)) return malformed("missing candidateBinding");
+  for (const field of BINDING_FIELDS) {
+    if (!isNonEmptyString(binding[field])) return malformed(`candidateBinding is missing ${field}`);
+  }
+
+  const claims = parsed["claims"];
+  if (!Array.isArray(claims)) return malformed("claims must be an array");
+  for (const claim of claims) {
+    if (!isRecord(claim) || !isNonEmptyString(claim["obligationId"]) || !isNonEmptyString(claim["outcome"])) {
+      return malformed("a claim is missing its obligation id or outcome");
+    }
+  }
+
+  const attestation = parsed["attestation"];
+  if (!isRecord(attestation) || !isNonEmptyString(attestation["level"])) return malformed("missing attestation.level");
+
+  const manifestDigest = parsed["manifestDigest"];
+  if (manifestDigest !== null && typeof manifestDigest !== "string") return malformed("manifestDigest must be a string or null");
+
+  return { ok: true, record: parsed as unknown as DeliveryRecord };
 }
 
 export interface DeliveryRecordFile {
@@ -199,7 +357,15 @@ export function selectDeliveryRecordForIdentity(
   records: readonly DeliveryRecordFile[],
   identity: RecomputedIdentity,
 ): DeliveryRecordFile | undefined {
-  throw new Error("not implemented: selectDeliveryRecordForIdentity");
+  const matches = records
+    .filter(
+      (entry) =>
+        entry.record.candidateBinding.deliverableDigest === identity.deliverableDigest &&
+        entry.record.candidateBinding.identityToken === identity.identityToken,
+    )
+    // Deterministic when more than one file keys to the same identity.
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return matches[0];
 }
 
 // ── Verify (pure core) ───────────────────────────────────────────────────────
@@ -238,5 +404,83 @@ export function verifyDeliveryRecord(
   recomputedIdentity: RecomputedIdentity,
   base: VerificationBase,
 ): DeliveryRecordCheck {
-  throw new Error("not implemented: verifyDeliveryRecord");
+  const policy = config.deliveryRecordVerification.baseMovement;
+  const blockers: Blocker[] = [];
+  const relaxedDriftClasses: DeliveryRecordDriftClass[] = [];
+  const binding = record.candidateBinding;
+
+  if (record.version !== DELIVERY_RECORD_VERSION) {
+    blockers.push(drBlocker("record_version_unsupported", `The record's version ${JSON.stringify(record.version)} is not ${DELIVERY_RECORD_VERSION}.`));
+  }
+  if (record.gateId !== config.gateId) {
+    blockers.push(
+      drBlocker("record_gate_mismatch", `The record is for gate ${JSON.stringify(record.gateId)}, not ${JSON.stringify(config.gateId)}.`),
+    );
+  }
+  if (record.attestation.level !== V1_ATTESTATION_LEVEL) {
+    blockers.push(
+      drBlocker(
+        "record_attestation_unsupported",
+        `The record declares attestation level ${JSON.stringify(record.attestation.level)}; v1 verifies only ${JSON.stringify(V1_ATTESTATION_LEVEL)}.`,
+      ),
+    );
+  }
+  if (!config.identityVersions.includes(binding.identityToken)) {
+    blockers.push(
+      drBlocker("record_identity_token_unknown", `The record's identity token ${JSON.stringify(binding.identityToken)} is not accepted by this config.`),
+    );
+  }
+
+  // Deliverable identity: the record must describe the tree at the PR head. This
+  // is the mismatch a foreign record fails on, and it is never relaxed.
+  if (binding.deliverableDigest !== recomputedIdentity.deliverableDigest || binding.identityToken !== recomputedIdentity.identityToken) {
+    blockers.push(
+      drBlocker(
+        "deliverable_identity_changed",
+        "The record's deliverable identity does not match the recomputed identity of the head.",
+        `record ${binding.deliverableDigest} (${binding.identityToken}) but head ${recomputedIdentity.deliverableDigest} (${recomputedIdentity.identityToken})`,
+      ),
+    );
+  }
+
+  // Base movement: staled by default, relaxed and named under the `allow` policy.
+  const baseDrift: DeliveryRecordDriftClass[] = [];
+  if (binding.baseRef !== base.ref) baseDrift.push("base_ref_changed");
+  if (binding.baseTipSha !== base.tipSha) baseDrift.push("base_tip_moved");
+  if (binding.mergeBaseSha !== base.mergeBaseSha) baseDrift.push("merge_base_moved");
+  for (const driftClass of baseDrift) {
+    if (policy === "allow") {
+      relaxedDriftClasses.push(driftClass);
+    } else {
+      blockers.push(drBlocker(driftClass, `The base moved (${driftClass}); the record is stale under the "stale" base-movement policy.`));
+    }
+  }
+
+  // A claim can only carry an admitting outcome; a blocked one is a malformed
+  // record, not a pass.
+  for (const claim of record.claims) {
+    if (claim.outcome === "blocked") {
+      blockers.push(drBlocker("record_claim_blocked", `Claim for ${claim.obligationId} carries a blocked outcome; a record must not.`));
+    }
+  }
+
+  // Coverage: every declared obligation must be accounted for by a claim.
+  const claimed = new Set(record.claims.map((claim) => claim.obligationId));
+  for (const obligation of config.obligations) {
+    if (!claimed.has(obligation.id)) {
+      blockers.push(
+        drBlocker("obligation_uncovered", `Obligation ${JSON.stringify(obligation.id)} has no claim in the record.`),
+      );
+    }
+  }
+
+  return {
+    ok: blockers.length === 0,
+    blockers,
+    baseMovement: policy,
+    baseMovementRelaxed: relaxedDriftClasses.length > 0,
+    relaxedDriftClasses,
+    attestationLabel: ATTESTATION_LABEL,
+    claims: record.claims,
+  };
 }

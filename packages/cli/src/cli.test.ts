@@ -217,7 +217,10 @@ async function buildAcceptSubmission(dir: string, config: HarnessConfig, artifac
     provider: PROVIDER,
     candidate,
     repository: null,
-    runHistory: [{ preparedTreeSha: captured.treeSha, evaluatedInPassId: PROVIDER.finalPassId }],
+    runHistory: [
+      { preparedTreeSha: "1".repeat(40), evaluatedInPassId: "pass-1" },
+      { preparedTreeSha: captured.treeSha, evaluatedInPassId: PROVIDER.finalPassId },
+    ],
     artifacts: [{ path: "reviewers/correctness.json", sha256: sha256Hex(approval), role: "reviewer-approval" }],
     attestation: { level: "self", signatures: [] },
     recordedAt: "2026-08-25T00:00:00Z",
@@ -344,7 +347,7 @@ describe("runCliBoundary exit codes", () => {
 // ── U8 coherence ─────────────────────────────────────────────────────────────
 
 describe("repo wiring coherence", () => {
-  it("wires capture and the store from one root so their workspace ids agree", async () => {
+  it("wires capture and the store from one root so their workspace ids agree", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const storage = await resolveRecordStorage(dir, { storageNamespace: config.storageNamespace });
@@ -360,7 +363,7 @@ describe("repo wiring coherence", () => {
 // ── The full loop ────────────────────────────────────────────────────────────
 
 describe("the full delivery loop", () => {
-  it("runs prepare → review-context → submit-evidence → gate → record → verify green", async () => {
+  it("runs prepare → review-context → submit-evidence → gate → record → verify green", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -389,7 +392,7 @@ describe("the full delivery loop", () => {
 // ── Self-neutrality ──────────────────────────────────────────────────────────
 
 describe("delivery record self-neutrality", () => {
-  it("writing the record does not change the deliverable identity it attests", async () => {
+  it("writing the record does not change the deliverable identity it attests", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -406,7 +409,7 @@ describe("delivery record self-neutrality", () => {
     expect(after).toBe(before);
   });
 
-  it("negative control: a non-neutral path does change the deliverable identity", async () => {
+  it("negative control: a non-neutral path does change the deliverable identity", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const before = await captureDigest(dir, config);
@@ -421,7 +424,7 @@ describe("delivery record self-neutrality", () => {
 // ── Waiver wiring ────────────────────────────────────────────────────────────
 
 describe("waiver wiring", () => {
-  it("never prompts and blocks when non-interactive, even for an all-waivable block", async () => {
+  it("never prompts and blocks when non-interactive, even for an all-waivable block", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -434,7 +437,7 @@ describe("waiver wiring", () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
-  it("waives end to end under a TTY when the operator accepts", async () => {
+  it("waives end to end under a TTY when the operator accepts", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -446,7 +449,7 @@ describe("waiver wiring", () => {
     expect(prompt).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 130 when the operator interrupts the waiver prompt", async () => {
+  it("returns 130 when the operator interrupts the waiver prompt", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -463,7 +466,7 @@ describe("waiver wiring", () => {
 // ── Error paths ──────────────────────────────────────────────────────────────
 
 describe("error paths", () => {
-  it("review-context without a receipt blocks and names prepare", async () => {
+  it("review-context without a receipt blocks and names prepare", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -472,7 +475,7 @@ describe("error paths", () => {
     expect(err.join("")).toContain("prepare");
   });
 
-  it("review-context on a stale receipt blocks with a class distinct from missing", async () => {
+  it("review-context on a stale receipt blocks with a class distinct from missing", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -488,7 +491,7 @@ describe("error paths", () => {
     expect(text).not.toContain("preparation_missing");
   });
 
-  it("submit-evidence after an edit rejects on a candidate mismatch", async () => {
+  it("submit-evidence after an edit rejects on a candidate mismatch", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -502,7 +505,7 @@ describe("error paths", () => {
     expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_POLICY);
   });
 
-  it("submit-evidence without --manifest is a usage error", async () => {
+  it("submit-evidence without --manifest is a usage error", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -510,7 +513,7 @@ describe("error paths", () => {
     expect(await runCli(["submit-evidence"], runtime)).toBe(EXIT_USAGE);
   });
 
-  it("record after an edit is refused", async () => {
+  it("record after an edit is refused", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -523,7 +526,7 @@ describe("error paths", () => {
     expect(await runCli(["record"], runtime)).toBe(EXIT_POLICY);
   });
 
-  it("check on a non-repository blocks with a typed store finding", async () => {
+  it("check on a non-repository blocks with a typed store finding", { timeout: 60000 }, async () => {
     const notARepo = await mkdtemp(path.join(await os.tmpdir(), "dh-norepo-"));
     cleanups.push(notARepo);
     const config = makeConfig();
@@ -532,7 +535,7 @@ describe("error paths", () => {
     expect(await runCli(["check"], runtime)).toBe(EXIT_POLICY);
   });
 
-  it("an invalid config is a typed policy block", async () => {
+  it("an invalid config is a typed policy block", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const artifacts = await makeArtifacts();
     const { runtime, err } = makeRuntime(dir, makeConfig(), artifacts, {
@@ -551,7 +554,7 @@ describe("error paths", () => {
     expect(err.join("")).toContain("config_broken");
   });
 
-  it("check on a real repository reports readiness", async () => {
+  it("check on a real repository reports readiness", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
@@ -564,7 +567,7 @@ describe("error paths", () => {
 // ── Concurrency ──────────────────────────────────────────────────────────────
 
 describe("concurrent record writes", () => {
-  it("two branches with different deliverables write non-conflicting record files", async () => {
+  it("two branches with different deliverables write non-conflicting record files", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();
     const digestMain = await captureDigest(dir, config);

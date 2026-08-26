@@ -54,7 +54,7 @@ export const recordCommand: CommandDescriptor = {
         blockers: [
           commandBlocker({
             code: "record_identity_changed",
-            sourceId: this.sourceId,
+            sourceId: "delivery-harness.cli.record",
             summary: "The deliverable identity changed after the gate; nothing was recorded.",
             details: `gate ${decision.candidate.deliverable.digest} but current ${recheck.candidate.deliverable.digest}`,
             remediations: [

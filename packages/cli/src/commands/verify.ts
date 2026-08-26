@@ -46,7 +46,7 @@ export const verifyCommand: CommandDescriptor = {
         blockers: [
           commandBlocker({
             code: "delivery_record_missing",
-            sourceId: this.sourceId,
+            sourceId: "delivery-harness.cli.verify",
             summary: "No delivery record describes the current candidate.",
             details: `expected ${relativePath}`,
             remediations: [
