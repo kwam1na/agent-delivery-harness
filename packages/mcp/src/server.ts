@@ -54,17 +54,18 @@ import {
 // ── Protocol identity ────────────────────────────────────────────────────────
 
 /**
- * The MCP revision this server implements, and the older revisions it will
- * still speak if a client asks for one. Newest first: `initialize` echoes the
+ * The MCP revision this server implements, and the older revision it will still
+ * speak if a client asks for one. Newest first: `initialize` echoes the
  * client's version when it is on this list and answers with the newest
  * otherwise, which is the negotiation the spec asks for.
+ *
+ * 2025-03-26 is missing on purpose. It is the one revision that requires a
+ * server to accept JSON-RPC batches, and the transport refuses every array; a
+ * client asking for it is answered with 2025-06-18, where that refusal is
+ * true. 2024-11-05 predates batching and carries no such requirement.
  */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
-  MCP_PROTOCOL_VERSION,
-  "2025-03-26",
-  "2024-11-05",
-]);
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([MCP_PROTOCOL_VERSION, "2024-11-05"]);
 
 /** Version tracks the package; U14 owns keeping the two in step at release. */
 export const MCP_SERVER_INFO = { name: "delivery-harness", version: "0.0.0" } as const;
