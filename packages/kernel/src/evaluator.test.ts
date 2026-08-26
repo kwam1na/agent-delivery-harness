@@ -625,6 +625,41 @@ describe("an obligation naming several providers", () => {
     expect(only(decision).kind).toBe("blocked");
     expect(codesOf(decision)).toEqual(["live_provider_failed", "live_provider_missing"]);
   });
+
+  // ── The zero-provider corner ─────────────────────────────────────────────
+  //
+  // An obligation naming no providers loads (the config surface has no
+  // minimum-length invariant) and has an empty residue under either policy —
+  // vacuously "all covered", trivially short of "one covered". Admission is
+  // refused by the guards downstream of the residue instead: the live path's
+  // `providers.length > 0` conjunct and the recorded path's requirement that a
+  // satisfied obligation name an actual record. These rows pin that fail-closed
+  // outcome for all four combinations, so a refactor of either guard cannot
+  // quietly turn the empty residue into an admission.
+
+  for (const providerPolicy of ["all", "existential"] as const) {
+    it(`blocks a recorded obligation naming no providers under "${providerPolicy}"`, () => {
+      const config = testConfig({ obligations: [obligation({ providers: [], providerPolicy })] });
+      const bare = evaluate({ config, records: [] });
+      expect(only(bare).kind).toBe("blocked");
+      expect(bare.admitted).toBe(false);
+      expect(codesOf(bare)).toContain("review_evidence_missing");
+      // A fresh green record on hand changes nothing: with no approved
+      // provider it is an unknown-provider record, never an admission.
+      const withRecord = evaluate({ config, records: [evidence()] });
+      expect(only(withRecord).kind).toBe("blocked");
+      expect(withRecord.admitted).toBe(false);
+      expect(codesOf(withRecord)).toContain("unknown_provider");
+    });
+
+    it(`blocks a live obligation naming no providers under "${providerPolicy}"`, () => {
+      const config = testConfig({ obligations: [obligation({ freshness: "live", providers: [], providerPolicy })] });
+      const decision = evaluate({ config, liveResults: [GREEN_RESULT] });
+      expect(only(decision).kind).toBe("blocked");
+      expect(decision.admitted).toBe(false);
+      expect(codesOf(decision)).toContain("live_provider_missing");
+    });
+  }
 });
 
 // ── Live results ───────────────────────────────────────────────────────────
