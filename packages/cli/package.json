@@ -1,6 +1,6 @@
 {
   "name": "@agent-delivery-harness/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "Delivery harness CLI: prepare, review-context, submit-evidence, gate, record, verify, check",
   "license": "Apache-2.0",
