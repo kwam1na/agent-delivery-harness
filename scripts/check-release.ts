@@ -35,9 +35,9 @@
  * check vacuously, so an empty package set is itself a finding.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { HARNESS_VERSION } from "@agent-delivery-harness/kernel";
 
 // ── Registry ─────────────────────────────────────────────────────────────────
@@ -291,5 +291,21 @@ function main(): void {
   process.exitCode = 1;
 }
 
-const invokedDirectly = process.argv[1] !== undefined && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+/** The spelling the filesystem can vouch for: the realpath where it can answer, the spelling itself where it cannot. */
+function canonicalEntryPath(entryPath: string): string {
+  try {
+    return realpathSync(entryPath);
+  } catch {
+    return entryPath;
+  }
+}
+
+// argv and `import.meta.url` may spell this file differently: argv carries the
+// caller's spelling while Node builds the module URL from the realpath (or,
+// under `--preserve-symlinks-main`, from the caller's spelling). A sensor that
+// under-matches here no-ops and exits 0 — a green sensor run that scanned
+// nothing — so each side is canonicalized independently and compared as paths.
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  canonicalEntryPath(path.resolve(process.argv[1])) === canonicalEntryPath(fileURLToPath(import.meta.url));
 if (invokedDirectly) main();

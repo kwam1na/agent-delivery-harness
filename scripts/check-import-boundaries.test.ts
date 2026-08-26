@@ -693,3 +693,44 @@ describe("anti-vacuity", () => {
     expect(finding?.file).toBe("packages/kernel/src/evaluator.ts");
   });
 });
+
+/**
+ * The sensor's entry guard, exercised the way `npm run sensor` exercises it: a
+ * spawned process launched by absolute path — here through a symlink, the shape
+ * a symlinked checkout (or macOS `/tmp`) produces. The guard's exit-code floor
+ * sits inside the guard itself, so an under-match is invisible in-process: the
+ * script just exits 0 having scanned nothing, and every sensor leg goes green
+ * over an unscanned tree. This spawn is the tripwire.
+ */
+describe("the entry guard", () => {
+  it("scans and reports when launched through a symlinked path", async () => {
+    const { spawn } = await import("node:child_process");
+    const { symlink, mkdtemp } = await import("node:fs/promises");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-sensor-entry-"));
+    const repoRoot = repoRootFromHere();
+    const linkedRepo = path.join(dir, "linked-repo");
+    await symlink(repoRoot, linkedRepo, "dir");
+    try {
+      const child = spawn(
+        process.execPath,
+        ["--import", "tsx", path.join(linkedRepo, "scripts/check-import-boundaries.ts")],
+        { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      child.on("error", () => {});
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      const exitCode = await new Promise<number | null>((resolve) => child.on("close", resolve));
+
+      const output = Buffer.concat(stdout).toString("utf8");
+      const diagnostics = Buffer.concat(stderr).toString("utf8");
+      expect(exitCode, diagnostics).toBe(0);
+      // Empty output with exit 0 is the exact under-match signature: the guard
+      // declined the entry and the sensor scanned nothing.
+      expect(output, `entry guard skipped the scan; stderr: ${diagnostics}`).toContain("check-import-boundaries:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

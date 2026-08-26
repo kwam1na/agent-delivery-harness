@@ -1027,7 +1027,7 @@ describe("the summary says nothing it does not know", () => {
 // ── Review round 1: the entry guard cannot fail silently ─────────────────────
 
 describe("the executable entry guard", () => {
-  it("matches through a symlinked invocation path", TIMEOUT, async () => {
+  it("matches through a symlinked invocation path, under either symlink regime", TIMEOUT, async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "dh-entry-"));
     cleanups.push(dir);
     const real = path.join(dir, "real");
@@ -1035,20 +1035,51 @@ describe("the executable entry guard", () => {
     const modulePath = path.join(real, "module.ts");
     await writeFile(modulePath, "export const x = 1;\n", "utf8");
     const linkedDir = path.join(dir, "linked");
-    await symlink(real, linkedDir);
+    await symlink(real, linkedDir, "dir");
+    const linkedModulePath = path.join(linkedDir, "module.ts");
 
-    // Realpathed, because that is what `import.meta.url` carries: Node resolves
-    // a module's own URL through the filesystem. The temp root itself sits
-    // behind a symlink on macOS, so building the href any other way would test
-    // a shape production never sees.
-    const moduleHref = pathToFileURL(realpathSync(modulePath)).href;
-    // How a runner invokes this action: an absolute path through whatever
-    // symlink the workspace happens to sit behind. A guard that compared the
-    // spellings would decide this module was not the entry, skip `main`, and
-    // exit 0 having verified nothing.
-    expect(invokedDirectly(path.join(linkedDir, "module.ts"), moduleHref)).toBe(true);
-    expect(invokedDirectly(path.join(real, "module.ts"), moduleHref)).toBe(true);
-    expect(invokedDirectly(path.join(real, "other.ts"), moduleHref)).toBe(false);
-    expect(invokedDirectly(undefined, moduleHref)).toBe(false);
+    // Under default module resolution `import.meta.url` carries the module's
+    // realpath while argv carries the caller's spelling — the symlink, for a
+    // workspace reached through one. (The temp root itself sits behind a
+    // symlink on macOS, so the realpath here is load-bearing for the test too.)
+    expect(invokedDirectly(linkedModulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
+    // Under `--preserve-symlinks-main` the regime flips: `import.meta.url`
+    // keeps the symlink spelling. A guard that realpathed only the argv side
+    // would under-match here — same silent exit 0, opposite configuration.
+    const linkedHref = pathToFileURL(linkedModulePath).href;
+    expect(invokedDirectly(linkedModulePath, linkedHref)).toBe(true);
+    expect(invokedDirectly(modulePath, linkedHref)).toBe(true);
+    // A different module never matches, whatever the spelling.
+    const otherPath = path.join(real, "other.ts");
+    await writeFile(otherPath, "export const y = 2;\n", "utf8");
+    expect(invokedDirectly(linkedModulePath, pathToFileURL(otherPath).href)).toBe(false);
+    expect(invokedDirectly(undefined, linkedHref)).toBe(false);
+  });
+
+  it("falls back to comparing the spellings when a side cannot be resolved", TIMEOUT, async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-entry-fallback-"));
+    cleanups.push(dir);
+    const real = path.join(dir, "real");
+    await mkdir(real, { recursive: true });
+    const linkedDir = path.join(dir, "linked");
+    await symlink(real, linkedDir, "dir");
+
+    // Neither path exists, so both canonicalizations keep the spellings —
+    // which match, URL-significant characters included. Deleting the per-side
+    // catch turns this row into a thrown error, not a wrong answer.
+    const ghost = path.join(real, "gh#ost.ts");
+    expect(invokedDirectly(ghost, pathToFileURL(ghost).href)).toBe(true);
+    // A side that cannot be resolved cannot be seen through: the only
+    // difference between these two spellings is the link, and with no
+    // filesystem entry to resolve it, the guard honestly under-matches.
+    expect(invokedDirectly(path.join(linkedDir, "gh#ost.ts"), pathToFileURL(ghost).href)).toBe(false);
+    // Each side is canonicalized independently, so one unresolvable side does
+    // not discard the other side's resolution — in either direction.
+    const modulePath = path.join(real, "module.ts");
+    await writeFile(modulePath, "export const x = 1;\n", "utf8");
+    expect(invokedDirectly(path.join(linkedDir, "module.ts"), pathToFileURL(path.join(real, "missing.ts")).href)).toBe(false);
+    expect(invokedDirectly(path.join(linkedDir, "missing.ts"), pathToFileURL(realpathSync(modulePath)).href)).toBe(false);
+    // A module href that is not a file: URL is never this module.
+    expect(invokedDirectly(modulePath, "data:text/javascript,export{}")).toBe(false);
   });
 });

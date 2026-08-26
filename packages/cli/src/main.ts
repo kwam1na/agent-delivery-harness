@@ -8,8 +8,9 @@
  * prints every obligation one "yes" would cover, reads a single line, and turns
  * a Ctrl-C into the typed {@link CliInterruption} the boundary maps to exit 130.
  */
+import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { CliInterruption, EXIT_POLICY, runCli, type CliRuntime } from "./index.ts";
 import type { WaiverPrompt } from "@agent-delivery-harness/kernel";
 
@@ -71,22 +72,43 @@ export function createWaiverPrompt(input: NodeJS.ReadableStream, output: NodeJS.
 export const readlineWaiverPrompt: WaiverPrompt = (decision, obligationIds) =>
   createWaiverPrompt(process.stdin, process.stderr)(decision, obligationIds);
 
-/** The `file://` href of a filesystem entry path. */
-export function entryHref(entryPath: string): string {
-  return pathToFileURL(entryPath).href;
+/** The spelling the filesystem can vouch for: the realpath where it can answer, the spelling itself where it cannot. */
+function canonicalEntryPath(entryPath: string): string {
+  try {
+    return realpathSync(entryPath);
+  } catch {
+    return entryPath;
+  }
 }
 
 /**
  * Whether this module is the entry the process was started with.
  *
- * Built with `pathToFileURL`, never by interpolating into a `file://` string. A
- * path is not a URL: a `#` or a `?` in any directory name terminates the
- * interpolated form early, the href stops matching, `main` never runs, and every
- * command exits 0 having printed nothing — silent success from a checkout whose
- * only sin was its directory name.
+ * argv and `import.meta.url` may spell the same file differently: argv is the
+ * caller's spelling, and Node builds the module URL from the realpath by
+ * default but from the caller's spelling under `--preserve-symlinks-main`. So
+ * each side is canonicalized independently and the canonical forms compared:
+ * a symlinked spelling matches its realpath whenever the link can be read
+ * (`/tmp` → `/private/tmp` on macOS, a wrapper script's stored path, a pnpm
+ * workspace link), and equal spellings still match when neither side resolves.
+ *
+ * What is NOT claimed: a symlink the filesystem cannot resolve cannot be seen
+ * through, and the failing-exit-code floor below sits inside this guard, so an
+ * under-match exits 0 in silence — the CLI reporting success having verified
+ * nothing. The floor cannot be hoisted above the guard: that would stamp a
+ * failing exit code on every process that merely *imports* this module. And a
+ * non-`file:` module href (a bundled or single-executable build) never
+ * matches — such a build must invoke `main` explicitly.
  */
 export function invokedDirectly(argvEntry: string | undefined, moduleHref: string): boolean {
-  return argvEntry !== undefined && entryHref(argvEntry) === moduleHref;
+  if (argvEntry === undefined) return false;
+  let modulePath: string;
+  try {
+    modulePath = fileURLToPath(moduleHref);
+  } catch {
+    return false;
+  }
+  return canonicalEntryPath(argvEntry) === canonicalEntryPath(modulePath);
 }
 
 export function defaultRuntime(): CliRuntime {
