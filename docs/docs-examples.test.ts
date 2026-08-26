@@ -100,7 +100,14 @@ async function initFixtureRepo(env: NodeJS.ProcessEnv): Promise<string> {
   await git(dir, env, "config", "user.name", "Getting Started Reader");
   await git(dir, env, "config", "commit.gpgsign", "false");
   await writeFile(path.join(dir, "README.md"), "# example project\n", "utf8");
-  await git(dir, env, "add", "README.md");
+  // The guide's stated prerequisite: a Node project in ES-module mode, so the
+  // config and provider script below parse the same way everywhere.
+  await writeFile(
+    path.join(dir, "package.json"),
+    `${JSON.stringify({ name: "example-project", private: true, type: "module" }, null, 2)}\n`,
+    "utf8",
+  );
+  await git(dir, env, "add", "README.md", "package.json");
   await git(dir, env, "commit", "--quiet", "--no-gpg-sign", "-m", "base");
   await git(dir, env, "branch", "origin/main");
   await mkdir(path.join(dir, "src"), { recursive: true });
@@ -186,5 +193,26 @@ describe("the getting-started walkthrough", () => {
     // with the honest attestation label.
     expect(stdout).toContain("verified ");
     expect(stdout).toContain(ATTESTATION_LABEL);
+
+    // FLAG COUPLING, WITHOUT DUPLICATION. The CLI accepts a lone positional
+    // where a flag is optional, so merely executing the walkthrough can survive
+    // a flag rename. The authority on what the flags are called is the CLI's
+    // own usage error — so ask it: run `submit-evidence` with no arguments
+    // through the shim the walkthrough installed, and require every flag the
+    // CLI names in its usage message to appear in the guide's shell blocks.
+    // Rename a flag in the CLI (message and all, as a real rename does) without
+    // updating the guide, and this goes red.
+    const shim = path.join(repo, ".delivery-harness/bin/delivery-harness");
+    const usage = await run(shim, ["submit-evidence"], { cwd: repo, env, timeout: 60_000 }).catch(
+      (error: Error & { stdout?: string; stderr?: string; code?: number }) => error,
+    );
+    const usageExit = usage instanceof Error ? usage.code : 0;
+    expect(usageExit, "submit-evidence with no arguments is a usage error (exit 2)").toBe(2);
+    const usageText = "stderr" in usage && typeof usage.stderr === "string" ? usage.stderr : "";
+    const flags = [...usageText.matchAll(/--[a-z][a-z-]*/g)].map((match) => match[0]);
+    expect(flags.length, `the usage message names its flags: ${JSON.stringify(usageText)}`).toBeGreaterThan(0);
+    for (const flag of flags) {
+      expect(script, `the guide's shell blocks use the CLI's ${flag} flag`).toContain(flag);
+    }
   });
 });
