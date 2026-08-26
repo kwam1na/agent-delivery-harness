@@ -12,6 +12,9 @@
   },
   "files": [
     "src",
-    "vectors"
+    "!src/**/*.test.ts",
+    "vectors",
+    "LICENSE",
+    "NOTICE"
   ]
 }

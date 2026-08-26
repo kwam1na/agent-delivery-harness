@@ -11,6 +11,9 @@
     ".": "./src/index.ts"
   },
   "files": [
-    "src"
+    "src",
+    "!src/**/*.test.ts",
+    "LICENSE",
+    "NOTICE"
   ]
 }

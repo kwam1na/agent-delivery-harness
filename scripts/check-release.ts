@@ -19,7 +19,12 @@
  *   license-coherence — the `LICENSE` file exists at the root, is the Apache
  *       License 2.0, and every manifest's `license` field (root and packages)
  *       says `Apache-2.0`. A tarball whose manifest disagrees with the license
- *       text it ships under is a legal statement nobody made.
+ *       text it ships under is a legal statement nobody made. And the PACK
+ *       SHAPE is checked, not assumed: what `npm pack --dry-run --json`
+ *       reports for each package must include `LICENSE` and `NOTICE`, because
+ *       npm auto-includes a license only from the PACKAGE directory — a root
+ *       LICENSE alone produces five license-less tarballs while every static
+ *       check reports clean, which is exactly the gap this rule closes.
  *   publishability — no workspace package is marked `private` (npm refuses to
  *       pack one, so the dry-run leg could never go green), while the root
  *       manifest MUST stay private: it is the workspace shell, and a root that
@@ -29,6 +34,7 @@
  * Anti-vacuity: a workspace that yields zero packages passes every per-package
  * check vacuously, so an empty package set is itself a finding.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -64,6 +70,12 @@ export const LICENSE_TEXT_MARKERS: readonly string[] = [
   "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
 ];
 
+/**
+ * Files every published tarball must carry. Apache-2.0 §4 requires
+ * redistributions to carry the license, and NOTICE rides with it (§4(d)).
+ */
+export const REQUIRED_PACK_FILES: readonly string[] = ["LICENSE", "NOTICE"];
+
 export interface ReleaseCheckInput {
   /** Absolute path to the repository root. */
   readonly root: string;
@@ -72,6 +84,19 @@ export interface ReleaseCheckInput {
    * own; defaults to the real one.
    */
   readonly harnessVersion?: string;
+  /**
+   * Reports the file list npm would pack for the package at `packageDir`.
+   * Injected so fixture trees can be checked without spawning npm; defaults to
+   * the real `npm pack --dry-run --json`.
+   */
+  readonly packFiles?: (packageDir: string) => readonly string[];
+}
+
+/** The real pack shape, straight from npm — never inferred from `files` globs. */
+export function npmPackFiles(packageDir: string): readonly string[] {
+  const stdout = execFileSync("npm", ["pack", "--dry-run", "--json"], { cwd: packageDir, encoding: "utf8" });
+  const parsed = JSON.parse(stdout) as readonly { readonly files: readonly { readonly path: string }[] }[];
+  return (parsed[0]?.files ?? []).map((file) => file.path);
 }
 
 export interface ReleaseCheckResult {
@@ -192,6 +217,35 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
         file: manifest.path,
         message: `license field is ${JSON.stringify(manifest.license)}, not ${JSON.stringify(EXPECTED_LICENSE_ID)}`,
       });
+    }
+  }
+
+  // license-coherence, pack-shape half: the tarball npm would actually build
+  // must carry the license it is distributed under. npm auto-includes a
+  // LICENSE/NOTICE only from the package's own directory, so this is checked
+  // against the reported pack shape, never assumed from the root.
+  const packFiles = input.packFiles ?? npmPackFiles;
+  for (const manifestRel of packageManifests) {
+    const packageDir = path.join(root, path.dirname(manifestRel));
+    let packed: readonly string[];
+    try {
+      packed = packFiles(packageDir);
+    } catch (error) {
+      findings.push({
+        rule: "license-coherence",
+        file: manifestRel,
+        message: `could not determine the pack shape: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
+    for (const required of REQUIRED_PACK_FILES) {
+      if (!packed.includes(required)) {
+        findings.push({
+          rule: "license-coherence",
+          file: manifestRel,
+          message: `the packed tarball would not carry ${required}; the published artifact must ship the license it is distributed under`,
+        });
+      }
     }
   }
 
