@@ -207,8 +207,13 @@ describe("the getting-started walkthrough", () => {
     // argument-less commands that means their guide lines carry no flags at
     // all). Substring containment would let `--manifest` hide inside
     // `--manifest-file` and `--man` inside `--manifest`; token equality does
-    // not. All data is derived at runtime from the guide and the CLI's own
-    // output — nothing is duplicated here.
+    // not. Both sides are harvested under ONE shared grammar by whitespace
+    // tokenization — an unanchored regex over the usage text would truncate a
+    // `--manifest2` rename back to `--manifest` and silently match the stale
+    // guide. And the guide is tokenized after joining bash continuation lines
+    // the way bash joins them, so a flag on a `\`-continued line is still that
+    // command's flag. All data is derived at runtime from the guide and the
+    // CLI's own output — nothing is duplicated here.
     const shim = path.join(repo, ".delivery-harness/bin/delivery-harness");
     const usage = await run(shim, ["submit-evidence"], { cwd: repo, env, timeout: 60_000 }).catch(
       (error: Error & { stdout?: string; stderr?: string; code?: number }) => error,
@@ -217,17 +222,25 @@ describe("the getting-started walkthrough", () => {
     expect(usageExit, "submit-evidence with no arguments is a usage error (exit 2)").toBe(2);
     const usageText = "stderr" in usage && typeof usage.stderr === "string" ? usage.stderr : "";
 
-    const FLAG_TOKEN = /^--[a-z][a-z-]*$/;
+    // The one flag grammar, shared by both harvests: `--`, a letter, then
+    // letters/digits/hyphens. Anchored — a token either is a flag or is not.
+    const FLAG_TOKEN = /^--[a-z][A-Za-z0-9-]*$/;
+    const flagTokensIn = (text: string): string[] =>
+      text
+        .trim()
+        .split(/\s+/)
+        .filter((token) => FLAG_TOKEN.test(token));
+
     const guideFlagTokens = new Set<string>();
-    for (const line of script.split("\n")) {
+    for (const line of script.replace(/\\\n/g, " ").split("\n")) {
       const tokens = line.trim().split(/\s+/);
       const command = tokens.indexOf("delivery-harness");
       if (command === -1) continue;
-      for (const token of tokens.slice(command + 1)) {
-        if (FLAG_TOKEN.test(token)) guideFlagTokens.add(token);
+      for (const token of flagTokensIn(tokens.slice(command + 1).join(" "))) {
+        guideFlagTokens.add(token);
       }
     }
-    const usageFlagTokens = new Set([...usageText.matchAll(/--[a-z][a-z-]*/g)].map((match) => match[0]));
+    const usageFlagTokens = new Set(flagTokensIn(usageText));
     expect(usageFlagTokens.size, `the usage message names its flags: ${JSON.stringify(usageText)}`).toBeGreaterThan(0);
     for (const flag of usageFlagTokens) {
       expect([...guideFlagTokens], `the guide passes the CLI's ${flag} flag on a delivery-harness line`).toContain(flag);
