@@ -88,6 +88,15 @@ const APPROVAL_MEMBERS = {
   required: ["schemaVersion", "reviewerId", "result", "provider", "workspaceId", "candidate"],
 } as const;
 
+/**
+ * The stamp's provider triple is closed like every other object in the
+ * contract. The candidate inside a stamp is compared by canonical form, so an
+ * extra member there is already a mismatch; this nested object is compared
+ * member by member, so without its own table it would be the one place in the
+ * §9.2 grammar something could ride along.
+ */
+const APPROVAL_PROVIDER_MEMBERS = { required: ["id", "runId", "finalPassId"] } as const;
+
 const FINDING_CODES: MemberCodes = {
   unknown: GEN_1_UNKNOWN,
   missing: { code: "finding_invalid", rule: "RG-5" },
@@ -347,6 +356,9 @@ function checkApprovals(input: ReviewGreenClaimInput, selected: readonly string[
     }
 
     const stampProvider = member(parsed, "provider");
+    if (isRecord(stampProvider)) {
+      checkMembers(stampProvider, pointer(at, "provider"), APPROVAL_PROVIDER_MEMBERS, APPROVAL_CODES, collector);
+    }
     const providerMatches =
       isRecord(stampProvider) &&
       member(stampProvider, "id") === input.provider.id &&

@@ -278,6 +278,14 @@ describe("approval stamps", () => {
     }
   });
 
+  it("must be closed against unknown members in the nested provider triple too", () => {
+    // The stamp's own grammar is closed at the root and inside the candidate;
+    // an open nested object would be the one place a member could ride along.
+    expect(
+      codesFor({}, { artifactContents: new Map([["reviewers/solo.json", approval({ provider: { ...PROVIDER, smuggled: "x" } })]]) }),
+    ).toContain("approval_mismatch");
+  });
+
   it("must be JSON, present, and closed against unknown members", () => {
     expect(codesFor({}, { artifactContents: new Map([["reviewers/solo.json", "not json"]]) })).toContain("approval_mismatch");
     expect(codesFor({}, { artifactContents: new Map() })).toContain("approval_mismatch");

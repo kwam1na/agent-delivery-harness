@@ -10,11 +10,14 @@
  *
  * UNIT MODE. The validator is pure: it judges a manifest against a repository
  * configuration and the candidate observation the caller supplies. Five vectors
- * expect codes only a recorder can reach — bytes materialized under an allocated
- * run root, and the record store a second submission collides with. Those are
- * enumerated by name in `RECORDER_DEPENDENT_VECTORS` and skipped here, loudly:
- * a name that has vanished from the kit fails the run rather than quietly
- * reducing coverage, which is the failure mode an unnamed skip list has.
+ * expect outcomes that belong to the recorder's surface — the run root it
+ * allocates, the record store a second submission collides with, and the
+ * artifact bytes it verifies through its fs port. That is a scope boundary, not
+ * a limit of what a manifest expresses, and integration mode is where those five
+ * are covered. Until then they are enumerated by name in
+ * `RECORDER_DEPENDENT_VECTORS` and skipped here, loudly: a name that has
+ * vanished from the kit fails the run rather than quietly reducing coverage,
+ * which is the failure mode an unnamed skip list has.
  *
  * CONFIGURATION IS A PARAMETER. The kit ships its own repository configuration
  * and the vectors are bound to it, so it is the default — but it arrives through
@@ -94,14 +97,16 @@ export interface DeferredVector {
 }
 
 /**
- * The vectors whose expectation is a conclusion about state the recorder owns.
- * Each was classified by reading the vector: what it overrides, what protocol it
- * declares in `extra`, and which code it expects.
+ * The vectors whose expectation lands on the recorder's surface. Each was
+ * classified by reading the vector: what it overrides, what protocol it declares
+ * in `extra`, and which code it expects. All five are covered in integration
+ * mode, where the recorder allocates a run root, materializes the bytes, and
+ * publishes records.
  */
 export const RECORDER_DEPENDENT_VECTORS: readonly DeferredVector[] = Object.freeze([
   Object.freeze({
     id: "a-idempotent-resubmission",
-    reason: "extra.submitTwice — the claim is about record ids being identical across two submissions, which requires records to be written",
+    reason: "extra.submitTwice — the claim is about record ids being identical across two submissions, so it is a claim about records the recorder writes",
   }),
   Object.freeze({
     id: "sub-4-record-conflict",
@@ -113,11 +118,11 @@ export const RECORDER_DEPENDENT_VECTORS: readonly DeferredVector[] = Object.free
   }),
   Object.freeze({
     id: "env-10-artifact-missing-file",
-    reason: "artifact_digest_mismatch — the entry names a file the run root does not contain, which is a filesystem observation",
+    reason: "artifact_digest_mismatch — the vector's point is an entry naming a file the run root does not contain, and ENV-11 is verified by the recorder's fs port against the files it materialized, not against a caller-assembled map of strings",
   }),
   Object.freeze({
     id: "env-11-artifact-digest-mismatch",
-    reason: "artifact_digest_mismatch — the declared digest is compared against the bytes on disk at submission",
+    reason: "artifact_digest_mismatch — the same boundary: ENV-11 compares each declared digest against the file's bytes at submission, which is the recorder's fs port doing a filesystem operation",
   }),
 ]);
 

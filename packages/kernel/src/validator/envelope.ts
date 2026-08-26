@@ -8,14 +8,15 @@
  * necessary but not sufficient — closed grammar, cross-field re-derivation, and
  * the code registry are what conformance is defined by.
  *
- * WHAT IT REFUSES TO GUESS. Four rejection codes are conclusions about state
- * only the recorder observes — bytes under an allocated run root (ENV-10's
- * realpath clause, ENV-11) and the published record store (SUB-3, SUB-4). This
- * validator does no I/O, so it does not reach them; they are registered in
- * `codes.ts` with `emitter: "recorder"` and belong to the submission flow that
- * owns the filesystem. What it does judge from caller-supplied observation is
- * SUB-1 and SUB-2, because a candidate capture and a preparation state are
- * values, not file handles.
+ * WHERE IT STOPS. Four rejection codes belong to the recorder's surface rather
+ * than to this module: the run root it allocates (SUB-3), the record store it
+ * publishes into (SUB-4), and the artifact bytes it reads and hashes through its
+ * fs port (ENV-10's realpath clause, ENV-11). RG-4 is handed approval-stamp
+ * contents as values because it reads their *meaning*; whether those bytes are
+ * the bytes at the declared path is a filesystem question, and answering it from
+ * a caller-assembled map would report a check that never ran. What this module
+ * does judge from caller-supplied observation is SUB-1 and SUB-2, because a
+ * candidate capture and a preparation state are values, not file handles.
  *
  * REPORTING. Every rule runs. Nothing short-circuits on a first failure, which
  * is what SUB-5 requires and what makes the conformance kit's multi-code
@@ -493,13 +494,14 @@ function isSafeRelativePath(value: string): boolean {
 // ── §5.8 shape (never a decision input) ────────────────────────────────────
 
 function checkTimestamp(root: Record<string, unknown>, collector: Collector): void {
-  // Grammar only. GEN-5 forbids consulting this value; it does not exempt the
-  // member from the closed grammar, and its bytes participate in the manifest
-  // digest like any other member.
-  const name = "recordedAt";
-  const value = member(root, name);
+  // Grammar only, and the sensor's one registered timestamp-read site: GEN-5
+  // forbids *consulting* this value, not knowing that the closed grammar
+  // requires it. Nothing below compares it, orders it, or derives anything from
+  // it — it is checked for being a non-empty string and dropped. Its bytes
+  // participate in the manifest digest like any other member.
+  const value = member(root, "recordedAt");
   if (value !== undefined && !isNonEmptyString(value)) {
-    collector.emit("malformed_field", "GEN-4", pointer("", name), "member is empty or not a string");
+    collector.emit("malformed_field", "GEN-4", "/recordedAt", "member is empty or not a string");
   }
 }
 

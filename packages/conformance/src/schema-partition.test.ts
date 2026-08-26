@@ -163,6 +163,28 @@ describe("the schema evaluator", () => {
     expect(() => validateAgainstSchema({ type: "string", contentEncoding: "base64" }, "x")).toThrow(/unsupported/);
   });
 
+  it("refuses a $ref carrying constraints beside it, rather than dropping them", () => {
+    // A sibling constraint next to $ref applies in 2020-12. Silently resolving
+    // through it would report a pass for a constraint never applied — the same
+    // failure the unsupported-keyword throw exists to prevent.
+    expect(() => validateAgainstSchema({ $ref: "#/$defs/x", type: "string", $defs: { x: { type: "number" } } }, 1)).toThrow(/sibling/);
+  });
+
+  it("allows the metadata keywords that carry no constraint beside a $ref", () => {
+    expect(validateAgainstSchema({ $ref: "#/$defs/x", title: "t", description: "d", $defs: { x: { type: "string" } } }, "a")).toEqual([]);
+  });
+
+  it("evaluates boolean subschemas as the schemas they are", () => {
+    // `true` admits anything, `false` admits nothing — wherever a subschema is
+    // allowed. Treating `true` as "no schema here" would fall through to
+    // additionalProperties and invent a violation.
+    expect(validateAgainstSchema({ type: "object", additionalProperties: false, properties: { a: true } }, { a: 1 })).toEqual([]);
+    expect(validateAgainstSchema({ type: "object", properties: { a: false } }, { a: 1 })).toHaveLength(1);
+    expect(validateAgainstSchema({ type: "object", additionalProperties: true }, { a: 1 })).toEqual([]);
+    expect(validateAgainstSchema({ type: "array", items: true }, [1, "two"])).toEqual([]);
+    expect(validateAgainstSchema({ type: "array", items: false }, [1])).toHaveLength(1);
+  });
+
   it("finds the violations it claims to find", () => {
     expect(validateAgainstSchema({ type: "object", additionalProperties: false, properties: {} }, { extra: 1 })).toHaveLength(1);
     expect(validateAgainstSchema({ type: "array", uniqueItems: true }, ["a", "a"])).toHaveLength(1);

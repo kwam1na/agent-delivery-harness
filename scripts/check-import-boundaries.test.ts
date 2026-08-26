@@ -7,18 +7,20 @@
  * deliberately outside every real scan root, and are injected through the
  * sensor's `root` / `protectedClasses` parameters.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   PROTECTED_CLASSES,
   SCAN_ROOTS,
+  TIMESTAMP_READ_EXEMPTIONS,
   repoRootFromHere,
   runImportBoundarySensor,
   type Finding,
   type ProtectedClass,
   type SensorRule,
+  type TimestampReadExemption,
 } from "./check-import-boundaries.ts";
 
 // ── Fixture tree ───────────────────────────────────────────────────────────
@@ -47,7 +49,14 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
   "packages/kernel/src/context.ts": `import { blocker } from "./blockers.ts";\nexport const classify = (env: Record<string, string>): string => blocker(env["CI"] ?? "unknown");\n`,
   "packages/kernel/src/evaluator.ts": `import type { CandidateShape } from "./candidate.types.ts";\nimport { sha256 } from "./digest.ts";\nimport { classify } from "./context.ts";\nexport const evaluate = (c: CandidateShape, e: Record<string, string>): string => sha256(c.digest) + classify(e);\n`,
   "packages/kernel/src/validator/codes.ts": `export const CODES = ["unknown_member"] as const;\n`,
-  "packages/kernel/src/validator/envelope.ts": `import type { RecordShape } from "../records.types.ts";\nimport { canonicalize } from "../canonical.ts";\nimport { CODES } from "./codes.ts";\nexport const validate = (r: RecordShape): string => canonicalize(r) + CODES[0];\n`,
+  "packages/kernel/src/validator/envelope.ts":
+    `import type { RecordShape } from "../records.types.ts";\n` +
+    `import { canonicalize } from "../canonical.ts";\n` +
+    `import { CODES } from "./codes.ts";\n` +
+    `const read = (o: Record<string, unknown>, k: string): unknown => o[k];\n` +
+    `export const validate = (r: RecordShape): string => canonicalize(r) + CODES[0];\n` +
+    // The registered site: the closed grammar has to know the member exists.
+    `export function checkTimestamp(m: Record<string, unknown>): boolean {\n  return typeof read(m, "recordedAt") === "string";\n}\n`,
 
   // d2 — fs only through the artifacts port.
   "packages/kernel/src/recorder.ts": `import type { ArtifactsPort } from "./artifacts.types.ts";\nexport const submit = (port: ArtifactsPort, p: string): Promise<string> => port.read(p);\n`,
@@ -95,9 +104,22 @@ function registryFor(root: string): ProtectedClass[] {
   }));
 }
 
+/**
+ * Exemptions derived from the fixture, on the same principle as `registryFor`:
+ * a fixture that does not contain the registered site is not making a claim
+ * about it. The registry's own load-bearingness is asserted against the real
+ * tree, and by the three tests that pass an explicit registry.
+ */
+function exemptionsFor(root: string): TimestampReadExemption[] {
+  return TIMESTAMP_READ_EXEMPTIONS.filter((entry) => {
+    const abs = path.join(root, entry.file);
+    return existsSync(abs) && readFileSync(abs, "utf8").includes('"recordedAt"');
+  });
+}
+
 function scan(overrides: Readonly<Record<string, string>> = {}): readonly Finding[] {
   const root = writeTree({ ...CLEAN_TREE, ...overrides });
-  return runImportBoundarySensor({ root, protectedClasses: registryFor(root) }).findings;
+  return runImportBoundarySensor({ root, protectedClasses: registryFor(root), timestampReadExemptions: exemptionsFor(root) }).findings;
 }
 
 function rules(findings: readonly Finding[]): SensorRule[] {
@@ -551,6 +573,61 @@ describe("rule e — GEN-5 time ban", () => {
       { "packages/kernel/src/admission.ts": `export const admit = (m: { recordedAt: string }): string => { const { recordedAt: at } = m; return at; };\n` },
       "packages/kernel/src/admission.ts",
     );
+  });
+
+  it("rejects a `\"recordedAt\"` literal handed to a member reader in a decision path", () => {
+    // The evasion an indirect reader opens: every member read in validator/
+    // goes through a helper, so none of the three syntactic forms above appears
+    // there at all. Without this form the recordedAt half of the rule would be
+    // unfalsifiable over that whole class.
+    const findings = expectFalsified(
+      "e-time-ban",
+      {
+        "packages/kernel/src/validator/envelope.ts":
+          `const read = (o: Record<string, unknown>, k: string): unknown => o[k];\n` +
+          `export const validate = (m: Record<string, unknown>): unknown => read(m, "recordedAt");\n` +
+          `export function checkTimestamp(m: Record<string, unknown>): boolean {\n  return typeof read(m, "recordedAt") === "string";\n}\n`,
+      },
+      "packages/kernel/src/validator/envelope.ts",
+    );
+    expect(findings.some((f) => f.rule === "e-time-ban" && f.message.includes("TIMESTAMP_READ_EXEMPTIONS"))).toBe(true);
+  });
+
+  it("leaves the registered structural read alone, and goes red the moment its registration is dropped", () => {
+    // Registration is load-bearing in both directions: the site is green only
+    // because it is registered, and the registry is checked against the site.
+    expect(rules(scan())).not.toContain("e-time-ban");
+
+    const root = writeTree(CLEAN_TREE);
+    const unregistered = runImportBoundarySensor({ root, protectedClasses: registryFor(root), timestampReadExemptions: [] }).findings;
+    expect(rules(unregistered)).toContain("e-time-ban");
+  });
+
+  it("reports a registration that exempts nothing, and one that would cover two reads", () => {
+    const withoutSite = writeTree({
+      ...CLEAN_TREE,
+      "packages/kernel/src/validator/envelope.ts": `export const validate = (m: Record<string, unknown>): unknown => m["id"];\n`,
+    });
+    const orphaned = runImportBoundarySensor({
+      root: withoutSite,
+      protectedClasses: registryFor(withoutSite),
+      timestampReadExemptions: TIMESTAMP_READ_EXEMPTIONS,
+    }).findings;
+    expect(orphaned.some((f) => f.rule === "anti-vacuity" && f.message.includes("exempts nothing"))).toBe(true);
+
+    const twice = writeTree({
+      ...CLEAN_TREE,
+      "packages/kernel/src/validator/envelope.ts":
+        `const read = (o: Record<string, unknown>, k: string): unknown => o[k];\n` +
+        `export function checkTimestamp(m: Record<string, unknown>): boolean {\n` +
+        `  return typeof read(m, "recordedAt") === "string" && read(m, "recordedAt") !== "";\n}\n`,
+    });
+    const twoReads = runImportBoundarySensor({
+      root: twice,
+      protectedClasses: registryFor(twice),
+      timestampReadExemptions: TIMESTAMP_READ_EXEMPTIONS,
+    }).findings;
+    expect(twoReads.some((f) => f.rule === "anti-vacuity" && f.message.includes("exactly one"))).toBe(true);
   });
 
   it("leaves a bare `recordedAt` parameter in a decision path alone", () => {

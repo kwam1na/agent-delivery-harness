@@ -14,13 +14,19 @@
  * a submission it is being offered. The two vocabularies never mix, and nothing
  * here is a blocker code.
  *
- * WHO EMITS WHAT. Four codes cannot be reached from a manifest alone: they are
- * conclusions about the filesystem and the record store, which the recorder
- * observes and the pure validator never touches. They are registered here
- * anyway — the registry is the whole registry — and carry `emitter: "recorder"`
- * so the split is a stated fact with a test behind it rather than an omission.
- * The conformance kit's five recorder-dependent vectors are exactly the vectors
- * whose expected codes live on that side of the line.
+ * WHERE THE LINE IS. Four codes are not this validator's to emit. The reason is
+ * a scope boundary, not an inability: what they judge is the recorder's
+ * surface — the run root it allocates (SUB-3), the record store it publishes
+ * into (SUB-4), and the artifact bytes it reads through its fs port (ENV-10's
+ * realpath clause, ENV-11). Byte-level artifact verification is the clearest
+ * case: it is a filesystem operation over files at declared paths, and a digest
+ * taken over whatever string map a caller assembled is a different operation
+ * with a different meaning — running it here would report a verification that
+ * never happened. The codes are registered anyway, because the registry is the
+ * whole registry, and carry `emitter: "recorder"` so the split is a stated fact
+ * with a test behind it. The conformance kit's five recorder-dependent vectors
+ * are exactly the vectors whose expectations sit on that side of the line;
+ * their coverage arrives with integration mode.
  */
 import type { NonEmptyTuple } from "../blockers.ts";
 
@@ -153,9 +159,11 @@ export type ManifestRejectionCode = (typeof MANIFEST_REJECTION_CODES)[number];
  * `validator` — decidable from the manifest, the repository configuration, and
  * the candidate observation the caller supplies.
  *
- * `recorder` — decidable only from state the recorder owns: bytes on disk under
- * an allocated run root, and the evidence records already published. A pure
- * validator that answered these would be guessing.
+ * `recorder` — owned by the recorder's surface: the run root it allocates, the
+ * records it publishes, and the artifact bytes it reads and hashes through its
+ * fs port. A pure validator can be handed values that resemble those things,
+ * which is exactly why it must not answer in their name: a caller would then
+ * hold a verification nobody performed.
  */
 export type RejectionEmitter = "validator" | "recorder";
 

@@ -10,11 +10,12 @@
  * in-kernel.
  *
  * WHY IT REFUSES WHAT IT DOES NOT KNOW. It implements exactly the keywords the
- * two published schemas use and **throws** on any other keyword. An evaluator
- * that skipped an unrecognized constraint would silently report "passes the
- * schema" for a document the schema rejects, which is the one failure this
- * cross-check cannot afford: the partition it feeds would then be wrong in the
- * direction that hides a disagreement.
+ * two published schemas use and **throws** on any other keyword — and, for the
+ * same reason, on a constraint sitting beside a `$ref`, which it would otherwise
+ * drop while resolving. An evaluator that skipped an unrecognized constraint
+ * would silently report "passes the schema" for a document the schema rejects,
+ * which is the one failure this cross-check cannot afford: the partition it
+ * feeds would then be wrong in the direction that hides a disagreement.
  */
 
 export interface SchemaViolation {
@@ -51,6 +52,12 @@ const SUPPORTED_KEYWORDS: ReadonlySet<string> = new Set([
 ]);
 
 type Schema = Record<string, unknown>;
+
+/** A subschema is an object, or a boolean: `true` admits anything, `false` nothing. */
+type Subschema = Schema | boolean;
+
+/** Keywords that carry no constraint, and so may legally sit beside a `$ref`. */
+const METADATA_KEYWORDS: ReadonlySet<string> = new Set(["$ref", "$schema", "$id", "$defs", "title", "description"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -94,10 +101,36 @@ function resolve(root: Schema, schema: Schema): Schema {
   if (typeof ref !== "string" || !ref.startsWith("#/$defs/")) {
     throw new Error(`unsupported $ref "${String(ref)}"`);
   }
+  // In 2020-12 a constraint beside a `$ref` still applies. This evaluator
+  // replaces the schema with its target, so a sibling constraint would be
+  // dropped — which is the silent-pass failure the whole module refuses.
+  const siblings = Object.keys(schema).filter((keyword) => !METADATA_KEYWORDS.has(keyword));
+  if (siblings.length > 0) {
+    throw new Error(`unsupported $ref sibling keyword(s): ${siblings.join(", ")}`);
+  }
   const defs = root["$defs"];
   const name = ref.slice("#/$defs/".length);
   if (!isRecord(defs) || !isRecord(defs[name])) throw new Error(`unresolvable $ref "${ref}"`);
   return defs[name];
+}
+
+/** Evaluates a value against a subschema in either of its two forms. */
+function checkSubschema(
+  root: Schema,
+  subschema: Subschema,
+  instance: unknown,
+  pointer: string,
+  violations: SchemaViolation[],
+  keyword: string,
+  message: string,
+): void {
+  if (subschema === true) return;
+  if (subschema === false) {
+    violations.push({ pointer, keyword, message });
+    return;
+  }
+  if (!isRecord(subschema)) throw new Error(`unsupported subschema ${JSON.stringify(subschema)}`);
+  check(root, subschema, instance, pointer, violations);
 }
 
 function check(root: Schema, rawSchema: Schema, instance: unknown, pointer: string, violations: SchemaViolation[]): void {
@@ -158,9 +191,9 @@ function check(root: Schema, rawSchema: Schema, instance: unknown, pointer: stri
       if (seen.size !== instance.length) emit("uniqueItems", "items are not unique");
     }
     const items = schema["items"];
-    if (isRecord(items)) {
+    if (items !== undefined) {
       instance.forEach((item, index) => {
-        check(root, items, item, `${pointer}/${index}`, violations);
+        checkSubschema(root, items as Subschema, item, `${pointer}/${index}`, violations, "items", "no item is valid here");
       });
     }
   }
@@ -176,17 +209,14 @@ function check(root: Schema, rawSchema: Schema, instance: unknown, pointer: stri
     }
     const properties = isRecord(schema["properties"]) ? schema["properties"] : {};
     for (const [name, value] of Object.entries(instance)) {
-      const propertySchema = properties[name];
-      if (isRecord(propertySchema)) {
-        check(root, propertySchema, value, `${pointer}/${escape(name)}`, violations);
+      const at = `${pointer}/${escape(name)}`;
+      if (Object.prototype.hasOwnProperty.call(properties, name)) {
+        checkSubschema(root, properties[name] as Subschema, value, at, violations, "properties", "no value is valid for this property");
         continue;
       }
       const additional = schema["additionalProperties"];
-      if (additional === false) {
-        violations.push({ pointer: `${pointer}/${escape(name)}`, keyword: "additionalProperties", message: "property is not allowed" });
-      } else if (isRecord(additional)) {
-        check(root, additional, value, `${pointer}/${escape(name)}`, violations);
-      }
+      if (additional === undefined) continue;
+      checkSubschema(root, additional as Subschema, value, at, violations, "additionalProperties", "property is not allowed");
     }
   }
 }

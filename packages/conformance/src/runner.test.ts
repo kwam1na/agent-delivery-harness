@@ -83,11 +83,12 @@ describe("the vendored kit", () => {
     }
   });
 
-  it("defers nothing a pure validator could have decided", () => {
-    // The mechanical justification for the skip list: each deferred reject
-    // vector expects a code the registry marks as recorder-emitted, and the one
-    // deferred accept vector expects a multi-step protocol rather than a single
-    // submission. Anything else on this list would be coverage quietly dropped.
+  it("defers only what the recorder's surface owns", () => {
+    // The mechanical justification for the skip list, and the standard a
+    // proposed sixth entry has to meet: each deferred reject vector expects a
+    // code the registry marks as recorder-emitted, and the one deferred accept
+    // vector expects a multi-step protocol rather than a single submission.
+    // Anything else on this list would be coverage dropped rather than deferred.
     for (const { id } of RECORDER_DEPENDENT_VECTORS) {
       const deferred = vector(id);
       if (deferred.expect.result === "accepted") {
