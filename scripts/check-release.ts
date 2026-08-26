@@ -25,6 +25,20 @@
  *       npm auto-includes a license only from the PACKAGE directory — a root
  *       LICENSE alone produces five license-less tarballs while every static
  *       check reports clean, which is exactly the gap this rule closes.
+ *   dependency-closure — every sibling package a package's PUBLISHED files
+ *       import is declared in that package's `dependencies`, pinned to the
+ *       lockstep version. Inside the workspace npm symlinks the siblings, so an
+ *       undeclared edge resolves for the typecheck, the unit suite, the docs
+ *       walkthrough, and `npm publish --dry-run` alike — dry-run verifies that a
+ *       tarball can be BUILT, never that it can be INSTALLED. Published, the
+ *       same edge is `ERR_MODULE_NOT_FOUND` on the consumer's first line. The
+ *       import set is read from the PACK SHAPE, for the same reason the license
+ *       rule is: test files are excluded from the tarballs, so a test-only
+ *       import is not a runtime dependency and must not be declared as one.
+ *       Three distinct findings — `dependency-undeclared` (imported, not
+ *       declared), `dependency-version-drift` (declared at a version that is not
+ *       the sibling's own), `dependency-unused` (declared, never imported from
+ *       the published files).
  *   publishability — no workspace package is marked `private` (npm refuses to
  *       pack one, so the dry-run leg could never go green), while the root
  *       manifest MUST stay private: it is the workspace shell, and a root that
@@ -38,6 +52,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { HARNESS_VERSION } from "@agent-delivery-harness/kernel";
 
 // ── Registry ─────────────────────────────────────────────────────────────────
@@ -46,6 +61,9 @@ export type ReleaseRule =
   | "version-consistency"
   | "harness-version-lockstep"
   | "license-coherence"
+  | "dependency-undeclared"
+  | "dependency-version-drift"
+  | "dependency-unused"
   | "publishability"
   | "manifest-unreadable"
   | "anti-vacuity";
@@ -76,6 +94,9 @@ export const LICENSE_TEXT_MARKERS: readonly string[] = [
  */
 export const REQUIRED_PACK_FILES: readonly string[] = ["LICENSE", "NOTICE"];
 
+/** The npm scope every workspace package publishes under. */
+export const PACKAGE_SCOPE = "@agent-delivery-harness";
+
 export interface ReleaseCheckInput {
   /** Absolute path to the repository root. */
   readonly root: string;
@@ -90,6 +111,12 @@ export interface ReleaseCheckInput {
    * the real `npm pack --dry-run --json`.
    */
   readonly packFiles?: (packageDir: string) => readonly string[];
+  /**
+   * The npm scope whose packages count as siblings for the dependency-closure
+   * rule. Injected so fixture trees can use a scope of their own; defaults to
+   * this workspace's.
+   */
+  readonly packageScope?: string;
 }
 
 /** The real pack shape, straight from npm — never inferred from `files` globs. */
@@ -113,6 +140,8 @@ interface Manifest {
   readonly version: string | undefined;
   readonly license: string | undefined;
   readonly isPrivate: boolean;
+  /** Declared runtime dependencies, as written. */
+  readonly dependencies: Readonly<Record<string, string>>;
 }
 
 function readManifest(root: string, relativePath: string, findings: ReleaseFinding[]): Manifest | undefined {
@@ -133,13 +162,147 @@ function readManifest(root: string, relativePath: string, findings: ReleaseFindi
     return undefined;
   }
   const record = parsed as Record<string, unknown>;
+  const rawDependencies = record["dependencies"];
+  const dependencies: Record<string, string> = {};
+  if (typeof rawDependencies === "object" && rawDependencies !== null) {
+    for (const [name, range] of Object.entries(rawDependencies as Record<string, unknown>)) {
+      if (typeof range === "string") dependencies[name] = range;
+    }
+  }
   return {
     path: relativePath,
     name: typeof record["name"] === "string" ? (record["name"] as string) : relativePath,
     version: typeof record["version"] === "string" ? (record["version"] as string) : undefined,
     license: typeof record["license"] === "string" ? (record["license"] as string) : undefined,
     isPrivate: record["private"] === true,
+    dependencies,
   };
+}
+
+// ── dependency-closure ───────────────────────────────────────────────────────
+
+/**
+ * Sibling package names imported by `source`, parsed with the TypeScript
+ * compiler API rather than matched out of the text — a scope name in a comment
+ * or in a `PACKAGE_NAME` string constant is not an import, and every package in
+ * this workspace contains exactly such a constant naming itself.
+ *
+ * TYPE-ONLY IMPORTS COUNT, deliberately. These packages publish TypeScript
+ * source (`exports` points at `./src/index.ts`), so a consumer's own `tsc` has
+ * to resolve every specifier the shipped source names — a `import type { … }
+ * from "@agent-delivery-harness/kernel"` that npm never installed is a hard
+ * build failure for that consumer, not a lint. `dependencies` is where a
+ * package states what must be present for it to be usable, and under
+ * source-publishing that includes the type edges. (Today every sibling edge in
+ * this workspace is a mixed value+type import, so the distinction changes no
+ * finding; the rule is written this way so a future type-only edge stays
+ * declared rather than silently dropping out.)
+ */
+export function siblingImportsOf(source: string, fileName: string, scope: string = PACKAGE_SCOPE): readonly string[] {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, /* setParentNodes */ false, ts.ScriptKind.TS);
+  const found = new Set<string>();
+
+  const record = (specifier: string): void => {
+    if (!specifier.startsWith(`${scope}/`)) return;
+    // A subpath import (`@scope/pkg/sub`) still depends on `@scope/pkg`.
+    const segments = specifier.split("/");
+    const scopeSegment = segments[0];
+    const nameSegment = segments[1];
+    if (scopeSegment === undefined || nameSegment === undefined) return;
+    found.add(`${scopeSegment}/${nameSegment}`);
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      record(node.moduleSpecifier.text);
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
+      record(node.moduleSpecifier.text);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const ref = node.moduleReference.expression;
+      if (ts.isStringLiteral(ref)) record(ref.text);
+    } else if (ts.isCallExpression(node)) {
+      const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const isRequire = ts.isIdentifier(node.expression) && node.expression.text === "require";
+      const first = node.arguments[0];
+      if ((isDynamicImport || isRequire) && first !== undefined && ts.isStringLiteralLike(first)) record(first.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(file, visit);
+
+  return [...found].sort();
+}
+
+function checkDependencyClosure(
+  root: string,
+  manifestRel: string,
+  manifest: Manifest,
+  packed: readonly string[],
+  versionOf: ReadonlyMap<string, string | undefined>,
+  scope: string,
+  findings: ReleaseFinding[],
+): void {
+  const packageDir = path.join(root, path.dirname(manifestRel));
+
+  const sources = packed.filter((file) => file.endsWith(".ts") && !file.endsWith(".d.ts"));
+  if (sources.length === 0) {
+    findings.push({
+      rule: "anti-vacuity",
+      file: manifestRel,
+      message: "the packed tarball carries no TypeScript source, so the dependency-closure rule would pass over it vacuously",
+    });
+    return;
+  }
+
+  const imported = new Map<string, string>();
+  for (const relFile of sources) {
+    const absolute = path.join(packageDir, relFile);
+    let text: string;
+    try {
+      text = readFileSync(absolute, "utf8");
+    } catch (error) {
+      findings.push({
+        rule: "anti-vacuity",
+        file: `${path.dirname(manifestRel)}/${relFile}`,
+        message: `npm would pack this file but it could not be read, so its imports went unchecked: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
+    for (const sibling of siblingImportsOf(text, absolute, scope)) {
+      if (sibling === manifest.name) continue; // a package is not its own dependency
+      if (!imported.has(sibling)) imported.set(sibling, relFile);
+    }
+  }
+
+  for (const [sibling, whereFirstSeen] of [...imported].sort()) {
+    const declared = manifest.dependencies[sibling];
+    const expected = versionOf.get(sibling);
+    if (declared === undefined) {
+      findings.push({
+        rule: "dependency-undeclared",
+        file: manifestRel,
+        message: `published file ${whereFirstSeen} imports ${sibling}, which is not in \`dependencies\`; inside the workspace npm symlinks it, but \`npm install ${manifest.name}\` would fetch this tarball alone and the import would throw ERR_MODULE_NOT_FOUND${expected === undefined ? "" : ` — declare it as ${JSON.stringify(expected)}`}`,
+      });
+      continue;
+    }
+    if (expected !== undefined && declared !== expected) {
+      findings.push({
+        rule: "dependency-version-drift",
+        file: manifestRel,
+        message: `declares ${sibling} at ${JSON.stringify(declared)} but that package is at ${JSON.stringify(expected)}; the workspace releases in lockstep, so the pin must be the exact sibling version`,
+      });
+    }
+  }
+
+  for (const declared of Object.keys(manifest.dependencies).sort()) {
+    if (!declared.startsWith(`${scope}/`)) continue;
+    if (imported.has(declared)) continue;
+    findings.push({
+      rule: "dependency-unused",
+      file: manifestRel,
+      message: `declares ${declared} but no published file imports it; a dependency nobody needs is one every consumer installs for nothing, and it hides the edge that was really dropped`,
+    });
+  }
 }
 
 export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
@@ -224,7 +387,14 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
   // must carry the license it is distributed under. npm auto-includes a
   // LICENSE/NOTICE only from the package's own directory, so this is checked
   // against the reported pack shape, never assumed from the root.
+  //
+  // The same pack shape answers the dependency-closure rule below: what a
+  // package SHIPS is what its declarations have to cover, and `files` excludes
+  // the tests — so a sibling imported only from a `*.test.ts` is correctly not a
+  // runtime dependency.
   const packFiles = input.packFiles ?? npmPackFiles;
+  const versionOf = new Map<string, string | undefined>(packages.map((pkg) => [pkg.name, pkg.version]));
+  const packagesByPath = new Map(packages.map((pkg) => [pkg.path, pkg]));
   for (const manifestRel of packageManifests) {
     const packageDir = path.join(root, path.dirname(manifestRel));
     let packed: readonly string[];
@@ -246,6 +416,11 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
           message: `the packed tarball would not carry ${required}; the published artifact must ship the license it is distributed under`,
         });
       }
+    }
+
+    const manifest = packagesByPath.get(manifestRel);
+    if (manifest !== undefined) {
+      checkDependencyClosure(root, manifestRel, manifest, packed, versionOf, input.packageScope ?? PACKAGE_SCOPE, findings);
     }
   }
 

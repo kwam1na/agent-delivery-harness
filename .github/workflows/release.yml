@@ -19,9 +19,30 @@
 #             v1 boundary note in packages/action/action.yml) is deliberate
 #             future release mechanics, not this workflow.
 #
+#   install — scripts/check-standalone-install.ts: the leg that leaves the
+#             workspace. It packs all five packages, installs each tarball ALONE
+#             into a temp directory outside the repository, and proves the
+#             installed thing imports and runs. This is the only check in the
+#             repository that exercises the standalone-install path, which is
+#             precisely the path publishing creates: dry-run above verifies a
+#             tarball can be BUILT, never that it can be INSTALLED, and every
+#             other check — typecheck, unit suite, docs walkthrough — runs
+#             inside the workspace where npm has already symlinked the siblings.
+#             It lives here rather than in `npm run check` because five packs
+#             and five installs are seconds, not milliseconds; the static half
+#             of the same rule (`dependency-closure` in check-release.ts) is
+#             pure and does run in the default suite on every leg.
+#
 # Triggers: every pull request that touches release surfaces, so a version or
-# license regression is red before it merges rather than at release time; and
-# workflow_dispatch, so the full set can be run on demand against any ref.
+# license regression is red before it merges rather than at release time.
+# Published package sources are a release surface too — a newly added import is
+# how an undeclared dependency gets in — so EVERYTHING a manifest's `files`
+# ships is on the list, per package rather than only at the repo root: `src/`,
+# `fixtures/` and `vectors/` for the conformance kit, and each package's own
+# LICENSE and NOTICE. The bare `LICENSE`/`NOTICE` entries match the root alone,
+# so without the `packages/*/` forms, deleting `packages/kernel/NOTICE` would
+# not start the very workflow whose license-coherence pack-shape rule exists to
+# catch it. And workflow_dispatch, to run the full set against any ref.
 
 name: Release checks
 
@@ -31,10 +52,22 @@ on:
       - "package.json"
       - "package-lock.json"
       - "packages/*/package.json"
+      - "packages/*/src/**"
+      # Published source is not only `src/`: the conformance kit's runner
+      # imports `fixtures/repo-config-adapter.ts`, which its `files` ships.
+      - "packages/*/fixtures/**"
+      - "packages/conformance/vectors/**"
       - "LICENSE"
       - "NOTICE"
+      # The per-package copies. `license-coherence` checks the pack shape, and
+      # npm auto-includes a license only from the package's own directory.
+      - "packages/*/LICENSE"
+      - "packages/*/NOTICE"
+      # Redundant under `packages/*/src/**` above, kept because the
+      # harness-version-lockstep rule is specifically about this file.
       - "packages/kernel/src/preparation.ts"
       - "scripts/check-release.ts"
+      - "scripts/check-standalone-install.ts"
       - ".github/workflows/release.yml"
   workflow_dispatch:
 
@@ -76,3 +109,10 @@ jobs:
 
       - name: Publish dry-run (action)
         run: npm publish --dry-run --workspace "@agent-delivery-harness/action"
+
+      # The leg dry-run cannot be: every tarball installed alone, outside the
+      # workspace, then imported and run. Offline — it resolves the five names
+      # to the local tarballs through `overrides`, never a registry, which is
+      # what lets it run before anything is published.
+      - name: Standalone-install smoke
+        run: npm run sensor:standalone

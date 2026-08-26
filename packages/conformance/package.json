@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=22"
   },
+  "dependencies": {
+    "@agent-delivery-harness/kernel": "0.1.0"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
@@ -14,6 +17,7 @@
     "src",
     "!src/**/*.test.ts",
     "vectors",
+    "fixtures/repo-config-adapter.ts",
     "LICENSE",
     "NOTICE"
   ]
