@@ -118,9 +118,20 @@ export default defineHarnessConfig({
   obligations: [
     {
       id: "review.green",
+      // `relevant_change` activates on any of four signals: enough reviewable
+      // lines, a reviewable binary change, a reviewable change that counts no
+      // lines (a mode flip, a pure rename), or a touched sensitive path.
+      // Optional members narrow the last three per obligation, and absence of
+      // each keeps the widest reading: `sensitiveGroupIds` binds the sensitive
+      // signal to named `sensitivePaths` groups, and
+      // `relevantBinaryChangeActivates` / `relevantZeroLineChangeActivates`
+      // (both default true) opt out of the other two signals independently.
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
       providers: ["claude-code.ce-code-review"],
+      // Optional quantifier over `providers`: "all" (also the default when
+      // absent) requires every provider; "existential" is satisfied by any one.
+      providerPolicy: "all",
       acceptedPayloadSpecs: ["review.green/1"],
       allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
       humanWaiverAllowed: true,

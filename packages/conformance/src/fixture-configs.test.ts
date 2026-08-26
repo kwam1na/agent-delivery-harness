@@ -79,8 +79,15 @@ function configDimensions(config: HarnessConfig): Record<string, string> {
     "providers.ids": stable(config.providers.map((provider) => provider.id)),
     "providers.findingCodes": stable(config.providers.map((provider) => provider.findingCodes)),
     "obligations.ids": perObligation((obligation) => obligation.id),
-    "obligations.activation": perObligation((obligation) => obligation.activation),
+    // The activation object is split into its members so a fixture cannot
+    // satisfy the divergence assertion on `kind` alone while silently
+    // converging on a narrowing member the kit leaves absent.
+    "obligations.activation.kind": perObligation((obligation) => obligation.activation.kind),
+    "obligations.activation.sensitiveGroupIds": perObligation((obligation) => obligation.activation.sensitiveGroupIds),
+    "obligations.activation.relevantBinaryChangeActivates": perObligation((obligation) => obligation.activation.relevantBinaryChangeActivates),
+    "obligations.activation.relevantZeroLineChangeActivates": perObligation((obligation) => obligation.activation.relevantZeroLineChangeActivates),
     "obligations.freshness": perObligation((obligation) => obligation.freshness),
+    "obligations.providerPolicy": perObligation((obligation) => obligation.providerPolicy),
     "obligations.providers": perObligation((obligation) => obligation.providers),
     "obligations.acceptedPayloadSpecs": perObligation((obligation) => obligation.acceptedPayloadSpecs),
     "obligations.allowedResolutionKinds": perObligation((obligation) => obligation.allowedResolutionKinds),

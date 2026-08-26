@@ -347,24 +347,26 @@ export function isRecordFreshForCandidate(config: HarnessConfig, recorded: Recor
  * Which of an obligation's providers are still unaccounted for, given the set
  * that produced something acceptable.
  *
- * THE QUANTIFIER LIVES HERE AND NOWHERE ELSE, AND IT IS HARDCODED TO "every".
- * Athena's obligations carry a `providerPolicy` quantifier (`"all"` or
- * existential); the standalone config surface has no such member yet — it is
- * specified as the pending `ObligationPolicy.providerPolicy` addition, alongside
- * the per-obligation activation bindings, and is not invented here. Until it
- * lands, the quantifier is the fail-closed one: an obligation that names two
- * providers is not satisfied by one of them, because the reverse default would
- * silently admit a candidate on half the evidence its config asked for.
+ * THE QUANTIFIER LIVES HERE AND NOWHERE ELSE, AND THE CONFIG SELECTS IT.
+ * `ObligationPolicy.providerPolicy` is the member: `"all"` — and its absence,
+ * which reads the same — demands every approved provider, exactly the behavior
+ * this function had while the quantifier was still hardcoded. That default is
+ * the fail-closed one: an obligation that names two providers is not satisfied
+ * by one of them, because the reverse default would silently admit a candidate
+ * on half the evidence its config asked for. `"existential"` is the opt-in:
+ * any one covered provider clears the residue.
  *
  * The shape is a residue rather than a boolean switch on purpose. Both call
- * sites ask the same question — who is missing — so neither carries a branch,
- * and when the member lands the existential reading is expressed *here* (an
- * existential obligation with at least one covered provider has no residue).
- * A branch no configuration can select is a branch no test can falsify, so
- * there is no such branch to find in this module.
+ * sites ask the same question — who is missing — so neither carries a branch:
+ * an existential obligation with at least one covered provider simply has no
+ * residue, and everything downstream (the satisfied checks, the missing-
+ * provider findings) follows from that without consulting the policy again.
  */
 function unsatisfiedProviders(obligation: ObligationPolicy, covered: ReadonlySet<string>): readonly string[] {
-  return obligation.providers.filter((providerId) => !covered.has(providerId));
+  const missing = obligation.providers.filter((providerId) => !covered.has(providerId));
+  const someCovered = missing.length < obligation.providers.length;
+  if ((obligation.providerPolicy ?? "all") === "existential" && someCovered) return [];
+  return missing;
 }
 
 /**

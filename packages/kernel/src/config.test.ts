@@ -378,6 +378,105 @@ describe("dangling references", () => {
   });
 });
 
+// ── The activation binding and the provider quantifier ────────────────────
+
+describe("the per-obligation activation binding and provider quantifier", () => {
+  it("loads all four members", () => {
+    const result = validateHarnessConfig(
+      withInput((input) => {
+        input.obligations[0]!.activation = {
+          kind: "relevant_change",
+          sensitiveGroupIds: ["auth"],
+          relevantBinaryChangeActivates: false,
+          relevantZeroLineChangeActivates: false,
+        };
+        input.obligations[0]!.providerPolicy = "existential";
+      }),
+    );
+    expect(result.ok ? [] : result.blockers).toEqual([]);
+    if (!result.ok) return;
+    const obligation = result.config.obligations[0]!;
+    expect(obligation.activation).toEqual({
+      kind: "relevant_change",
+      sensitiveGroupIds: ["auth"],
+      relevantBinaryChangeActivates: false,
+      relevantZeroLineChangeActivates: false,
+    });
+    expect(obligation.providerPolicy).toBe("existential");
+  });
+
+  it("keeps the members absent when the author omits them: absence is the widened, fail-closed policy", () => {
+    const config = define(validInput());
+    const obligation = config.obligations[0]!;
+    expect(obligation.activation).toEqual({ kind: "relevant_change" });
+    expect("sensitiveGroupIds" in obligation.activation).toBe(false);
+    expect("providerPolicy" in obligation).toBe(false);
+  });
+
+  it("loads an empty binding, which opts the obligation out of the sensitive signal entirely", () => {
+    const result = validateHarnessConfig(
+      withInput((input) => {
+        input.obligations[0]!.activation = { kind: "relevant_change", sensitiveGroupIds: [] };
+      }),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a binding naming a group no sensitive-path entry declares", () => {
+    expectOnly(
+      withInput((input) => {
+        input.obligations[0]!.activation = { kind: "relevant_change", sensitiveGroupIds: ["auth", "ghost-group"] };
+      }),
+      "config_dangling_sensitive_group",
+    );
+  });
+
+  it("accepts a binding whose every id is declared — the negative control for the dangling row", () => {
+    const result = validateHarnessConfig(
+      withInput((input) => {
+        input.obligations[0]!.activation = { kind: "relevant_change", sensitiveGroupIds: ["auth"] };
+      }),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects an unknown activation member — Athena's spelling of the binding included", () => {
+    expectOnly(
+      withInput((input) => {
+        input.obligations[0]!.activation = { kind: "relevant_change", sensitiveScenarioIds: ["auth"] };
+      }),
+      "config_unknown_member",
+    );
+  });
+
+  it("rejects a non-boolean opt-out, a malformed group id, and a quantifier outside the enumeration", () => {
+    expectOnly(
+      withInput((input) => {
+        input.obligations[0]!.activation = { kind: "relevant_change", relevantBinaryChangeActivates: "no" };
+      }),
+      "config_invalid_member",
+    );
+    expectOnly(
+      withInput((input) => {
+        input.obligations[0]!.activation = { kind: "relevant_change", relevantZeroLineChangeActivates: 0 };
+      }),
+      "config_invalid_member",
+    );
+    expectOnly(
+      withInput((input) => {
+        input.obligations[0]!.activation = { kind: "relevant_change", sensitiveGroupIds: ["Not An Id"] };
+      }),
+      "config_invalid_member",
+    );
+    expectOnly(
+      withInput((input) => {
+        input.obligations[0]!.providerPolicy = "any";
+      }),
+      "config_invalid_member",
+    );
+  });
+});
+
 // ── The waiver biconditional ───────────────────────────────────────────────
 
 describe("the waiver flag and the allowed resolution kinds", () => {
