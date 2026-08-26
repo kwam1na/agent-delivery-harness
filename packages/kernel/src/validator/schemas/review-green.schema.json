@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review.green/1/payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "finalized", "editedAfterFinalPass",
+               "reviewers", "findings", "telemetry"],
+  "properties": {
+    "verdict": { "const": "green" },
+    "finalized": { "const": true },
+    "editedAfterFinalPass": { "const": false },
+    "reviewers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected", "completed", "failed", "timedOut"],
+      "properties": {
+        "selected": { "$ref": "#/$defs/reviewerList" },
+        "completed": { "$ref": "#/$defs/reviewerList" },
+        "failed": { "$ref": "#/$defs/reviewerList" },
+        "timedOut": { "$ref": "#/$defs/reviewerList" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "scope", "actionable",
+                     "blocking", "disposition"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["P0", "P1", "P2", "P3"] },
+          "scope": { "enum": ["in_contract", "adjacent", "expansion"] },
+          "actionable": { "type": "boolean" },
+          "blocking": { "type": "boolean" },
+          "disposition": { "enum": ["resolved", "advisory", "pre_existing",
+                                    "deferred", "unresolved", "ignored"] },
+          "deferredIssueId": { "type": "string",
+                               "pattern": "^[A-Z][A-Z0-9]*-[0-9]+$" }
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["iterationCount", "findingCounts",
+                   "deferredExpansionCount", "deferredIssueIds"],
+      "properties": {
+        "iterationCount": { "type": "integer", "minimum": 1 },
+        "findingCounts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["P0", "P1", "P2", "P3"],
+          "properties": {
+            "P0": { "type": "integer", "minimum": 0 },
+            "P1": { "type": "integer", "minimum": 0 },
+            "P2": { "type": "integer", "minimum": 0 },
+            "P3": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "deferredExpansionCount": { "type": "integer", "minimum": 0 },
+        "deferredIssueIds": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*-[0-9]+$" }
+        },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unit", "total", "reportedBy"],
+          "properties": {
+            "unit": { "type": "string", "minLength": 1 },
+            "total": { "type": "number", "minimum": 0 },
+            "byReviewer": { "type": "object",
+                            "additionalProperties": { "type": "number", "minimum": 0 } },
+            "reportedBy": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "reviewerList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  }
+}

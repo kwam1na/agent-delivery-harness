@@ -21,9 +21,16 @@
  *        not import the fs/process/os family directly; their filesystem work
  *        goes through the `artifacts.ts` fs port (not yet created).
  *   e  — GEN-5 time ban. No `Date.now()`, `new Date()`, or `recordedAt` member
- *        read (`x.recordedAt`, `x["recordedAt"]`) in the decision paths the spec
- *        forbids consulting a clock from. A locally-scoped binding merely named
- *        `recordedAt` is legal; only reading the member is a finding.
+ *        read in the decision paths the spec forbids consulting a clock from.
+ *        Four forms are rejected: `x.recordedAt`, `x["recordedAt"]`, a
+ *        destructured `recordedAt`, and the member name handed to a reader as a
+ *        call argument (`read(m, "recordedAt")`) — the last because a module
+ *        that reads every member through one helper never writes any of the
+ *        first three, which would leave the rule unfalsifiable exactly where it
+ *        matters most. A locally-scoped binding merely named `recordedAt` is
+ *        legal; only reading the member is a finding. The one structural read
+ *        the grammar needs is registered in TIMESTAMP_READ_EXEMPTIONS, site by
+ *        site, and each registration is checked against the tree.
  *
  * `import type` is always legal — a type has no runtime edge. `*.test.ts` files
  * are outside the d1/d2/e scans (tests read fixtures from disk and stub clocks);
@@ -80,6 +87,37 @@ export interface ProtectedClass {
 const RECORDED_AT = "recordedAt";
 
 /**
+ * Sites permitted to name `recordedAt` as a call argument, one entry per site.
+ *
+ * A closed grammar has to know the member exists — the envelope requires it, and
+ * a manifest without it is malformed — so a validator that never mentions the
+ * name at all cannot enforce GEN-1 over it. That is a shape check, not a
+ * decision: the value is tested for being a non-empty string and is never
+ * compared, ordered, or otherwise consulted.
+ *
+ * This is deliberately a registry and not a suppression comment. An exemption
+ * names a file and the function inside it, both are checked against the tree,
+ * and each must cover exactly one read — so an exemption that stops matching is
+ * a finding, and a second read cannot hide behind the first.
+ */
+export interface TimestampReadExemption {
+  /** Repo-relative POSIX path. */
+  readonly file: string;
+  /** Enclosing function name, as written. */
+  readonly fn: string;
+  readonly reason: string;
+}
+
+export const TIMESTAMP_READ_EXEMPTIONS: readonly TimestampReadExemption[] = [
+  {
+    file: "packages/kernel/src/validator/envelope.ts",
+    fn: "checkTimestamp",
+    reason:
+      "GEN-1/GEN-4 shape check: the member must be present and a non-empty string. The value is never read into a comparison, and GEN-5 bans decisions on it, not knowledge that it exists.",
+  },
+];
+
+/**
  * Scanned for the always-on rules (a, b, c). Directories are walked; a single
  * file is scanned as itself, which is how the two pieces of repository source
  * that live outside any package `src` are covered — the fixture configs and the
@@ -104,7 +142,7 @@ export const KERNEL_SRC = "packages/kernel/src";
 export const KERNEL_PACKAGE = "@delivery-harness/kernel";
 
 export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
-  { id: "kernel-validator", path: "packages/kernel/src/validator", kind: "dir", rules: ["d1", "e"], status: "pending" },
+  { id: "kernel-validator", path: "packages/kernel/src/validator", kind: "dir", rules: ["d1", "e"], status: "present" },
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "pending" },
   { id: "kernel-context", path: "packages/kernel/src/context.ts", kind: "file", rules: ["d1"], status: "pending" },
   { id: "kernel-recorder", path: "packages/kernel/src/recorder.ts", kind: "file", rules: ["d2", "e"], status: "pending" },
@@ -168,6 +206,7 @@ export interface SensorInput {
   readonly scanRoots?: readonly string[];
   readonly protectedClasses?: readonly ProtectedClass[];
   readonly kernelSrc?: string;
+  readonly timestampReadExemptions?: readonly TimestampReadExemption[];
 }
 
 export interface SensorResult {
@@ -181,6 +220,10 @@ export function runImportBoundarySensor(input: SensorInput): SensorResult {
   const scanRoots = input.scanRoots ?? SCAN_ROOTS;
   const protectedClasses = input.protectedClasses ?? PROTECTED_CLASSES;
   const kernelSrc = input.kernelSrc ?? KERNEL_SRC;
+  const exemptions = input.timestampReadExemptions ?? TIMESTAMP_READ_EXEMPTIONS;
+  /** Exempted reads actually seen, keyed `file#fn`, so each registration can be checked against the tree. */
+  const exemptedReads = new Map<string, number>();
+  const timeBannedFiles = new Set<string>();
 
   const findings: Finding[] = [];
   const scanRootFileCounts: Record<string, number> = {};
@@ -283,7 +326,41 @@ export function runImportBoundarySensor(input: SensorInput): SensorResult {
       checkFsFamily(imports, "d2-no-adhoc-fs", "filesystem work must go through the artifacts.ts port, not a direct import", emit);
     }
     if (rules.has("e")) {
-      checkTimeBan(source, emit);
+      timeBannedFiles.add(relFile);
+      checkTimeBan(source, relFile, exemptions, emit, (key) => exemptedReads.set(key, (exemptedReads.get(key) ?? 0) + 1));
+    }
+  }
+
+  // Anti-vacuity: every timestamp-read exemption still names a site, and covers
+  // exactly one read there. Both halves matter — a registration that matches
+  // nothing is a hole kept open for no reason, and one that matches twice would
+  // let a second read in on the strength of the first.
+  for (const exemption of exemptions) {
+    const key = `${exemption.file}#${exemption.fn}`;
+    if (!timeBannedFiles.has(exemption.file)) {
+      findings.push({
+        rule: "anti-vacuity",
+        file: exemption.file,
+        line: 0,
+        message: `timestamp-read exemption "${key}" names a file no rule-e class covers, so it exempts nothing`,
+      });
+      continue;
+    }
+    const seen = exemptedReads.get(key) ?? 0;
+    if (seen === 0) {
+      findings.push({
+        rule: "anti-vacuity",
+        file: exemption.file,
+        line: 0,
+        message: `timestamp-read exemption "${key}" matched no read, so it exempts nothing; drop the registration or restore the site`,
+      });
+    } else if (seen > 1) {
+      findings.push({
+        rule: "anti-vacuity",
+        file: exemption.file,
+        line: 0,
+        message: `timestamp-read exemption "${key}" matched ${seen} reads; an exemption covers exactly one site so a second read cannot hide behind the first`,
+      });
     }
   }
 
@@ -593,8 +670,17 @@ function checkD1(
 
 // ── Rule e ─────────────────────────────────────────────────────────────────
 
-function checkTimeBan(source: ts.SourceFile, emit: (rule: SensorRule, node: ts.Node, message: string) => void): void {
-  const visit = (node: ts.Node): void => {
+function checkTimeBan(
+  source: ts.SourceFile,
+  relFile: string,
+  exemptions: readonly TimestampReadExemption[],
+  emit: (rule: SensorRule, node: ts.Node, message: string) => void,
+  recordExemptedRead: (key: string) => void,
+): void {
+  const exemptFunctions = new Set(exemptions.filter((entry) => entry.file === relFile).map((entry) => entry.fn));
+
+  const visit = (node: ts.Node, enclosing: string): void => {
+    const here = functionNameOf(node) ?? enclosing;
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Date" && node.name.text === "now") {
       emit("e-time-ban", node, `\`Date.now()\` in a decision path; GEN-5 forbids any admissibility or freshness decision from consulting a clock`);
     }
@@ -618,9 +704,45 @@ function checkTimeBan(source: ts.SourceFile, emit: (rule: SensorRule, node: ts.N
         emit("e-time-ban", node, `destructures \`${RECORDED_AT}\` in a decision path; GEN-5 forbids any admissibility or freshness decision from depending on it`);
       }
     }
-    ts.forEachChild(node, visit);
+    // A member name handed to a reader. The three forms above are what a module
+    // that reads members directly writes; this is what a module that reads them
+    // through a helper writes, and validator/ is entirely the second kind.
+    if (ts.isCallExpression(node)) {
+      for (const argument of node.arguments) {
+        const unwrapped = unwrap(argument);
+        if (!ts.isStringLiteralLike(unwrapped) || unwrapped.text !== RECORDED_AT) continue;
+        if (exemptFunctions.has(here)) {
+          recordExemptedRead(`${relFile}#${here}`);
+          continue;
+        }
+        emit(
+          "e-time-ban",
+          node,
+          `hands \`"${RECORDED_AT}"\` to a member reader in a decision path; GEN-5 forbids any admissibility or freshness decision from depending on it. A grammar-only read must be registered in TIMESTAMP_READ_EXEMPTIONS`,
+        );
+      }
+    }
+    ts.forEachChild(node, (child) => {
+      visit(child, here);
+    });
   };
-  ts.forEachChild(source, visit);
+  ts.forEachChild(source, (child) => {
+    visit(child, "<module>");
+  });
+}
+
+/** The name a finding should attribute a read to: the nearest enclosing function, as written. */
+function functionNameOf(node: ts.Node): string | undefined {
+  if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) {
+    return node.name !== undefined && ts.isIdentifier(node.name) ? node.name.text : "<anonymous>";
+  }
+  if (ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
+    const parent = node.parent;
+    if (parent !== undefined && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
+    if (parent !== undefined && ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
+    return "<anonymous>";
+  }
+  return undefined;
 }
 
 // ── Import extraction ──────────────────────────────────────────────────────

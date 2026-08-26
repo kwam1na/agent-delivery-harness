@@ -36,3 +36,50 @@ export * from "./blockers.ts";
 // The injected policy surface: the config schema, its load-time invariants, and
 // the neutral-matcher primitive the identity computation shares with it.
 export * from "./config.ts";
+
+// The normative manifest validator: the rejection-code registry, the
+// delivery-evidence/1 envelope, and the review.green/1 payload. The published
+// JSON Schemas sit beside them in validator/schemas/ and are cross-checked
+// against this implementation rather than consulted by it.
+export {
+  CONFORMING_ATTESTATION_LEVEL,
+  DELIVERY_EVIDENCE_1,
+  MANIFEST_REJECTION_CODES,
+  MANIFEST_REJECTION_REGISTRY,
+  MANIFEST_RULE_IDS,
+  META_RULE_IDS,
+  RECORDER_EMITTED_CODES,
+  REVIEW_GREEN_1,
+  SUPPORTED_ENVELOPE_SPECS,
+  SUPPORTED_PAYLOAD_SPECS,
+  VALIDATOR_EMITTED_CODES,
+  isManifestRejectionCode,
+  type ManifestRejection,
+  type ManifestRejectionCode,
+  type ManifestRejectionCodeEntry,
+  type ManifestRuleId,
+  type ManifestValidation,
+  type RejectionEmitter,
+} from "./validator/codes.ts";
+export {
+  validateManifest,
+  type DeclaredArtifact,
+  type DeliveryEvidenceManifest,
+  type ManifestArtifact,
+  type ManifestAttestation,
+  type ManifestBase,
+  type ManifestCandidate,
+  type ManifestClaim,
+  type ManifestDeliverable,
+  type ManifestProvider,
+  type ManifestValidationContext,
+  type RunHistoryEntry,
+} from "./validator/envelope.ts";
+export {
+  FINDING_DISPOSITIONS,
+  FINDING_SCOPES,
+  FINDING_SEVERITIES,
+  REVIEWER_APPROVAL_ROLE,
+  validateReviewGreenClaim,
+  type ReviewGreenClaimInput,
+} from "./validator/review-green.ts";
