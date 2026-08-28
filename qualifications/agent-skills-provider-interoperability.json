@@ -1,0 +1,146 @@
+{
+  "baselines": {
+    "agentSkills": {
+      "archiveSha256": "0e5a2e536ce104f0c8c7956f373990064ecae709fe287c4504d30f2a4314094f",
+      "commitSha": "9ad6a934e97222cd819b8e48b7e258effa89a09e",
+      "coreQualificationSha256": "c88f1b9b8974400e49cf8229f211647226705ae0bd0bac0f63ddc9aec5548063",
+      "installedProviderSha256": "3f68ac3d677384c6229a3a8215c969bd211c477afbdea1712e564d634e82504f",
+      "installedWorkflowsSha256": "3fbe993bfb10ea6663c62a0a0d3243153fe6f0136807f191d7fe020e482c8353",
+      "linearAttestationSha256": "9e59c80307c6cd365abbe646d52effa512610e707b32074fe8a8632cf329cbb3",
+      "linearQualificationSha256": "fd450a03db73312f449c0aeef2907aa0712ad372071fbccd1b367428532649a3",
+      "metadataSha256": "9c6f96a9994c0faf6dc84a3d907be60ebd82bb7e5579256c853855010d324d99",
+      "profile": "core",
+      "providerQualificationSha256": "092691d27d2dfe312ac17d18634f4292e52abc2c3efbdaf9568cd7ad8f43768e",
+      "releaseId": "core-v1",
+      "treeSha": "26034f0e5eea07d066e855100cfd4cabf1195eee"
+    },
+    "harness": {
+      "commitSha": "b7d62db716e335b25e13f1029ee9c3896244e315",
+      "providerRailSha256": "7cb6245980961ba6103e15783d8a9636987e223b7b03d5350cbf3643d64b4954",
+      "recorderSha256": "1a246e103afa378a6dcc0c5822242282c9ebdf039d1c85a8eaad1bc2f674a53a",
+      "treeSha": "41e4333f18aa63e013b323cba9f6c52b030f1c12"
+    }
+  },
+  "capabilities": {
+    "observed": [
+      "create",
+      "read",
+      "update",
+      "search",
+      "relations",
+      "reconciliation"
+    ],
+    "required": [
+      "create",
+      "read",
+      "update",
+      "search",
+      "relations",
+      "reconciliation"
+    ]
+  },
+  "evidence": {
+    "candidateBinding": {
+      "baseRef": "baseline",
+      "baseTipSha": "00c87542800ff9e5ab323b058f7d61e5d9f0dcb8",
+      "deliverableDigest": "a848d8a52e0432790403be7f89cfc55a88ee6727d8f399f8a78c4f4f92e1388f",
+      "identityToken": "delivery-harness-tree/v1",
+      "mergeBaseSha": "00c87542800ff9e5ab323b058f7d61e5d9f0dcb8",
+      "treeSha": "0d54118bd32b4b84db10f584b3b593e79f6c59d9",
+      "workspaceId": "provider-interoperability"
+    },
+    "manifestDigest": "f87748f311af7589ea122f4e53962cb7b006d9c4a1901f3e7c8a5ba33c6b5745",
+    "publication": {
+      "first": "published",
+      "reconciled": "idempotent",
+      "recordCount": 1
+    },
+    "resolution": {
+      "finalPassId": "pass-1",
+      "kind": "evidence",
+      "providerId": "agent-skills.review",
+      "runId": "happy-run"
+    }
+  },
+  "proofBoundary": {
+    "external": "The retained Linear qualification and attestation identities preserve the six-operation contract, but this replay does not prove a fresh Linear connector call; external host provenance remains owned by the protected host run.",
+    "offline": "Binds the exact retained release bytes to installed provider execution, the harness subprocess rail, and recorder publication using controlled representative host events."
+  },
+  "protocol": {
+    "contractSha256": "ffeb3f5fe5baa4f288601e7550b06e1bff36f5160fc0ab48059ea403ed5b1c1e",
+    "schemaSha256": "7242d88fadc5087b1d63e0065565cd6e272225b2a2240c14de2fe4db305ea0e6",
+    "vectorsSha256": "1ceb7d7e2043d71f7dea0d95ba2dcb97d2977c56d0045a7001c44eb777dbb2bf",
+    "version": "delivery-provider-rails/1"
+  },
+  "scenarios": [
+    {
+      "assertionCount": 3,
+      "evidence": [
+        "exact installed provider completed",
+        "six native operation names crossed stdio",
+        "non-empty evidence reached the recorder"
+      ],
+      "id": "happy-pinned-run",
+      "result": "passed"
+    },
+    {
+      "assertionCount": 4,
+      "evidence": [
+        "changed immutable input rejected before provider startup",
+        "unsupported protocol rejected before request",
+        "wrong release blocked before host events",
+        "release mismatch created no manifest, publication, or record"
+      ],
+      "id": "incompatible-protocol-and-release",
+      "result": "passed"
+    },
+    {
+      "assertionCount": 1,
+      "evidence": [
+        "real subprocess close before terminal remained indeterminate"
+      ],
+      "id": "provider-crash",
+      "result": "passed"
+    },
+    {
+      "assertionCount": 5,
+      "evidence": [
+        "request crossed the harness subprocess boundary",
+        "deferred progress was observed before abort",
+        "aborted attempt remained interrupted and indeterminate",
+        "cancelled subprocess closure was awaited",
+        "fresh installed provider started and completed immediately after cleanup"
+      ],
+      "id": "cancellation",
+      "result": "passed"
+    },
+    {
+      "assertionCount": 3,
+      "evidence": [
+        "removed manifest reached the real recorder",
+        "recorder refused publication",
+        "missing evidence remained non-green"
+      ],
+      "id": "missing-evidence",
+      "result": "passed"
+    },
+    {
+      "assertionCount": 5,
+      "evidence": [
+        "fresh installed provider reused the same attempt identity and run root",
+        "manifest bytes remained identical",
+        "candidate and record identities remained stable",
+        "second publication reconciled idempotently",
+        "one green claim remained"
+      ],
+      "id": "stable-rerun",
+      "result": "passed"
+    }
+  ],
+  "schemaVersion": "provider-harness-interoperability/1",
+  "summary": {
+    "failed": 0,
+    "passed": 6,
+    "result": "passed"
+  }
+}

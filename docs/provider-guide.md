@@ -78,6 +78,36 @@ required. The tracked delivery record is still produced by the ordinary
 `record` command; the rail creates neither a second evidence store nor a second
 telemetry stream.
 
+## Pinned provider interoperability qualification
+
+`npm run qualify:provider` replays the repository's one checked provider
+qualification. It binds the exact harness rail, recorder, contract, schema, and
+vectors to one deterministic agent-skills core release and its retained core,
+provider, and Linear qualification identities. The release is installed into a
+fresh temporary repository, then its installed Python module is opened through
+the real subprocess rail. The successful attempt carries the ordered native
+operation set `create`, `read`, `update`, `search`, `relations`, and
+`reconciliation`; its non-empty manifest is submitted through the ordinary
+recorder with the caller-bound provider attempt.
+
+The replay also rejects immutable-input and release mismatches, an unsupported
+protocol, a controlled subprocess crash, an interrupted invocation, and a
+missing manifest. A fresh installed process repeats the successful request with
+the same request, idempotency, and run-root identity; the provider must emit the
+same manifest bytes and the recorder must report the same claim as idempotent,
+leaving one stored record.
+
+The checked qualification record is candidate-keyed and retains the existing
+evidence semantics: candidate binding, manifest digest, provider/run/final-pass
+resolution, and publication outcomes. It deliberately omits the recorder's
+workspace-local record id and storage workspace id. Retaining a literal
+`delivery-record/1` from a random temporary workspace would make replay bytes
+machine-specific; inventing stable replacements would no longer be the
+recorder's record. The qualification proves the exact offline subprocess and
+publication boundary. Its retained Linear qualification and attestation hashes
+preserve the six-operation contract, but they do not claim a fresh connector
+call; that provenance remains with the protected host run.
+
 ### Which MCP revisions the server speaks
 
 Four, across both of MCP's eras — and the two tools behave identically on every
