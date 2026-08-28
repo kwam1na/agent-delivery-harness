@@ -1,10 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   consumeProviderRailMessages,
   invokeProviderRail,
+  openProviderRailProcess,
   type ProviderRailMessage,
   type ProviderRailSession,
 } from "./provider-rails.ts";
@@ -193,8 +195,116 @@ describe("provider invocation lifecycle", () => {
       { open: async () => session, signal: controller.signal, cancellationId: "cancel-one" },
     );
     expect(session.sent.map((message) => message.kind)).toEqual(["negotiate", "request", "cancel"]);
-    expect(result).toMatchObject({ kind: "interrupted", status: "malformed" });
+    expect(result).toMatchObject({ kind: "interrupted", status: "indeterminate" });
   });
+
+  it.skipIf(process.platform === "win32")("bounds stalled real-process negotiation and escalates ignored SIGTERM", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "provider-rail-stall-"));
+    const marker = path.join(dir, "signals.txt");
+    const script = `
+      const fs = require("node:fs");
+      const marker = process.argv[1];
+      process.on("SIGTERM", () => fs.appendFileSync(marker, "term\\n"));
+      setInterval(() => {}, 1000);
+    `;
+    const started = Date.now();
+    const result = await invokeProviderRail(
+      { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
+      {
+        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script, marker], cwd: dir, env: process.env }),
+        deadlineMs: 500,
+        terminationGraceMs: 100,
+      },
+    );
+    expect(result).toMatchObject({ kind: "blocked", status: "indeterminate" });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await readFile(marker, "utf8")).toContain("term");
+    await rm(dir, { recursive: true, force: true });
+  }, 5_000);
+
+  it.skipIf(process.platform === "win32")("cancels an aborted real process stalled before terminal and awaits its closure", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "provider-rail-abort-"));
+    const marker = path.join(dir, "events.txt");
+    const script = `
+      const fs = require("node:fs");
+      const readline = require("node:readline");
+      const marker = process.argv[1];
+      process.on("SIGTERM", () => fs.appendFileSync(marker, "term\\n"));
+      const lines = readline.createInterface({ input: process.stdin });
+      lines.on("line", (line) => {
+        const message = JSON.parse(line);
+        if (message.kind === "negotiate") process.stdout.write(JSON.stringify({ kind: "negotiation", outcome: "supported", selectedVersion: "delivery-provider-rails/1", supportedVersions: ["delivery-provider-rails/1"] }) + "\\n");
+        if (message.kind === "cancel") fs.appendFileSync(marker, "cancel\\n");
+      });
+      setInterval(() => {}, 1000);
+    `;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 500);
+    const result = await invokeProviderRail(
+      { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
+      {
+        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script, marker], cwd: dir, env: process.env }),
+        signal: controller.signal,
+        deadlineMs: 2_000,
+        terminationGraceMs: 100,
+      },
+    );
+    expect(result).toMatchObject({ kind: "interrupted", status: "indeterminate" });
+    expect(await readFile(marker, "utf8")).toContain("cancel");
+    await rm(dir, { recursive: true, force: true });
+  }, 5_000);
+
+  it.skipIf(process.platform === "win32")("expires a negotiated real process that never emits a terminal", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "provider-rail-no-terminal-"));
+    const marker = path.join(dir, "events.txt");
+    const script = `
+      const fs = require("node:fs");
+      const readline = require("node:readline");
+      const marker = process.argv[1];
+      process.on("SIGTERM", () => {});
+      const lines = readline.createInterface({ input: process.stdin });
+      lines.on("line", (line) => {
+        const message = JSON.parse(line);
+        if (message.kind === "negotiate") process.stdout.write(JSON.stringify({ kind: "negotiation", outcome: "supported", selectedVersion: "delivery-provider-rails/1", supportedVersions: ["delivery-provider-rails/1"] }) + "\\n");
+        if (message.kind === "cancel") fs.appendFileSync(marker, "cancel\\n");
+      });
+      setInterval(() => {}, 1000);
+    `;
+    const result = await invokeProviderRail(
+      { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
+      {
+        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script, marker], cwd: dir, env: process.env }),
+        deadlineMs: 750,
+        terminationGraceMs: 100,
+      },
+    );
+    expect(result).toMatchObject({ kind: "blocked", status: "indeterminate" });
+    expect(await readFile(marker, "utf8")).toContain("cancel");
+    await rm(dir, { recursive: true, force: true });
+  }, 5_000);
+
+  it.skipIf(process.platform === "win32")("bounds a real provider that never reads a request write", async () => {
+    const script = `
+      process.on("SIGTERM", () => {});
+      process.stdout.write(JSON.stringify({ kind: "negotiation", outcome: "supported", selectedVersion: "delivery-provider-rails/1", supportedVersions: ["delivery-provider-rails/1"] }) + "\\n");
+      setInterval(() => {}, 1000);
+    `;
+    const result = await invokeProviderRail(
+      {
+        providerId: "review.provider",
+        requestId: "request-one",
+        idempotencyKey: "attempt-one",
+        payload: { blockedWrite: "x".repeat(8 * 1024 * 1024) },
+        requiresEvidence: false,
+      },
+      {
+        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script], cwd: process.cwd(), env: process.env }),
+        deadlineMs: 500,
+        terminationGraceMs: 100,
+      },
+    );
+    expect(result).toMatchObject({ kind: "blocked", status: "indeterminate" });
+  }, 5_000);
 });
 
 describe("green-claim publication", () => {
@@ -214,13 +324,31 @@ describe("green-claim publication", () => {
     result: { manifestPath: "/allocated/run/manifest.json" },
   } as const;
 
+  function bindingArtifacts(providerId = "review.provider", runId = "request-one", inside = true) {
+    return {
+      async isInsideRunRoot() {
+        return inside;
+      },
+      async readTextFile() {
+        return JSON.stringify({ provider: { id: providerId, runId } });
+      },
+    };
+  }
+
   it("does not expose a green result when retained evidence publication fails", async () => {
     const publishManifest = vi.fn(async () => {
       throw new Error("injected crash before claim link");
     });
     const result = await invokeProviderRail(
-      { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: true },
-      { open: async () => scriptedSession([negotiation, success]), publishManifest },
+      {
+        providerId: "review.provider",
+        requestId: "request-one",
+        idempotencyKey: "attempt-one",
+        payload: {},
+        requiresEvidence: true,
+        runRootPath: "/allocated/run",
+      },
+      { open: async () => scriptedSession([negotiation, success]), publishManifest, bindingArtifacts: bindingArtifacts() },
     );
     expect(publishManifest).toHaveBeenCalledWith("/allocated/run/manifest.json");
     expect(result.kind).toBe("blocked");
@@ -238,10 +366,38 @@ describe("green-claim publication", () => {
       throw new Error("injected teardown crash after terminal");
     };
     const result = await invokeProviderRail(
-      { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: true },
-      { open: async () => session, publishManifest },
+      {
+        providerId: "review.provider",
+        requestId: "request-one",
+        idempotencyKey: "attempt-one",
+        payload: {},
+        requiresEvidence: true,
+        runRootPath: "/allocated/run",
+      },
+      { open: async () => session, publishManifest, bindingArtifacts: bindingArtifacts() },
     );
     expect(publishManifest).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ kind: "success", records: [record] });
+  });
+
+  it.each([
+    ["path escape", bindingArtifacts("review.provider", "request-one", false)],
+    ["cross-provider manifest", bindingArtifacts("other.provider", "request-one")],
+    ["cross-run manifest", bindingArtifacts("review.provider", "other-run")],
+  ])("rejects %s before calling the existing recorder", async (_label, bindingArtifacts) => {
+    const publishManifest = vi.fn();
+    const result = await invokeProviderRail(
+      {
+        providerId: "review.provider",
+        requestId: "request-one",
+        idempotencyKey: "attempt-one",
+        payload: {},
+        requiresEvidence: true,
+        runRootPath: "/allocated/run",
+      },
+      { open: async () => scriptedSession([negotiation, success]), publishManifest, bindingArtifacts },
+    );
+    expect(result).toMatchObject({ kind: "blocked", status: "malformed" });
+    expect(publishManifest).not.toHaveBeenCalled();
   });
 });

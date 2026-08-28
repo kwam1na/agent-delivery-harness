@@ -340,6 +340,7 @@ export async function runCliBoundary(
               idempotencyKey: randomUUID(),
               payload: { ...payload, runId: requestId, runRoot: allocation.runRoot.path },
               requiresEvidence,
+              runRootPath: allocation.runRoot.path,
             },
             {
               open: () =>
@@ -355,6 +356,7 @@ export async function runCliBoundary(
                     ...wiring.storageOptions,
                   },
                 ),
+              bindingArtifacts: artifacts,
               signal: runtime.signal ?? interruptController?.signal,
               cancellationId: randomUUID(),
             },

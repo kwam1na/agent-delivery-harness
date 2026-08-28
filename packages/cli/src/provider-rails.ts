@@ -10,6 +10,7 @@
  * shape; recorded obligations reuse SubmissionOutcome and its evidence records.
  */
 import {
+  BlockedError,
   canonicalize,
   createBlocker,
   type Blocker,
@@ -280,13 +281,83 @@ export interface ProviderRailSession {
   send(message: ProviderRailMessage): Promise<void>;
   /** `null` means the provider process or transport closed. */
   receive(): Promise<unknown | null>;
-  close(): Promise<void>;
+  close(options?: { readonly terminationGraceMs?: number }): Promise<void>;
 }
 
 export interface OpenProviderRailProcessInput {
   readonly command: readonly [string, ...string[]];
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+}
+
+const DEFAULT_PROVIDER_RAIL_DEADLINE_MS = 10 * 60_000;
+const DEFAULT_TERMINATION_GRACE_MS = 1_000;
+
+class RailLifecycleEnded extends Error {
+  readonly causeKind: "deadline" | "abort";
+
+  constructor(causeKind: "deadline" | "abort") {
+    super(causeKind === "deadline" ? "Provider lifecycle deadline expired." : "Provider lifecycle was aborted.");
+    this.name = "RailLifecycleEnded";
+    this.causeKind = causeKind;
+  }
+}
+
+/** One total lifecycle budget shared by negotiation, writes, and event waits. */
+class RailDeadline {
+  readonly signal: AbortSignal;
+  readonly #controller = new AbortController();
+  readonly #timer: ReturnType<typeof setTimeout>;
+  readonly #parent: AbortSignal | undefined;
+  readonly #onParentAbort: () => void;
+
+  constructor(timeoutMs: number, parent?: AbortSignal) {
+    this.signal = this.#controller.signal;
+    this.#parent = parent;
+    this.#onParentAbort = () => this.#controller.abort(new RailLifecycleEnded("abort"));
+    parent?.addEventListener("abort", this.#onParentAbort, { once: true });
+    if (parent?.aborted === true) this.#onParentAbort();
+    this.#timer = setTimeout(
+      () => this.#controller.abort(new RailLifecycleEnded("deadline")),
+      Math.max(1, Math.floor(timeoutMs)),
+    );
+  }
+
+  async wait<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.signal.aborted) throw this.reason();
+    const pending = operation();
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(this.reason());
+      this.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([pending, aborted]);
+    } finally {
+      if (onAbort !== undefined) this.signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  dispose(): void {
+    clearTimeout(this.#timer);
+    this.#parent?.removeEventListener("abort", this.#onParentAbort);
+  }
+
+  private reason(): RailLifecycleEnded {
+    return this.signal.reason instanceof RailLifecycleEnded ? this.signal.reason : new RailLifecycleEnded("abort");
+  }
+}
+
+async function settlesWithin(operation: Promise<unknown>, milliseconds: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), Math.max(1, Math.floor(milliseconds)));
+  });
+  try {
+    return await Promise.race([operation.then(() => true, () => true), elapsed]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** Opens the contract over newline-delimited JSON on a provider subprocess's stdio. */
@@ -298,6 +369,10 @@ export function openProviderRailProcess(input: OpenProviderRailProcessInput): Pr
     stdio: ["pipe", "pipe", "pipe"],
     shell: false,
   });
+  // A deadline may destroy the child while a bounded stdin write is pending.
+  // The write callback still reports that failure; this listener prevents the
+  // stream's parallel `error` event from becoming an uncaught exception.
+  child.stdin.on("error", () => {});
   const lines = createInterface({ input: child.stdout });
   // Diagnostics stay provider-owned; drain the pipe so a noisy provider cannot
   // deadlock while the typed stdout rail is waiting for its terminal event.
@@ -305,6 +380,11 @@ export function openProviderRailProcess(input: OpenProviderRailProcessInput): Pr
   const queued: unknown[] = [];
   const waiters: Array<(value: unknown | null) => void> = [];
   let closed = false;
+  let resolveClosed: (() => void) | undefined;
+  const childClosed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  let closing: Promise<void> | undefined;
 
   const deliver = (value: unknown | null): void => {
     const waiter = waiters.shift();
@@ -327,6 +407,7 @@ export function openProviderRailProcess(input: OpenProviderRailProcessInput): Pr
     if (closed) return;
     closed = true;
     while (waiters.length > 0) waiters.shift()?.(null);
+    resolveClosed?.();
   };
   child.once("close", close);
   child.once("error", close);
@@ -344,10 +425,22 @@ export function openProviderRailProcess(input: OpenProviderRailProcessInput): Pr
       if (closed) return Promise.resolve(null);
       return new Promise<unknown | null>((resolve) => waiters.push(resolve));
     },
-    async close() {
-      lines.close();
-      if (!child.stdin.destroyed) child.stdin.end();
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    close(options = {}) {
+      closing ??= (async () => {
+        lines.close();
+        if (!child.stdin.destroyed) child.stdin.end();
+        if (closed || child.exitCode !== null || child.signalCode !== null) {
+          await childClosed;
+          return;
+        }
+        child.kill("SIGTERM");
+        const grace = options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
+        if (!(await settlesWithin(childClosed, grace)) && child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        await childClosed;
+      })();
+      return closing;
     },
   });
 }
@@ -358,13 +451,23 @@ export interface ProviderRailAttemptInput {
   readonly idempotencyKey: string;
   readonly payload: JsonObject;
   readonly requiresEvidence: boolean;
+  /** Harness-allocated root this one invocation owns. Required for evidence publication. */
+  readonly runRootPath?: string;
+}
+
+export interface ProviderManifestBindingArtifacts {
+  isInsideRunRoot(runRootPath: string, target: string): Promise<boolean>;
+  readTextFile(target: string): Promise<string>;
 }
 
 export interface ProviderRailAttemptOptions {
   readonly open: () => Promise<ProviderRailSession>;
   readonly publishManifest?: (manifestPath: string) => Promise<SubmissionOutcome>;
+  readonly bindingArtifacts?: ProviderManifestBindingArtifacts;
   readonly signal?: AbortSignal;
   readonly cancellationId?: string;
+  readonly deadlineMs?: number;
+  readonly terminationGraceMs?: number;
 }
 
 export type ProviderRailInvocationResult =
@@ -378,11 +481,13 @@ export type ProviderRailInvocationResult =
   | {
       readonly kind: "interrupted";
       readonly status: "cancelled" | "indeterminate" | "malformed";
+      readonly runId: string;
       readonly blockers: readonly Blocker[];
     }
   | {
       readonly kind: "blocked";
       readonly status: Exclude<ProviderRailConsumption["status"], "supported" | "success" | "cancelled">;
+      readonly runId: string;
       readonly blockers: readonly Blocker[];
     };
 
@@ -446,6 +551,37 @@ function manifestPathOf(terminal: ProviderRailTerminal): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+async function manifestBindingBlocker(
+  input: ProviderRailAttemptInput,
+  options: ProviderRailAttemptOptions,
+  manifestPath: string,
+): Promise<Blocker | null> {
+  if (input.runRootPath === undefined || options.bindingArtifacts === undefined) {
+    return railBlocker(input.providerId, "malformed", "Provider evidence cannot be bound to this invocation's allocated run root.");
+  }
+  try {
+    if (!(await options.bindingArtifacts.isInsideRunRoot(input.runRootPath, manifestPath))) {
+      return railBlocker(input.providerId, "malformed", "Provider success named a manifest outside this invocation's allocated run root.");
+    }
+    const parsed = JSON.parse(await options.bindingArtifacts.readTextFile(manifestPath)) as unknown;
+    if (!isObject(parsed) || !isObject(parsed["provider"])) {
+      return railBlocker(input.providerId, "malformed", "Provider success named a manifest without provider attempt identity.");
+    }
+    const provider = parsed["provider"];
+    if (provider["id"] !== input.providerId || provider["runId"] !== input.requestId) {
+      return railBlocker(
+        input.providerId,
+        "malformed",
+        "Provider success named a manifest bound to a different provider attempt.",
+        { expectedProviderId: input.providerId, expectedRunId: input.requestId },
+      );
+    }
+    return null;
+  } catch (error) {
+    return railBlocker(input.providerId, "malformed", "Provider success named a manifest whose attempt identity could not be read.", error);
+  }
+}
+
 /**
  * Runs one negotiated provider attempt. A successful terminal is provisional:
  * when recorded evidence is required, the adapter publishes the returned
@@ -456,101 +592,69 @@ export async function invokeProviderRail(
   input: ProviderRailAttemptInput,
   options: ProviderRailAttemptOptions,
 ): Promise<ProviderRailInvocationResult> {
-  let session: ProviderRailSession;
+  const deadline = new RailDeadline(options.deadlineMs ?? DEFAULT_PROVIDER_RAIL_DEADLINE_MS, options.signal);
+  const terminationGraceMs = options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
+  let session: ProviderRailSession | undefined;
+  let requestStarted = false;
   try {
-    session = await options.open();
-  } catch (error) {
-    return {
-      kind: "blocked",
-      status: "indeterminate",
-      blockers: [railBlocker(input.providerId, "indeterminate", "The provider process could not be started.", error)],
-    };
-  }
-  const received: unknown[] = [];
-  let cancellationSent = false;
-  let cancellationFailure: unknown;
-  let cancellationPromise: Promise<void> | undefined;
-
-  const sendCancellation = (): void => {
-    if (cancellationSent) return;
-    cancellationSent = true;
-    cancellationPromise = session
-      .send({
-        kind: "cancel",
-        version: DELIVERY_PROVIDER_RAILS_VERSION,
-        requestId: input.requestId,
-        cancellationId: options.cancellationId ?? `cancel-${input.requestId}`,
-        reason: "Consumer interrupted the provider attempt",
-      })
-      .catch((error: unknown) => {
-        cancellationFailure = error;
-      });
-  };
-
-  try {
-    await session.send({ kind: "negotiate", supportedVersions: [DELIVERY_PROVIDER_RAILS_VERSION] });
-    const negotiation = await session.receive();
+    session = await deadline.wait(options.open);
+    const activeSession = session;
+    await deadline.wait(() => activeSession.send({ kind: "negotiate", supportedVersions: [DELIVERY_PROVIDER_RAILS_VERSION] }));
+    const negotiation = await deadline.wait(() => activeSession.receive());
     if (negotiation === null) {
       return {
         kind: "blocked",
         status: "indeterminate",
+        runId: input.requestId,
         blockers: [railBlocker(input.providerId, "indeterminate", "The provider transport closed before version negotiation completed.")],
       };
     }
-    received.push(negotiation);
+    const received: unknown[] = [negotiation];
     const negotiated = consumeProviderRailMessages(received, { requestId: input.requestId });
     if (negotiated.status === "unsupported") {
-      return { kind: "blocked", status: "unsupported", blockers: outcomeBlockers(input.providerId, negotiated) };
+      return { kind: "blocked", status: "unsupported", runId: input.requestId, blockers: outcomeBlockers(input.providerId, negotiated) };
     }
     if (negotiated.status !== "supported") {
-      return { kind: "blocked", status: "malformed", blockers: outcomeBlockers(input.providerId, negotiated) };
+      return { kind: "blocked", status: "malformed", runId: input.requestId, blockers: outcomeBlockers(input.providerId, negotiated) };
     }
 
-    await session.send({
-      kind: "request",
-      version: DELIVERY_PROVIDER_RAILS_VERSION,
-      requestId: input.requestId,
-      idempotencyKey: input.idempotencyKey,
-      payload: input.payload,
-    });
-    options.signal?.addEventListener("abort", sendCancellation, { once: true });
-    if (options.signal?.aborted === true) sendCancellation();
+    requestStarted = true;
+    await deadline.wait(() =>
+      activeSession.send({
+        kind: "request",
+        version: DELIVERY_PROVIDER_RAILS_VERSION,
+        requestId: input.requestId,
+        idempotencyKey: input.idempotencyKey,
+        payload: input.payload,
+      }),
+    );
 
     for (;;) {
-      const message = await session.receive();
-      await cancellationPromise;
-      if (cancellationFailure !== undefined) throw cancellationFailure;
+      const message = await deadline.wait(() => activeSession.receive());
       if (message === null) {
         const interrupted = consumeProviderRailMessages(received, {
           requestId: input.requestId,
-          cancellationAccepted: cancellationSent,
           interrupted: true,
         });
-        return cancellationSent
-          ? { kind: "interrupted", status: "indeterminate", blockers: outcomeBlockers(input.providerId, interrupted) }
-          : { kind: "blocked", status: "indeterminate", blockers: outcomeBlockers(input.providerId, interrupted) };
+        return { kind: "blocked", status: "indeterminate", runId: input.requestId, blockers: outcomeBlockers(input.providerId, interrupted) };
       }
       received.push(message);
       const consumption = consumeProviderRailMessages(received, {
         requestId: input.requestId,
-        cancellationAccepted: cancellationSent,
       });
       if (consumption.status === "supported") continue;
       if (consumption.status === "malformed") {
-        const blockers = outcomeBlockers(input.providerId, consumption);
-        return cancellationSent
-          ? { kind: "interrupted", status: "malformed", blockers }
-          : { kind: "blocked", status: "malformed", blockers };
+        return { kind: "blocked", status: "malformed", runId: input.requestId, blockers: outcomeBlockers(input.providerId, consumption) };
       }
       if (consumption.terminal === null) continue;
       // Terminal is absorbing. Once it is accepted, a later local signal must
       // not emit cancellation or replace the provider's completed outcome.
-      options.signal?.removeEventListener("abort", sendCancellation);
+      deadline.dispose();
       if (consumption.status === "cancelled") {
-        return { kind: "interrupted", status: "cancelled", blockers: outcomeBlockers(input.providerId, consumption) };
+        return { kind: "interrupted", status: "cancelled", runId: input.requestId, blockers: outcomeBlockers(input.providerId, consumption) };
       }
       if (consumption.status !== "success") {
-        return { kind: "blocked", status: consumption.status, blockers: outcomeBlockers(input.providerId, consumption) };
+        return { kind: "blocked", status: consumption.status, runId: input.requestId, blockers: outcomeBlockers(input.providerId, consumption) };
       }
 
       let records: readonly SubmissionRecord[] = [];
@@ -560,8 +664,13 @@ export async function invokeProviderRail(
           return {
             kind: "blocked",
             status: "malformed",
+            runId: input.requestId,
             blockers: [railBlocker(input.providerId, "malformed", "Provider success did not identify a manifest for retained evidence publication.")],
           };
+        }
+        const bindingFailure = await manifestBindingBlocker(input, options, manifestPath);
+        if (bindingFailure !== null) {
+          return { kind: "blocked", status: "malformed", runId: input.requestId, blockers: [bindingFailure] };
         }
         let publication: SubmissionOutcome;
         try {
@@ -570,13 +679,18 @@ export async function invokeProviderRail(
           return {
             kind: "blocked",
             status: "failed",
-            blockers: [railBlocker(input.providerId, "failed", "Provider evidence publication did not complete.", error)],
+            runId: input.requestId,
+            blockers:
+              error instanceof BlockedError
+                ? error.blockers
+                : [railBlocker(input.providerId, "failed", "Provider evidence publication did not complete.", error)],
           };
         }
         if (publication.status !== "accepted") {
           return {
             kind: "blocked",
             status: "failed",
+            runId: input.requestId,
             blockers:
               publication.blockers.length > 0
                 ? publication.blockers
@@ -595,16 +709,38 @@ export async function invokeProviderRail(
       };
     }
   } catch (error) {
-    const blockers = [railBlocker(input.providerId, "indeterminate", "The provider transport closed without a trustworthy terminal outcome.", error)];
-    return options.signal?.aborted === true
-      ? { kind: "interrupted", status: "indeterminate", blockers }
-      : { kind: "blocked", status: "indeterminate", blockers };
+    if (session !== undefined && requestStarted && error instanceof RailLifecycleEnded) {
+      await settlesWithin(
+        Promise.resolve().then(() =>
+          session?.send({
+            kind: "cancel",
+            version: DELIVERY_PROVIDER_RAILS_VERSION,
+            requestId: input.requestId,
+            cancellationId: options.cancellationId ?? `cancel-${input.requestId}`,
+            reason: error.causeKind === "deadline" ? "Consumer deadline expired" : "Consumer interrupted the provider attempt",
+          }),
+        ),
+        terminationGraceMs,
+      );
+    }
+    const summary =
+      error instanceof RailLifecycleEnded
+        ? error.causeKind === "deadline"
+          ? "The provider lifecycle deadline expired without a trustworthy terminal outcome."
+          : "The provider invocation was interrupted without a trustworthy terminal outcome."
+        : session === undefined
+          ? "The provider process could not be started."
+          : "The provider transport closed without a trustworthy terminal outcome.";
+    const blockers = [railBlocker(input.providerId, "indeterminate", summary, error)];
+    return error instanceof RailLifecycleEnded && error.causeKind === "abort"
+      ? { kind: "interrupted", status: "indeterminate", runId: input.requestId, blockers }
+      : { kind: "blocked", status: "indeterminate", runId: input.requestId, blockers };
   } finally {
-    options.signal?.removeEventListener("abort", sendCancellation);
+    deadline.dispose();
     // Transport teardown after an accepted terminal cannot rewrite that
     // terminal. The process/session is still closed on every path.
     try {
-      await session.close();
+      await session?.close({ terminationGraceMs });
     } catch {
       // Best effort only; pre-terminal transport failures are mapped above.
     }

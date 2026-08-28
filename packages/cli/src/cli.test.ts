@@ -45,9 +45,8 @@ import {
   wireRepo,
   type CliRuntime,
   type CommandDescriptor,
-  type ProviderRailMessage,
-  type ProviderRailSession,
 } from "./index.ts";
+import type { ProviderRailMessage, ProviderRailSession } from "./provider-rails.ts";
 
 const run = promisify(execFile);
 const cleanups: string[] = [];
@@ -542,6 +541,153 @@ describe("the full delivery loop", () => {
       outcome: "satisfied_live_fact",
       providerId: PROVIDER.id,
     });
+  });
+
+  it("re-evaluates an existential live obligation after failure and stops after another provider succeeds", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const providerIds = ["failing.provider", "passing.provider"] as const;
+    const config = makeConfig({
+      providers: providerIds.map((id) => ({ id, findingCodes: [], command: [`fake-${id}`] })),
+      obligations: [
+        {
+          id: "review.green",
+          activation: { kind: "relevant_change" },
+          freshness: "live",
+          providers: providerIds,
+          providerPolicy: "existential",
+          acceptedPayloadSpecs: ["review.green/1"],
+          allowedResolutionKinds: ["satisfied_live_fact", "not_applicable"],
+          humanWaiverAllowed: false,
+          minimumAttestationLevel: "self",
+          ciDelegationPolicyIds: [],
+          remediation: { default: [{ id: "run-provider", kind: "retry", summary: "Run an uncovered provider." }] },
+          waivableCodes: [],
+          nonWaivableCodes: [...STRUCTURAL_WAIVABLE, ...STRUCTURAL_NONWAIVABLE],
+        },
+      ],
+    });
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    const opened: string[] = [];
+    const railRuntime: CliRuntime = {
+      ...runtime,
+      openProviderRail: async ({ providerId }): Promise<ProviderRailSession> => {
+        opened.push(providerId);
+        let receiveCount = 0;
+        let requestId: string | undefined;
+        return {
+          async send(message) {
+            if (message.kind === "request") requestId = message.requestId;
+          },
+          async receive() {
+            receiveCount += 1;
+            if (receiveCount === 1) {
+              return {
+                kind: "negotiation",
+                outcome: "supported",
+                selectedVersion: "delivery-provider-rails/1",
+                supportedVersions: ["delivery-provider-rails/1"],
+              };
+            }
+            if (requestId === undefined) return null;
+            return {
+              kind: "terminal",
+              outcome: providerId === "failing.provider" ? "failed" : "success",
+              requestId,
+              sequence: 1,
+              summary: `${providerId} complete`,
+              version: "delivery-provider-rails/1",
+            };
+          },
+          async close() {},
+        };
+      },
+    };
+
+    expect(await runCli(["prepare"], railRuntime)).toBe(EXIT_OK);
+    expect(await runCli(["record"], railRuntime)).toBe(EXIT_OK);
+    expect(opened).toEqual(["failing.provider", "passing.provider"]);
+  });
+
+  it("invokes only the uncovered provider for an all-provider exact-evidence obligation", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const providerIds = ["first.provider", "second.provider"] as const;
+    const config = makeConfig({
+      providers: providerIds.map((id) => ({ id, findingCodes: [], command: [`fake-${id}`] })),
+      obligations: [
+        {
+          id: "review.green",
+          activation: { kind: "relevant_change" },
+          freshness: "exact_candidate",
+          providers: providerIds,
+          providerPolicy: "all",
+          acceptedPayloadSpecs: ["review.green/1"],
+          allowedResolutionKinds: ["satisfied_evidence", "not_applicable"],
+          humanWaiverAllowed: false,
+          minimumAttestationLevel: "self",
+          ciDelegationPolicyIds: [],
+          remediation: { default: [{ id: "run-provider", kind: "retry", summary: "Run the uncovered provider." }] },
+          waivableCodes: [],
+          nonWaivableCodes: [...STRUCTURAL_WAIVABLE, ...STRUCTURAL_NONWAIVABLE],
+        },
+      ],
+    });
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const existingManifest = await buildAcceptSubmission(dir, config, artifacts, {
+      id: "first.provider",
+      version: "1.0.0",
+      runId: "first-run",
+      finalPassId: "pass-2",
+    });
+    expect(await runCli(["submit-evidence", "--manifest", existingManifest], runtime)).toBe(EXIT_OK);
+
+    const opened: string[] = [];
+    const railRuntime: CliRuntime = {
+      ...runtime,
+      openProviderRail: async ({ providerId }): Promise<ProviderRailSession> => {
+        opened.push(providerId);
+        let receiveCount = 0;
+        let terminal: ProviderRailMessage | null = null;
+        return {
+          async send(message) {
+            if (message.kind !== "request") return;
+            const manifestPath = await buildAcceptSubmission(dir, config, artifacts, {
+              id: providerId,
+              version: "1.0.0",
+              runId: message.requestId,
+              finalPassId: "pass-2",
+            });
+            terminal = {
+              kind: "terminal",
+              outcome: "success",
+              requestId: message.requestId,
+              sequence: 1,
+              summary: "Review complete",
+              version: "delivery-provider-rails/1",
+              result: { manifestPath },
+            };
+          },
+          async receive() {
+            receiveCount += 1;
+            if (receiveCount === 1) {
+              return {
+                kind: "negotiation",
+                outcome: "supported",
+                selectedVersion: "delivery-provider-rails/1",
+                supportedVersions: ["delivery-provider-rails/1"],
+              };
+            }
+            return terminal;
+          },
+          async close() {},
+        };
+      },
+    };
+
+    expect(await runCli(["record"], railRuntime)).toBe(EXIT_OK);
+    expect(opened).toEqual(["second.provider"]);
   });
 });
 

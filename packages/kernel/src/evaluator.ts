@@ -193,6 +193,8 @@ export interface NotApplicableResolution extends ResolutionBase {
  */
 export interface BlockedResolution extends ResolutionBase {
   readonly kind: "blocked";
+  /** Structured unresolved findings only for providers with opt-in CLI commands. */
+  readonly providerFindings?: NonEmptyTuple<ObligationFinding>;
   readonly blockers: NonEmptyTuple<Blocker>;
 }
 
@@ -304,13 +306,28 @@ function finding(obligation: ObligationPolicy, code: string, summary: string, de
   };
 }
 
-function blockedWith(gateId: string, obligation: ObligationPolicy, findings: readonly ObligationFinding[], fallback: ObligationFinding): BlockedResolution {
+function blockedWith(
+  config: HarnessConfig,
+  gateId: string,
+  obligation: ObligationPolicy,
+  findings: readonly ObligationFinding[],
+  fallback: ObligationFinding,
+): BlockedResolution {
   const source = findings.length > 0 ? findings : [fallback];
   const [first, ...rest] = source.map((entry) => entry.blocker);
+  const commandProviders = new Set(config.providers.filter((provider) => provider.command !== undefined).map((provider) => provider.id));
+  const providerFindings = source.filter(
+    (entry): entry is ObligationFinding & { readonly providerId: string } =>
+      entry.providerId !== undefined && commandProviders.has(entry.providerId),
+  );
+  const [firstProviderFinding, ...restProviderFindings] = providerFindings;
   return {
     kind: "blocked",
     gateId,
     obligationId: obligation.id,
+    ...(firstProviderFinding === undefined
+      ? {}
+      : { providerFindings: [firstProviderFinding, ...restProviderFindings] }),
     blockers: [first as Blocker, ...rest],
   };
 }
@@ -476,7 +493,7 @@ function evaluateLiveObligation(input: EvaluateGateInput, obligation: Obligation
   const pending = findings.length > 0 ? findings : [fallback];
   const waived = waiverFor(input, obligation, pending);
   if (waived !== undefined) return { resolution: waived, diagnostics: pending };
-  return { resolution: blockedWith(gateId, obligation, pending, fallback), diagnostics: [] };
+  return { resolution: blockedWith(input.config, gateId, obligation, pending, fallback), diagnostics: [] };
 }
 
 // ── Recorded obligations ───────────────────────────────────────────────────
@@ -625,11 +642,11 @@ function evaluateRecordedObligation(input: EvaluateGateInput, obligation: Obliga
   // a choice about. They block ahead of delegation and the waiver rather than
   // taking their place in the queue.
   if (scan.ambiguous) {
-    return { resolution: blockedWith(gateId, obligation, scan.blocking, fallback), diagnostics: scan.diagnostics };
+    return { resolution: blockedWith(input.config, gateId, obligation, scan.blocking, fallback), diagnostics: scan.diagnostics };
   }
   if (scan.malformed.length > 0) {
     return {
-      resolution: blockedWith(gateId, obligation, scan.malformed, fallback),
+      resolution: blockedWith(input.config, gateId, obligation, scan.malformed, fallback),
       diagnostics: scan.blocking.filter((entry) => !scan.malformed.includes(entry)),
     };
   }
@@ -641,7 +658,7 @@ function evaluateRecordedObligation(input: EvaluateGateInput, obligation: Obliga
   const waived = waiverFor(input, obligation, pending);
   if (waived !== undefined) return { resolution: waived, diagnostics: pending };
 
-  return { resolution: blockedWith(gateId, obligation, pending, fallback), diagnostics: [] };
+  return { resolution: blockedWith(input.config, gateId, obligation, pending, fallback), diagnostics: [] };
 }
 
 // ── Waivers ────────────────────────────────────────────────────────────────

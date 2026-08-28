@@ -46,7 +46,7 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 - No human-review-process adapter (GitHub-approvals-to-manifest bridging).
 - No payload specs beyond review.green/1.
 - No port of Athena-only machinery: passkey waiver stack, Convex static analyzer, behavior-scenario runner, graphify.
-- No guarded provider-command execution: the v1 gate evaluates and admits; it does not spawn the consumer's validation suites. Live-provider results are caller-supplied inputs to the admission adapter; `satisfied_live_fact` is retained for contract fidelity with the deferred guarded-execution design and is producible in v1 only from those injected results.
+- No kernel-side guarded provider-command execution: the pure evaluator and admission adapter evaluate caller-supplied records and live results without spawning consumer validation suites. The opt-in CLI-boundary provider rail may obtain those same inputs from configured commands without moving orchestration into the kernel.
 - No Windows support in v1 (macOS + Linux; Windows is follow-up).
 - No naming/branding/pricing decisions — `delivery-harness` and `@delivery-harness/*` are working names.
 
@@ -130,7 +130,7 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 - Schema engine vs hand-rolled?: Hand-rolled normative validator; schemas published and cross-checked under the vector-keyed partition.
 - Where does the blocker contract live?: Phase A (Unit 15) — every Phase B unit produces typed failures.
 - Gate dimension?: Single explicit `gateId`; multi-gate deferred.
-- Where do live facts come from in v1?: Caller-supplied provider results injected into the admission adapter; the gate never spawns commands (see Scope Boundaries).
+- Where do live facts come from in v1?: Caller-supplied provider results injected into the admission adapter, including results obtained by the opt-in CLI-boundary provider rail; the kernel gate never spawns commands (see Scope Boundaries).
 - How can config-independence coexist with vector-bound identifiers?: Two synthetic configs — kit-variant (holds the kit-bound values: envelope spec, `review.green` + `review.green/1`, the two registered providers, `deliverable-tree/v1`, level `self`; varies everything else) and full-divergence (varies everything except the values v1 scope fixes: `delivery-evidence/1`, `review.green/1`, attestation `self`; uses a consumer-owned identity token). Kit runs load the kit repo-config by default (the runner takes the config as a parameter); phase-boundary independence runs pass the kit-variant config through the same parameter.
 - SUB-1 comparison breadth?: The full enumerated field set, including `headSha` when present (spec SUB-1 says "every field"; §5.3's informational note governs gate-time, not record-time) — a head move with an identical tree is rejected at submission and requires re-preparation.
 - Receipt failure-class precedence?: `missing` → `invalid` → `wiring_mismatch` → `base_changed` → `stale`, pinned by test.

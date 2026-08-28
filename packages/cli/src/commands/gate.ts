@@ -9,7 +9,7 @@
  * only ever offers a waiver to a `human` context, all-or-nothing over waivable
  * findings; the CLI adds no waiver logic of its own.
  */
-import { BlockedError, runAdmission, type AdmissionResult, type LiveProviderResult } from "@agent-delivery-harness/kernel";
+import { runAdmission, type AdmissionResult, type Blocker, type LiveProviderResult } from "@agent-delivery-harness/kernel";
 import { CliInterruption, type CommandContext, type CommandDescriptor, type CommandResult } from "../boundary.ts";
 
 /**
@@ -35,29 +35,36 @@ export async function runProviderBackedAdmission(
     ...(options.includeInjectedLiveResults && context.liveResults !== undefined ? { liveResults: context.liveResults } : {}),
   };
 
-  const initial = await runAdmission(input, admissionOptions);
-  if (initial.admitted || initial.decision === undefined || initial.candidate === undefined) return initial;
-
-  const requested = new Map<string, { obligationIds: string[]; requiresEvidence: boolean; needsLiveResult: boolean }>();
-  for (const resolution of initial.decision.resolutions) {
-    if (resolution.kind !== "blocked") continue;
-    const obligation = context.config.obligations.find((entry) => entry.id === resolution.obligationId);
-    if (obligation === undefined) continue;
-    const missingCode = obligation.freshness === "live" ? "live_provider_missing" : "review_evidence_missing";
-    if (resolution.blockers.some((blocker) => blocker.code !== missingCode)) continue;
-    for (const providerId of obligation.providers) {
-      const registration = context.config.providers.find((provider) => provider.id === providerId);
-      if (registration?.command === undefined) continue;
-      const entry = requested.get(providerId) ?? { obligationIds: [], requiresEvidence: false, needsLiveResult: false };
-      entry.obligationIds.push(obligation.id);
-      entry.requiresEvidence ||= obligation.freshness === "exact_candidate";
-      entry.needsLiveResult ||= obligation.freshness === "live";
-      requested.set(providerId, entry);
-    }
-  }
-
   const liveResults: LiveProviderResult[] = options.includeInjectedLiveResults ? [...(context.liveResults ?? [])] : [];
-  for (const [providerId, request] of requested) {
+  const attempted = new Set<string>();
+  const attemptBlockers: Blocker[] = [];
+  let admission = await runAdmission(input, admissionOptions);
+
+  while (!admission.admitted && admission.decision !== undefined && admission.candidate !== undefined) {
+    const requested = new Map<string, { obligationIds: string[]; requiresEvidence: boolean; needsLiveResult: boolean }>();
+    for (const resolution of admission.decision.resolutions) {
+      if (resolution.kind !== "blocked") continue;
+      const obligation = context.config.obligations.find((entry) => entry.id === resolution.obligationId);
+      if (obligation === undefined) continue;
+      const missingCode = obligation.freshness === "live" ? "live_provider_missing" : "review_evidence_missing";
+      for (const finding of resolution.providerFindings ?? []) {
+        if (finding.code !== missingCode || finding.providerId === undefined || attempted.has(finding.providerId)) continue;
+        const registration = context.config.providers.find((provider) => provider.id === finding.providerId);
+        if (registration?.command === undefined || !obligation.providers.includes(registration.id)) continue;
+        const entry = requested.get(registration.id) ?? { obligationIds: [], requiresEvidence: false, needsLiveResult: false };
+        entry.obligationIds.push(obligation.id);
+        entry.requiresEvidence ||= obligation.freshness === "exact_candidate";
+        entry.needsLiveResult ||= obligation.freshness === "live";
+        requested.set(registration.id, entry);
+      }
+    }
+
+    const next = requested.entries().next().value as
+      | [string, { obligationIds: string[]; requiresEvidence: boolean; needsLiveResult: boolean }]
+      | undefined;
+    if (next === undefined) break;
+    const [providerId, request] = next;
+    attempted.add(providerId);
     const result = await context.invokeProvider?.({
       providerId,
       requiresEvidence: request.requiresEvidence,
@@ -65,22 +72,37 @@ export async function runProviderBackedAdmission(
         gateId: context.config.gateId,
         providerId,
         obligationIds: [...new Set(request.obligationIds)].sort(),
-        candidate: initial.candidate,
+        candidate: admission.candidate,
       },
     });
     if (result === undefined) continue;
     if (result.kind === "interrupted") throw new CliInterruption("Provider invocation interrupted before a trustworthy terminal outcome.");
-    if (result.kind === "blocked") throw new BlockedError(result.blockers);
-    if (request.needsLiveResult) liveResults.push(result.liveResult);
+    if (result.kind === "blocked") {
+      attemptBlockers.push(...result.blockers);
+      if (request.needsLiveResult) {
+        liveResults.push({ providerId, runId: result.runId, status: "failed", findings: [] });
+      }
+    } else if (request.needsLiveResult) {
+      liveResults.push(result.liveResult);
+    }
+
+    admission = await runAdmission(
+      { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
+      admissionOptions,
+    );
   }
 
-  return runAdmission(
+  if (admission.admitted) return admission;
+  const final = await runAdmission(
     { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
     {
       ...admissionOptions,
       ...(options.allowPrompt && context.promptForWaiver !== undefined ? { promptForWaiver: context.promptForWaiver } : {}),
     },
   );
+  return attemptBlockers.length === 0 || final.admitted
+    ? final
+    : { ...final, blockers: [...attemptBlockers, ...final.blockers] };
 }
 
 export const gateCommand: CommandDescriptor = {
