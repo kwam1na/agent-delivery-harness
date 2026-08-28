@@ -451,19 +451,11 @@ export interface ProviderRailAttemptInput {
   readonly idempotencyKey: string;
   readonly payload: JsonObject;
   readonly requiresEvidence: boolean;
-  /** Harness-allocated root this one invocation owns. Required for evidence publication. */
-  readonly runRootPath?: string;
-}
-
-export interface ProviderManifestBindingArtifacts {
-  isInsideRunRoot(runRootPath: string, target: string): Promise<boolean>;
-  readTextFile(target: string): Promise<string>;
 }
 
 export interface ProviderRailAttemptOptions {
   readonly open: () => Promise<ProviderRailSession>;
   readonly publishManifest?: (manifestPath: string) => Promise<SubmissionOutcome>;
-  readonly bindingArtifacts?: ProviderManifestBindingArtifacts;
   readonly signal?: AbortSignal;
   readonly cancellationId?: string;
   readonly deadlineMs?: number;
@@ -551,37 +543,6 @@ function manifestPathOf(terminal: ProviderRailTerminal): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-async function manifestBindingBlocker(
-  input: ProviderRailAttemptInput,
-  options: ProviderRailAttemptOptions,
-  manifestPath: string,
-): Promise<Blocker | null> {
-  if (input.runRootPath === undefined || options.bindingArtifacts === undefined) {
-    return railBlocker(input.providerId, "malformed", "Provider evidence cannot be bound to this invocation's allocated run root.");
-  }
-  try {
-    if (!(await options.bindingArtifacts.isInsideRunRoot(input.runRootPath, manifestPath))) {
-      return railBlocker(input.providerId, "malformed", "Provider success named a manifest outside this invocation's allocated run root.");
-    }
-    const parsed = JSON.parse(await options.bindingArtifacts.readTextFile(manifestPath)) as unknown;
-    if (!isObject(parsed) || !isObject(parsed["provider"])) {
-      return railBlocker(input.providerId, "malformed", "Provider success named a manifest without provider attempt identity.");
-    }
-    const provider = parsed["provider"];
-    if (provider["id"] !== input.providerId || provider["runId"] !== input.requestId) {
-      return railBlocker(
-        input.providerId,
-        "malformed",
-        "Provider success named a manifest bound to a different provider attempt.",
-        { expectedProviderId: input.providerId, expectedRunId: input.requestId },
-      );
-    }
-    return null;
-  } catch (error) {
-    return railBlocker(input.providerId, "malformed", "Provider success named a manifest whose attempt identity could not be read.", error);
-  }
-}
-
 /**
  * Runs one negotiated provider attempt. A successful terminal is provisional:
  * when recorded evidence is required, the adapter publishes the returned
@@ -667,10 +628,6 @@ export async function invokeProviderRail(
             runId: input.requestId,
             blockers: [railBlocker(input.providerId, "malformed", "Provider success did not identify a manifest for retained evidence publication.")],
           };
-        }
-        const bindingFailure = await manifestBindingBlocker(input, options, manifestPath);
-        if (bindingFailure !== null) {
-          return { kind: "blocked", status: "malformed", runId: input.requestId, blockers: [bindingFailure] };
         }
         let publication: SubmissionOutcome;
         try {

@@ -324,17 +324,6 @@ describe("green-claim publication", () => {
     result: { manifestPath: "/allocated/run/manifest.json" },
   } as const;
 
-  function bindingArtifacts(providerId = "review.provider", runId = "request-one", inside = true) {
-    return {
-      async isInsideRunRoot() {
-        return inside;
-      },
-      async readTextFile() {
-        return JSON.stringify({ provider: { id: providerId, runId } });
-      },
-    };
-  }
-
   it("does not expose a green result when retained evidence publication fails", async () => {
     const publishManifest = vi.fn(async () => {
       throw new Error("injected crash before claim link");
@@ -346,9 +335,8 @@ describe("green-claim publication", () => {
         idempotencyKey: "attempt-one",
         payload: {},
         requiresEvidence: true,
-        runRootPath: "/allocated/run",
       },
-      { open: async () => scriptedSession([negotiation, success]), publishManifest, bindingArtifacts: bindingArtifacts() },
+      { open: async () => scriptedSession([negotiation, success]), publishManifest },
     );
     expect(publishManifest).toHaveBeenCalledWith("/allocated/run/manifest.json");
     expect(result.kind).toBe("blocked");
@@ -372,32 +360,10 @@ describe("green-claim publication", () => {
         idempotencyKey: "attempt-one",
         payload: {},
         requiresEvidence: true,
-        runRootPath: "/allocated/run",
       },
-      { open: async () => session, publishManifest, bindingArtifacts: bindingArtifacts() },
+      { open: async () => session, publishManifest },
     );
     expect(publishManifest).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ kind: "success", records: [record] });
-  });
-
-  it.each([
-    ["path escape", bindingArtifacts("review.provider", "request-one", false)],
-    ["cross-provider manifest", bindingArtifacts("other.provider", "request-one")],
-    ["cross-run manifest", bindingArtifacts("review.provider", "other-run")],
-  ])("rejects %s before calling the existing recorder", async (_label, bindingArtifacts) => {
-    const publishManifest = vi.fn();
-    const result = await invokeProviderRail(
-      {
-        providerId: "review.provider",
-        requestId: "request-one",
-        idempotencyKey: "attempt-one",
-        payload: {},
-        requiresEvidence: true,
-        runRootPath: "/allocated/run",
-      },
-      { open: async () => scriptedSession([negotiation, success]), publishManifest, bindingArtifacts },
-    );
-    expect(result).toMatchObject({ kind: "blocked", status: "malformed" });
-    expect(publishManifest).not.toHaveBeenCalled();
   });
 });

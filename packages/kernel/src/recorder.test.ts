@@ -24,7 +24,7 @@
  *   a receipt is a blocker rather than a rejection, and that nothing bypasses
  *   it, is this module's own contract.
  */
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -373,6 +373,88 @@ describe("an accepted submission", () => {
     await mkdir(path.dirname(nested), { recursive: true });
     await writeFile(nested, `${JSON.stringify(manifestFor(), null, 2)}\n`, "utf8");
     expect((await test.submit(nested)).status).toBe("accepted");
+  });
+});
+
+describe("provider attempt binding", () => {
+  it("validates and publishes the single manifest snapshot it reads", async () => {
+    const test = await preparedScenario();
+    const manifestPath = await test.writeManifest(manifestFor());
+    let reads = 0;
+    const artifacts = {
+      ...test.artifacts,
+      async readTextFile(target: string) {
+        reads += 1;
+        if (reads > 1) throw new Error("manifest was read more than once");
+        return test.artifacts.readTextFile(target);
+      },
+    };
+
+    const outcome = await test.submit(manifestPath, {
+      artifacts,
+      expectedProviderAttempt: { providerId: PROVIDER_ID, runId: RUN_ID, runRootPath: test.runRoot },
+    });
+
+    expect(outcome.status).toBe("accepted");
+    expect(reads).toBe(1);
+  });
+
+  it.each([
+    ["provider", { id: "other.provider", version: "1.0.0", runId: RUN_ID, finalPassId: FINAL_PASS }],
+    ["run", { id: PROVIDER_ID, version: "1.0.0", runId: "other-run", finalPassId: FINAL_PASS }],
+  ])("rejects a cross-%s replacement made as the recorder takes its snapshot", async (_label, replacementProvider) => {
+    const test = await preparedScenario();
+    const manifestPath = await test.writeManifest(manifestFor());
+    let replaced = false;
+    const artifacts = {
+      ...test.artifacts,
+      async readTextFile(target: string) {
+        if (target === manifestPath && !replaced) {
+          replaced = true;
+          await writeFile(target, `${JSON.stringify(manifestFor({ provider: replacementProvider }), null, 2)}\n`, "utf8");
+        }
+        return test.artifacts.readTextFile(target);
+      },
+    };
+
+    const outcome = await test.submit(manifestPath, {
+      artifacts,
+      expectedProviderAttempt: { providerId: PROVIDER_ID, runId: RUN_ID, runRootPath: test.runRoot },
+    });
+
+    expect(outcome.status).toBe("blocked");
+    expect(blockerCodesOf(outcome)).toContain("provider_attempt_mismatch");
+    expect(await test.recordFiles()).toEqual([]);
+  });
+
+  it("rejects a cross-root symlink replacement made as the recorder takes its snapshot", async () => {
+    const test = await preparedScenario();
+    const manifestPath = await test.writeManifest(manifestFor());
+    const foreign = await test.artifacts.allocateRunRoot({ providerId: PROVIDER_ID, runId: "other-run" });
+    if (!foreign.ok) throw new Error(`foreign fixture run root refused: ${foreign.reason}`);
+    const foreignManifest = path.join(foreign.runRoot.path, "manifest.json");
+    await writeFile(foreignManifest, `${JSON.stringify(manifestFor(), null, 2)}\n`, "utf8");
+    let replaced = false;
+    const artifacts = {
+      ...test.artifacts,
+      async readTextFile(target: string) {
+        if (target === manifestPath && !replaced) {
+          replaced = true;
+          await unlink(target);
+          await symlink(foreignManifest, target);
+        }
+        return test.artifacts.readTextFile(target);
+      },
+    };
+
+    const outcome = await test.submit(manifestPath, {
+      artifacts,
+      expectedProviderAttempt: { providerId: PROVIDER_ID, runId: RUN_ID, runRootPath: test.runRoot },
+    });
+
+    expect(outcome.status).toBe("blocked");
+    expect(blockerCodesOf(outcome)).toContain("provider_manifest_outside_attempt_root");
+    expect(await test.recordFiles()).toEqual([]);
   });
 });
 
