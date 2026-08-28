@@ -1,18 +1,18 @@
 {
   "baselines": {
     "agentSkills": {
-      "archiveSha256": "0e5a2e536ce104f0c8c7956f373990064ecae709fe287c4504d30f2a4314094f",
-      "commitSha": "9ad6a934e97222cd819b8e48b7e258effa89a09e",
-      "coreQualificationSha256": "c88f1b9b8974400e49cf8229f211647226705ae0bd0bac0f63ddc9aec5548063",
+      "archiveSha256": "004bfcf1c8d245a75d9f696d9f1ac83af4b0e6f2c90a48e3927a916a5b8c5ef8",
+      "commitSha": "ddd04495d4fd5d8bac214cb4b81f9dd985d8dd0d",
+      "coreQualificationSha256": "ff72c32a317ba90d3c7c99fbdfe671f8e0116e278bdf4feb58587fd6a1716b6d",
       "installedProviderSha256": "3f68ac3d677384c6229a3a8215c969bd211c477afbdea1712e564d634e82504f",
       "installedWorkflowsSha256": "3fbe993bfb10ea6663c62a0a0d3243153fe6f0136807f191d7fe020e482c8353",
       "linearAttestationSha256": "9e59c80307c6cd365abbe646d52effa512610e707b32074fe8a8632cf329cbb3",
-      "linearQualificationSha256": "fd450a03db73312f449c0aeef2907aa0712ad372071fbccd1b367428532649a3",
-      "metadataSha256": "9c6f96a9994c0faf6dc84a3d907be60ebd82bb7e5579256c853855010d324d99",
+      "linearQualificationSha256": "300de6e2c41d5dd22b79611f5f9da076a63fa88b26e4a5fe9708096cc2a78f51",
+      "metadataSha256": "20b0194b082510d1cb2b7bbbe217888eac444fa28f4610819c76f194493d5e81",
       "profile": "core",
-      "providerQualificationSha256": "092691d27d2dfe312ac17d18634f4292e52abc2c3efbdaf9568cd7ad8f43768e",
+      "providerQualificationSha256": "131c872bfe14a5d30d5af4330849c38348533fa736e60eb07d63dbe85f8e40c4",
       "releaseId": "core-v1",
-      "treeSha": "26034f0e5eea07d066e855100cfd4cabf1195eee"
+      "treeSha": "63b3d1e9494fa6675107d98213ce7809b8a2888a"
     },
     "harness": {
       "commitSha": "b7d62db716e335b25e13f1029ee9c3896244e315",
@@ -49,7 +49,7 @@
       "treeSha": "0d54118bd32b4b84db10f584b3b593e79f6c59d9",
       "workspaceId": "provider-interoperability"
     },
-    "manifestDigest": "f87748f311af7589ea122f4e53962cb7b006d9c4a1901f3e7c8a5ba33c6b5745",
+    "manifestDigest": "5d6bf9935868d43b28a8f19f0dc2089e641c30234f1fabd133c5c17793524bac",
     "publication": {
       "first": "published",
       "reconciled": "idempotent",

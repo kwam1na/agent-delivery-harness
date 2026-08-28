@@ -24,10 +24,10 @@ async function sha256(file: string): Promise<string> {
 describe("exact installed provider interoperability", () => {
   it("pins immutable harness, provider, release, and protocol identities", async () => {
     expect(HARNESS_BASELINE).toBe("b7d62db716e335b25e13f1029ee9c3896244e315");
-    expect(AGENT_SKILLS_BASELINE).toBe("9ad6a934e97222cd819b8e48b7e258effa89a09e");
+    expect(AGENT_SKILLS_BASELINE).toBe("ddd04495d4fd5d8bac214cb4b81f9dd985d8dd0d");
     expect(PROTOCOL_VERSION).toBe("delivery-provider-rails/1");
-    expect(await sha256(archive)).toBe("0e5a2e536ce104f0c8c7956f373990064ecae709fe287c4504d30f2a4314094f");
-    expect(await sha256(metadata)).toBe("9c6f96a9994c0faf6dc84a3d907be60ebd82bb7e5579256c853855010d324d99");
+    expect(await sha256(archive)).toBe("004bfcf1c8d245a75d9f696d9f1ac83af4b0e6f2c90a48e3927a916a5b8c5ef8");
+    expect(await sha256(metadata)).toBe("20b0194b082510d1cb2b7bbbe217888eac444fa28f4610819c76f194493d5e81");
   });
 
   it("rejects changed immutable inputs in the read-only preflight", async () => {
