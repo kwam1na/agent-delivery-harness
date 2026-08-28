@@ -16,6 +16,7 @@
     "sensor": "node --import tsx scripts/check-import-boundaries.ts",
     "sensor:cli": "node --import tsx scripts/check-cli-inventory.ts",
     "sensor:standalone": "node --import tsx scripts/check-standalone-install.ts",
+    "qualify:provider": "node --import tsx scripts/qualify-agent-skills-provider.ts",
     "kit:generate": "node --import tsx packages/conformance/src/generate.ts packages/conformance/vectors",
     "test": "vitest run",
     "check": "npm run typecheck && npm run sensor && npm run sensor:cli && npm run test"

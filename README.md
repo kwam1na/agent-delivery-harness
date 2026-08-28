@@ -89,6 +89,7 @@ npm ci             # install (npm workspaces, ESM throughout)
 npm run typecheck  # tsc, strict
 npm run sensor     # import-boundary / env / Bun / purity / time sensor
 npm run sensor:cli # CLI-inventory sensor
+npm run qualify:provider # exact installed-provider interoperability replay
 npm test           # vitest (DELIVERY_HARNESS_MAX_WORKERS caps concurrency)
 npm run check      # all of the above, in order
 ```
