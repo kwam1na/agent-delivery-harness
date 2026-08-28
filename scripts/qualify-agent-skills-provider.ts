@@ -75,10 +75,18 @@ interface QualificationScenario {
   readonly evidence: readonly string[];
 }
 
+interface QualificationCandidateBinding {
+  readonly treeSha: string;
+  readonly deliverableDigest: string;
+  readonly identityToken: string;
+  readonly baseRef: string;
+  readonly baseTipSha: string;
+  readonly mergeBaseSha: string;
+  readonly workspaceId: string;
+}
+
 export interface AgentSkillsProviderQualification {
   readonly schemaVersion: "provider-harness-interoperability/1";
-  readonly qualificationId: string;
-  readonly qualification: { readonly driverSha256: string };
   readonly baselines: {
     readonly harness: {
       readonly commitSha: typeof HARNESS_BASELINE;
@@ -102,22 +110,10 @@ export interface AgentSkillsProviderQualification {
     };
   };
   readonly protocol: { readonly version: typeof PROTOCOL_VERSION; readonly contractSha256: string; readonly schemaSha256: string; readonly vectorsSha256: string };
-  readonly candidate: {
-    readonly key: string;
-    readonly binding: {
-      readonly treeSha: string;
-      readonly deliverableDigest: string;
-      readonly identityToken: string;
-      readonly baseRef: string;
-      readonly baseTipSha: string;
-      readonly mergeBaseSha: string;
-      readonly workspaceId: string;
-    };
-  };
   readonly capabilities: { readonly required: readonly string[]; readonly observed: readonly string[] };
   readonly evidence: {
     readonly manifestDigest: string;
-    readonly candidateBinding: AgentSkillsProviderQualification["candidate"]["binding"];
+    readonly candidateBinding: QualificationCandidateBinding;
     readonly resolution: {
       readonly kind: "evidence";
       readonly providerId: string;
@@ -263,7 +259,7 @@ function harnessConfig(): HarnessConfig {
   });
 }
 
-function candidateBinding(): AgentSkillsProviderQualification["candidate"]["binding"] {
+function candidateBinding(): QualificationCandidateBinding {
   return {
     treeSha: CANDIDATE.treeSha,
     deliverableDigest: CANDIDATE.deliverable.digest,
@@ -346,6 +342,44 @@ function openInstalled(python: string, repository: string, generation: string): 
     cwd: generation,
     env: environment,
   });
+}
+
+interface CancellationObservation {
+  requestSent: boolean;
+  progressObserved: boolean;
+  sessionClosed: boolean;
+}
+
+function abortAfterDeferredProgress(
+  session: ProviderRailSession,
+  requestId: string,
+  controller: AbortController,
+  observation: CancellationObservation,
+): ProviderRailSession {
+  return {
+    async send(message) {
+      if (message.kind === "request" && message.requestId === requestId) observation.requestSent = true;
+      await session.send(message);
+    },
+    async receive() {
+      const message = await session.receive();
+      if (
+        !observation.progressObserved &&
+        typeof message === "object" &&
+        message !== null &&
+        (message as { kind?: unknown }).kind === "progress" &&
+        (message as { requestId?: unknown }).requestId === requestId
+      ) {
+        observation.progressObserved = true;
+        setImmediate(() => controller.abort());
+      }
+      return message;
+    },
+    async close(options) {
+      await session.close(options);
+      observation.sessionClosed = true;
+    },
+  };
 }
 
 async function allocate(artifacts: ReturnType<typeof createArtifactsPort>, runId: string): Promise<string> {
@@ -445,6 +479,8 @@ export async function qualifyAgentSkillsProvider(input: QualificationInput): Pro
   await unsupported.close();
 
   const mismatchRoot = await allocate(artifacts, "release-mismatch");
+  const recordsBeforeMismatch = await countRecords(storageRoot);
+  let mismatchPublicationCalled = false;
   const mismatch = await invokeProviderRail(
     {
       providerId: PROVIDER_ID,
@@ -453,10 +489,19 @@ export async function qualifyAgentSkillsProvider(input: QualificationInput): Pro
       payload: providerPayload("release-mismatch", mismatchRoot, { release: { ...RELEASE, archiveSha256: "0".repeat(64) } }),
       requiresEvidence: true,
     },
-    { open: () => openInstalled(python, repository, generation), publishManifest: async () => { throw new Error("release mismatch reached publication"); } },
+    {
+      open: () => openInstalled(python, repository, generation),
+      publishManifest: async (manifestPath) => {
+        mismatchPublicationCalled = true;
+        return publish("release-mismatch", mismatchRoot, manifestPath);
+      },
+    },
   );
   invariant(mismatch.kind === "blocked" && mismatch.status === "blocked", "release mismatch did not fail closed");
   invariant(mismatch.blockers.some((blocker) => blocker.details?.includes("release-mismatch") === true), "release mismatch blocker was not retained");
+  invariant(!mismatchPublicationCalled, "release mismatch reached publication");
+  invariant((await readdir(mismatchRoot)).length === 0, "release mismatch created attempt evidence");
+  invariant(await countRecords(storageRoot) === recordsBeforeMismatch, "release mismatch changed the record store");
 
   const crashScript = [
     "const readline=require('node:readline');",
@@ -473,7 +518,7 @@ export async function qualifyAgentSkillsProvider(input: QualificationInput): Pro
 
   const cancellationRoot = await allocate(artifacts, "cancel-run");
   const controller = new AbortController();
-  const cancellationTimer = setTimeout(() => controller.abort(), 100);
+  const cancellationObservation: CancellationObservation = { requestSent: false, progressObserved: false, sessionClosed: false };
   const cancellation = await invokeProviderRail(
     {
       providerId: PROVIDER_ID,
@@ -483,14 +528,35 @@ export async function qualifyAgentSkillsProvider(input: QualificationInput): Pro
       requiresEvidence: false,
     },
     {
-      open: () => openInstalled(python, repository, generation),
+      open: async () =>
+        abortAfterDeferredProgress(
+          await openInstalled(python, repository, generation),
+          "cancel-run",
+          controller,
+          cancellationObservation,
+        ),
       signal: controller.signal,
       cancellationId: "cancel-once",
       deadlineMs: 2_000,
     },
   );
-  clearTimeout(cancellationTimer);
+  invariant(cancellationObservation.requestSent, "cancellation request never crossed the subprocess boundary");
+  invariant(cancellationObservation.progressObserved, "deferred progress was not observed before cancellation");
   invariant(cancellation.kind === "interrupted" && cancellation.status === "indeterminate", "harness cancellation was not conservatively interrupted");
+  invariant(cancellationObservation.sessionClosed, "cancelled subprocess closure was not awaited");
+
+  const afterCancellationRoot = await allocate(artifacts, "after-cancel-run");
+  const afterCancellation = await invokeProviderRail(
+    {
+      providerId: PROVIDER_ID,
+      requestId: "after-cancel-run",
+      idempotencyKey: "attempt-after-cancel-run",
+      payload: providerPayload("after-cancel-run", afterCancellationRoot),
+      requiresEvidence: false,
+    },
+    { open: () => openInstalled(python, repository, generation) },
+  );
+  invariant(afterCancellation.kind === "success", "fresh provider did not start after cancellation cleanup");
 
   const missingRoot = await allocate(artifacts, "missing-evidence");
   const missingEvidence = await invokeProviderRail(
@@ -547,27 +613,17 @@ export async function qualifyAgentSkillsProvider(input: QualificationInput): Pro
   const binding = candidateBinding();
   invariant(canonicalize(evidenceRecord.candidateBinding) === canonicalize(binding), "recorder candidate binding differs from the qualified candidate");
 
-  const driverSha256 = await sha256File(fileURLToPath(import.meta.url));
-  const candidateKey = sha256(canonicalize({
-    harness: HARNESS_BASELINE,
-    agentSkills: AGENT_SKILLS_BASELINE,
-    protocol: PROTOCOL_VERSION,
-    release: RELEASE,
-    candidate: binding,
-  }));
   const scenarios = [
     scenario("happy-pinned-run", ["exact installed provider completed", "six native operation names crossed stdio", "non-empty evidence reached the recorder"]),
-    scenario("incompatible-protocol-and-release", ["changed immutable input rejected before provider startup", "unsupported protocol rejected before request", "wrong release blocked before host events"]),
+    scenario("incompatible-protocol-and-release", ["changed immutable input rejected before provider startup", "unsupported protocol rejected before request", "wrong release blocked before host events", "release mismatch created no manifest, publication, or record"]),
     scenario("provider-crash", ["real subprocess close before terminal remained indeterminate"]),
-    scenario("cancellation", ["aborted installed attempt remained interrupted and indeterminate at the harness boundary"]),
+    scenario("cancellation", ["request crossed the harness subprocess boundary", "deferred progress was observed before abort", "aborted attempt remained interrupted and indeterminate", "cancelled subprocess closure was awaited", "fresh installed provider started and completed immediately after cleanup"]),
     scenario("missing-evidence", ["removed manifest reached the real recorder", "recorder refused publication", "missing evidence remained non-green"]),
     scenario("stable-rerun", ["fresh installed provider reused the same attempt identity and run root", "manifest bytes remained identical", "candidate and record identities remained stable", "second publication reconciled idempotently", "one green claim remained"]),
   ] as const;
 
   return {
     schemaVersion: "provider-harness-interoperability/1",
-    qualificationId: sha256(canonicalize({ candidateKey, driverSha256 })),
-    qualification: { driverSha256 },
     baselines: {
       harness: { commitSha: HARNESS_BASELINE, treeSha: HARNESS_TREE_SHA, providerRailSha256: PROVIDER_RAIL_SHA256, recorderSha256: RECORDER_SHA256 },
       agentSkills: {
@@ -586,7 +642,6 @@ export async function qualifyAgentSkillsProvider(input: QualificationInput): Pro
       },
     },
     protocol: { version: PROTOCOL_VERSION, contractSha256: CONTRACT_SHA256, schemaSha256: CONTRACT_SCHEMA_SHA256, vectorsSha256: CONTRACT_VECTORS_SHA256 },
-    candidate: { key: candidateKey, binding },
     capabilities: { required: OPERATIONS, observed },
     evidence: {
       manifestDigest: published.manifestDigest,
@@ -621,8 +676,9 @@ async function main(): Promise<void> {
   const metadata = path.join(root, "qualifications/fixtures/agent-skills-core-v1.release.json");
   const output = process.argv[2] === undefined ? path.join(root, "qualifications/agent-skills-provider-interoperability.json") : path.resolve(process.argv[2]);
   const record = await qualifyAgentSkillsProvider({ root, archive, metadata });
-  await writeFile(output, canonicalQualification(record), "utf8");
-  process.stdout.write(`${record.qualificationId}\n`);
+  const encoded = canonicalQualification(record);
+  await writeFile(output, encoded, "utf8");
+  process.stdout.write(`${sha256(encoded)}\n`);
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

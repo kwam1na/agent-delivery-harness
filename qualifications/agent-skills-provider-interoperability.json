@@ -21,18 +21,6 @@
       "treeSha": "41e4333f18aa63e013b323cba9f6c52b030f1c12"
     }
   },
-  "candidate": {
-    "binding": {
-      "baseRef": "baseline",
-      "baseTipSha": "00c87542800ff9e5ab323b058f7d61e5d9f0dcb8",
-      "deliverableDigest": "a848d8a52e0432790403be7f89cfc55a88ee6727d8f399f8a78c4f4f92e1388f",
-      "identityToken": "delivery-harness-tree/v1",
-      "mergeBaseSha": "00c87542800ff9e5ab323b058f7d61e5d9f0dcb8",
-      "treeSha": "0d54118bd32b4b84db10f584b3b593e79f6c59d9",
-      "workspaceId": "provider-interoperability"
-    },
-    "key": "6f06c04666dc56c9d72f2b3708dc45ae53557cfb279a990500ec7ea520d1a863"
-  },
   "capabilities": {
     "observed": [
       "create",
@@ -84,10 +72,6 @@
     "vectorsSha256": "1ceb7d7e2043d71f7dea0d95ba2dcb97d2977c56d0045a7001c44eb777dbb2bf",
     "version": "delivery-provider-rails/1"
   },
-  "qualification": {
-    "driverSha256": "e6c8233eb3bfb8065e0f14fc1dded86cd7c6d435a1c0684f2413d8332bdee0d5"
-  },
-  "qualificationId": "739c69d1cfe2ddb491a7a6c63221f3c191512a8aa2e6a9a6e377f89796c23f5f",
   "scenarios": [
     {
       "assertionCount": 3,
@@ -100,11 +84,12 @@
       "result": "passed"
     },
     {
-      "assertionCount": 3,
+      "assertionCount": 4,
       "evidence": [
         "changed immutable input rejected before provider startup",
         "unsupported protocol rejected before request",
-        "wrong release blocked before host events"
+        "wrong release blocked before host events",
+        "release mismatch created no manifest, publication, or record"
       ],
       "id": "incompatible-protocol-and-release",
       "result": "passed"
@@ -118,9 +103,13 @@
       "result": "passed"
     },
     {
-      "assertionCount": 1,
+      "assertionCount": 5,
       "evidence": [
-        "aborted installed attempt remained interrupted and indeterminate at the harness boundary"
+        "request crossed the harness subprocess boundary",
+        "deferred progress was observed before abort",
+        "aborted attempt remained interrupted and indeterminate",
+        "cancelled subprocess closure was awaited",
+        "fresh installed provider started and completed immediately after cleanup"
       ],
       "id": "cancellation",
       "result": "passed"

@@ -43,7 +43,7 @@ describe("exact installed provider interoperability", () => {
     }
   });
 
-  it("drives the installed provider and real recorder through every required scenario", { timeout: 30_000 }, async () => {
+  it("drives every scenario once and replays the canonical checked record", { timeout: 30_000 }, async () => {
     const record = await qualifyAgentSkillsProvider({ root, archive, metadata });
     expect(record.summary).toEqual({ passed: 6, failed: 0, result: "passed" });
     expect(record.capabilities).toEqual({
@@ -60,11 +60,19 @@ describe("exact installed provider interoperability", () => {
     ]);
     expect(record.evidence.publication).toEqual({ first: "published", reconciled: "idempotent", recordCount: 1 });
     expect(record.evidence.manifestDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(record.evidence.candidateBinding).toEqual(record.candidate.binding);
-  });
-
-  it("replays to the checked canonical record without retaining paths or raw host references", { timeout: 30_000 }, async () => {
-    const record = await qualifyAgentSkillsProvider({ root, archive, metadata });
+    expect(record.scenarios.find((scenario) => scenario.id === "cancellation")?.evidence).toEqual([
+      "request crossed the harness subprocess boundary",
+      "deferred progress was observed before abort",
+      "aborted attempt remained interrupted and indeterminate",
+      "cancelled subprocess closure was awaited",
+      "fresh installed provider started and completed immediately after cleanup",
+    ]);
+    expect(record.scenarios.find((scenario) => scenario.id === "incompatible-protocol-and-release")?.evidence).toContain(
+      "release mismatch created no manifest, publication, or record",
+    );
+    expect(record).not.toHaveProperty("qualificationId");
+    expect(record).not.toHaveProperty("qualification");
+    expect(record).not.toHaveProperty("candidate");
     const encoded = canonicalQualification(record);
     expect(encoded).toBe(await readFile(checkedRecord, "utf8"));
     expect(encoded).not.toMatch(/\/Users\/|[A-Za-z]:\\/u);
