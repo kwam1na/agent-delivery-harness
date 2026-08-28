@@ -46,6 +46,7 @@ import {
   type CliRuntime,
   type CommandDescriptor,
 } from "./index.ts";
+import { runProviderBackedAdmission } from "./commands/gate.ts";
 import type { ProviderRailMessage, ProviderRailSession } from "./provider-rails.ts";
 
 const run = promisify(execFile);
@@ -726,6 +727,48 @@ describe("delivery record self-neutrality", () => {
 // ── Waiver wiring ────────────────────────────────────────────────────────────
 
 describe("waiver wiring", () => {
+  it("keeps manual providers on one admission capture and evaluation pass", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+
+    const wiring = await wireRepo(dir, config);
+    let captures = 0;
+    let projections = 0;
+    const result = await runProviderBackedAdmission(
+      {
+        rootDir: dir,
+        config,
+        env: {},
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+        args: [],
+        wire: async () => ({
+          ...wiring,
+          captureCandidate: async () => {
+            captures += 1;
+            return wiring.captureCandidate();
+          },
+          projectActivation: async (candidate) => {
+            projections += 1;
+            return wiring.projectActivation(candidate);
+          },
+        }),
+        artifacts,
+        write: () => {},
+        classifyContext: () => classifyExecutionContext({ config, env: {}, stdinIsTTY: false, stdoutIsTTY: false }),
+      },
+      { allowPrompt: true, includeInjectedLiveResults: true },
+    );
+
+    expect(result.admitted).toBe(false);
+    expect(result.waiver).toBe("not_offered");
+    expect(captures).toBe(1);
+    expect(projections).toBe(1);
+  });
+
   it("never prompts and blocks when non-interactive, even for an all-waivable block", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();

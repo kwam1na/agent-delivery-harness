@@ -34,6 +34,14 @@ export async function runProviderBackedAdmission(
     context: context.classifyContext(),
     ...(options.includeInjectedLiveResults && context.liveResults !== undefined ? { liveResults: context.liveResults } : {}),
   };
+  const finalAdmissionOptions = {
+    ...admissionOptions,
+    ...(options.allowPrompt && context.promptForWaiver !== undefined ? { promptForWaiver: context.promptForWaiver } : {}),
+  };
+
+  if (!context.config.providers.some((provider) => provider.command !== undefined)) {
+    return runAdmission(input, finalAdmissionOptions);
+  }
 
   const liveResults: LiveProviderResult[] = options.includeInjectedLiveResults ? [...(context.liveResults ?? [])] : [];
   const attempted = new Set<string>();
@@ -95,10 +103,7 @@ export async function runProviderBackedAdmission(
   if (admission.admitted) return admission;
   const final = await runAdmission(
     { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
-    {
-      ...admissionOptions,
-      ...(options.allowPrompt && context.promptForWaiver !== undefined ? { promptForWaiver: context.promptForWaiver } : {}),
-    },
+    finalAdmissionOptions,
   );
   return attemptBlockers.length === 0 || final.admitted
     ? final
