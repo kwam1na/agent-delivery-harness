@@ -14,17 +14,19 @@
  * THE ORDER, AND WHY IT IS THIS ORDER.
  *
  *   1. Read the manifest through the fs port.
- *   2. Re-capture the candidate through the injected port (SUB-1, SUB-2).
- *   3. Require a current preparation receipt for that candidate — the
+ *   2. When a provider caller supplies its allocated attempt, bind that one
+ *      snapshot to the expected provider, run, and run root.
+ *   3. Re-capture the candidate through the injected port (SUB-1, SUB-2).
+ *   4. Require a current preparation receipt for that candidate — the
  *      preparation receipt's ordering mechanism.
- *   4. Derive the run root from the provider coordinates, and observe every
+ *   5. Derive the run root from the provider coordinates, and observe every
  *      declared artifact inside it (ENV-10's realpath clause, ENV-11).
- *   5. Validate the manifest, handing it the re-captured candidate and the
- *      artifact bytes read in step 4.
- *   6. Aggregate: the validator's rejections and this module's, in one
+ *   6. Validate the manifest, handing it the re-captured candidate and the
+ *      artifact bytes read in step 5.
+ *   7. Aggregate: the validator's rejections and this module's, in one
  *      response (SUB-5), with no record written if there is a single one
  *      (GEN-3).
- *   7. Publish one record per claim, stamped with the manifest digest (SUB-4).
+ *   8. Publish one record per claim, stamped with the manifest digest (SUB-4).
  *
  * Capture precedes the receipt check because the receipt is evaluated *against*
  * a candidate: there is nothing to compare a receipt to until something has
@@ -74,6 +76,15 @@ export interface SubmissionInput {
   readonly config: HarnessConfig;
 }
 
+export interface ExpectedProviderAttempt {
+  /** Provider selected by the harness for this invocation. */
+  readonly providerId: string;
+  /** Request/run identity allocated by the harness for this invocation. */
+  readonly runId: string;
+  /** Run root allocated by the harness before the provider was started. */
+  readonly runRootPath: string;
+}
+
 export interface SubmissionOptions extends RecordStorageOptions {
   /**
    * How the current candidate is observed (SUB-1). Injected rather than
@@ -84,6 +95,12 @@ export interface SubmissionOptions extends RecordStorageOptions {
   readonly captureCandidate: CaptureCandidate;
   /** The filesystem port. Defaults to one rooted in the system temp directory. */
   readonly artifacts?: ArtifactsPort;
+  /**
+   * Optional caller authority for provider-driven submissions. When present,
+   * the recorder binds the one manifest snapshot it reads to this invocation
+   * before any validation or publication. Ordinary submission paths omit it.
+   */
+  readonly expectedProviderAttempt?: ExpectedProviderAttempt;
   /** Passed through to the receipt evaluation. Tests use it; callers do not. */
   readonly harnessVersion?: string;
 }
@@ -286,6 +303,12 @@ const CHECK_MANIFEST_PATH: Remediation = {
   summary: "Submit the manifest from the run root the harness allocated for this run.",
 };
 
+const RETRY_PROVIDER_ATTEMPT: Remediation = {
+  id: "retry-provider-attempt",
+  kind: "retry",
+  summary: "Run the selected provider again with the harness-allocated request and run root.",
+};
+
 function submissionBlocker(code: string, summary: string, details: string, remediation: Remediation): Blocker {
   return createBlocker({
     // A runtime-checked code: this module builds one from a rejection code,
@@ -346,6 +369,49 @@ function nonEmpty<T>(values: readonly T[], what: string): NonEmptyTuple<T> {
 
 function blockedOutcome(blockers: readonly Blocker[]): SubmissionOutcome {
   return { status: "blocked", blockers: nonEmpty(blockers, "blockers") };
+}
+
+async function expectedProviderAttemptBlockers(
+  manifest: unknown,
+  manifestPath: string,
+  expected: ExpectedProviderAttempt,
+  artifacts: ArtifactsPort,
+): Promise<readonly Blocker[]> {
+  const blockers: Blocker[] = [];
+  try {
+    if (!(await artifacts.isInsideRunRoot(expected.runRootPath, manifestPath))) {
+      blockers.push(
+        submissionBlocker(
+          "provider_manifest_outside_attempt_root",
+          "The provider manifest is outside the run root allocated for this attempt.",
+          "The manifest path does not resolve inside the caller-bound provider run root.",
+          RETRY_PROVIDER_ATTEMPT,
+        ),
+      );
+    }
+  } catch (error) {
+    if (error instanceof BlockedError) return error.blockers;
+    blockers.push(
+      submissionBlocker(
+        "provider_attempt_binding_failed",
+        "The provider manifest could not be bound to its allocated run root.",
+        error instanceof Error ? error.message : String(error),
+        RETRY_PROVIDER_ATTEMPT,
+      ),
+    );
+  }
+
+  if (readPath(manifest, "provider.id") !== expected.providerId || readPath(manifest, "provider.runId") !== expected.runId) {
+    blockers.push(
+      submissionBlocker(
+        "provider_attempt_mismatch",
+        "The provider manifest belongs to a different invocation.",
+        "The manifest provider or run identity differs from the caller-bound provider attempt.",
+        RETRY_PROVIDER_ATTEMPT,
+      ),
+    );
+  }
+  return blockers;
 }
 
 function rejectedOutcome(rejections: readonly ManifestRejection[], comparison: CandidateComparison | null = null): SubmissionOutcome {
@@ -468,6 +534,16 @@ export async function submitManifest(input: SubmissionInput, options: Submission
         RESUBMIT,
       ),
     ]);
+  }
+
+  if (options.expectedProviderAttempt !== undefined) {
+    const attemptBlockers = await expectedProviderAttemptBlockers(
+      manifest,
+      input.manifestPath,
+      options.expectedProviderAttempt,
+      artifacts,
+    );
+    if (attemptBlockers.length > 0) return blockedOutcome(attemptBlockers);
   }
 
   // ── SUB-1 and SUB-2: what is actually prepared, right now ──

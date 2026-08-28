@@ -26,6 +26,7 @@
  * disagreement unconstructible in the first place.
  */
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import {
   BlockedError,
@@ -37,6 +38,7 @@ import {
   evaluateCandidateActivation,
   renderBlockers,
   resolveRecordStorage,
+  submitManifest,
   validateHarnessConfig,
   withDeliverableIdentity,
   type ArtifactsPort,
@@ -51,6 +53,12 @@ import {
   type ReviewActivationProjection,
   type WaiverPrompt,
 } from "@agent-delivery-harness/kernel";
+import {
+  invokeProviderRail,
+  openProviderRailProcess,
+  type ProviderRailInvocationResult,
+  type ProviderRailSession,
+} from "./provider-rails.ts";
 
 // ── Exit codes ───────────────────────────────────────────────────────────────
 
@@ -111,6 +119,12 @@ export interface CommandContext {
   /** Present only when the run can ask a human; the boundary gates it on a TTY. */
   readonly promptForWaiver?: WaiverPrompt;
   readonly liveResults?: readonly LiveProviderResult[];
+  /** Runs one configured provider through the neutral stdio rail, if it has a command. */
+  readonly invokeProvider?: (input: {
+    readonly providerId: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+    readonly requiresEvidence: boolean;
+  }) => Promise<ProviderRailInvocationResult | undefined>;
   /** Emits one line of operator-facing output to stdout. */
   readonly write: (text: string) => void;
   /** Classifies the execution context from this invocation's env + TTY. */
@@ -141,6 +155,14 @@ export interface CliRuntime {
   /** The filesystem port. Defaults to one rooted in the system temp directory. */
   readonly artifacts?: ArtifactsPort;
   readonly liveResults?: readonly LiveProviderResult[];
+  readonly signal?: AbortSignal;
+  /** Test/embedding seam. The ordinary runtime opens the provider's configured command. */
+  readonly openProviderRail?: (input: {
+    readonly providerId: string;
+    readonly command: readonly [string, ...string[]];
+    readonly cwd: string;
+    readonly env: EnvSnapshot;
+  }) => Promise<ProviderRailSession>;
 }
 
 // ── Blocker helpers ──────────────────────────────────────────────────────────
@@ -283,6 +305,65 @@ export async function runCliBoundary(
         ? { promptForWaiver: runtime.promptForWaiver }
         : {}),
       ...(runtime.liveResults === undefined ? {} : { liveResults: runtime.liveResults }),
+      invokeProvider: async ({ providerId, payload, requiresEvidence }) => {
+        const provider = config.providers.find((registration) => registration.id === providerId);
+        if (provider?.command === undefined) return undefined;
+        const command = provider.command;
+        const requestId = randomUUID();
+        const allocation = await artifacts.allocateRunRoot({ providerId, runId: requestId });
+        if (!allocation.ok) {
+          throw new BlockedError([
+            commandBlocker({
+              code: "provider_rail_run_root_refused",
+              sourceId: "delivery-harness.cli.provider-rails",
+              summary: "The provider run root could not be allocated.",
+              details: `${providerId}/${requestId}: ${allocation.reason}`,
+              remediations: [
+                {
+                  id: "check-provider-identity",
+                  kind: "code_change",
+                  summary: "Correct the provider id or restore the harness run-root location, then retry.",
+                },
+              ],
+            }),
+          ]);
+        }
+        const wiring = await wire();
+        const interruptController = runtime.signal === undefined ? new AbortController() : undefined;
+        const onInterrupt = (): void => interruptController?.abort();
+        if (interruptController !== undefined) process.once("SIGINT", onInterrupt);
+        try {
+          return await invokeProviderRail(
+            {
+              providerId,
+              requestId,
+              idempotencyKey: randomUUID(),
+              payload: { ...payload, runId: requestId, runRoot: allocation.runRoot.path },
+              requiresEvidence,
+            },
+            {
+              open: () =>
+                runtime.openProviderRail === undefined
+                  ? openProviderRailProcess({ command, cwd: runtime.cwd, env: { ...runtime.env } })
+                  : runtime.openProviderRail({ providerId, command, cwd: runtime.cwd, env: runtime.env }),
+              publishManifest: (manifestPath) =>
+                submitManifest(
+                  { rootDir: runtime.cwd, config, manifestPath },
+                  {
+                    captureCandidate: wiring.captureCandidate,
+                    artifacts,
+                    expectedProviderAttempt: { providerId, runId: requestId, runRootPath: allocation.runRoot.path },
+                    ...wiring.storageOptions,
+                  },
+                ),
+              signal: runtime.signal ?? interruptController?.signal,
+              cancellationId: randomUUID(),
+            },
+          );
+        } finally {
+          if (interruptController !== undefined) process.off("SIGINT", onInterrupt);
+        }
+      },
       write: (text) => runtime.stdout(`${text}\n`),
       classifyContext: () =>
         classifyExecutionContext({

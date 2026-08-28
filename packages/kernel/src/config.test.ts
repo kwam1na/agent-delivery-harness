@@ -178,6 +178,24 @@ describe("a sound config", () => {
     expect(Object.keys(config).sort()).toEqual(Object.keys(validInput()).sort());
   });
 
+  it("accepts an optional provider command as a non-shell argv array", () => {
+    const config = define(
+      withInput((input) => {
+        input.providers[0]!.command = ["review-provider", "--stdio"];
+      }),
+    );
+    expect(config.providers[0]?.command).toEqual(["review-provider", "--stdio"]);
+  });
+
+  it("rejects an empty provider command", () => {
+    expectOnly(
+      withInput((input) => {
+        input.providers[0]!.command = [];
+      }),
+      "config_invalid_member",
+    );
+  });
+
   it("defaults the three members that carry defaults, and nothing else", () => {
     const input = structuredClone(validInput()) as Partial<MutableInput>;
     delete input.baseRef;

@@ -46,7 +46,7 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 - No human-review-process adapter (GitHub-approvals-to-manifest bridging).
 - No payload specs beyond review.green/1.
 - No port of Athena-only machinery: passkey waiver stack, Convex static analyzer, behavior-scenario runner, graphify.
-- No guarded provider-command execution: the v1 gate evaluates and admits; it does not spawn the consumer's validation suites. Live-provider results are caller-supplied inputs to the admission adapter; `satisfied_live_fact` is retained for contract fidelity with the deferred guarded-execution design and is producible in v1 only from those injected results.
+- No kernel-side guarded provider-command execution: the pure evaluator and admission adapter evaluate caller-supplied records and live results without spawning consumer validation suites. The opt-in CLI-boundary provider rail may obtain those same inputs from configured commands without moving orchestration into the kernel.
 - No Windows support in v1 (macOS + Linux; Windows is follow-up).
 - No naming/branding/pricing decisions — `delivery-harness` and `@delivery-harness/*` are working names.
 
@@ -76,7 +76,7 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 - `athena:scripts/harness-review-evidence.ts` (811 lines) — manifest parsing rules and recorder flow (the spec's ancestor), receipt-gated review context.
 - `athena:scripts/harness-blockers.ts` (617 lines) — typed blocker contract, redaction chain, CLI boundary.
 - `athena:scripts/delivery-run-telemetry.ts` (686 lines) — the tracked, fingerprint-neutral record pattern the delivery record mirrors.
-- Conversation artifacts: the published delivery-evidence/1 spec and the 89-vector conformance kit (both vendored in U1).
+- Conversation artifacts: the published delivery-evidence/1 spec and the 89-vector conformance kit (both vendored in Unit 1).
 
 ### Institutional Learnings
 
@@ -95,7 +95,7 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 
 ### External References
 
-- RFC 8785 (JSON Canonicalization Scheme) — canonical-form test vectors for U2.
+- RFC 8785 (JSON Canonicalization Scheme) — canonical-form test vectors for Unit 2.
 - RFC 2119 — spec keyword semantics (already embedded in the spec document).
 
 ---
@@ -103,21 +103,21 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 ## Key Technical Decisions
 
 - **Port, don't share**: kernel modules are ported from Athena with config injection; no code is imported from or shared with the Athena repo. Rationale: divergence freedom and zero coupling; Athena becomes a consumer later. Tradeoff: temporary duplication until Athena migrates (accepted; the spec + kit keep them honest).
-- **Node-first, `node:child_process` only; Bun-API ban is a sensor rule**: Bun stays a supported runtime via the CI matrix, never a required one; the U1 sensor statically rejects `Bun.*` usage everywhere.
+- **Node-first, `node:child_process` only; Bun-API ban is a sensor rule**: Bun stays a supported runtime via the CI matrix, never a required one; the Unit 1 sensor statically rejects `Bun.*` usage everywhere.
 - **npm-workspaces ESM monorepo**: packages `kernel`, `cli`, `mcp`, `action`, `conformance`. Rationale: no extra tooling for a repo this size. Tradeoff: manual task ordering in CI.
 - **Hand-rolled total validators as the normative implementation; published JSON Schemas cross-checked in tests**: reject-unknown-members, multi-code aggregation, and cross-field rules are natural hand-rolled and awkward in schema engines. The cross-check partition is **vector-keyed** (an explicit list of vector ids expected to fail the schemas) rather than code-keyed, because two RG-10 vectors sharing `invalid_cost` split across the schema boundary and `unsupported_attestation` splits the other way — a code-keyed partition is unsound. The schema-failing set carries a non-emptiness assertion.
 - **One canonicalizer**: RFC 8785 (JCS) implemented in-kernel with RFC test vectors, used for `manifestDigest`, `recordId`, `workspaceId`, and `preparationFingerprint` alike. Athena's locale-dependent `stableJson` is deliberately not ported. Alternative (`canonicalize` npm package) rejected: supply-chain surface on the most security-critical path.
 - **Single gate, explicit id**: config declares exactly one `gateId`; it participates in the SUB-4 record-identity tuple, record filenames (`<gateId>--<obligationId>--<recordId>.json`), and blocker sources. Multi-gate and gate-owned provider spawning are deferred.
-- **Identity version binds the neutral set** (spec §10: identity revs cascade deliberately): `computingIdentityVersion` may be `"deliverable-tree/v1"` only when the config's `reviewNeutral` set equals that token's narration set (`docs/reports/`, `docs/solutions/`, `telemetry/delivery-runs/` — characterized from Athena; the spec names the categories, not the literals); any other `reviewNeutral` set requires a consumer-owned identity token (e.g. `"delivery-harness-tree/v1"` for this repo's own config). Enforced as a U3 load-time invariant. Only `reviewNeutral` excludes entries from the deliverable digest; `recordNeutral` never does.
+- **Identity version binds the neutral set** (spec §10: identity revs cascade deliberately): `computingIdentityVersion` may be `"deliverable-tree/v1"` only when the config's `reviewNeutral` set equals that token's narration set (`docs/reports/`, `docs/solutions/`, `telemetry/delivery-runs/` — characterized from Athena; the spec names the categories, not the literals); any other `reviewNeutral` set requires a consumer-owned identity token (e.g. `"delivery-harness-tree/v1"` for this repo's own config). Enforced as a Unit 3 load-time invariant. Only `reviewNeutral` excludes entries from the deliverable digest; `recordNeutral` never does.
 - **Evidence storage stays git-private and worktree-local** under `git rev-parse --git-path <config.storageNamespace>/` (default namespace `delivery-harness/`). L0 evidence is workspace-scoped by design; the tracked delivery record is the only sanctioned crossing.
-- **The delivery record is a product-layer artifact with its own version token (`delivery-record/1`), outside the delivery-evidence/1 spec.** Members: version token, candidate binding, claim outcomes, `manifestDigest`, `workspaceId`, `attestation.level`, identity token. Its path is the config member `deliveryRecordPath`, which the U3 invariants require to satisfy **both** neutral predicates (this is where `recordNeutral ⊆ reviewNeutral` bites on a concrete path). Verification policy is the config member `deliveryRecordVerification: { baseMovement: "stale" | "allow" }` (default `"stale"`), read **only** by `verifyDeliveryRecord` — never by the evaluator — so the local gate is never more permissive than the Action; when `"allow"` is active the check summary must name it. The evaluator's evidence input comes only from the git-private store; the tracked record is never gate-time evidence. At L0 it proves process discipline and freshness, not provenance.
-- **Pure evaluator / effectful admission adapter split preserved**: the evaluator (U9) performs no I/O; the admission adapter (U17) owns record discovery mapping, binding assembly, context translation, live-result intake, and the two-pass waiver evaluation. Purity is a **direct-import** sensor rule; the fs-bearing modules (U5, U7) publish their type surfaces in dedicated `*.types.ts` files so pure modules can import shapes without implementations.
+- **The delivery record is a product-layer artifact with its own version token (`delivery-record/1`), outside the delivery-evidence/1 spec.** Members: version token, candidate binding, claim outcomes, `manifestDigest`, `workspaceId`, `attestation.level`, identity token. Its path is the config member `deliveryRecordPath`, which the Unit 3 invariants require to satisfy **both** neutral predicates (this is where `recordNeutral ⊆ reviewNeutral` bites on a concrete path). Verification policy is the config member `deliveryRecordVerification: { baseMovement: "stale" | "allow" }` (default `"stale"`), read **only** by `verifyDeliveryRecord` — never by the evaluator — so the local gate is never more permissive than the Action; when `"allow"` is active the check summary must name it. The evaluator's evidence input comes only from the git-private store; the tracked record is never gate-time evidence. At L0 it proves process discipline and freshness, not provenance.
+- **Pure evaluator / effectful admission adapter split preserved**: the evaluator (Unit 9) performs no I/O; the admission adapter (Unit 17) owns record discovery mapping, binding assembly, context translation, live-result intake, and the two-pass waiver evaluation. Purity is a **direct-import** sensor rule; the fs-bearing modules (Unit 5, Unit 7) publish their type surfaces in dedicated `*.types.ts` files so pure modules can import shapes without implementations.
 - **Config as an explicit parameter** (`defineHarnessConfig()`), loaded once at the CLI/Action boundary. Never read env at import time. The CI-policy env key is config (`ciPolicyEnvKey`), vendor-neutral by default. Every config member has a named reader; a member no unit reads is a plan defect.
-- **Blocker contract and the gate's structural finding codes land in Phase A (U15)**: U15 exports both the blocker contract and `GATE_STRUCTURAL_FINDING_CODES` (stale_evidence, ambiguous_records, malformed_record, resolution_not_allowed, …). Each config provider declares its `findingCodes` surface; per obligation, `waivableCodes` + `nonWaivableCodes` must **exactly partition** the emittable set (structural ∪ registered providers' codes) — an unclassified code is a load-time finding, matching Athena's exhaustive-partition doctrine. Redaction and §11.2 neutralization (control chars, ANSI, bidi, zero-width) both live inside the single shared renderer used by CLI, MCP, and Action.
+- **Blocker contract and the gate's structural finding codes land in Phase A (Unit 15)**: Unit 15 exports both the blocker contract and `GATE_STRUCTURAL_FINDING_CODES` (stale_evidence, ambiguous_records, malformed_record, resolution_not_allowed, …). Each config provider declares its `findingCodes` surface; per obligation, `waivableCodes` + `nonWaivableCodes` must **exactly partition** the emittable set (structural ∪ registered providers' codes) — an unclassified code is a load-time finding, matching Athena's exhaustive-partition doctrine. Redaction and §11.2 neutralization (control chars, ANSI, bidi, zero-width) both live inside the single shared renderer used by CLI, MCP, and Action.
 - **Remediations are config, not kernel switches**: each obligation carries `remediation: { default, byCode? }` (non-empty, validated). Athena's obligation-id-keyed exhaustive switch is not ported.
 - **Waiver records are a discriminated identity variant**: `{workspaceId, gateId, obligationId, candidateBinding, kind: "waiver"}` — no provider triple — plus an explicit `scope: "invocation" | "durable"` field. Idempotent per candidate by construction. Athena's `invocation:` id-prefix convention is incompatible with content-addressed ids and is not ported.
 - **GitHub Action before App**: a composite Action wrapping the kernel's pure `verifyDeliveryRecord` proves the loop with no hosted infrastructure; bootstrap rule and producer/poller job-split pattern documented.
-- **The conformance kit is the validator's test suite**, evaluated by default under the kit's own repo-config (via the U3 adapter — the runner takes the config as a parameter, never hardcodes it): unit mode in U4 (84 manifest-decidable vectors), integration mode in U8 (all 89). Config-independence is proven separately: the kit-variant config re-drives the kit runs at each phase boundary (vector-independent dimensions varied, except the two derived-fixed by the identity invariants), and the full-divergence config drives the kernel suite in U14.
+- **The conformance kit is the validator's test suite**, evaluated by default under the kit's own repo-config (via the Unit 3 adapter — the runner takes the config as a parameter, never hardcodes it): unit mode in Unit 4 (84 manifest-decidable vectors), integration mode in Unit 8 (all 89). Config-independence is proven separately: the kit-variant config re-drives the kit runs at each phase boundary (vector-independent dimensions varied, except the two derived-fixed by the identity invariants), and the full-divergence config drives the kernel suite in Unit 14.
 
 ---
 
@@ -128,24 +128,24 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 - How does evidence reach CI at L0?: The tracked delivery record. CI recomputes deliverable identity from the PR head; `workspaceId` is recorded but excluded from CI verification (CI is a different workspace by construction).
 - Action vs App first?: Action — no hosted infrastructure; the kernel verify core is what the App will reuse.
 - Schema engine vs hand-rolled?: Hand-rolled normative validator; schemas published and cross-checked under the vector-keyed partition.
-- Where does the blocker contract live?: Phase A (U15) — every Phase B unit produces typed failures.
+- Where does the blocker contract live?: Phase A (Unit 15) — every Phase B unit produces typed failures.
 - Gate dimension?: Single explicit `gateId`; multi-gate deferred.
-- Where do live facts come from in v1?: Caller-supplied provider results injected into the admission adapter; the gate never spawns commands (see Scope Boundaries).
+- Where do live facts come from in v1?: Caller-supplied provider results injected into the admission adapter, including results obtained by the opt-in CLI-boundary provider rail; the kernel gate never spawns commands (see Scope Boundaries).
 - How can config-independence coexist with vector-bound identifiers?: Two synthetic configs — kit-variant (holds the kit-bound values: envelope spec, `review.green` + `review.green/1`, the two registered providers, `deliverable-tree/v1`, level `self`; varies everything else) and full-divergence (varies everything except the values v1 scope fixes: `delivery-evidence/1`, `review.green/1`, attestation `self`; uses a consumer-owned identity token). Kit runs load the kit repo-config by default (the runner takes the config as a parameter); phase-boundary independence runs pass the kit-variant config through the same parameter.
 - SUB-1 comparison breadth?: The full enumerated field set, including `headSha` when present (spec SUB-1 says "every field"; §5.3's informational note governs gate-time, not record-time) — a head move with an identical tree is rejected at submission and requires re-preparation.
 - Receipt failure-class precedence?: `missing` → `invalid` → `wiring_mismatch` → `base_changed` → `stale`, pinned by test.
 
 ### Deferred to Implementation
 
-- JCS number-serialization edge cases: resolve against RFC 8785 vectors during U2.
-- Default run-root location per OS: settle in U8 with the macOS realpath-alias test.
-- MCP transport details (stdio assumed) and tool naming: settle in U11.
-- Delivery-record file naming (timestamp-plus-branch vs candidate-keyed): settle in U10 under two constraints — merge-conflict-free across parallel branches AND exact Action lookup. Candidate-keyed is the working favorite.
-- Preparation wiring-path default set: settle in U16; config-declared with a sane default (installed harness version + `harness.config.ts`).
+- JCS number-serialization edge cases: resolve against RFC 8785 vectors during Unit 2.
+- Default run-root location per OS: settle in Unit 8 with the macOS realpath-alias test.
+- MCP transport details (stdio assumed) and tool naming: settle in Unit 11.
+- Delivery-record file naming (timestamp-plus-branch vs candidate-keyed): settle in Unit 10 under two constraints — merge-conflict-free across parallel branches AND exact Action lookup. Candidate-keyed is the working favorite.
+- Preparation wiring-path default set: settle in Unit 16; config-declared with a sane default (installed harness version + `harness.config.ts`).
 
 ### Requiring User Decision (does not block implementation start)
 
-- npm scope + license (recommendation: Apache-2.0). U14's release mechanics assume a LICENSE file exists; its content awaits this decision.
+- npm scope + license (recommendation: Apache-2.0). Unit 14's release mechanics assume a LICENSE file exists; its content awaits this decision.
 
 ---
 
@@ -154,27 +154,27 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
     delivery-harness/
       package.json                  # npm workspaces, pinned vitest family
       tsconfig.base.json
-      LICENSE                       # content per user license decision (U14)
-      README.md                     # U13
-      harness.config.ts             # self-hosting config (skeleton in U3, completed in U14)
+      LICENSE                       # content per user license decision (Unit 14)
+      README.md                     # Unit 13
+      harness.config.ts             # self-hosting config (skeleton in Unit 3, completed in Unit 14)
       .github/workflows/ci.yml      # node + bun matrix, kit both modes, sensors, independence runs
-      .github/workflows/gate.yml    # self-hosting delivery-record verification (U14)
-      .github/workflows/release.yml # publish dry-run + version/license consistency (U14)
+      .github/workflows/gate.yml    # self-hosting delivery-record verification (Unit 14)
+      .github/workflows/release.yml # publish dry-run + version/license consistency (Unit 14)
       packages/
         kernel/
           src/
             canonical.ts            # RFC 8785 JCS (single canonicalizer)
             digest.ts               # sha256 helpers, manifestDigest
             config.ts               # defineHarnessConfig, invariants
-            blockers.ts             # blocker contract + shared renderer + GATE_STRUCTURAL_FINDING_CODES (U15)
+            blockers.ts             # blocker contract + shared renderer + GATE_STRUCTURAL_FINDING_CODES (Unit 15)
             candidate.ts            # git capture, double-observation, activation projection
             candidate.types.ts      # fs-free shapes for pure consumers
             identity.ts             # deliverable-tree identity, two neutral predicates
             records.ts              # content-addressed evidence store, workspaceId
             records.types.ts        # fs-free shapes for pure consumers
-            preparation.ts          # receipts: publish/evaluate, wiring fingerprint (U16)
+            preparation.ts          # receipts: publish/evaluate, wiring fingerprint (Unit 16)
             recorder.ts             # submission flow (SUB rules)
-            artifacts.ts            # fs port: run roots, realpath, artifact read/digest, record-file write (U8)
+            artifacts.ts            # fs port: run roots, realpath, artifact read/digest, record-file write (Unit 8)
             artifacts.types.ts      # fs-free shapes
             validator/
               envelope.ts           # delivery-evidence/1
@@ -183,7 +183,7 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
               schemas/              # published JSON Schemas (envelope + payload)
             evaluator.ts            # pure gate evaluation
             context.ts              # execution-context classification
-            admission.ts            # effectful adapter: mapping, live-result intake, two-pass waiver eval (U17)
+            admission.ts            # effectful adapter: mapping, live-result intake, two-pass waiver eval (Unit 17)
             delivery-record.ts      # delivery-record/1 produce + verifyDeliveryRecord
           src/*.test.ts             # sibling tests throughout
         conformance/
@@ -192,11 +192,11 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
             kit-variant-config.ts   # kit-bound values fixed; every vector-independent dimension varied
             second-config.ts        # full-divergence config for the kernel suite
             repo-config-adapter.ts  # kit context/repo-config.json → defineHarnessConfig (maps + defaults)
-            identity-goldens/       # crafted trees + expected digests (U6)
+            identity-goldens/       # crafted trees + expected digests (Unit 6)
           src/runner.ts             # kit harness (unit + integration modes)
           src/runner.test.ts
           src/generate.ts           # vendored kit generator
-          src/second-config.test.ts # config-independence proof (U14)
+          src/second-config.test.ts # config-independence proof (Unit 14)
         cli/
           src/index.ts              # command registry + runCliBoundary
           src/commands/*.ts         # prepare, review-context, submit-evidence, gate, record, verify, check
@@ -205,18 +205,18 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
         action/
           action.yml
           src/main.ts               # thin wrapper over kernel verifyDeliveryRecord
-          fixtures/events/          # simulated PR event payloads (U12)
+          fixtures/events/          # simulated PR event payloads (Unit 12)
       scripts/
         check-import-boundaries.ts  # boundaries + env + Bun-API + io-purity + time bans
-        check-cli-inventory.ts      # blocker-contract registration sensor (built in U10)
+        check-cli-inventory.ts      # blocker-contract registration sensor (built in Unit 10)
         *.test.ts                   # sibling tests (convention applies here and in cli/mcp/action too)
       docs/
-        spec/delivery-evidence-1.md # vendored normative input (U1)
-        delivery-record.md          # delivery-record/1 note (U13)
+        spec/delivery-evidence-1.md # vendored normative input (Unit 1)
+        delivery-record.md          # delivery-record/1 note (Unit 13)
         getting-started.md
         provider-guide.md
         conformance.md
-        docs-examples.test.ts       # executes the getting-started CLI sequence (U13)
+        docs-examples.test.ts       # executes the getting-started CLI sequence (Unit 13)
 
 ---
 
@@ -257,11 +257,11 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ## Implementation Units
 
-*(Dependencies lines are direct-only; the phase execution order — U1, U15, U2, U3, U4 | U5, U6, U7, U16, U8, U9, U17 | U10–U14 — is authoritative for transitive needs.)*
+*(Dependencies lines are direct-only; the phase execution order — Unit 1, Unit 15, Unit 2, Unit 3, Unit 4 | Unit 5, Unit 6, Unit 7, Unit 16, Unit 8, Unit 9, Unit 17 | Unit 10–Unit 14 — is authoritative for transitive needs.)*
 
 ### Phase A — Pure foundations (no git dependency)
 
-- U1. **Repo scaffold, CI matrix, vendored inputs, and purity sensor**
+- Unit 1. **Repo scaffold, CI matrix, vendored inputs, and purity sensor**
 
 **Goal:** A buildable npm-workspaces monorepo with Node+Bun CI, the vendored normative inputs (spec + kit), and the static sensor whose rules keep the kernel honest from day one.
 
@@ -276,13 +276,13 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 **Approach:**
 - ESM throughout; vitest pinned to one exact version across all workspaces; `--maxWorkers` via env.
-- Sensor rules (each independently falsifiable): (a) kernel imports nothing from `cli`/`mcp`/`action` and never imports `harness.config`; (b) no module reads `process.env` at import time — in-function reads legal, aliased top-level reads (`const p = process; p.env.X`) resolved and rejected, unresolvable constructs reported as findings, never skipped; (c) no `Bun.*` API anywhere; (d1) **true purity** — `validator/`, `evaluator.ts`, and `context.ts` import none of the fs/process/os specifier family (`node:fs`, `node:fs/promises`, `fs`, `fs/promises`, `node:child_process`, `child_process`, `node:os`, `os`, `node:module`, `module`) and, within the kernel, import only `*.types.ts`, `canonical.ts`, `digest.ts`, `blockers.ts`, `config.ts`, `context.ts` (itself pure — it reads a given env snapshot), and siblings inside their own **subdirectory** — this allowance applies to `validator/` only (its files may import each other, e.g. `codes.ts`, and are themselves d1-pure); `evaluator.ts` and `context.ts` sit at the kernel root and get **no** sibling allowance, so their kernel imports are exactly the enumerated list above — so a pure module cannot reach fs transitively through `candidate.ts`/`identity.ts`/`records.ts`. `import type` is always legal; `*.test.ts` files are outside the d1/d2 scans (tests may read fixtures from disk); (d2) **no ad-hoc fs** — `recorder.ts`, `admission.ts`, `delivery-record.ts` may not import the fs/process/os specifier family directly; their filesystem work goes through the fs port (`artifacts.ts`, created in U8); (e) GEN-5 time ban — no `Date.now()`/`new Date()`/`recordedAt` reads in the decision paths of `validator/`, `recorder.ts`, `evaluator.ts`, `admission.ts`, `delivery-record.ts`, and `packages/action/src/main.ts`.
-- The CLI-inventory sensor is NOT built here — its scan root does not exist until U10.
+- Sensor rules (each independently falsifiable): (a) kernel imports nothing from `cli`/`mcp`/`action` and never imports `harness.config`; (b) no module reads `process.env` at import time — in-function reads legal, aliased top-level reads (`const p = process; p.env.X`) resolved and rejected, unresolvable constructs reported as findings, never skipped; (c) no `Bun.*` API anywhere; (d1) **true purity** — `validator/`, `evaluator.ts`, and `context.ts` import none of the fs/process/os specifier family (`node:fs`, `node:fs/promises`, `fs`, `fs/promises`, `node:child_process`, `child_process`, `node:os`, `os`, `node:module`, `module`) and, within the kernel, import only `*.types.ts`, `canonical.ts`, `digest.ts`, `blockers.ts`, `config.ts`, `context.ts` (itself pure — it reads a given env snapshot), and siblings inside their own **subdirectory** — this allowance applies to `validator/` only (its files may import each other, e.g. `codes.ts`, and are themselves d1-pure); `evaluator.ts` and `context.ts` sit at the kernel root and get **no** sibling allowance, so their kernel imports are exactly the enumerated list above — so a pure module cannot reach fs transitively through `candidate.ts`/`identity.ts`/`records.ts`. `import type` is always legal; `*.test.ts` files are outside the d1/d2 scans (tests may read fixtures from disk); (d2) **no ad-hoc fs** — `recorder.ts`, `admission.ts`, `delivery-record.ts` may not import the fs/process/os specifier family directly; their filesystem work goes through the fs port (`artifacts.ts`, created in Unit 8); (e) GEN-5 time ban — no `Date.now()`/`new Date()`/`recordedAt` reads in the decision paths of `validator/`, `recorder.ts`, `evaluator.ts`, `admission.ts`, `delivery-record.ts`, and `packages/action/src/main.ts`.
+- The CLI-inventory sensor is NOT built here — its scan root does not exist until Unit 10.
 
 **Patterns to follow:** `athena:scripts/harness-blocker-inventory.ts`; the two static-check learnings.
 
 **Test scenarios:**
-- Happy path: sensor passes on the scaffold; anti-vacuity — scan root (`packages/kernel/src` once U15 lands; a fixture directory until then) yields > 0 files.
+- Happy path: sensor passes on the scaffold; anti-vacuity — scan root (`packages/kernel/src` once Unit 15 lands; a fixture directory until then) yields > 0 files.
 - Falsification, one per rule and per protected file class: kernel→cli import; top-level env read; aliased env read; `Bun.spawn` call; `node:fs/promises` import planted in an `evaluator.ts` fixture (d1); an `identity.ts` import planted in a validator fixture (d1 kernel-import allowlist); a bare `fs` import planted in a `delivery-record.ts` fixture (d2); `Date.now()` planted in a validator fixture and in an action-main fixture (e) — each red, restore green.
 - Edge case: legal in-function `process.env` read → green; unresolvable dynamic construct → reported finding.
 
@@ -290,18 +290,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U15. **Blocker contract, gate finding codes, and shared renderer**
+- Unit 15. **Blocker contract, gate finding codes, and shared renderer**
 
 **Goal:** The failure vocabulary every later unit speaks — typed blockers, the gate's structural finding-code registry, and the one renderer that redacts and neutralizes for all three surfaces.
 
 **Requirements:** R2, R5, R11
 
-**Dependencies:** U1
+**Dependencies:** Unit 1
 
 **Files:**
 - Create: `packages/kernel/src/blockers.ts`, `packages/kernel/src/blockers.test.ts`
 
-**Approach:** Single constructor (blocker codes pattern-validated at type and runtime; summaries collapsed to one line; details bounded and redacted); typed sources; argv-array remediations (non-empty tuple, unconstructible otherwise); rendering total — never throws from the failure path. Redaction chain (PEM, provider tokens, JWTs, credential assignments) inside the constructor. Neutralization (§11.2: control chars, ANSI, bidi, zero-width) inside the shared renderer. Exports `GATE_STRUCTURAL_FINDING_CODES` — the evaluator's structural blocked-finding codes (`stale_evidence`, `ambiguous_records`, `malformed_record`, `resolution_not_allowed`, `review_evidence_missing`, …) — consumed by U3's partition invariant and U9.
+**Approach:** Single constructor (blocker codes pattern-validated at type and runtime; summaries collapsed to one line; details bounded and redacted); typed sources; argv-array remediations (non-empty tuple, unconstructible otherwise); rendering total — never throws from the failure path. Redaction chain (PEM, provider tokens, JWTs, credential assignments) inside the constructor. Neutralization (§11.2: control chars, ANSI, bidi, zero-width) inside the shared renderer. Exports `GATE_STRUCTURAL_FINDING_CODES` — the evaluator's structural blocked-finding codes (`stale_evidence`, `ambiguous_records`, `malformed_record`, `resolution_not_allowed`, `review_evidence_missing`, …) — consumed by Unit 3's partition invariant and Unit 9.
 
 **Patterns to follow:** `athena:scripts/harness-blockers.ts`; `athena:scripts/harness-gate-admission.ts` (code partitions).
 
@@ -316,18 +316,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U2. **Canonical JSON and digests**
+- Unit 2. **Canonical JSON and digests**
 
 **Goal:** RFC 8785 canonicalization and the digest helpers everything downstream trusts — the repo's only canonicalizer.
 
 **Requirements:** R1, R2, R11
 
-**Dependencies:** U1
+**Dependencies:** Unit 1
 
 **Files:**
 - Create: `packages/kernel/src/canonical.ts`, `packages/kernel/src/canonical.test.ts`, `packages/kernel/src/digest.ts`, `packages/kernel/src/digest.test.ts`
 
-**Approach:** In-kernel JCS; `manifestDigest = sha256(JCS(manifest with attestation.signatures := []))`; lowercase-hex helpers. `recordId` and `workspaceId` digests (U7) use this module — no second canonicalizer exists.
+**Approach:** In-kernel JCS; `manifestDigest = sha256(JCS(manifest with attestation.signatures := []))`; lowercase-hex helpers. `recordId` and `workspaceId` digests (Unit 7) use this module — no second canonicalizer exists.
 
 **Execution note:** Test-first from the RFC 8785 appendix vectors before any implementation.
 
@@ -343,22 +343,22 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U3. **Config schema, loader, and invariants**
+- Unit 3. **Config schema, loader, and invariants**
 
 **Goal:** `defineHarnessConfig()` — the injected replacement for Athena's registries — carrying everything the kernel needs, with load-time invariants that catch inconsistent policy, plus the three conformance fixture configs.
 
 **Requirements:** R2, R4, R7, R11
 
-**Dependencies:** U1, U15
+**Dependencies:** Unit 1, Unit 15
 
 **Files:**
 - Create: `packages/kernel/src/config.ts`, `packages/kernel/src/config.test.ts`
-- Create: `harness.config.ts` (minimal self-hosting skeleton: one placeholder obligation, a placeholder double-neutral `deliveryRecordPath`, and the consumer-owned identity token `delivery-harness-tree/v1` — all invariants satisfied from day one; U14 replaces the placeholders with real providers/obligations/path), `packages/conformance/fixtures/kit-variant-config.ts`, `packages/conformance/fixtures/second-config.ts`, `packages/conformance/fixtures/repo-config-adapter.ts`
+- Create: `harness.config.ts` (minimal self-hosting skeleton: one placeholder obligation, a placeholder double-neutral `deliveryRecordPath`, and the consumer-owned identity token `delivery-harness-tree/v1` — all invariants satisfied from day one; Unit 14 replaces the placeholders with real providers/obligations/path), `packages/conformance/fixtures/kit-variant-config.ts`, `packages/conformance/fixtures/second-config.ts`, `packages/conformance/fixtures/repo-config-adapter.ts`
 
 **Approach:**
-- Config surface (every member names its reader): `gateId` (U7 filenames/identity); `baseRef` (U5); `storageNamespace` (U7/U16); `acceptedEnvelopeSpecs[]` (U4, GEN-2); `identityVersions[]` accepted set (U4, ENV-6) + `computingIdentityVersion` (U6); `reviewNeutral`/`recordNeutral` as `{prefix, suffix?}` matchers (U6); `pathClassification: {generated, test, lockfile}` prefix/glob matchers (U5); `sensitivePaths: {id, patterns}[]` (U5); obligations — `activation` (U5/U9), `freshness` (U9), `providers` (U9/U17), `acceptedPayloadSpecs` (U4), `allowedResolutionKinds` (U9), `humanWaiverAllowed` (U9/U17), `minimumAttestationLevel` (U3 enforces the v1 invariant; U4 is the future behavioral reader when L1 lands), `ciDelegationPolicyIds` (U9), `remediation: {default, byCode?}` (U9), `waivableCodes` + `nonWaivableCodes` (U9/U17); provider registry with per-provider `findingCodes` (U3 partition, U17); agent env signals + CI policies + `ciPolicyEnvKey` (U9 context); `preparationWiringPaths` (U16); activation threshold (U5); `deliveryRecordPath` (U10/U12) and `deliveryRecordVerification: { baseMovement: "stale" | "allow" }` default `"stale"` (U10/U12 verify core only). Run roots are deliberately **not** a config dimension (derived under `os.tmpdir()` + the harness namespace; stated in U8).
-- Invariants (all violations reported together; closed grammar rejects unknown members): `humanWaiverAllowed` ⟺ `"waived" ∈ allowedResolutionKinds`; no dangling provider/CI-policy/payload-spec references; unique ids; non-empty remediation lists; **exact partition** — per obligation, `waivableCodes ⊎ nonWaivableCodes` = `GATE_STRUCTURAL_FINDING_CODES ∪ (findingCodes of its registered providers)` (unclassified code = load-time finding; the code universe is injected — U15's constant plus config data — so no reference to U4 exists); `recordNeutral ⊆ reviewNeutral`; `deliveryRecordPath` satisfies both neutral predicates (the review-neutral-but-not-record-neutral case is the load-bearing one and is tested by name); `computingIdentityVersion ∈ identityVersions` (a recorder must accept the identity it computes); `computingIdentityVersion == "deliverable-tree/v1"` only if `reviewNeutral` equals the `deliverable-tree/v1` narration set (`docs/reports/`, `docs/solutions/`, `telemetry/delivery-runs/` — characterized from Athena in U6; the spec names the categories, not the literals), else a consumer-owned token is required; obligations must be non-empty (a zero-obligation gate that admits everything is a load-time finding); `minimumAttestationLevel == "self"` in v1 (message cites the scope decision).
-- Fixtures: the kit's `context/repo-config.json` loads through the adapter, which **maps** its declared fields (gateId, accepted specs, identity versions, obligations, providers, min attestation), **strips** `configVersion`, and **defaults** every dimension the kit does not declare. Adapter test: each defaulted dimension is either vector-independent or pinned to the value the invariants require (`reviewNeutral` defaults to the `deliverable-tree/v1` narration set so the declared identity version stays legal — the one constrained default, named); falsification — point a defaulted dimension at a vector-bound value (e.g. add `review.green/0` to accepted payload specs) → at least one kit vector goes red. `kit-variant-config.ts` pins the kit-bound values **as whole sets, not merely as members** (accepted envelope specs; the obligation set exactly `{review.green}` with payload specs exactly `{review.green/1}`; the provider registry exactly the kit's two providers; `identityVersions` exactly `{deliverable-tree/v1}`; level `self`) — set-fixing preserves the negative space four reject vectors depend on (`qa.exercised`, `review.green/0`, `unknown.provider`, `deliverable-tree/v0` must stay absent). Two members are **derived-fixed** and belong to the enumerated fixed set: set-pinned `identityVersions` forces `computingIdentityVersion = "deliverable-tree/v1"` (membership invariant), which forces `reviewNeutral` to the v1 narration set (token invariant) — harmless because kit runs stub the U5 capture port and never recompute identity from a real tree. **Every other** dimension MUST diverge, with an anti-vacuity assertion enumerating the fixed set (declared + derived) and asserting divergence across the complement. `second-config.ts` diverges in everything except the three values v1 scope fixes (`delivery-evidence/1`, `review.green/1`, attestation `self`), including a consumer-owned identity token.
+- Config surface (every member names its reader): `gateId` (Unit 7 filenames/identity); `baseRef` (Unit 5); `storageNamespace` (Unit 7/Unit 16); `acceptedEnvelopeSpecs[]` (Unit 4, GEN-2); `identityVersions[]` accepted set (Unit 4, ENV-6) + `computingIdentityVersion` (Unit 6); `reviewNeutral`/`recordNeutral` as `{prefix, suffix?}` matchers (Unit 6); `pathClassification: {generated, test, lockfile}` prefix/glob matchers (Unit 5); `sensitivePaths: {id, patterns}[]` (Unit 5); obligations — `activation` (Unit 5/Unit 9), `freshness` (Unit 9), `providers` (Unit 9/Unit 17), `acceptedPayloadSpecs` (Unit 4), `allowedResolutionKinds` (Unit 9), `humanWaiverAllowed` (Unit 9/Unit 17), `minimumAttestationLevel` (Unit 3 enforces the v1 invariant; Unit 4 is the future behavioral reader when L1 lands), `ciDelegationPolicyIds` (Unit 9), `remediation: {default, byCode?}` (Unit 9), `waivableCodes` + `nonWaivableCodes` (Unit 9/Unit 17); provider registry with per-provider `findingCodes` (Unit 3 partition, Unit 17); agent env signals + CI policies + `ciPolicyEnvKey` (Unit 9 context); `preparationWiringPaths` (Unit 16); activation threshold (Unit 5); `deliveryRecordPath` (Unit 10/Unit 12) and `deliveryRecordVerification: { baseMovement: "stale" | "allow" }` default `"stale"` (Unit 10/Unit 12 verify core only). Run roots are deliberately **not** a config dimension (derived under `os.tmpdir()` + the harness namespace; stated in Unit 8).
+- Invariants (all violations reported together; closed grammar rejects unknown members): `humanWaiverAllowed` ⟺ `"waived" ∈ allowedResolutionKinds`; no dangling provider/CI-policy/payload-spec references; unique ids; non-empty remediation lists; **exact partition** — per obligation, `waivableCodes ⊎ nonWaivableCodes` = `GATE_STRUCTURAL_FINDING_CODES ∪ (findingCodes of its registered providers)` (unclassified code = load-time finding; the code universe is injected — Unit 15's constant plus config data — so no reference to Unit 4 exists); `recordNeutral ⊆ reviewNeutral`; `deliveryRecordPath` satisfies both neutral predicates (the review-neutral-but-not-record-neutral case is the load-bearing one and is tested by name); `computingIdentityVersion ∈ identityVersions` (a recorder must accept the identity it computes); `computingIdentityVersion == "deliverable-tree/v1"` only if `reviewNeutral` equals the `deliverable-tree/v1` narration set (`docs/reports/`, `docs/solutions/`, `telemetry/delivery-runs/` — characterized from Athena in Unit 6; the spec names the categories, not the literals), else a consumer-owned token is required; obligations must be non-empty (a zero-obligation gate that admits everything is a load-time finding); `minimumAttestationLevel == "self"` in v1 (message cites the scope decision).
+- Fixtures: the kit's `context/repo-config.json` loads through the adapter, which **maps** its declared fields (gateId, accepted specs, identity versions, obligations, providers, min attestation), **strips** `configVersion`, and **defaults** every dimension the kit does not declare. Adapter test: each defaulted dimension is either vector-independent or pinned to the value the invariants require (`reviewNeutral` defaults to the `deliverable-tree/v1` narration set so the declared identity version stays legal — the one constrained default, named); falsification — point a defaulted dimension at a vector-bound value (e.g. add `review.green/0` to accepted payload specs) → at least one kit vector goes red. `kit-variant-config.ts` pins the kit-bound values **as whole sets, not merely as members** (accepted envelope specs; the obligation set exactly `{review.green}` with payload specs exactly `{review.green/1}`; the provider registry exactly the kit's two providers; `identityVersions` exactly `{deliverable-tree/v1}`; level `self`) — set-fixing preserves the negative space four reject vectors depend on (`qa.exercised`, `review.green/0`, `unknown.provider`, `deliverable-tree/v0` must stay absent). Two members are **derived-fixed** and belong to the enumerated fixed set: set-pinned `identityVersions` forces `computingIdentityVersion = "deliverable-tree/v1"` (membership invariant), which forces `reviewNeutral` to the v1 narration set (token invariant) — harmless because kit runs stub the Unit 5 capture port and never recompute identity from a real tree. **Every other** dimension MUST diverge, with an anti-vacuity assertion enumerating the fixed set (declared + derived) and asserting divergence across the complement. `second-config.ts` diverges in everything except the three values v1 scope fixes (`delivery-evidence/1`, `review.green/1`, attestation `self`), including a consumer-owned identity token.
 
 **Patterns to follow:** `athena:scripts/harness-gate-registry.ts` (`validateHarnessGateRegistry`); the exhaustive-partition learning.
 
@@ -372,13 +372,13 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U4. **Manifest validator, code registry, and kit runner (unit mode)**
+- Unit 4. **Manifest validator, code registry, and kit runner (unit mode)**
 
-**Goal:** The normative validator for the envelope and review.green/1, green on the 84 manifest-decidable vectors, with the 5 recorder-dependent vectors enumerated and asserted-skipped until U8.
+**Goal:** The normative validator for the envelope and review.green/1, green on the 84 manifest-decidable vectors, with the 5 recorder-dependent vectors enumerated and asserted-skipped until Unit 8.
 
 **Requirements:** R1, R3, R11
 
-**Dependencies:** U2, U3, U15
+**Dependencies:** Unit 2, Unit 3, Unit 15
 
 **Files:**
 - Create: `packages/kernel/src/validator/envelope.ts`, `packages/kernel/src/validator/review-green.ts`, `packages/kernel/src/validator/codes.ts`, `packages/kernel/src/validator/schemas/` + sibling tests
@@ -386,9 +386,9 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 **Approach:**
 - Closed grammar (GEN-1); every violated rule reported (SUB-5 floor); manifest rejection-code registry as an exhaustive `Record` witness.
-- Attestation: only `self` conforms; any other defined level → `unsupported_attestation` regardless of signatures; non-empty signatures → `unsupported_attestation` (kit `env-8` floor: `{repository_required, unsupported_attestation}`). `minimumAttestationLevel` has no v1 behavioral read here — U3's invariant is the enforcing reader; U4 becomes the behavioral reader only when L1 lands.
-- Cross-field rules re-derive rather than trust. `env-10-artifact-traversal` is unit-mode (path-shape rejection before file access, per the kit README). Deferred set (5, named, asserted-skipped — silent absence is a runner failure): `a-idempotent-resubmission`, `sub-4-record-conflict`, `sub-3-manifest-outside-run-root` (needs a real allocated run root to be meaningful), `env-10-artifact-missing-file`, `env-11-artifact-digest-mismatch`. Accept vectors asserted as *no rejection codes*; record-writing asserted in U8.
-- Kit runs load the kit repo-config via the U3 adapter by default; the runner takes the config as a parameter (the phase-boundary independence runs pass the kit-variant config through the same parameter).
+- Attestation: only `self` conforms; any other defined level → `unsupported_attestation` regardless of signatures; non-empty signatures → `unsupported_attestation` (kit `env-8` floor: `{repository_required, unsupported_attestation}`). `minimumAttestationLevel` has no v1 behavioral read here — Unit 3's invariant is the enforcing reader; Unit 4 becomes the behavioral reader only when L1 lands.
+- Cross-field rules re-derive rather than trust. `env-10-artifact-traversal` is unit-mode (path-shape rejection before file access, per the kit README). Deferred set (5, named, asserted-skipped — silent absence is a runner failure): `a-idempotent-resubmission`, `sub-4-record-conflict`, `sub-3-manifest-outside-run-root` (needs a real allocated run root to be meaningful), `env-10-artifact-missing-file`, `env-11-artifact-digest-mismatch`. Accept vectors asserted as *no rejection codes*; record-writing asserted in Unit 8.
+- Kit runs load the kit repo-config via the Unit 3 adapter by default; the runner takes the config as a parameter (the phase-boundary independence runs pass the kit-variant config through the same parameter).
 - Schema cross-check, vector-keyed: an explicit list of vector ids expected to fail the published schemas; asserted non-empty; every accept vector passes both; at least one cross-field-only reject vector (e.g. `rg-10-cost-by-reviewer-exceeds-total`) passes the schemas while failing the validator — proving the partition boundary is real.
 - GEN-5 behavioral test: mutating only `recordedAt` changes `manifestDigest`, changes no outcome.
 
@@ -406,18 +406,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ### Phase B — Git-bound kernel
 
-- U5. **Candidate capture and activation projection**
+- Unit 5. **Candidate capture and activation projection**
 
 **Goal:** Stable, prepared-state candidate capture plus the review-activation projection the evaluator consumes.
 
 **Requirements:** R2, R3, R4, R11
 
-**Dependencies:** U3, U15
+**Dependencies:** Unit 3, Unit 15
 
 **Files:**
 - Create: `packages/kernel/src/candidate.ts`, `packages/kernel/src/candidate.types.ts`, `packages/kernel/src/candidate.test.ts`
 
-**Approach:** Double-observation bracket (retry bound 3); clean and staged-index modes; unstaged/untracked → `unprepared`; scrubbed git env; base failures → typed block (legitimately empty diff — tip equals base — is a distinct legal result). U5 owns **two named injection ports**, both typed in `candidate.types.ts`: `computeIdentity` (satisfied by U6's `withDeliverableIdentity`; U5's own tests use a fixed-digest double) so the returned candidate carries `deliverable.digest`, and `captureCandidate` (the whole-candidate port the recorder consumes; the kit runner stubs it with vector `currentCandidate` values). Projection: classification via `config.pathClassification`, relevant-line counting against `config.baseRef`, binary detection, `config.sensitivePaths` matching. Drift-class taxonomy defined here: `deliverable_identity_changed`, `raw_tree_changed`, `base_tip_moved`, `merge_base_moved`, `workspace_changed`. `candidate.types.ts` carries the fs-free shapes for pure consumers.
+**Approach:** Double-observation bracket (retry bound 3); clean and staged-index modes; unstaged/untracked → `unprepared`; scrubbed git env; base failures → typed block (legitimately empty diff — tip equals base — is a distinct legal result). Unit 5 owns **two named injection ports**, both typed in `candidate.types.ts`: `computeIdentity` (satisfied by Unit 6's `withDeliverableIdentity`; Unit 5's own tests use a fixed-digest double) so the returned candidate carries `deliverable.digest`, and `captureCandidate` (the whole-candidate port the recorder consumes; the kit runner stubs it with vector `currentCandidate` values). Projection: classification via `config.pathClassification`, relevant-line counting against `config.baseRef`, binary detection, `config.sensitivePaths` matching. Drift-class taxonomy defined here: `deliverable_identity_changed`, `raw_tree_changed`, `base_tip_moved`, `merge_base_moved`, `workspace_changed`. `candidate.types.ts` carries the fs-free shapes for pure consumers.
 
 **Patterns to follow:** `athena:scripts/harness-candidate.ts`; fail-closed base handling.
 
@@ -428,23 +428,23 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 - Projection: threshold triple — threshold−1 (inactive), threshold (active), threshold−1 relevant + 500 generated (inactive); binary activates; sensitive-path match names the id.
 - Falsification: widen the `generated` matcher so generated lines count as relevant → the third leg of the threshold triple goes red.
 
-**Verification:** all capture states reachable; projection drives U9's activation cases; identity seam explicit.
+**Verification:** all capture states reachable; projection drives Unit 9's activation cases; identity seam explicit.
 
 ---
 
-- U6. **Deliverable identity**
+- Unit 6. **Deliverable identity**
 
 **Goal:** The deliverable-tree digest, config-driven neutral predicates, byte-compatible with Athena's `deliverable-tree/v1` under the v1 narration set.
 
 **Requirements:** R1, R2, R7, R11
 
-**Dependencies:** U2, U3, U5, U15
+**Dependencies:** Unit 2, Unit 3, Unit 5, Unit 15
 
 **Files:**
 - Create: `packages/kernel/src/identity.ts`, `packages/kernel/src/identity.test.ts`
 - Create: `packages/conformance/fixtures/identity-goldens/`
 
-**Approach:** NUL-stream `ls-tree -r -z --full-tree`; byte-order sort; `mode\0objectSha\0path\0` domain-separated by the identity token; no backslash rewriting. **Only `reviewNeutral` excludes entries from the digest**; `recordNeutral` is a separate predicate that never affects it. Provides the identity computer U5 injects (`withDeliverableIdentity`). Token semantics per the U3 invariant: `deliverable-tree/v1` requires that token's narration set (the Athena-characterized literals); the goldens are computed under exactly that set.
+**Approach:** NUL-stream `ls-tree -r -z --full-tree`; byte-order sort; `mode\0objectSha\0path\0` domain-separated by the identity token; no backslash rewriting. **Only `reviewNeutral` excludes entries from the digest**; `recordNeutral` is a separate predicate that never affects it. Provides the identity computer Unit 5 injects (`withDeliverableIdentity`). Token semantics per the Unit 3 invariant: `deliverable-tree/v1` requires that token's narration set (the Athena-characterized literals); the goldens are computed under exactly that set.
 
 **Execution note:** Characterize Athena's implementation on the goldens corpus first, then port — byte compatibility under the v1 set is a hard requirement.
 
@@ -460,18 +460,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U7. **Evidence record store**
+- Unit 7. **Evidence record store**
 
 **Goal:** Content-addressed, atomic, workspace-scoped record persistence with the discriminated evidence/waiver identity.
 
 **Requirements:** R2, R3, R11
 
-**Dependencies:** U2, U3, U15
+**Dependencies:** Unit 2, Unit 3, Unit 15
 
 **Files:**
 - Create: `packages/kernel/src/records.ts`, `packages/kernel/src/records.types.ts`, `packages/kernel/src/records.test.ts`
 
-**Approach:** Storage at `git rev-parse --git-path <config.storageNamespace>/records`, filenames `<gateId>--<obligationId>--<recordId>.json` — this module owns the storage-dir resolver others (U16) reuse. Identity is discriminated: **evidence variant** `recordId = sha256(canonical({workspaceId, gateId, obligationId, candidateBinding, providerId, runId, finalPassId}))`; **waiver variant** `sha256(canonical({workspaceId, gateId, obligationId, candidateBinding, kind: "waiver"}))` — no provider triple, idempotent per candidate — plus the explicit `scope: "invocation" | "durable"` field. `candidateBinding` fields enumerated: `{treeSha, deliverableDigest, identityToken, baseRef, baseTipSha, mergeBaseSha, workspaceId}` (the `workspaceId` redundancy with the tuple is intentional and stated). `workspaceId = sha256(canonical(absolute storage dir))`. Publish: tmp `wx` + fsync + `link()`; `EEXIST` → re-parse and compare identity. Discovery re-derives ids; mismatches quarantine as malformed — distinct from byte-corruption. Modes 0700/0600. `records.types.ts` carries fs-free shapes.
+**Approach:** Storage at `git rev-parse --git-path <config.storageNamespace>/records`, filenames `<gateId>--<obligationId>--<recordId>.json` — this module owns the storage-dir resolver others (Unit 16) reuse. Identity is discriminated: **evidence variant** `recordId = sha256(canonical({workspaceId, gateId, obligationId, candidateBinding, providerId, runId, finalPassId}))`; **waiver variant** `sha256(canonical({workspaceId, gateId, obligationId, candidateBinding, kind: "waiver"}))` — no provider triple, idempotent per candidate — plus the explicit `scope: "invocation" | "durable"` field. `candidateBinding` fields enumerated: `{treeSha, deliverableDigest, identityToken, baseRef, baseTipSha, mergeBaseSha, workspaceId}` (the `workspaceId` redundancy with the tuple is intentional and stated). `workspaceId = sha256(canonical(absolute storage dir))`. Publish: tmp `wx` + fsync + `link()`; `EEXIST` → re-parse and compare identity. Discovery re-derives ids; mismatches quarantine as malformed — distinct from byte-corruption. Modes 0700/0600. `records.types.ts` carries fs-free shapes.
 
 **Patterns to follow:** `athena:scripts/harness-obligation-records.ts` (incl. the `{kind:"waiver"}` collapse; minus `stableJson`).
 
@@ -486,18 +486,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U16. **Preparation receipts**
+- Unit 16. **Preparation receipts**
 
 **Goal:** The kernel's ordering mechanism: no receipt → no review context → no admission.
 
 **Requirements:** R2, R3, R11
 
-**Dependencies:** U5, U7, U15
+**Dependencies:** Unit 5, Unit 7, Unit 15
 
 **Files:**
 - Create: `packages/kernel/src/preparation.ts`, `packages/kernel/src/preparation.test.ts`
 
-**Approach:** Receipt: candidate coordinates + `preparationFingerprint` = the digest of a canonical-JSON object carrying the harness's own version and, for each declared path in `config.preparationWiringPaths` (sorted and deduplicated), that path paired with the sha256 digest of its bytes. Framing the raw bytes with a NUL separator instead is not injective — `path1\0abc\0path2\0def` reads two ways once a wiring file contains a NUL of its own — and pairing each digest with its declared path additionally keeps two byte-identical wiring files distinguishable. A declared wiring path missing from disk is a typed blocker at publish time — never hashed as empty (fail-closed per the static-check learning). Stored git-private via U7's storage-dir resolver (reused, not re-derived). `evaluateReceipt` failure classes in pinned precedence: `missing` → `invalid` → `wiring_mismatch` → `base_changed` → `stale`. A harness-version bump with byte-identical wiring files lands as `wiring_mismatch`.
+**Approach:** Receipt: candidate coordinates + `preparationFingerprint` = the digest of a canonical-JSON object carrying the harness's own version and, for each declared path in `config.preparationWiringPaths` (sorted and deduplicated), that path paired with the sha256 digest of its bytes. Framing the raw bytes with a NUL separator instead is not injective — `path1\0abc\0path2\0def` reads two ways once a wiring file contains a NUL of its own — and pairing each digest with its declared path additionally keeps two byte-identical wiring files distinguishable. A declared wiring path missing from disk is a typed blocker at publish time — never hashed as empty (fail-closed per the static-check learning). Stored git-private via Unit 7's storage-dir resolver (reused, not re-derived). `evaluateReceipt` failure classes in pinned precedence: `missing` → `invalid` → `wiring_mismatch` → `base_changed` → `stale`. A harness-version bump with byte-identical wiring files lands as `wiring_mismatch`.
 
 **Patterns to follow:** `athena:scripts/pr-athena-prepare.ts`.
 
@@ -512,27 +512,27 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U8. **Recorder (submission flow) + kit integration mode**
+- Unit 8. **Recorder (submission flow) + kit integration mode**
 
 **Goal:** The end-to-end submission path — receipt-gated context through per-claim record publication — with the full 89-vector kit green in integration mode.
 
 **Requirements:** R1, R3, R11
 
-**Dependencies:** U4, U5, U6, U7, U15, U16
+**Dependencies:** Unit 4, Unit 5, Unit 6, Unit 7, Unit 15, Unit 16
 
 **Files:**
 - Create: `packages/kernel/src/recorder.ts`, `packages/kernel/src/recorder.test.ts`, `packages/kernel/src/artifacts.ts`, `packages/kernel/src/artifacts.types.ts`, `packages/kernel/src/artifacts.test.ts`
 - Modify: `packages/conformance/src/runner.ts` (integration mode)
 
-**Approach:** Review context requires a current receipt (U16). Filesystem work — run-root allocation, realpath, artifact stat/read/digest, and (later, for U10) record-file writes — lives in the `artifacts.ts` fs port created here; `recorder.ts` consumes the port (sensor rule d2). Run roots are derived under `os.tmpdir()` + the harness namespace and are **not** a config dimension in v1 (stated so the closed grammar is not reopened later). Candidate re-captured through the injected `captureCandidate` port (named in U5; the kit runner stubs it with vector `currentCandidate` values) and compared on the **enumerated field set**: `treeSha`, `headSha` (when present — strict per SUB-1's "every field"; a head move with identical tree is rejected and requires re-preparation), `deliverable.digest`, `deliverable.identity`, `base.ref`, `base.tipSha`, `base.mergeBaseSha`, `workspaceId`, and `vcs` (constant under ENV-4; compared for completeness). Accepted manifests split into per-claim records stamped with `manifestDigest`. SUB-5 aggregation holds at the recorder.
+**Approach:** Review context requires a current receipt (Unit 16). Filesystem work — run-root allocation, realpath, artifact stat/read/digest, and (later, for Unit 10) record-file writes — lives in the `artifacts.ts` fs port created here; `recorder.ts` consumes the port (sensor rule d2). Run roots are derived under `os.tmpdir()` + the harness namespace and are **not** a config dimension in v1 (stated so the closed grammar is not reopened later). Candidate re-captured through the injected `captureCandidate` port (named in Unit 5; the kit runner stubs it with vector `currentCandidate` values) and compared on the **enumerated field set**: `treeSha`, `headSha` (when present — strict per SUB-1's "every field"; a head move with identical tree is rejected and requires re-preparation), `deliverable.digest`, `deliverable.identity`, `base.ref`, `base.tipSha`, `base.mergeBaseSha`, `workspaceId`, and `vcs` (constant under ENV-4; compared for completeness). Accepted manifests split into per-claim records stamped with `manifestDigest`. SUB-5 aggregation holds at the recorder.
 
 **Test scenarios:**
-- All 89 vectors in integration mode (kit repo-config via adapter), including the 5 deferred from U4, full accept assertions (records written per claim), and the multi-step vectors.
+- All 89 vectors in integration mode (kit repo-config via adapter), including the 5 deferred from Unit 4, full accept assertions (records written per claim), and the multi-step vectors.
 - GEN-3 atomicity: two-obligation config, one valid + one invalid claim → rejected with both claims' codes, zero records on disk.
 - SUB-5 at the recorder: containment + digest + freshness violated together → all three reported.
-- SUB-1: one scenario per U5 drift class asserting the named class; `workspaceId` drift; head moved with identical tree → rejected (decision pinned); config-binding drift — `base.ref` differing from the manifest → rejected, identity token differing → rejected, and a stubbed `vcs` mismatch → rejected (none maps to a U5 drift class; the enumerated comparison is what catches them — note that a real config edit would usually also trip U16's `wiring_mismatch` first since `harness.config.ts` is a default wiring path, but submission gates only on review context, so the SUB-1 comparison is the recorder's own backstop and these scenarios inject via the capture port). The comparison operates entirely on the re-captured candidate — which already carries `base.ref` and the identity token from U5's config read — so the recorder performs no direct config read and U8's dependency line correctly omits U3.
+- SUB-1: one scenario per Unit 5 drift class asserting the named class; `workspaceId` drift; head moved with identical tree → rejected (decision pinned); config-binding drift — `base.ref` differing from the manifest → rejected, identity token differing → rejected, and a stubbed `vcs` mismatch → rejected (none maps to a Unit 5 drift class; the enumerated comparison is what catches them — note that a real config edit would usually also trip Unit 16's `wiring_mismatch` first since `harness.config.ts` is a default wiring path, but submission gates only on review context, so the SUB-1 comparison is the recorder's own backstop and these scenarios inject via the capture port). The comparison operates entirely on the re-captured candidate — which already carries `base.ref` and the identity token from Unit 5's config read — so the recorder performs no direct config read and Unit 8's dependency line correctly omits Unit 3.
 - Edge case: macOS `/var` alias contained; artifact path is a directory → rejected; symlink resolving inside root → accepted (pinned); artifact file missing → digest failure.
-- Artifacts port: the record-file write path (atomic write, mode bits) is exercised by `artifacts.test.ts` here, even though its first consumer is U10's `record` command.
+- Artifacts port: the record-file write path (atomic write, mode bits) is exercised by `artifacts.test.ts` here, even though its first consumer is Unit 10's `record` command.
 - Falsification: relax raw-`treeSha` equality to identity equality → raw-tree drift scenario red.
 - Phase-boundary independence: integration run green under `kit-variant-config`.
 
@@ -540,30 +540,30 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U9. **Gate evaluator + execution context**
+- Unit 9. **Gate evaluator + execution context**
 
 **Goal:** Pure obligation evaluation with the six-outcome contract and the trust asymmetry.
 
 **Requirements:** R2, R4, R11
 
-**Dependencies:** U3, U5, U7, U15
+**Dependencies:** Unit 3, Unit 5, Unit 7, Unit 15
 
 **Files:**
 - Create: `packages/kernel/src/evaluator.ts`, `packages/kernel/src/evaluator.test.ts`, `packages/kernel/src/context.ts`, `packages/kernel/src/context.test.ts`
 
 **Approach:**
-- Six outcomes: `satisfied_live_fact`, `satisfied_evidence`, `waived`, `delegated`, `not_applicable`, `blocked` — never interchangeable. Live facts come only from caller-supplied results (via U17); the evaluator consumes them as input.
+- Six outcomes: `satisfied_live_fact`, `satisfied_evidence`, `waived`, `delegated`, `not_applicable`, `blocked` — never interchangeable. Live facts come only from caller-supplied results (via Unit 17); the evaluator consumes them as input.
 - Freshness tuple: deliverable digest + identity token + base ref + base tip + merge base + `workspaceId`; raw tree ignored at gate time, exactly and only here. Unknown identity token fails closed.
-- Waivers: live obligations (obligation kind = the config `freshness` member, `live` vs `exact_candidate`) honor only `scope: "invocation"` records; `waivableCodes`/`nonWaivableCodes` partition from config; remediations from the config catalog. Structural codes from U15's registry.
+- Waivers: live obligations (obligation kind = the config `freshness` member, `live` vs `exact_candidate`) honor only `scope: "invocation"` records; `waivableCodes`/`nonWaivableCodes` partition from config; remediations from the config catalog. Structural codes from Unit 15's registry.
 - Context (`context.ts`): reads a **given** env snapshot; CI policy via `config.ciPolicyEnvKey`; returns the matched policy's values, never literals; classified once per gate; evaluator re-checks per-obligation `ciDelegationPolicyIds` before `delegated`. Precedence: repo-authorized CI > recognized agent > interactive human > unknown; partial CI match → `unauthorized_automation`, never a downgrade; a PTY never promotes an agent.
-- Purity: no I/O; sensor rule d1 enforced by U1; consumes only `*.types.ts` shapes from U5/U7 — the freshness comparison operates on the digest and identity-token **strings** carried on `candidate.types.ts` shapes, so no import of `identity.ts` exists (hence no U6 dependency).
+- Purity: no I/O; sensor rule d1 enforced by Unit 1; consumes only `*.types.ts` shapes from Unit 5/Unit 7 — the freshness comparison operates on the digest and identity-token **strings** carried on `candidate.types.ts` shapes, so no import of `identity.ts` exists (hence no Unit 6 dependency).
 - `deliveryRecordVerification.baseMovement` is invisible here by design: the negative reader claim is tested — evaluating a base-drift obligation under `"stale"` and `"allow"` configs yields an identical `blocked` outcome.
 
 **Execution note:** Test-first as a pure decision table — no I/O in any test.
 
 **Test scenarios:**
 - One scenario per outcome kind naming its input state — including `satisfied_live_fact` from an injected live result, asserted distinct from `satisfied_evidence`; distinctness pairs (stale → `blocked`, never `not_applicable`; below-threshold-no-evidence → `not_applicable`, never `satisfied_*`).
-- Freshness: raw tree differs, identity matches → fresh (positive leniency, paired with U8's strict negative); `baseTipSha` moved → stale; `workspaceId` mismatch → stale; unknown identity token → fails closed; two records in one slot → ambiguous, non-waivable.
+- Freshness: raw tree differs, identity matches → fresh (positive leniency, paired with Unit 8's strict negative); `baseTipSha` moved → stale; `workspaceId` mismatch → stale; unknown identity token → fails closed; two records in one slot → ambiguous, non-waivable.
 - Waivers: prior-invocation waiver inert on a new invocation; `durable` waiver honored only for candidate-bound obligations; a `nonWaivableCodes` member blocks even for a human.
 - Context table: CI + matching policy → `ci` with matched values; CI + near-miss → `unauthorized_automation` (≠ `unknown`); agent + PTY → `agent` (≠ `human`); agent + CI → CI precedence; nothing → `unknown`.
 - Cross-product: obligation kind × `humanWaiverAllowed` × context ∈ {agent, human, ci, unknown}.
@@ -575,18 +575,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U17. **Admission adapter**
+- Unit 17. **Admission adapter**
 
 **Goal:** The effectful seam between store/context/live-results and the pure evaluator.
 
 **Requirements:** R2, R4, R11
 
-**Dependencies:** U5, U7, U9, U15, U16
+**Dependencies:** Unit 5, Unit 7, Unit 9, Unit 15, Unit 16
 
 **Files:**
 - Create: `packages/kernel/src/admission.ts`, `packages/kernel/src/admission.test.ts`
 
-**Approach:** Requires a current receipt. Maps discovered records + malformed diagnostics into the evaluator's input union — `appliesToCandidate` decided here. Assembles the candidate binding from U5's `captureCandidate` port, whose result already carries `deliverable.digest` via the injected identity computer. Accepts **caller-supplied live-provider results** (the v1 source of `satisfied_live_fact`). Translates classifier context. Two-pass waiver evaluation: evaluate; if every blocked resolution is fully waivable and context is interactive-human, prompt **once** (injected prompt I/O) naming every covered obligation, re-capture the candidate, then re-evaluate with synthesized `scope: "invocation"` waiver records. All-or-nothing: any non-waivable blocker suppresses the prompt.
+**Approach:** Requires a current receipt. Maps discovered records + malformed diagnostics into the evaluator's input union — `appliesToCandidate` decided here. Assembles the candidate binding from Unit 5's `captureCandidate` port, whose result already carries `deliverable.digest` via the injected identity computer. Accepts **caller-supplied live-provider results** (the v1 source of `satisfied_live_fact`). Translates classifier context. Two-pass waiver evaluation: evaluate; if every blocked resolution is fully waivable and context is interactive-human, prompt **once** (injected prompt I/O) naming every covered obligation, re-capture the candidate, then re-evaluate with synthesized `scope: "invocation"` waiver records. All-or-nothing: any non-waivable blocker suppresses the prompt.
 
 **Patterns to follow:** `athena:scripts/harness-gate-admission.ts`.
 
@@ -600,13 +600,13 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ### Phase C — Surfaces, verification, self-hosting
 
-- U10. **CLI and delivery record**
+- Unit 10. **CLI and delivery record**
 
 **Goal:** The operator surface: seven commands over the kernel, the CLI-inventory sensor, the waiver-prompt wiring, and the `delivery-record/1` projection with its pure verify core.
 
 **Requirements:** R2, R5, R7, R11
 
-**Dependencies:** U3, U6, U7, U8, U15, U16, U17
+**Dependencies:** Unit 3, Unit 6, Unit 7, Unit 8, Unit 15, Unit 16, Unit 17
 
 **Files:**
 - Create: `packages/kernel/src/delivery-record.ts`, `packages/kernel/src/delivery-record.test.ts`
@@ -615,13 +615,13 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 **Approach:**
 - `runCliBoundary` wraps every command; unknown throws → `internal_error`, redacted; exit codes: 1 policy block, 2 usage error, 130 interruption.
-- `gate` owns the interactive waiver-prompt wiring over U17's injected prompt I/O: TTY detection at the CLI boundary; non-TTY invocations never prompt.
-- Delivery record (`delivery-record/1`): members per Key Technical Decisions; path from `config.deliveryRecordPath` (already invariant-checked by U3); naming decided here under both constraints; refuses to write when the gate result does not describe the current deliverable identity. `delivery-record.ts` only **produces** the record object and bytes (sensor rule d2); the CLI `record` command performs the write through the U8 fs port.
+- `gate` owns the interactive waiver-prompt wiring over Unit 17's injected prompt I/O: TTY detection at the CLI boundary; non-TTY invocations never prompt.
+- Delivery record (`delivery-record/1`): members per Key Technical Decisions; path from `config.deliveryRecordPath` (already invariant-checked by Unit 3); naming decided here under both constraints; refuses to write when the gate result does not describe the current deliverable identity. `delivery-record.ts` only **produces** the record object and bytes (sensor rule d2); the CLI `record` command performs the write through the Unit 8 fs port.
 - `verifyDeliveryRecord(config, record, recomputedIdentity, base)` — pure kernel function reading `config.deliveryRecordVerification`; consumed by `verify` and the Action; `workspaceId` recorded, excluded from verification.
 - CLI-inventory sensor built here (scan root real): every command registered with the blocker contract; the sensor **fails** on an empty registry.
 
 **Test scenarios:**
-- Happy path: full loop in a temp repo — prepare → context → submit (a kit-shaped accept manifest rebound to the temp repo's captured candidate via the U5 seam) → gate green → record written → `verify` passes.
+- Happy path: full loop in a temp repo — prepare → context → submit (a kit-shaped accept manifest rebound to the temp repo's captured candidate via the Unit 5 seam) → gate green → record written → `verify` passes.
 - Self-neutrality: identity before/after `record` byte-identical; negative control — a record path outside review-neutral fails the same assertion.
 - Waiver wiring: non-TTY + all-waivable block → never prompts, blocks; TTY + all-waivable + accept → end-to-end `waived`.
 - Error path: `review-context` without receipt → typed block naming `prepare`; stale receipt → distinct class; submit-after-edit → candidate mismatch; `record` after edit → refused; `check` on unwritable store / invalid config → typed blockers.
@@ -634,18 +634,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U11. **MCP server**
+- Unit 11. **MCP server**
 
 **Goal:** `review-context` and `submit-evidence` as MCP tools at strict parity with the CLI.
 
 **Requirements:** R6, R11
 
-**Dependencies:** U10, U15
+**Dependencies:** Unit 10, Unit 15
 
 **Files:**
 - Create: `packages/mcp/src/server.ts`, `packages/mcp/src/server.test.ts`
 
-**Approach:** Thin wrapper over the same command core; stdio transport; structured rejections; all output through the U15 renderer (agent context windows are a rendering surface).
+**Approach:** Thin wrapper over the same command core; stdio transport; structured rejections; all output through the Unit 15 renderer (agent context windows are a rendering surface).
 
 **Test scenarios:**
 - Parity table: accept vector; one representative reject per code family (GEN/ENV/SUB/RG); candidate mismatch; **malformed/unknown tool arguments → structured usage error at parity with the CLI's exit-2 class** — each through both paths, structured results compared.
@@ -655,18 +655,18 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U12. **GitHub Action (verify mode)**
+- Unit 12. **GitHub Action (verify mode)**
 
 **Goal:** Fail-closed PR verification of the tracked delivery record, wrapping the kernel verify core.
 
 **Requirements:** R4, R7, R11
 
-**Dependencies:** U3, U6, U10, U15
+**Dependencies:** Unit 3, Unit 6, Unit 10, Unit 15
 
 **Files:**
 - Create: `packages/action/action.yml`, `packages/action/src/main.ts`, `packages/action/src/main.test.ts`, `packages/action/fixtures/events/`
 
-**Approach:** Checkout the **PR head** (never the synthetic merge commit); load consumer config; recompute identity (U6); locate the record; call `verifyDeliveryRecord`; emit a check summary with typed failures, remediations, and the honest attestation label ("self / workspace-scoped — process discipline and freshness, not provenance"). `baseMovement` policy comes from config (default stales; relaxation named in the summary). Delegated-authority mode via `ciPolicyId` input. Bootstrap rule + producer/poller pattern documented.
+**Approach:** Checkout the **PR head** (never the synthetic merge commit); load consumer config; recompute identity (Unit 6); locate the record; call `verifyDeliveryRecord`; emit a check summary with typed failures, remediations, and the honest attestation label ("self / workspace-scoped — process discipline and freshness, not provenance"). `baseMovement` policy comes from config (default stales; relaxation named in the summary). Delegated-authority mode via `ciPolicyId` input. Bootstrap rule + producer/poller pattern documented.
 
 **Test scenarios:** (simulated events)
 - Happy path: fresh record → pass with claim summary + attestation label.
@@ -681,19 +681,19 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U13. **Documentation and spec publication**
+- Unit 13. **Documentation and spec publication**
 
 **Goal:** The adoption surface: spec, delivery-record note, guides, executable docs examples.
 
 **Requirements:** R9, R11
 
-**Dependencies:** U10, U12
+**Dependencies:** Unit 10, Unit 12
 
 **Files:**
 - Create: `docs/delivery-record.md`, `docs/getting-started.md`, `docs/provider-guide.md`, `docs/conformance.md`, `README.md`, `docs/docs-examples.test.ts`
 - Modify: `docs/spec/delivery-evidence-1.md` (repo-local linking only)
 
-**Approach:** Getting-started walks config → CLI loop → `record` → Action check (the Action leg marked as covered by U12's simulated events). Provider-guide walks context → accepted manifest. `docs/delivery-record.md` states extra-spec status, version token, both-neutral-sets requirement, the L0 honesty line, and the `baseMovement` policy. README states license/publication status.
+**Approach:** Getting-started walks config → CLI loop → `record` → Action check (the Action leg marked as covered by Unit 12's simulated events). Provider-guide walks context → accepted manifest. `docs/delivery-record.md` states extra-spec status, version token, both-neutral-sets requirement, the L0 honesty line, and the `baseMovement` policy. README states license/publication status.
 
 **Test scenarios:**
 - Happy path: `docs-examples.test.ts` executes the getting-started CLI sequence verbatim against a fixture repo through a passing local `verify`.
@@ -703,24 +703,24 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ---
 
-- U14. **Self-hosting dogfood and release checks**
+- Unit 14. **Self-hosting dogfood and release checks**
 
 **Goal:** The repo gates its own PRs with its own harness; config-independence proof finalized; release mechanics land.
 
 **Requirements:** R8, R10, R11
 
-**Dependencies:** U12, U13, all prior
+**Dependencies:** Unit 12, Unit 13, all prior
 
 **Files:**
 - Create: `.github/workflows/gate.yml`, `.github/workflows/release.yml`, `LICENSE`
-- Modify: `harness.config.ts` (replace the U3 skeleton's placeholder obligation and `deliveryRecordPath` with real providers, obligations, and the final record path; the consumer-owned identity token is already set in U3), `.github/workflows/ci.yml`
+- Modify: `harness.config.ts` (replace the Unit 3 skeleton's placeholder obligation and `deliveryRecordPath` with real providers, obligations, and the final record path; the consumer-owned identity token is already set in Unit 3), `.github/workflows/ci.yml`
 - Create: `packages/conformance/src/second-config.test.ts`
 
-**Approach:** Self-hosting config declares `review.green` with this repo's provider(s); its consumer-owned identity token (`delivery-harness-tree/v1`, set in U3 because `reviewNeutral` includes the record path) is the deliberate identity-rev cascade — safe because `gate.yml` does not exist before this unit. `gate.yml` verifies the record on PRs; the introducing PR is bootstrap-exempt (documented). `release.yml`: publish dry-run per package, version consistency, LICENSE presence + `license`-field match (content per the open user decision; Apache-2.0 recommended default if undecided — flagged, not silent). Config-independence: the kernel suite runs under `second-config.ts`; kit runs (both modes) under `kit-variant-config.ts`; "zero kernel diff" is a review criterion, stated as such.
+**Approach:** Self-hosting config declares `review.green` with this repo's provider(s); its consumer-owned identity token (`delivery-harness-tree/v1`, set in Unit 3 because `reviewNeutral` includes the record path) is the deliberate identity-rev cascade — safe because `gate.yml` does not exist before this unit. `gate.yml` verifies the record on PRs; the introducing PR is bootstrap-exempt (documented). `release.yml`: publish dry-run per package, version consistency, LICENSE presence + `license`-field match (content per the open user decision; Apache-2.0 recommended default if undecided — flagged, not silent). Config-independence: the kernel suite runs under `second-config.ts`; kit runs (both modes) under `kit-variant-config.ts`; "zero kernel diff" is a review criterion, stated as such.
 
 **Test scenarios:**
 - Integration (simulated events): planted stale-record PR fails the gate workflow; fresh-record PR passes — both before any live PR.
-- Config-independence: kernel suite green under the full-divergence config; kit both modes green under the kit-variant config; falsification — a planted kernel conditional on a config value turns the proof red (meaningful because U3 pins the divergence assertions).
+- Config-independence: kernel suite green under the full-divergence config; kit both modes green under the kit-variant config; falsification — a planted kernel conditional on a config value turns the proof red (meaningful because Unit 3 pins the divergence assertions).
 - Release: dry-run green per package; version mismatch → red; missing LICENSE → red.
 - CI matrix green on Node 22/24 and Bun for the full suite.
 
@@ -734,27 +734,27 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 | Requirement | Answered by |
 |---|---|
-| R1 kit-green validator + schemas | U2, U4, U6, U8 |
-| R2 config-driven kernel | U1, U15, U2, U3, U5, U6, U7, U16, U9, U17, U10 |
-| R3 submission contract | U4, U5, U7, U16, U8 |
-| R4 gate + trust asymmetry | U3, U5, U9, U17, U12 |
-| R5 CLI + blocker rendering | U15, U10 |
-| R6 MCP | U11 |
-| R7 delivery record + Action | U3, U6, U10, U12 |
-| R8 Node-first, Bun matrix | U1, U14 |
-| R9 docs | U13 |
-| R10 self-hosting + release | U14 |
-| R11 falsified sensors + two-config independence | U1, U15, U2, U3, U4, U5, U6, U7, U16, U8, U9, U17, U10, U11, U12, U13, U14 |
+| R1 kit-green validator + schemas | Unit 2, Unit 4, Unit 6, Unit 8 |
+| R2 config-driven kernel | Unit 1, Unit 15, Unit 2, Unit 3, Unit 5, Unit 6, Unit 7, Unit 16, Unit 9, Unit 17, Unit 10 |
+| R3 submission contract | Unit 4, Unit 5, Unit 7, Unit 16, Unit 8 |
+| R4 gate + trust asymmetry | Unit 3, Unit 5, Unit 9, Unit 17, Unit 12 |
+| R5 CLI + blocker rendering | Unit 15, Unit 10 |
+| R6 MCP | Unit 11 |
+| R7 delivery record + Action | Unit 3, Unit 6, Unit 10, Unit 12 |
+| R8 Node-first, Bun matrix | Unit 1, Unit 14 |
+| R9 docs | Unit 13 |
+| R10 self-hosting + release | Unit 14 |
+| R11 falsified sensors + two-config independence | Unit 1, Unit 15, Unit 2, Unit 3, Unit 4, Unit 5, Unit 6, Unit 7, Unit 16, Unit 8, Unit 9, Unit 17, Unit 10, Unit 11, Unit 12, Unit 13, Unit 14 |
 
 ---
 
 ## System-Wide Impact
 
-- **Interaction graph:** spec ↔ validator ↔ kit form a three-way contract; version strings single-sourced in `validator/codes.ts`, consumed by docs and kit (config validation's code universe is injected — U15's structural constant plus config provider data — never imported from U4). The gate's structural finding codes are a second, disjoint registry in U15 — the two vocabularies never mix.
+- **Interaction graph:** spec ↔ validator ↔ kit form a three-way contract; version strings single-sourced in `validator/codes.ts`, consumed by docs and kit (config validation's code universe is injected — Unit 15's structural constant plus config provider data — never imported from Unit 4). The gate's structural finding codes are a second, disjoint registry in Unit 15 — the two vocabularies never mix.
 - **API surface parity:** CLI and MCP share one command core (including the usage-error class); the Action and the CLI `verify` share `verifyDeliveryRecord`, including the `baseMovement` policy — the Action is never more permissive than local verification, and the evaluator never reads that policy at all.
-- **Error propagation:** every surface renders through the single U15 renderer; unknown throws become `internal_error`; no surface prints raw exceptions or unneutralized evidence text.
+- **Error propagation:** every surface renders through the single Unit 15 renderer; unknown throws become `internal_error`; no surface prints raw exceptions or unneutralized evidence text.
 - **State lifecycle risks:** git-private records and receipts are worktree-local; the delivery record is the only sanctioned crossing, protected by double-neutrality.
-- **Integration coverage:** kit integration mode (U8), the CLI end-to-end loop + self-neutrality (U10), simulated gate events in both directions (U14).
+- **Integration coverage:** kit integration mode (Unit 8), the CLI end-to-end loop + self-neutrality (Unit 10), simulated gate events in both directions (Unit 14).
 - **Unchanged invariants:** the published spec and the kit's 89 expectations are inputs — no unit may weaken a vector; a needed spec change is surfaced as a decision. The evaluator consumes only git-private store records.
 
 ---
@@ -773,7 +773,7 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 ## Success Metrics
 
 - Conformance kit green in CI: 84 unit-mode + all 89 integration-mode, both runtimes, under the kit repo-config and the kit-variant config.
-- The kit-variant config re-drives the kit runs green at each phase boundary, and the full-divergence config passes the kernel suite in U14 with zero kernel diff (review criterion), with the sensor rules holding throughout — the kernel is demonstrably free of repo-specific policy, while operational reusability remains proven only at this repo until a second consumer adopts it.
+- The kit-variant config re-drives the kit runs green at each phase boundary, and the full-divergence config passes the kernel suite in Unit 14 with zero kernel diff (review criterion), with the sensor rules holding throughout — the kernel is demonstrably free of repo-specific policy, while operational reusability remains proven only at this repo until a second consumer adopts it.
 - The dogfood gate's simulated events pass in both directions, and the first real post-bootstrap PR is gated live.
 - An agent framework session (Claude Code as first provider) produces an accepted manifest following only `docs/provider-guide.md`.
 
@@ -785,11 +785,11 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 |------|-----------|--------|------------|
 | JCS implementation bug corrupts digests | Low | High | RFC 8785 vectors test-first; single canonicalizer; kit digests end-to-end |
 | Spec ↔ implementation drift | Med | High | Kit gates CI; versions single-sourced; no vector weakened without a surfaced decision |
-| Identity digest diverges from `deliverable-tree/v1` | Low | High | U6 goldens characterized against Athena under the v1 narration set; token-binds-neutral-set invariant prevents silent divergence under one token |
+| Identity digest diverges from `deliverable-tree/v1` | Low | High | Unit 6 goldens characterized against Athena under the v1 narration set; token-binds-neutral-set invariant prevents silent divergence under one token |
 | Delivery record deadlocks or oversells | Med | High | `deliveryRecordPath` invariant-checked against both predicates + self-neutrality test; attestation label on every check; `baseMovement` read only by the verify core |
-| Bun incompatibility discovered late | Med | Med | CI matrix from U1; Bun-API ban is a falsified sensor rule |
-| Evaluator purity / config leakage erosion | Low | High | Sensor rules d1/d2 with per-file falsification; `*.types.ts` seam; kit-variant independence at every phase boundary, full-divergence in U14 |
-| U8/U10 balloon (first full-stack meets) | Med | Med | U15/U16/U17 extracted; the `verifyDeliveryRecord` core kept pure and small |
+| Bun incompatibility discovered late | Med | Med | CI matrix from Unit 1; Bun-API ban is a falsified sensor rule |
+| Evaluator purity / config leakage erosion | Low | High | Sensor rules d1/d2 with per-file falsification; `*.types.ts` seam; kit-variant independence at every phase boundary, full-divergence in Unit 14 |
+| Unit 8/Unit 10 balloon (first full-stack meets) | Med | Med | Unit 15/Unit 16/Unit 17 extracted; the `verifyDeliveryRecord` core kept pure and small |
 | Scope creep toward hosted features | Med | Med | Scope Boundaries + deferred list; scope reviewer lens |
 | Solo bandwidth stalls mid-phase | Med | Med | Phases independently shippable; Phase A alone is a correct validator + kit runner |
 | Git edge cases (hostile paths, concurrency, worktrees) | Med | Med | Learnings-derived tests: NUL streams, double-observation, link-publish, realpath alias, cross-worktree |
@@ -798,27 +798,27 @@ Two flows share the kernel. Locally: preparation publishes a receipt (no receipt
 
 ## Phased Delivery
 
-### Phase A — Pure foundations (U1, U15, U2, U3, U4)
+### Phase A — Pure foundations (Unit 1, Unit 15, Unit 2, Unit 3, Unit 4)
 Ships: a correct validator + conformance runner + blocker contract. Internal milestone: validator provably correct against the kit; publishable once the license/scope decision lands. Kit-variant unit-mode run green at the boundary.
 
-### Phase B — Git-bound kernel (U5, U6, U7, U16, U8, U9, U17)
+### Phase B — Git-bound kernel (Unit 5, Unit 6, Unit 7, Unit 16, Unit 8, Unit 9, Unit 17)
 Ships: the full local evidence loop as a library. Kit fully green in integration mode; kit-variant integration run green at the boundary.
 
-### Phase C — Surfaces and self-hosting (U10–U14)
+### Phase C — Surfaces and self-hosting (Unit 10–Unit 14)
 Ships: CLI, MCP, Action, docs, dogfood, release mechanics. The end-to-end product loop.
 
 ---
 
 ## Documentation Plan
 
-- `docs/spec/delivery-evidence-1.md` (vendored U1), `docs/delivery-record.md`, `docs/getting-started.md`, `docs/provider-guide.md`, `docs/conformance.md`, `README.md`, `docs/docs-examples.test.ts` (U13)
+- `docs/spec/delivery-evidence-1.md` (vendored Unit 1), `docs/delivery-record.md`, `docs/getting-started.md`, `docs/provider-guide.md`, `docs/conformance.md`, `README.md`, `docs/docs-examples.test.ts` (Unit 13)
 - Athena solution note + landed-change report obligations do **not** apply to the target repo; this plan document itself is the Athena-side artifact.
 
 ---
 
 ## Sources & References
 
-- Published spec artifact: delivery-evidence/1 (claude.ai artifact, 2026-08-25) — normative input, vendored in U1.
-- Conformance kit: 89 vectors + generator (this session; vendored in U1).
+- Published spec artifact: delivery-evidence/1 (claude.ai artifact, 2026-08-25) — normative input, vendored in Unit 1.
+- Conformance kit: 89 vectors + generator (this session; vendored in Unit 1).
 - Source modules: `athena:scripts/harness-*.ts`, `athena:scripts/pr-athena-prepare.ts` as listed in Context & Research.
 - Prior plans mirrored: `athena:docs/plans/2026-08-11-001-feat-harness-gate-obligations-plan.md`, `athena:docs/plans/2026-08-21-001-feat-athena-agent-harness-foundation-plan.md`.

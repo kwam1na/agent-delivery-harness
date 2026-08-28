@@ -46,6 +46,8 @@ import {
   type CliRuntime,
   type CommandDescriptor,
 } from "./index.ts";
+import { runProviderBackedAdmission } from "./commands/gate.ts";
+import type { ProviderRailMessage, ProviderRailSession } from "./provider-rails.ts";
 
 const run = promisify(execFile);
 const cleanups: string[] = [];
@@ -178,7 +180,12 @@ function greenPayload(): unknown {
 }
 
 /** Captures the candidate the way the CLI does, then builds an accepted manifest bound to it. */
-async function buildAcceptSubmission(dir: string, config: HarnessConfig, artifacts: ArtifactsPort): Promise<string> {
+async function buildAcceptSubmission(
+  dir: string,
+  config: HarnessConfig,
+  artifacts: ArtifactsPort,
+  provider = PROVIDER,
+): Promise<string> {
   const storage = await resolveRecordStorage(dir, { storageNamespace: config.storageNamespace });
   const capture = await captureGitCandidate({
     rootDir: dir,
@@ -197,7 +204,7 @@ async function buildAcceptSubmission(dir: string, config: HarnessConfig, artifac
     workspaceId: captured.workspaceId,
   };
 
-  const allocation = await artifacts.allocateRunRoot({ providerId: PROVIDER.id, runId: PROVIDER.runId });
+  const allocation = await artifacts.allocateRunRoot({ providerId: provider.id, runId: provider.runId });
   if (!allocation.ok) throw new Error(`run root: ${allocation.reason}`);
   const runRoot = allocation.runRoot.path;
 
@@ -206,7 +213,7 @@ async function buildAcceptSubmission(dir: string, config: HarnessConfig, artifac
       schemaVersion: 1,
       reviewerId: "correctness",
       result: "approved",
-      provider: { id: PROVIDER.id, runId: PROVIDER.runId, finalPassId: PROVIDER.finalPassId },
+      provider: { id: provider.id, runId: provider.runId, finalPassId: provider.finalPassId },
       workspaceId: candidate.workspaceId,
       candidate,
     },
@@ -218,12 +225,12 @@ async function buildAcceptSubmission(dir: string, config: HarnessConfig, artifac
 
   const manifest = {
     spec: "delivery-evidence/1",
-    provider: PROVIDER,
+    provider,
     candidate,
     repository: null,
     runHistory: [
       { preparedTreeSha: "1".repeat(40), evaluatedInPassId: "pass-1" },
-      { preparedTreeSha: captured.treeSha, evaluatedInPassId: PROVIDER.finalPassId },
+      { preparedTreeSha: captured.treeSha, evaluatedInPassId: provider.finalPassId },
     ],
     artifacts: [{ path: "reviewers/correctness.json", sha256: sha256Hex(approval), role: "reviewer-approval" }],
     attestation: { level: "self", signatures: [] },
@@ -391,6 +398,298 @@ describe("the full delivery loop", () => {
     await commitRecord(dir);
     expect(await runCli(["verify"], runtime)).toBe(EXIT_OK);
   });
+
+  it("invokes an opt-in provider at the existing record boundary and promotes only its retained green evidence", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig({ providers: [{ id: PROVIDER.id, findingCodes: [], command: ["fake-review-provider"] }] });
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    let opened = 0;
+    const railRuntime: CliRuntime = {
+      ...runtime,
+      openProviderRail: async (): Promise<ProviderRailSession> => {
+        opened += 1;
+        let receiveCount = 0;
+        let terminal: ProviderRailMessage | null = null;
+        return {
+          async send(message) {
+            if (message.kind !== "request") return;
+            const manifestPath = await buildAcceptSubmission(dir, config, artifacts, {
+              id: PROVIDER.id,
+              version: PROVIDER.version,
+              runId: message.requestId,
+              finalPassId: "pass-2",
+            });
+            terminal = {
+              kind: "terminal",
+              outcome: "success",
+              requestId: message.requestId,
+              sequence: 1,
+              summary: "Review complete",
+              version: "delivery-provider-rails/1",
+              result: { manifestPath },
+            };
+          },
+          async receive() {
+            receiveCount += 1;
+            if (receiveCount === 1) {
+              return {
+                kind: "negotiation",
+                outcome: "supported",
+                selectedVersion: "delivery-provider-rails/1",
+                supportedVersions: ["delivery-provider-rails/1"],
+              };
+            }
+            return terminal;
+          },
+          async close() {},
+        };
+      },
+    };
+
+    expect(await runCli(["prepare"], railRuntime)).toBe(EXIT_OK);
+    expect(await runCli(["record"], railRuntime)).toBe(EXIT_OK);
+    expect(opened).toBe(1);
+
+    const recordDir = path.join(dir, "telemetry/delivery-runs");
+    const recordName = (await readdir(recordDir)).find((name) => name.startsWith("record--") && name.endsWith(".json"));
+    expect(recordName).toBeDefined();
+    if (recordName === undefined) return;
+    const parsed = parseDeliveryRecord(await readFile(path.join(recordDir, recordName), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.claims).toHaveLength(1);
+    expect(parsed.record.claims[0]).toMatchObject({
+      obligationId: "review.green",
+      outcome: "satisfied_evidence",
+      providerId: PROVIDER.id,
+    });
+  });
+
+  it("maps provider success into the existing live-fact delivery claim", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig({
+      providers: [{ id: PROVIDER.id, findingCodes: [], command: ["fake-live-provider"] }],
+      obligations: [
+        {
+          id: "review.green",
+          activation: { kind: "relevant_change" },
+          freshness: "live",
+          providers: [PROVIDER.id],
+          acceptedPayloadSpecs: ["review.green/1"],
+          allowedResolutionKinds: ["satisfied_live_fact", "not_applicable"],
+          humanWaiverAllowed: false,
+          minimumAttestationLevel: "self",
+          ciDelegationPolicyIds: [],
+          remediation: { default: [{ id: "run-provider", kind: "retry", summary: "Run the live provider." }] },
+          waivableCodes: [],
+          nonWaivableCodes: [...STRUCTURAL_WAIVABLE, ...STRUCTURAL_NONWAIVABLE],
+        },
+      ],
+    });
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    let opened = 0;
+    const railRuntime: CliRuntime = {
+      ...runtime,
+      openProviderRail: async (): Promise<ProviderRailSession> => {
+        opened += 1;
+        let receiveCount = 0;
+        let requestId: string | undefined;
+        return {
+          async send(message) {
+            if (message.kind === "request") requestId = message.requestId;
+          },
+          async receive() {
+            receiveCount += 1;
+            if (receiveCount === 1) {
+              return {
+                kind: "negotiation",
+                outcome: "supported",
+                selectedVersion: "delivery-provider-rails/1",
+                supportedVersions: ["delivery-provider-rails/1"],
+              };
+            }
+            if (requestId === undefined) return null;
+            return {
+              kind: "terminal",
+              outcome: "success",
+              requestId,
+              sequence: 1,
+              summary: "Live review complete",
+              version: "delivery-provider-rails/1",
+            };
+          },
+          async close() {},
+        };
+      },
+    };
+
+    expect(await runCli(["prepare"], railRuntime)).toBe(EXIT_OK);
+    expect(await runCli(["record"], railRuntime)).toBe(EXIT_OK);
+    expect(opened).toBe(1);
+
+    const recordDir = path.join(dir, "telemetry/delivery-runs");
+    const recordName = (await readdir(recordDir)).find((name) => name.startsWith("record--") && name.endsWith(".json"));
+    expect(recordName).toBeDefined();
+    if (recordName === undefined) return;
+    const parsed = parseDeliveryRecord(await readFile(path.join(recordDir, recordName), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.claims).toHaveLength(1);
+    expect(parsed.record.claims[0]).toMatchObject({
+      obligationId: "review.green",
+      outcome: "satisfied_live_fact",
+      providerId: PROVIDER.id,
+    });
+  });
+
+  it("re-evaluates an existential live obligation after failure and stops after another provider succeeds", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const providerIds = ["failing.provider", "passing.provider"] as const;
+    const config = makeConfig({
+      providers: providerIds.map((id) => ({ id, findingCodes: [], command: [`fake-${id}`] })),
+      obligations: [
+        {
+          id: "review.green",
+          activation: { kind: "relevant_change" },
+          freshness: "live",
+          providers: providerIds,
+          providerPolicy: "existential",
+          acceptedPayloadSpecs: ["review.green/1"],
+          allowedResolutionKinds: ["satisfied_live_fact", "not_applicable"],
+          humanWaiverAllowed: false,
+          minimumAttestationLevel: "self",
+          ciDelegationPolicyIds: [],
+          remediation: { default: [{ id: "run-provider", kind: "retry", summary: "Run an uncovered provider." }] },
+          waivableCodes: [],
+          nonWaivableCodes: [...STRUCTURAL_WAIVABLE, ...STRUCTURAL_NONWAIVABLE],
+        },
+      ],
+    });
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    const opened: string[] = [];
+    const railRuntime: CliRuntime = {
+      ...runtime,
+      openProviderRail: async ({ providerId }): Promise<ProviderRailSession> => {
+        opened.push(providerId);
+        let receiveCount = 0;
+        let requestId: string | undefined;
+        return {
+          async send(message) {
+            if (message.kind === "request") requestId = message.requestId;
+          },
+          async receive() {
+            receiveCount += 1;
+            if (receiveCount === 1) {
+              return {
+                kind: "negotiation",
+                outcome: "supported",
+                selectedVersion: "delivery-provider-rails/1",
+                supportedVersions: ["delivery-provider-rails/1"],
+              };
+            }
+            if (requestId === undefined) return null;
+            return {
+              kind: "terminal",
+              outcome: providerId === "failing.provider" ? "failed" : "success",
+              requestId,
+              sequence: 1,
+              summary: `${providerId} complete`,
+              version: "delivery-provider-rails/1",
+            };
+          },
+          async close() {},
+        };
+      },
+    };
+
+    expect(await runCli(["prepare"], railRuntime)).toBe(EXIT_OK);
+    expect(await runCli(["record"], railRuntime)).toBe(EXIT_OK);
+    expect(opened).toEqual(["failing.provider", "passing.provider"]);
+  });
+
+  it("invokes only the uncovered provider for an all-provider exact-evidence obligation", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const providerIds = ["first.provider", "second.provider"] as const;
+    const config = makeConfig({
+      providers: providerIds.map((id) => ({ id, findingCodes: [], command: [`fake-${id}`] })),
+      obligations: [
+        {
+          id: "review.green",
+          activation: { kind: "relevant_change" },
+          freshness: "exact_candidate",
+          providers: providerIds,
+          providerPolicy: "all",
+          acceptedPayloadSpecs: ["review.green/1"],
+          allowedResolutionKinds: ["satisfied_evidence", "not_applicable"],
+          humanWaiverAllowed: false,
+          minimumAttestationLevel: "self",
+          ciDelegationPolicyIds: [],
+          remediation: { default: [{ id: "run-provider", kind: "retry", summary: "Run the uncovered provider." }] },
+          waivableCodes: [],
+          nonWaivableCodes: [...STRUCTURAL_WAIVABLE, ...STRUCTURAL_NONWAIVABLE],
+        },
+      ],
+    });
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const existingManifest = await buildAcceptSubmission(dir, config, artifacts, {
+      id: "first.provider",
+      version: "1.0.0",
+      runId: "first-run",
+      finalPassId: "pass-2",
+    });
+    expect(await runCli(["submit-evidence", "--manifest", existingManifest], runtime)).toBe(EXIT_OK);
+
+    const opened: string[] = [];
+    const railRuntime: CliRuntime = {
+      ...runtime,
+      openProviderRail: async ({ providerId }): Promise<ProviderRailSession> => {
+        opened.push(providerId);
+        let receiveCount = 0;
+        let terminal: ProviderRailMessage | null = null;
+        return {
+          async send(message) {
+            if (message.kind !== "request") return;
+            const manifestPath = await buildAcceptSubmission(dir, config, artifacts, {
+              id: providerId,
+              version: "1.0.0",
+              runId: message.requestId,
+              finalPassId: "pass-2",
+            });
+            terminal = {
+              kind: "terminal",
+              outcome: "success",
+              requestId: message.requestId,
+              sequence: 1,
+              summary: "Review complete",
+              version: "delivery-provider-rails/1",
+              result: { manifestPath },
+            };
+          },
+          async receive() {
+            receiveCount += 1;
+            if (receiveCount === 1) {
+              return {
+                kind: "negotiation",
+                outcome: "supported",
+                selectedVersion: "delivery-provider-rails/1",
+                supportedVersions: ["delivery-provider-rails/1"],
+              };
+            }
+            return terminal;
+          },
+          async close() {},
+        };
+      },
+    };
+
+    expect(await runCli(["record"], railRuntime)).toBe(EXIT_OK);
+    expect(opened).toEqual(["second.provider"]);
+  });
 });
 
 // ── Self-neutrality ──────────────────────────────────────────────────────────
@@ -428,6 +727,48 @@ describe("delivery record self-neutrality", () => {
 // ── Waiver wiring ────────────────────────────────────────────────────────────
 
 describe("waiver wiring", () => {
+  it("keeps manual providers on one admission capture and evaluation pass", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+
+    const wiring = await wireRepo(dir, config);
+    let captures = 0;
+    let projections = 0;
+    const result = await runProviderBackedAdmission(
+      {
+        rootDir: dir,
+        config,
+        env: {},
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+        args: [],
+        wire: async () => ({
+          ...wiring,
+          captureCandidate: async () => {
+            captures += 1;
+            return wiring.captureCandidate();
+          },
+          projectActivation: async (candidate) => {
+            projections += 1;
+            return wiring.projectActivation(candidate);
+          },
+        }),
+        artifacts,
+        write: () => {},
+        classifyContext: () => classifyExecutionContext({ config, env: {}, stdinIsTTY: false, stdoutIsTTY: false }),
+      },
+      { allowPrompt: true, includeInjectedLiveResults: true },
+    );
+
+    expect(result.admitted).toBe(false);
+    expect(result.waiver).toBe("not_offered");
+    expect(captures).toBe(1);
+    expect(projections).toBe(1);
+  });
+
   it("never prompts and blocks when non-interactive, even for an all-waivable block", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();

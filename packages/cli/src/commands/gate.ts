@@ -9,29 +9,113 @@
  * only ever offers a waiver to a `human` context, all-or-nothing over waivable
  * findings; the CLI adds no waiver logic of its own.
  */
-import { runAdmission } from "@agent-delivery-harness/kernel";
-import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
+import { runAdmission, type AdmissionResult, type Blocker, type LiveProviderResult } from "@agent-delivery-harness/kernel";
+import { CliInterruption, type CommandContext, type CommandDescriptor, type CommandResult } from "../boundary.ts";
+
+/**
+ * Runs the ordinary admission first, invokes only configured providers that can
+ * answer the resulting missing-evidence/live-result blocks, then re-evaluates
+ * through the same admission adapter. Configs without provider commands take
+ * the pre-existing path unchanged.
+ */
+export async function runProviderBackedAdmission(
+  context: CommandContext,
+  options: { readonly allowPrompt: boolean; readonly includeInjectedLiveResults: boolean },
+): Promise<AdmissionResult> {
+  const wiring = await context.wire();
+  const admissionOptions = {
+    captureCandidate: wiring.captureCandidate,
+    projectActivation: wiring.projectActivation,
+    ...wiring.storageOptions,
+  };
+  const input = {
+    rootDir: context.rootDir,
+    config: context.config,
+    context: context.classifyContext(),
+    ...(options.includeInjectedLiveResults && context.liveResults !== undefined ? { liveResults: context.liveResults } : {}),
+  };
+  const finalAdmissionOptions = {
+    ...admissionOptions,
+    ...(options.allowPrompt && context.promptForWaiver !== undefined ? { promptForWaiver: context.promptForWaiver } : {}),
+  };
+
+  if (!context.config.providers.some((provider) => provider.command !== undefined)) {
+    return runAdmission(input, finalAdmissionOptions);
+  }
+
+  const liveResults: LiveProviderResult[] = options.includeInjectedLiveResults ? [...(context.liveResults ?? [])] : [];
+  const attempted = new Set<string>();
+  const attemptBlockers: Blocker[] = [];
+  let admission = await runAdmission(input, admissionOptions);
+
+  while (!admission.admitted && admission.decision !== undefined && admission.candidate !== undefined) {
+    const requested = new Map<string, { obligationIds: string[]; requiresEvidence: boolean; needsLiveResult: boolean }>();
+    for (const resolution of admission.decision.resolutions) {
+      if (resolution.kind !== "blocked") continue;
+      const obligation = context.config.obligations.find((entry) => entry.id === resolution.obligationId);
+      if (obligation === undefined) continue;
+      const missingCode = obligation.freshness === "live" ? "live_provider_missing" : "review_evidence_missing";
+      for (const finding of resolution.providerFindings ?? []) {
+        if (finding.code !== missingCode || finding.providerId === undefined || attempted.has(finding.providerId)) continue;
+        const registration = context.config.providers.find((provider) => provider.id === finding.providerId);
+        if (registration?.command === undefined || !obligation.providers.includes(registration.id)) continue;
+        const entry = requested.get(registration.id) ?? { obligationIds: [], requiresEvidence: false, needsLiveResult: false };
+        entry.obligationIds.push(obligation.id);
+        entry.requiresEvidence ||= obligation.freshness === "exact_candidate";
+        entry.needsLiveResult ||= obligation.freshness === "live";
+        requested.set(registration.id, entry);
+      }
+    }
+
+    const next = requested.entries().next().value as
+      | [string, { obligationIds: string[]; requiresEvidence: boolean; needsLiveResult: boolean }]
+      | undefined;
+    if (next === undefined) break;
+    const [providerId, request] = next;
+    attempted.add(providerId);
+    const result = await context.invokeProvider?.({
+      providerId,
+      requiresEvidence: request.requiresEvidence,
+      payload: {
+        gateId: context.config.gateId,
+        providerId,
+        obligationIds: [...new Set(request.obligationIds)].sort(),
+        candidate: admission.candidate,
+      },
+    });
+    if (result === undefined) continue;
+    if (result.kind === "interrupted") throw new CliInterruption("Provider invocation interrupted before a trustworthy terminal outcome.");
+    if (result.kind === "blocked") {
+      attemptBlockers.push(...result.blockers);
+      if (request.needsLiveResult) {
+        liveResults.push({ providerId, runId: result.runId, status: "failed", findings: [] });
+      }
+    } else if (request.needsLiveResult) {
+      liveResults.push(result.liveResult);
+    }
+
+    admission = await runAdmission(
+      { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
+      admissionOptions,
+    );
+  }
+
+  if (admission.admitted) return admission;
+  const final = await runAdmission(
+    { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
+    finalAdmissionOptions,
+  );
+  return attemptBlockers.length === 0 || final.admitted
+    ? final
+    : { ...final, blockers: [...attemptBlockers, ...final.blockers] };
+}
 
 export const gateCommand: CommandDescriptor = {
   name: "gate",
   sourceId: "delivery-harness.cli.gate",
   summary: "Evaluate the delivery gate for the current candidate.",
   async run(context: CommandContext): Promise<CommandResult> {
-    const wiring = await context.wire();
-    const result = await runAdmission(
-      {
-        rootDir: context.rootDir,
-        config: context.config,
-        context: context.classifyContext(),
-        ...(context.liveResults === undefined ? {} : { liveResults: context.liveResults }),
-      },
-      {
-        captureCandidate: wiring.captureCandidate,
-        projectActivation: wiring.projectActivation,
-        ...(context.promptForWaiver === undefined ? {} : { promptForWaiver: context.promptForWaiver }),
-        ...wiring.storageOptions,
-      },
-    );
+    const result = await runProviderBackedAdmission(context, { allowPrompt: true, includeInjectedLiveResults: true });
 
     if (result.admitted) {
       const waiverNote =

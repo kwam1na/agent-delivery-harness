@@ -51,10 +51,12 @@
  * leaves the store exactly as it found it: zero waiver records.
  *
  * WHAT THE PORT FROM ATHENA DROPPED. Athena's admission wrote gate-decision
- * telemetry events, spawned the private validation providers, and mapped two
- * Athena-only providers (documentation and delivery-run telemetry). None of
- * those is in v1 scope — the gate admits and never spawns (Scope Boundaries),
- * there is no decision-event stream, and providers are config data. And Athena's
+ * telemetry events, spawned private validation providers inside admission, and
+ * mapped two Athena-only providers (documentation and delivery-run telemetry).
+ * None of those is in this adapter's scope: admission itself never spawns, there
+ * is no decision-event stream, and the neutral CLI rail invokes only opt-in
+ * provider commands before handing their ordinary evidence/live results back
+ * here. And Athena's
  * `toEvaluatorContext` remapped the classifier's kinds onto the evaluator's;
  * here `context.ts` already emits the evaluator's `ExecutionContext` union, so
  * the translation is the identity and the classified context is consumed

@@ -23,6 +23,61 @@ implementation:
 An MCP session never sees a waiver prompt. Waivers belong to interactive
 humans; a provider's job is to make evidence, not to excuse its absence.
 
+## Opt-in command providers
+
+A provider registration may add a non-shell argv array:
+
+```ts
+providers: [
+  {
+    id: "review.provider",
+    findingCodes: [],
+    command: ["review-provider", "--stdio"],
+  },
+]
+```
+
+When an active obligation is blocked only because this configured provider has
+not supplied a live result or retained evidence, `gate` and `record` invoke the
+command at their existing command boundary. Repositories whose registrations
+omit `command` keep the manual flow described in the rest of this guide.
+
+The command exchanges one JSON document per stdout/stdin line. The documents
+and state transitions are the exact vendored
+[`delivery-provider-rails/1` contract](contracts/delivery-provider-rails-v1.md);
+the corresponding [JSON Schema](contracts/delivery-provider-rails.schema.json)
+and [shared conformance vectors](../packages/cli/fixtures/delivery-provider-rails-v1.json)
+are retained alongside the adapter. Stderr is diagnostic only and is never
+parsed as protocol data.
+
+After negotiation, the request payload includes the gate, provider, obligation
+ids, candidate binding, and harness-allocated `runId` and `runRoot`. Those
+nested members are adopter-owned opaque payload data, not additions to the
+contract envelope. For an exact-candidate obligation, a successful terminal's
+opaque `result` must contain `manifestPath`. The adapter submits that manifest
+through the existing recorder and exposes no green result until publication is
+accepted. A live obligation maps terminal success to the evaluator's existing
+live-provider result. Provider blocker events become ordinary typed blockers;
+unsupported negotiation, malformed or conflicting sequences, process closure,
+cancellation, failure, and indeterminate terminals all fail closed.
+
+Negotiation, protocol writes, and event waits share one bounded lifecycle
+deadline and the CLI's interruption signal. Expiry or interruption produces an
+indeterminate typed blocker; after a request has begun, the adapter sends
+`cancel` best-effort, terminates the child with a bounded SIGTERM grace, then
+uses SIGKILL if the process does not close and awaits that closure.
+
+Terminal outcomes are absorbing. In particular, cancellation or a locally
+indeterminate interruption can never be replaced by a later success. Each
+evidence record keeps the recorder's existing fsync-and-link crash-atomic
+publication boundary and its real-process crash sensor. The recorder's
+pre-existing multi-claim limitation also remains: a process crash between
+separate claim publications can leave already-linked records, so a provider
+should prefer one claim per manifest when whole-manifest crash atomicity is
+required. The tracked delivery record is still produced by the ordinary
+`record` command; the rail creates neither a second evidence store nor a second
+telemetry stream.
+
 ### Which MCP revisions the server speaks
 
 Four, across both of MCP's eras — and the two tools behave identically on every

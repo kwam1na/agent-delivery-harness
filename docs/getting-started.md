@@ -114,6 +114,9 @@ export default defineHarnessConfig({
   // every outstanding receipt goes stale, forcing a re-prepare.
   preparationWiringPaths: ["harness.config.ts"],
 
+  // Add `command: ["review-provider", "--stdio"]` only when this provider
+  // implements the vendored delivery-provider-rails/1 contract. Without it,
+  // the manual review-context / submit-evidence workflow below is unchanged.
   providers: [{ id: "claude-code.ce-code-review", findingCodes: [] }],
   obligations: [
     {
