@@ -107,8 +107,9 @@ export interface LiveProviderFinding {
 }
 
 /**
- * A result the caller observed and is handing to the gate. The v1 gate does not
- * spawn provider commands, so this is the only road to `satisfied_live_fact`.
+ * A result the caller observed and is handing to the pure evaluator. Process
+ * invocation belongs to a command boundary, so this remains the evaluator's
+ * only road to `satisfied_live_fact`.
  */
 export interface LiveProviderResult {
   readonly providerId: string;

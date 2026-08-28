@@ -16,12 +16,12 @@ import {
   deliveryRecordBytes,
   deliveryRecordPathFor,
   discoverRecords,
-  runAdmission,
   type EvidenceRecord,
 } from "@agent-delivery-harness/kernel";
 import path from "node:path";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
+import { runProviderBackedAdmission } from "./gate.ts";
 
 export const recordCommand: CommandDescriptor = {
   name: "record",
@@ -33,10 +33,7 @@ export const recordCommand: CommandDescriptor = {
     // The gate is run without a prompt: `record` is not the waiver surface. If a
     // waiver is needed, the operator runs `gate` first; here a non-admitting gate
     // is simply a refusal.
-    const admission = await runAdmission(
-      { rootDir: context.rootDir, config: context.config, context: context.classifyContext() },
-      { captureCandidate: wiring.captureCandidate, projectActivation: wiring.projectActivation, ...wiring.storageOptions },
-    );
+    const admission = await runProviderBackedAdmission(context, { allowPrompt: false, includeInjectedLiveResults: false });
     if (!admission.admitted || admission.decision === undefined) {
       return { kind: "blocked", blockers: [...admission.blockers] };
     }

@@ -48,6 +48,7 @@ cannot drift from the tool.
 |---|---|
 | [Getting started](docs/getting-started.md) | Config → CLI loop → delivery record → local verify → the PR check. |
 | [Provider guide](docs/provider-guide.md) | Taking a review context to an accepted manifest: run roots, the final-pass discipline, reviewer approvals, deferral rules, resubmission semantics. |
+| [Provider rails contract](docs/contracts/delivery-provider-rails-v1.md) | The vendored neutral negotiation, lifecycle, cancellation, and terminal-state contract used by opt-in command providers. |
 | [The delivery record](docs/delivery-record.md) | The `delivery-record/1` note: extra-spec status, the both-neutral-sets requirement, what L0 attestation honestly claims, the `baseMovement` policy. |
 | [Conformance](docs/conformance.md) | Running the 89-vector kit (unit and integration modes), byte-identical regeneration, the drift guard. |
 | [The spec](docs/spec/delivery-evidence-1.md) | `delivery-evidence/1` — the vendored normative contract. |
@@ -64,7 +65,8 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the seven-command operator surface:
+- **`@agent-delivery-harness/cli`** — the seven-command operator surface and
+  opt-in `delivery-provider-rails/1` stdio adapter:
   `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
   `check`.
 - **`@agent-delivery-harness/mcp`** — MCP server exposing `review-context` and

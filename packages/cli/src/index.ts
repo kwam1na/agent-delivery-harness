@@ -61,6 +61,21 @@ export { gateCommand } from "./commands/gate.ts";
 export { recordCommand } from "./commands/record.ts";
 export { verifyCommand } from "./commands/verify.ts";
 export { checkCommand } from "./commands/check.ts";
+export {
+  DELIVERY_PROVIDER_RAILS_VERSION,
+  consumeProviderRailMessages,
+  invokeProviderRail,
+  openProviderRailProcess,
+  type ConsumeProviderRailOptions,
+  type OpenProviderRailProcessInput,
+  type ProviderRailAttemptInput,
+  type ProviderRailAttemptOptions,
+  type ProviderRailConsumption,
+  type ProviderRailEvent,
+  type ProviderRailInvocationResult,
+  type ProviderRailMessage,
+  type ProviderRailSession,
+} from "./provider-rails.ts";
 
 /** Runs the CLI against a runtime and returns the process exit code. */
 export function runCli(argv: readonly string[], runtime: CliRuntime): Promise<number> {

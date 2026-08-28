@@ -193,6 +193,8 @@ export interface ProviderRegistration {
   readonly id: string;
   /** Every finding code this provider can report. Half of the code universe. */
   readonly findingCodes: readonly string[];
+  /** Optional stdio provider-rail executable, expressed as argv and never a shell string. */
+  readonly command?: NonEmptyTuple<string>;
 }
 
 export interface EnvironmentRequirement {
@@ -890,14 +892,24 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
           sound = false;
           return;
         }
-        checkClosed(findings, at, entry, ["id", "findingCodes"]);
+        checkClosed(findings, at, entry, ["id", "findingCodes", "command"]);
         const id = readString(findings, `${at}.id`, entry["id"], { pattern: ID_PATTERN, describe: "a provider id" });
         const findingCodes = readStringArray(findings, `${at}.findingCodes`, entry["findingCodes"], {
           pattern: FINDING_CODE_PATTERN,
           describe: "a finding code",
         });
+        let command: NonEmptyTuple<string> | undefined;
+        if (entry["command"] !== undefined) {
+          const values = readStringArray(findings, `${at}.command`, entry["command"], { describe: "a provider command argument" });
+          if (values === undefined || values.length === 0 || values.some((value) => value.length === 0)) {
+            if (values !== undefined) findings.add("config_invalid_member", `${at}.command`, "must be a non-empty argv array of non-empty strings");
+            sound = false;
+          } else {
+            command = values as NonEmptyTuple<string>;
+          }
+        }
         if (id === undefined || findingCodes === undefined) sound = false;
-        else registrations.push({ id, findingCodes });
+        else registrations.push({ id, findingCodes, ...(command === undefined ? {} : { command }) });
       });
       if (sound) providers = registrations;
     }
