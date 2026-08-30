@@ -231,7 +231,18 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     kind: "dir",
     rules: ["d1", "e"],
     status: "present",
-    d1Allowlist: ["digest.ts"],
+    // The policy compiler consumes the frozen spine shapes it emits
+    // (snapshot, grants, capability result specs, finish-line vocabulary)
+    // and the pure config loader whose output is its admission projection.
+    d1Allowlist: [
+      "digest.ts",
+      "config.ts",
+      "spine/grammar.ts",
+      "spine/policy.ts",
+      "spine/contract.ts",
+      "spine/grant.ts",
+      "spine/capability.ts",
+    ],
     d1SiblingAllowance: true,
   },
   {
