@@ -1,0 +1,1046 @@
+{
+  "purpose": "Golden accept/reject vectors for the frozen managed-delivery contract spine. Hand-authored claims about each closed grammar: every family carries at least one accept and one reject vector, the journal-entry family carries one golden entry per active (journal, kind) pair, and reject vectors name the codes the validator must report. The implementation conforms to these vectors, never the reverse.",
+  "families": [
+    {
+      "family": "journal-entry",
+      "vectors": [
+        {
+          "name": "intake state change",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "intake",
+            "subjectId": "intake-1",
+            "expectedRevision": 0,
+            "idempotencyKey": "ik-0",
+            "kind": "intake.state.changed",
+            "payload": { "from": "draft_scope", "to": "awaiting_clarification" }
+          }
+        },
+        {
+          "name": "intake contract confirmation",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "intake",
+            "subjectId": "intake-1",
+            "expectedRevision": 2,
+            "idempotencyKey": "ik-2",
+            "kind": "operator.confirmation.recorded",
+            "payload": {
+              "confirmation": {
+                "spec": "operator-confirmation/1",
+                "confirmationClass": "contract-confirmation",
+                "origin": "operator-terminal",
+                "action": "confirm-contract",
+                "expiry": "2026-08-30T12:00:00Z",
+                "nonce": "nonce-1",
+                "productTrustRevocationEpoch": 0,
+                "repositoryAuthorityRevocationEpoch": "absent-by-state",
+                "intakeDraftId": "intake-1",
+                "deliveryId": "absent-by-state",
+                "normalizedContractDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "supersededInvocationFence": "absent-by-state",
+                "expectedJournalRevision": "absent-by-state",
+                "targetBaseCommit": "absent-by-state",
+                "boundInvocationFence": "absent-by-state",
+                "boundCandidateTreeSha": "absent-by-state"
+              }
+            }
+          }
+        },
+        {
+          "name": "delivery registration",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 0,
+            "idempotencyKey": "dk-0",
+            "kind": "delivery.registered",
+            "payload": {
+              "contractDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "intakeId": "intake-1",
+              "confirmationNonce": "nonce-1",
+              "activeCompositionProfile": "core",
+              "registeringInstallationId": "install-1"
+            }
+          }
+        },
+        {
+          "name": "workspace binding",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 4,
+            "idempotencyKey": "dk-4",
+            "kind": "workspace.bound",
+            "payload": {
+              "workspaceId": "workspace-1",
+              "repositoryId": "repo-1",
+              "baseRef": "refs/heads/main",
+              "baseTipSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branchRef": "refs/heads/delivery-1",
+              "branchRefValue": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "worktreeId": "worktree-1",
+              "baselineClassification": "clean"
+            }
+          }
+        },
+        {
+          "name": "fenced invocation",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 5,
+            "idempotencyKey": "dk-5",
+            "kind": "invocation.fenced",
+            "payload": {
+              "fence": 1,
+              "hostTaskId": "task-1",
+              "worktreeId": "worktree-1",
+              "candidateTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "candidateBranchRefValue": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "authorityEpoch": 4,
+              "observationLifetimeSeconds": 900
+            }
+          }
+        },
+        {
+          "name": "activity observation",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 6,
+            "idempotencyKey": "dk-6",
+            "kind": "activity.observed",
+            "payload": { "activity": "paused", "fence": 1 }
+          }
+        },
+        {
+          "name": "takeover authorization",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 9,
+            "idempotencyKey": "dk-9",
+            "kind": "operator.confirmation.recorded",
+            "payload": {
+              "confirmation": {
+                "spec": "operator-confirmation/1",
+                "confirmationClass": "takeover-authorization",
+                "origin": "operator-terminal",
+                "action": "authorize-takeover",
+                "expiry": "2026-08-30T12:00:00Z",
+                "nonce": "nonce-2",
+                "productTrustRevocationEpoch": 0,
+                "repositoryAuthorityRevocationEpoch": 4,
+                "intakeDraftId": "absent-by-state",
+                "deliveryId": "delivery-1",
+                "normalizedContractDigest": "absent-by-state",
+                "supersededInvocationFence": 2,
+                "expectedJournalRevision": 9,
+                "targetBaseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "boundInvocationFence": "absent-by-state",
+                "boundCandidateTreeSha": "absent-by-state"
+              }
+            }
+          }
+        },
+        {
+          "name": "pending waiver proposal",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 10,
+            "idempotencyKey": "dk-10",
+            "kind": "approval.request.recorded",
+            "payload": {
+              "requestKind": "waiver",
+              "criterionId": "crit-2",
+              "actorId": "reviewer-1",
+              "reason": "criterion superseded by amended scope"
+            }
+          }
+        },
+        {
+          "name": "repository operation result",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 11,
+            "idempotencyKey": "dk-11",
+            "kind": "operation.result.recorded",
+            "payload": {
+              "capabilityId": "repo.check",
+              "result": {
+                "spec": "sensor-result/1",
+                "capabilityId": "repo.check",
+                "outcome": "passed",
+                "summary": "sensors clean",
+                "candidateTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            }
+          }
+        },
+        {
+          "name": "workspace disposition",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 12,
+            "idempotencyKey": "dk-12",
+            "kind": "workspace.disposition.recorded",
+            "payload": { "workspaceId": "workspace-1", "disposition": "prior_host_termination_unverified" }
+          }
+        },
+        {
+          "name": "committed transition",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 13,
+            "idempotencyKey": "dk-13",
+            "kind": "transition.committed",
+            "payload": { "from": "accepted", "to": "preparing" }
+          }
+        },
+        {
+          "name": "workflow stage result",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 14,
+            "idempotencyKey": "dk-14",
+            "kind": "stage.result.recorded",
+            "payload": {
+              "stageId": "implement",
+              "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+              "resultDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "name": "reviewer attempt artifact",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 15,
+            "idempotencyKey": "dk-15",
+            "kind": "attempt.artifact.recorded",
+            "payload": {
+              "attemptId": "attempt-1",
+              "lensId": "outcome-correctness",
+              "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "name": "accepted evidence reference",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 16,
+            "idempotencyKey": "dk-16",
+            "kind": "evidence.reference.recorded",
+            "payload": {
+              "recordId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "name": "candidate recapture",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 17,
+            "idempotencyKey": "dk-17",
+            "kind": "candidate.recaptured",
+            "payload": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branchRefValue": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        },
+        {
+          "name": "policy snapshot binding",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 1,
+            "idempotencyKey": "dk-1",
+            "kind": "policy.snapshot.bound",
+            "payload": {
+              "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "repositoryAuthorityEpoch": 4
+            }
+          }
+        },
+        {
+          "name": "generation pin",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 2,
+            "idempotencyKey": "dk-2",
+            "kind": "generation.pinned",
+            "payload": {
+              "generationDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "releaseId": "core-v1",
+              "profile": "core"
+            }
+          }
+        },
+        {
+          "name": "trust epoch observation",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 18,
+            "idempotencyKey": "dk-18",
+            "kind": "trust.epoch.observed",
+            "payload": { "productTrustEpoch": 1, "repositoryAuthorityEpoch": 4 }
+          }
+        },
+        {
+          "name": "typed blocker",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 19,
+            "idempotencyKey": "dk-19",
+            "kind": "blocker.recorded",
+            "payload": { "code": "sensor-unavailable", "summary": "required sensor missing from adapter set" }
+          }
+        },
+        {
+          "name": "recorded finish line",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 20,
+            "idempotencyKey": "dk-20",
+            "kind": "finish.line.recorded",
+            "payload": {
+              "result": {
+                "spec": "finish-line-result/1",
+                "finishLine": "merge-ready",
+                "deliveryId": "delivery-1",
+                "candidate": {
+                  "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                "outcomeVerificationDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "mergeReadyObligationsSatisfied": true
+              }
+            }
+          }
+        },
+        {
+          "name": "a reserved kind carrying a payload",
+          "verdict": "reject",
+          "codes": ["reserved_kind"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 3,
+            "idempotencyKey": "dk-3",
+            "kind": "action.intent.recorded",
+            "payload": { "action": "merge" }
+          }
+        },
+        {
+          "name": "a reserved kind without a payload",
+          "verdict": "reject",
+          "codes": ["reserved_kind"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "maintenance",
+            "subjectId": "install-1",
+            "expectedRevision": 0,
+            "idempotencyKey": "mk-0",
+            "kind": "maintenance.action.recorded"
+          }
+        },
+        {
+          "name": "an out-of-vocabulary kind",
+          "verdict": "reject",
+          "codes": ["unknown_kind"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 3,
+            "idempotencyKey": "dk-3",
+            "kind": "delivery.invented",
+            "payload": {}
+          }
+        },
+        {
+          "name": "a known kind outside its enumerated journal",
+          "verdict": "reject",
+          "codes": ["unknown_kind"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "maintenance",
+            "subjectId": "install-1",
+            "expectedRevision": 0,
+            "idempotencyKey": "mk-0",
+            "kind": "delivery.registered",
+            "payload": {}
+          }
+        },
+        {
+          "name": "an unknown envelope member",
+          "verdict": "reject",
+          "codes": ["unknown_member"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 3,
+            "idempotencyKey": "dk-3",
+            "kind": "candidate.recaptured",
+            "payload": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branchRefValue": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "invented": true
+          }
+        },
+        {
+          "name": "an unknown payload member on an active kind",
+          "verdict": "reject",
+          "codes": ["unknown_member"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 3,
+            "idempotencyKey": "dk-3",
+            "kind": "candidate.recaptured",
+            "payload": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branchRefValue": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "grantedAuthority": ["merge"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "family": "product-composition-pin",
+      "vectors": [
+        {
+          "name": "the golden composition pin",
+          "verdict": "accept",
+          "value": {
+            "spec": "product-composition-pin/1",
+            "productVersion": "0.1.0",
+            "distributionDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harnessModuleVersions": { "@agent-delivery-harness/kernel": "0.1.0" },
+            "skillsArchive": {
+              "releaseId": "core-v1",
+              "profile": "core",
+              "archiveSha256": "25dd462a818cf2134c08be27181ba123adfa74bf2c367884a411b8b664523fc6",
+              "metadataSha256": "e3b4904148b45df90937f2f383f1ef1e5cb0ba60a27291602edf89609c3a3ffa",
+              "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+              "provenanceLockSha256": "12cebfaf0848f102931d6f1794cce5f79de58533678b9bcd6c8347dee5cb09ff",
+              "protocolVersion": "delivery-provider-rails/1"
+            },
+            "contractVersions": {
+              "policy": "policy-snapshot/1",
+              "scopedWork": "scoped-delivery-contract/1",
+              "run": "journal-entry/1",
+              "workflowResult": "stage-result-ref/1",
+              "event": "journal-entry/1",
+              "controlPlane": "reserved/0"
+            },
+            "productTrustLabel": "local-digest / operator-pinned"
+          }
+        },
+        {
+          "name": "an unknown member",
+          "verdict": "reject",
+          "codes": ["unknown_member"],
+          "value": {
+            "spec": "product-composition-pin/1",
+            "productVersion": "0.1.0",
+            "distributionDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "harnessModuleVersions": { "@agent-delivery-harness/kernel": "0.1.0" },
+            "skillsArchive": {
+              "releaseId": "core-v1",
+              "profile": "core",
+              "archiveSha256": "25dd462a818cf2134c08be27181ba123adfa74bf2c367884a411b8b664523fc6",
+              "metadataSha256": "e3b4904148b45df90937f2f383f1ef1e5cb0ba60a27291602edf89609c3a3ffa",
+              "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+              "provenanceLockSha256": "12cebfaf0848f102931d6f1794cce5f79de58533678b9bcd6c8347dee5cb09ff",
+              "protocolVersion": "delivery-provider-rails/1"
+            },
+            "contractVersions": {
+              "policy": "policy-snapshot/1",
+              "scopedWork": "scoped-delivery-contract/1",
+              "run": "journal-entry/1",
+              "workflowResult": "stage-result-ref/1",
+              "event": "journal-entry/1",
+              "controlPlane": "reserved/0"
+            },
+            "productTrustLabel": "local-digest / operator-pinned",
+            "floatingBranch": "main"
+          }
+        }
+      ]
+    },
+    {
+      "family": "product-trust-state",
+      "vectors": [
+        {
+          "name": "the golden trust state",
+          "verdict": "accept",
+          "value": {
+            "spec": "product-trust-state/1",
+            "installationId": "install-1",
+            "pinnedManifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "revokedGenerationDigests": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
+            "revocationEpoch": 1,
+            "highWaterMark": 2
+          }
+        },
+        {
+          "name": "a negative revocation epoch",
+          "verdict": "reject",
+          "codes": ["malformed_member"],
+          "value": {
+            "spec": "product-trust-state/1",
+            "installationId": "install-1",
+            "pinnedManifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "revokedGenerationDigests": [],
+            "revocationEpoch": -1,
+            "highWaterMark": 0
+          }
+        },
+        {
+          "name": "a duplicate revoked digest",
+          "verdict": "reject",
+          "codes": ["malformed_member"],
+          "value": {
+            "spec": "product-trust-state/1",
+            "installationId": "install-1",
+            "pinnedManifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "revokedGenerationDigests": [
+              "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            ],
+            "revocationEpoch": 1,
+            "highWaterMark": 0
+          }
+        }
+      ]
+    },
+    {
+      "family": "scoped-delivery-contract",
+      "vectors": [
+        {
+          "name": "the golden accepted contract",
+          "verdict": "accept",
+          "value": {
+            "spec": "scoped-delivery-contract/1",
+            "contractId": "contract-1",
+            "task": "Fix the flaky sensor",
+            "intendedOutcome": "The sensor is deterministic",
+            "acceptanceCriteria": [{ "criterionId": "crit-1", "statement": "sensor passes 100 consecutive runs" }],
+            "nonGoals": [],
+            "repository": { "repositoryId": "repo-1", "baseRef": "refs/heads/main" },
+            "requestedFinishLine": "merge-ready",
+            "requestedAuthority": ["candidate-mutation"],
+            "unresolvedDecisions": []
+          }
+        },
+        {
+          "name": "an empty acceptance-criteria set",
+          "verdict": "reject",
+          "codes": ["malformed_member"],
+          "value": {
+            "spec": "scoped-delivery-contract/1",
+            "contractId": "contract-1",
+            "task": "Fix the flaky sensor",
+            "intendedOutcome": "The sensor is deterministic",
+            "acceptanceCriteria": [],
+            "nonGoals": [],
+            "repository": { "repositoryId": "repo-1", "baseRef": "refs/heads/main" },
+            "requestedFinishLine": "merge-ready",
+            "requestedAuthority": [],
+            "unresolvedDecisions": []
+          }
+        },
+        {
+          "name": "an unknown finish line",
+          "verdict": "reject",
+          "codes": ["malformed_member"],
+          "value": {
+            "spec": "scoped-delivery-contract/1",
+            "contractId": "contract-1",
+            "task": "Fix the flaky sensor",
+            "intendedOutcome": "The sensor is deterministic",
+            "acceptanceCriteria": [{ "criterionId": "crit-1", "statement": "sensor passes 100 consecutive runs" }],
+            "nonGoals": [],
+            "repository": { "repositoryId": "repo-1", "baseRef": "refs/heads/main" },
+            "requestedFinishLine": "ship-it",
+            "requestedAuthority": [],
+            "unresolvedDecisions": []
+          }
+        }
+      ]
+    },
+    {
+      "family": "outcome-verification",
+      "vectors": [
+        {
+          "name": "the golden outcome verification",
+          "verdict": "accept",
+          "value": {
+            "spec": "outcome-verification/1",
+            "contractId": "contract-1",
+            "candidate": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "criteria": [
+              {
+                "criterionId": "crit-1",
+                "disposition": "passed",
+                "evidence": { "kind": "sensor", "reference": "record-1" }
+              }
+            ],
+            "reviewAttempts": [
+              {
+                "attemptId": "attempt-1",
+                "lensId": "outcome-correctness",
+                "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "verdict": "approved"
+              }
+            ]
+          }
+        },
+        {
+          "name": "a criterion missing its disposition",
+          "verdict": "reject",
+          "codes": ["missing_member"],
+          "value": {
+            "spec": "outcome-verification/1",
+            "contractId": "contract-1",
+            "candidate": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "criteria": [{ "criterionId": "crit-1", "evidence": { "kind": "sensor", "reference": "record-1" } }],
+            "reviewAttempts": [
+              {
+                "attemptId": "attempt-1",
+                "lensId": "outcome-correctness",
+                "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "verdict": "approved"
+              }
+            ]
+          }
+        },
+        {
+          "name": "zero review attempts",
+          "verdict": "reject",
+          "codes": ["zero_review_attempts"],
+          "value": {
+            "spec": "outcome-verification/1",
+            "contractId": "contract-1",
+            "candidate": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "criteria": [
+              {
+                "criterionId": "crit-1",
+                "disposition": "passed",
+                "evidence": { "kind": "sensor", "reference": "record-1" }
+              }
+            ],
+            "reviewAttempts": []
+          }
+        }
+      ]
+    },
+    {
+      "family": "policy-snapshot",
+      "vectors": [
+        {
+          "name": "the golden snapshot — the digest recomputes from its own members",
+          "verdict": "accept",
+          "value": {
+            "spec": "policy-snapshot/1",
+            "policyDigest": "5a96508688f3243118d4fb1a3849fa73532459979065b0f98ffd1fe3a535e4c8",
+            "repositoryId": "repo-1",
+            "productTrustRevocationEpoch": 0,
+            "repositoryAuthorityRevocationEpoch": 4,
+            "grantedFinishLines": ["merge-ready"],
+            "grantedAuthority": ["candidate-mutation"],
+            "reviewLenses": [
+              { "lensId": "outcome-correctness", "category": "outcome-correctness" },
+              { "lensId": "testing-policy", "category": "testing-policy" }
+            ],
+            "obligations": [{ "obligationId": "review.green" }]
+          }
+        },
+        {
+          "name": "an unknown member",
+          "verdict": "reject",
+          "codes": ["unknown_member"],
+          "value": {
+            "spec": "policy-snapshot/1",
+            "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "repositoryId": "repo-1",
+            "productTrustRevocationEpoch": 0,
+            "repositoryAuthorityRevocationEpoch": 4,
+            "grantedFinishLines": ["merge-ready"],
+            "grantedAuthority": [],
+            "reviewLenses": [{ "lensId": "outcome-correctness", "category": "outcome-correctness" }],
+            "obligations": [{ "obligationId": "review.green" }],
+            "proseAuthority": "trust me"
+          }
+        }
+      ]
+    },
+    {
+      "family": "invocation-fence",
+      "vectors": [
+        {
+          "name": "the golden fence",
+          "verdict": "accept",
+          "value": {
+            "spec": "invocation-fence/1",
+            "deliveryId": "delivery-1",
+            "fence": 1,
+            "expectedJournalRevision": 6,
+            "hostTaskId": "task-1",
+            "worktreeId": "worktree-1",
+            "candidate": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branchRef": "refs/heads/delivery-1",
+              "branchRefValue": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "authorityEpoch": 4,
+            "observationLifetimeSeconds": 900
+          }
+        },
+        {
+          "name": "an unknown member",
+          "verdict": "reject",
+          "codes": ["unknown_member"],
+          "value": {
+            "spec": "invocation-fence/1",
+            "deliveryId": "delivery-1",
+            "fence": 1,
+            "expectedJournalRevision": 6,
+            "hostTaskId": "task-1",
+            "worktreeId": "worktree-1",
+            "candidate": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "branchRef": "refs/heads/delivery-1",
+              "branchRefValue": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "authorityEpoch": 4,
+            "observationLifetimeSeconds": 900,
+            "sessionToken": "opaque"
+          }
+        }
+      ]
+    },
+    {
+      "family": "reviewer-attempt",
+      "vectors": [
+        {
+          "name": "the golden attempt",
+          "verdict": "accept",
+          "value": {
+            "spec": "reviewer-attempt/1",
+            "attemptId": "attempt-1",
+            "deliveryId": "delivery-1",
+            "lensId": "outcome-correctness",
+            "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "verdict": "approved"
+          }
+        },
+        {
+          "name": "a missing context digest — independence must stay falsifiable",
+          "verdict": "reject",
+          "codes": ["missing_member"],
+          "value": {
+            "spec": "reviewer-attempt/1",
+            "attemptId": "attempt-1",
+            "deliveryId": "delivery-1",
+            "lensId": "outcome-correctness",
+            "verdict": "approved"
+          }
+        }
+      ]
+    },
+    {
+      "family": "execution-grant",
+      "vectors": [
+        {
+          "name": "an unknown member",
+          "verdict": "reject",
+          "codes": ["unknown_member"],
+          "value": {
+            "spec": "execution-grant/1",
+            "profile": "checkpoint",
+            "allowedCapabilities": ["tool.edit"],
+            "writablePaths": ["src/"],
+            "protectedPaths": [".delivery/"],
+            "forbiddenOperations": [],
+            "credentials": ["deploy-key"]
+          }
+        },
+        {
+          "name": "the golden checkpoint grant",
+          "verdict": "accept",
+          "value": {
+            "spec": "execution-grant/1",
+            "profile": "checkpoint",
+            "allowedCapabilities": ["tool.edit"],
+            "writablePaths": ["src/"],
+            "protectedPaths": [".delivery/"],
+            "forbiddenOperations": ["network.publish"]
+          }
+        }
+      ]
+    },
+    {
+      "family": "grant-attestation",
+      "vectors": [
+        {
+          "name": "the golden intake attestation — absent-by-state, not omitted",
+          "verdict": "accept",
+          "value": {
+            "spec": "grant-attestation/1",
+            "profile": "intake",
+            "hostVersion": "claude-code/2.5.0",
+            "grantDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "productTrustRevocationEpoch": 0,
+            "expiry": "2026-08-30T12:00:00Z",
+            "intakeDraftId": "intake-1",
+            "deliveryId": "absent-by-state",
+            "invocationFence": "absent-by-state",
+            "workspaceId": "absent-by-state",
+            "projectionDigest": "absent-by-state",
+            "discoveryConfigurationDigest": "absent-by-state",
+            "registeringInstallationId": "absent-by-state",
+            "activeProfile": "absent-by-state"
+          }
+        },
+        {
+          "name": "an intake attestation binding a delivery",
+          "verdict": "reject",
+          "codes": ["unsupported_combination"],
+          "value": {
+            "spec": "grant-attestation/1",
+            "profile": "intake",
+            "hostVersion": "claude-code/2.5.0",
+            "grantDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "productTrustRevocationEpoch": 0,
+            "expiry": "2026-08-30T12:00:00Z",
+            "intakeDraftId": "intake-1",
+            "deliveryId": "delivery-1",
+            "invocationFence": "absent-by-state",
+            "workspaceId": "absent-by-state",
+            "projectionDigest": "absent-by-state",
+            "discoveryConfigurationDigest": "absent-by-state",
+            "registeringInstallationId": "absent-by-state",
+            "activeProfile": "absent-by-state"
+          }
+        }
+      ]
+    },
+    {
+      "family": "operator-confirmation",
+      "vectors": [
+        {
+          "name": "a confirmation binding both classes at once",
+          "verdict": "reject",
+          "codes": ["unsupported_combination"],
+          "value": {
+            "spec": "operator-confirmation/1",
+            "confirmationClass": "contract-confirmation",
+            "origin": "operator-terminal",
+            "action": "confirm-contract",
+            "expiry": "2026-08-30T12:00:00Z",
+            "nonce": "nonce-1",
+            "productTrustRevocationEpoch": 0,
+            "repositoryAuthorityRevocationEpoch": "absent-by-state",
+            "intakeDraftId": "intake-1",
+            "deliveryId": "delivery-1",
+            "normalizedContractDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "supersededInvocationFence": "absent-by-state",
+            "expectedJournalRevision": "absent-by-state",
+            "targetBaseCommit": "absent-by-state",
+            "boundInvocationFence": "absent-by-state",
+            "boundCandidateTreeSha": "absent-by-state"
+          }
+        },
+        {
+          "name": "the golden contract confirmation",
+          "verdict": "accept",
+          "value": {
+            "spec": "operator-confirmation/1",
+            "confirmationClass": "contract-confirmation",
+            "origin": "operator-terminal",
+            "action": "confirm-contract",
+            "expiry": "2026-08-30T12:00:00Z",
+            "nonce": "nonce-1",
+            "productTrustRevocationEpoch": 0,
+            "repositoryAuthorityRevocationEpoch": "absent-by-state",
+            "intakeDraftId": "intake-1",
+            "deliveryId": "absent-by-state",
+            "normalizedContractDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "supersededInvocationFence": "absent-by-state",
+            "expectedJournalRevision": "absent-by-state",
+            "targetBaseCommit": "absent-by-state",
+            "boundInvocationFence": "absent-by-state",
+            "boundCandidateTreeSha": "absent-by-state"
+          }
+        }
+      ]
+    },
+    {
+      "family": "capability-descriptor",
+      "vectors": [
+        {
+          "name": "the golden sensor descriptor",
+          "verdict": "accept",
+          "value": {
+            "spec": "capability-descriptor/1",
+            "capabilityId": "repo.check",
+            "kind": "sensor",
+            "version": "1",
+            "resultSpec": "sensor-result/1"
+          }
+        },
+        {
+          "name": "a capability kind the skeleton does not freeze",
+          "verdict": "reject",
+          "codes": ["malformed_member"],
+          "value": {
+            "spec": "capability-descriptor/1",
+            "capabilityId": "repo.merge",
+            "kind": "operation",
+            "version": "1",
+            "resultSpec": "sensor-result/1"
+          }
+        }
+      ]
+    },
+    {
+      "family": "sensor-result",
+      "vectors": [
+        {
+          "name": "the golden sensor result",
+          "verdict": "accept",
+          "value": {
+            "spec": "sensor-result/1",
+            "capabilityId": "repo.check",
+            "outcome": "failed",
+            "summary": "2 findings",
+            "candidateTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        {
+          "name": "a result trying to carry authority",
+          "verdict": "reject",
+          "codes": ["unknown_member"],
+          "value": {
+            "spec": "sensor-result/1",
+            "capabilityId": "repo.check",
+            "outcome": "passed",
+            "summary": "clean",
+            "candidateTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "grantedAuthority": ["merge"]
+          }
+        }
+      ]
+    },
+    {
+      "family": "finish-line-result",
+      "vectors": [
+        {
+          "name": "the golden merge-ready result",
+          "verdict": "accept",
+          "value": {
+            "spec": "finish-line-result/1",
+            "finishLine": "merge-ready",
+            "deliveryId": "delivery-1",
+            "candidate": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "outcomeVerificationDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mergeReadyObligationsSatisfied": true
+          }
+        },
+        {
+          "name": "a result claiming satisfaction is false",
+          "verdict": "reject",
+          "codes": ["malformed_member"],
+          "value": {
+            "spec": "finish-line-result/1",
+            "finishLine": "merge-ready",
+            "deliveryId": "delivery-1",
+            "candidate": {
+              "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "outcomeVerificationDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "mergeReadyObligationsSatisfied": false
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -58,6 +58,14 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     // The registered site: the closed grammar has to know the member exists.
     `export function checkTimestamp(m: Record<string, unknown>): boolean {\n  return typeof read(m, "recordedAt") === "string";\n}\n`,
 
+  // The contract spine: pure, and independent of the evidence kernel. Its
+  // fixture mirrors the real shape — a sibling import plus the canonicalizer.
+  "packages/kernel/src/spine/vocabulary.ts": `export const JOURNALS = ["intake", "delivery", "maintenance"] as const;\n`,
+  "packages/kernel/src/spine/journal.ts":
+    `import { canonicalize } from "../canonical.ts";\n` +
+    `import { JOURNALS } from "./vocabulary.ts";\n` +
+    `export const describeEntry = (v: unknown): string => canonicalize(v) + JOURNALS[0];\n`,
+
   // d2 — fs only through the artifacts port.
   "packages/kernel/src/recorder.ts": `import type { ArtifactsPort } from "./artifacts.types.ts";\nexport const submit = (port: ArtifactsPort, p: string): Promise<string> => port.read(p);\n`,
   "packages/kernel/src/admission.ts": `import type { RecordShape } from "./records.types.ts";\nimport { evaluate } from "./evaluator.ts";\nexport const admit = (r: RecordShape): string => r.id + evaluate({ digest: r.id }, {});\n`,
@@ -417,6 +425,54 @@ describe("rule d1 — true purity", () => {
       "d1-kernel-purity",
       { "packages/kernel/src/context.ts": `import { read } from "./artifacts.ts";\nexport const classify = (): string => read("x");\n` },
       "packages/kernel/src/context.ts",
+    );
+  });
+
+  it("keeps a spine sibling import and the canonicalizer green", () => {
+    expect(rules(scan())).not.toContain("d1-kernel-purity");
+    expect(CLEAN_TREE["packages/kernel/src/spine/journal.ts"]).toContain("./vocabulary.ts");
+    expect(CLEAN_TREE["packages/kernel/src/spine/journal.ts"]).toContain("../canonical.ts");
+  });
+
+  it("rejects a spine import of the evidence validator — the spine cannot reach the evidence kernel", () => {
+    const findings = expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/spine/journal.ts": `import { CODES } from "../validator/codes.ts";\nexport const describeEntry = (): string => CODES[0];\n`,
+      },
+      "packages/kernel/src/spine/journal.ts",
+    );
+    expect(findings[0]?.message).toContain("validator/codes.ts");
+  });
+
+  it("rejects a spine import of the kernel config — the evidence kernel's policy surface is not the spine's", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/spine/journal.ts": `import { defineHarnessConfig } from "../config.ts";\nexport const describeEntry = (): unknown => defineHarnessConfig({});\n`,
+      },
+      "packages/kernel/src/spine/journal.ts",
+    );
+  });
+
+  it("rejects an evidence-validator import of the spine — the evidence kernel cannot reach the spine either", () => {
+    const findings = expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/validator/envelope.ts": `import { JOURNALS } from "../spine/vocabulary.ts";\nexport const validate = (): string => JOURNALS[0];\n`,
+      },
+      "packages/kernel/src/validator/envelope.ts",
+    );
+    expect(findings[0]?.message).toContain("spine/vocabulary.ts");
+  });
+
+  it("rejects the fs family inside the spine", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/spine/journal.ts": `import { readFileSync } from "node:fs";\nexport const describeEntry = (p: string): string => readFileSync(p, "utf8");\n`,
+      },
+      "packages/kernel/src/spine/journal.ts",
     );
   });
 

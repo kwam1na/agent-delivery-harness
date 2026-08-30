@@ -81,6 +81,18 @@ export interface ProtectedClass {
    * promote it to `present` in the same change.
    */
   readonly status: "present" | "pending";
+  /**
+   * For a d1 class: the kernel-root modules its members may import by name,
+   * replacing D1_KERNEL_ALLOWLIST. This is how dependency DIRECTIONS are
+   * enforced, not just purity: the contract spine's allowlist names only the
+   * canonicalizer and digest modules, so the spine cannot reach the evidence
+   * kernel (validator/, evaluator, config, blockers), while the evidence
+   * kernel's default allowlist does not name the spine — the two stay
+   * independent in both directions and meet only at the package barrel.
+   */
+  readonly d1Allowlist?: readonly string[];
+  /** For a d1 dir class: whether members may import siblings inside the class. */
+  readonly d1SiblingAllowance?: boolean;
 }
 
 /** The informational timestamp (§5.8) no decision path may read. */
@@ -142,7 +154,20 @@ export const KERNEL_SRC = "packages/kernel/src";
 export const KERNEL_PACKAGE = "@agent-delivery-harness/kernel";
 
 export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
-  { id: "kernel-validator", path: "packages/kernel/src/validator", kind: "dir", rules: ["d1", "e"], status: "present" },
+  { id: "kernel-validator", path: "packages/kernel/src/validator", kind: "dir", rules: ["d1", "e"], status: "present", d1SiblingAllowance: true },
+  // The managed-delivery contract spine: pure validators, the frozen
+  // vocabulary, and the journal reducers. Its allowlist deliberately names
+  // only the canonicalizer and digest modules — the evidence kernel and the
+  // spine stay independent in both directions.
+  {
+    id: "kernel-spine",
+    path: "packages/kernel/src/spine",
+    kind: "dir",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["canonical.ts", "digest.ts"],
+    d1SiblingAllowance: true,
+  },
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "present" },
   { id: "kernel-context", path: "packages/kernel/src/context.ts", kind: "file", rules: ["d1"], status: "present" },
   { id: "kernel-recorder", path: "packages/kernel/src/recorder.ts", kind: "file", rules: ["d2", "e"], status: "present" },
@@ -320,7 +345,16 @@ export function runImportBoundarySensor(input: SensorInput): SensorResult {
     const rules = rulesFor(relFile, activeClasses);
 
     if (rules.has("d1")) {
-      checkD1(relFile, kernelSrc, imports, root, hasSiblingAllowance(relFile, activeClasses), emit);
+      const d1Class = d1ClassFor(relFile, activeClasses);
+      checkD1(
+        relFile,
+        kernelSrc,
+        imports,
+        root,
+        d1Class?.d1SiblingAllowance ?? false,
+        d1Class?.d1Allowlist ?? D1_KERNEL_ALLOWLIST,
+        emit,
+      );
     }
     if (rules.has("d2")) {
       checkFsFamily(imports, "d2-no-adhoc-fs", "filesystem work must go through the artifacts.ts port, not a direct import", emit);
@@ -614,6 +648,7 @@ function checkD1(
   imports: readonly ImportEdge[],
   root: string,
   hasSiblingAllowance: boolean,
+  allowlist: readonly string[],
   emit: (rule: SensorRule, node: ts.Node, message: string) => void,
 ): void {
   checkFsFamily(imports, "d1-kernel-purity", "this module is pure by contract and performs no I/O", emit);
@@ -630,7 +665,7 @@ function checkD1(
       emit(
         "d1-kernel-purity",
         edge.node,
-        `imports "${edge.specifier}"; the kernel barrel is not on the d1 allowlist — a d1-pure module may reach only *.types.ts or ${D1_KERNEL_ALLOWLIST.join(", ")} by relative path`,
+        `imports "${edge.specifier}"; the kernel barrel is not on the d1 allowlist — a d1-pure module may reach only *.types.ts or ${allowlist.join(", ")} by relative path`,
       );
       continue;
     }
@@ -652,17 +687,17 @@ function checkD1(
     const base = path.posix.basename(resolved);
     const allowed =
       base.endsWith(".types.ts") ||
-      D1_KERNEL_ALLOWLIST.includes(kernelRel) ||
+      allowlist.includes(kernelRel) ||
       (hasSiblingAllowance && path.posix.dirname(resolved) === importerDir);
 
     if (!allowed) {
       const allowance = hasSiblingAllowance
         ? `, or a sibling inside ${importerDir}`
-        : ` (no sibling allowance outside the validator/ class)`;
+        : ` (no sibling allowance for this class)`;
       emit(
         "d1-kernel-purity",
         edge.node,
-        `imports kernel module "${kernelRel}"; a d1-pure module may import only *.types.ts or ${D1_KERNEL_ALLOWLIST.join(", ")}${allowance}`,
+        `imports kernel module "${kernelRel}"; this d1 class may import only *.types.ts or ${allowlist.join(", ")}${allowance}`,
       );
     }
   }
@@ -802,17 +837,17 @@ function rulesFor(relFile: string, activeClasses: readonly ProtectedClass[]): Se
 }
 
 /**
- * The d1 sibling allowance belongs to the `validator/` dir class only. Any other
- * kernel subdirectory gets the same allowlist as the kernel root.
+ * The most specific d1 class covering this file: a matching dir class first,
+ * then a matching file class. The class carries the allowlist and sibling
+ * allowance the check runs under; a file class without either falls back to
+ * the kernel-root defaults.
  */
-function hasSiblingAllowance(relFile: string, activeClasses: readonly ProtectedClass[]): boolean {
-  return activeClasses.some(
-    (entry) =>
-      entry.kind === "dir" &&
-      entry.rules.includes("d1") &&
-      path.posix.basename(entry.path) === "validator" &&
-      isUnder(relFile, entry.path),
-  );
+function d1ClassFor(relFile: string, activeClasses: readonly ProtectedClass[]): ProtectedClass | undefined {
+  const matches = activeClasses.filter((entry) => {
+    if (!entry.rules.includes("d1")) return false;
+    return entry.kind === "file" ? relFile === entry.path : isUnder(relFile, entry.path);
+  });
+  return matches.find((entry) => entry.kind === "dir") ?? matches[0];
 }
 
 function resolveRelativeImport(root: string, relFile: string, specifier: string): string | undefined {
