@@ -1,0 +1,110 @@
+{
+  "schemaVersion": "walking-skeleton-m0/1",
+  "description": "The thin one-handoff walking-skeleton proof — the milestone's decidable kill-switch gate. One already-scoped contract, one disposable git repository, one installed confirmation-fixture composition, and the full checkpoint path plan -> implement -> validate -> review -> admit -> record -> merge-ready, exercised twice: LIVE against real Claude Code host tasks launched by the qualification harness (never by the product), and IN-PROCESS by the disposable-repository scenario sensor driving the same facade, binding, journal, and evidence loop with the planted failures the milestone names. Every claim below states which leg proved it; nothing is claimed beyond what ran.",
+  "recordedAt": "2026-08-30T14:33:01Z",
+  "gateVerdict": {
+    "decision": "proceed",
+    "criteria": [
+      {
+        "statement": "an already-scoped contract accepted inside a host task reaches merge-ready without operator stage choreography",
+        "outcome": "met",
+        "leg": "live",
+        "evidence": "two headless host tasks drove every checkpoint themselves; the only human inputs across the whole delivery were the two policy-required confirmations"
+      },
+      {
+        "statement": "ending the task after an intermediate checkpoint and resuming in a fresh task replays no accepted work",
+        "outcome": "met",
+        "leg": "live",
+        "evidence": "the first task ended cleanly after the validating -> reviewing checkpoint; SessionEnd recorded honest Tier 2 paused; the fresh task resumed at reviewing with plan and implement stage results durable exactly once"
+      },
+      {
+        "statement": "resume at the graded floor is one operator-authorized takeover through the facade channel into a fresh worktree from the last trusted commit, not counted as an intervention",
+        "outcome": "met",
+        "leg": "live",
+        "evidence": "one takeover authorization consumed on the binding-owned fixture channel; fresh worktree on takeover-2 at the last trusted commit; fence 2 superseded fence 1; interruption counter 2, intervention counter 0"
+      },
+      {
+        "statement": "a green-but-unrelated change fails criterion mapping, and horizontal expansion stops if any of this fails",
+        "outcome": "met",
+        "leg": "fixture",
+        "evidence": "the criterion maps only to a passing exact-candidate trusted-sensor result; a failed, stale-candidate, or absent result leaves the criterion blocked and merge-ready refuses"
+      }
+    ]
+  },
+  "hosts": [
+    {
+      "hostId": "claude-code",
+      "hostVersion": "2.1.97",
+      "tier": 2,
+      "admission": "session-scoped --settings composed by the binding (grant-derived permission allow rules, model-external PreToolUse interceptor, SessionEnd lifecycle hook) with --setting-sources set to the empty selection, so candidate-writable scopes are excluded and the binding's digest-bound settings file is the session's only settings source"
+    }
+  ],
+  "delivery": {
+    "deliveryId": "dlv-d49440df9038",
+    "contractId": "contract-greeting-1",
+    "repositoryId": "disposable-skeleton",
+    "compositionProfile": "confirmation-fixture",
+    "baseCommit": "8dab76a",
+    "lastTrustedCommitAtTakeover": "71b212a210ea309f1f986ca1667e2db461e991a6",
+    "finalState": "completed",
+    "finalFence": 2,
+    "expectedRevisionAtCompletion": 31,
+    "journalSha256": "501ba1ae7d54599308cc50025c1d128ef58988fb3e6346d5ef8bc76f06a0d443",
+    "trackedRecord": "telemetry/delivery-runs/record--a775159aa187f3c23280a64a6fb54451603215c3295cde3375c3cc6bda0573f1.json",
+    "externalVerification": "delivery-harness verify: verified; attestation label 'self / workspace-scoped — process discipline and freshness, not provenance'"
+  },
+  "counters": {
+    "operatorInterventions": 0,
+    "policyRequiredInterruptions": 2,
+    "interruptionBreakdown": ["contract confirmation at the already-scoped handoff", "takeover authorization at resume"]
+  },
+  "legs": {
+    "live": {
+      "statement": "real Claude Code v2.1.97 host tasks, launched headlessly by the qualification harness driver (never by the product), drove the delivery through the facade's managed CLI surface",
+      "phases": [
+        {
+          "phase": "one-handoff progression",
+          "ran": "plan -> implement -> native git commit -> candidate checkpoint -> trusted sensor -> reviewing, unattended",
+          "transcriptSha256": "1767028d199bdc47ad810c11828393971f90bd69b6863cba47ddce86919195bf"
+        },
+        {
+          "phase": "interruption",
+          "ran": "clean host end after an intermediate checkpoint; the model-external SessionEnd hook appended activity.observed paused (Tier 2 trusted lifecycle evidence); the delivery checkpoint did not move"
+        },
+        {
+          "phase": "takeover resume",
+          "ran": "status reported paused + takeover-required; one operator confirmation consumed on the facade channel; prior workspace quarantined; fresh host-created worktree bound at the last trusted commit under fence 2"
+        },
+        {
+          "phase": "review through merge-ready",
+          "ran": "two mandatory lenses as two distinct native subagents with independently constructed contexts, review reduction, compounding, admission through the existing harness evidence boundary, neutral tracked-record commit, external verification, merge-ready completion — unattended",
+          "transcriptSha256": "69e13d43dc213f527542eb94de9f2c422ce0f1b0a3cf5f6f30f9a352c28a4508"
+        }
+      ],
+      "notExercisedLive": [
+        "planted implementation/sensor/reviewer failures (the live sessions took the green path; the fixture leg plants all three)",
+        "the production interactive confirmation channel (the composition ran the plan's confirmation-fixture profile, which the installer production-rejects)",
+        "same-worktree resume (out of reach by design below Tier 3)"
+      ]
+    },
+    "fixture": {
+      "statement": "the disposable-repository scenario sensor drives the same facade, admission binding, append-only journal, and existing evidence loop in-process, with the planted failures the milestone names",
+      "sensor": "packages/kernel/src/facade/walking-skeleton.scenario.test.ts",
+      "scenarios": [
+        { "id": "unattended-progression", "statement": "one active host task progresses without operator stage choreography" },
+        { "id": "planted-implementation-failure", "statement": "the trusted sensor catches a planted defect and validation loops through remediation" },
+        { "id": "candidate-rewrites-sensor", "statement": "the candidate rewrites its tracked sensor to always pass, and the trusted-base copy still governs" },
+        { "id": "planted-reviewer-failure", "statement": "a planted review finding loops through remediation and a fresh aligned review" },
+        { "id": "same-context-reinvocation", "statement": "a same-context reviewer re-invocation under a fresh attempt identity does not count toward the floor" },
+        { "id": "interruption-resume", "statement": "termination leaves the delivery paused (Tier 2) safely and a fresh task resumes from the last trustworthy checkpoint with no replayed work" },
+        { "id": "model-minted-confirmation", "statement": "model-minted contract and takeover confirmations are refused (model-visible surface, orphaned channel)" },
+        { "id": "exact-candidate-mutation", "statement": "a tampered receipted projection byte fails closed at the next canonical recheck with a typed blocker" },
+        { "id": "typed-blocker-visibility", "statement": "one typed blocker is readable through the facade without inspecting internal module commands" },
+        { "id": "intervention-counter", "statement": "the operator-intervention counter stays zero while the host can proceed, moves on a journaled operator-input blocker, and counts the policy-required confirmations separately" },
+        { "id": "no-product-agent-process", "statement": "the product's complete process inventory across the delivery is git and node (the trusted-base sensor); no agent runtime, no worktree lifecycle operation, no daemon" }
+      ]
+    }
+  },
+  "moduleBoundaries": "the V-slices live in the final module boundaries (policy, checkpoint, workflow, host, evidence, finish-line, facade) and are enforced by the import-boundary sensor's protected-class registry with per-module dependency allowlists",
+  "outsideTheSkeleton": ["update/rollback", "second host", "trackers", "control plane", "Athena", "merge", "deploy"]
+}

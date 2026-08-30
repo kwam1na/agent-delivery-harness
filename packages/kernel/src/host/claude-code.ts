@@ -321,7 +321,12 @@ export async function composeClaudeCodeSession(
   return {
     ok: true,
     settingsPath,
-    cliArgs: ["--settings", settingsPath, "--setting-sources", "user"],
+    // Candidate-writable setting scopes (project/local) are excluded — the
+    // graded requirement — and so is every other ambient scope: the empty
+    // selection makes the binding-composed `--settings` file the session's
+    // ONLY settings source, so the discovery configuration is exactly the
+    // digest-bound bytes above.
+    cliArgs: ["--settings", settingsPath, "--setting-sources", ""],
     discoveryConfigurationDigest,
   };
 }

@@ -175,9 +175,11 @@ describe("composeClaudeCodeSession", () => {
     if (!session.ok) return;
 
     // The graded record's required admission flags: candidate-writable scopes
-    // (project/local) are excluded, which neutralizes a planted settings file.
+    // (project/local) are excluded, which neutralizes a planted settings
+    // file. The composed selection excludes every ambient scope, so the
+    // binding's own settings file is the session's only settings source.
     const sources = session.cliArgs[session.cliArgs.indexOf("--setting-sources") + 1];
-    expect(sources).toBe("user");
+    expect(sources).toBe("");
     expect(sources).not.toContain("project");
     expect(sources).not.toContain("local");
 

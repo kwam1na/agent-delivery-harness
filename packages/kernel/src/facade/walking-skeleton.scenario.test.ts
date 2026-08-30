@@ -192,9 +192,10 @@ describe("the thin one-handoff walking skeleton", () => {
     if (!bound.ok) return;
     expect(bound.fence).toBe(1);
 
-    // Candidate-planted setting scopes are excluded at admission.
+    // Candidate-planted setting scopes are excluded at admission — the
+    // composed selection loads no ambient scope at all.
     expect(bound.cliArgs).toContain("--setting-sources");
-    expect(bound.cliArgs[bound.cliArgs.indexOf("--setting-sources") + 1]).toBe("user");
+    expect(bound.cliArgs[bound.cliArgs.indexOf("--setting-sources") + 1]).toBe("");
 
     // The model-external interceptor governs the session: a write under a
     // protected authority path is denied, an in-grant write is allowed.
