@@ -214,12 +214,12 @@ describe("the thin one-handoff walking skeleton", () => {
     // protected authority path is denied, an in-grant write is allowed.
     const bindingState = JSON.parse(readFileSync(bound.statePath, "utf8")) as HookBindingState;
     expect(
-      decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: path.join(worktreeA, ".managed-projection", "x") } }, LATER).allowed,
+      decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: path.join(worktreeA, ".managed-projection", "x") } }, LATER, bindingState.expectation.invocationFence).allowed,
     ).toBe(false);
     expect(
-      decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: path.join(worktreeA, "src", "greet.mjs") } }, LATER).allowed,
+      decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: path.join(worktreeA, "src", "greet.mjs") } }, LATER, bindingState.expectation.invocationFence).allowed,
     ).toBe(true);
-    expect(decideHookInvocation(bindingState, { tool_name: "operator-confirmation.takeover-authorization", tool_input: {} }, LATER).allowed).toBe(false);
+    expect(decideHookInvocation(bindingState, { tool_name: "operator-confirmation.takeover-authorization", tool_input: {} }, LATER, bindingState.expectation.invocationFence).allowed).toBe(false);
 
     // ── Plan checkpoint ──
     const statusPlanning = await facade.status({ deliveryId, observedAt: LATER });
@@ -292,13 +292,26 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(resumed.activity).toBe("active");
     expect(resumed.nextCheckpoint).toMatchObject({ kind: "workflow-stage", stageId: "implement" });
 
-    // A stale attestation from the superseded fence opens no tools.
-    expect(decideHookInvocation(bindingState, { tool_name: "Read", tool_input: {} }, LATER).allowed).toBe(true); // old state file, old expectation — still internally consistent…
-    const freshState = JSON.parse(readFileSync((await facadeStatePath(deliveryId)), "utf8")) as HookBindingState;
+    // The superseded invocation opens no tools, twice over. Its binding state
+    // is fence-scoped, so the rebind wrote a new file rather than overwriting
+    // it — and supersession voided the one it still reads.
+    const staleStatePath = await facadeStatePath(deliveryId, 1);
+    const supersededState = JSON.parse(readFileSync(staleStatePath, "utf8")) as HookBindingState;
+    expect(supersededState.attestation).toBeNull();
+    expect(decideHookInvocation(supersededState, { tool_name: "Read", tool_input: {} }, LATER, 1).allowed).toBe(false);
+
+    const freshState = JSON.parse(readFileSync(await facadeStatePath(deliveryId), "utf8")) as HookBindingState;
     expect(freshState.expectation.invocationFence).toBe(2);
+    // And a fence 1 attestation presented against the current expectation is
+    // rejected on its own terms, independently of the voiding.
     expect(
-      decideHookInvocation({ ...freshState, attestation: bindingState.attestation }, { tool_name: "Read", tool_input: {} }, LATER).allowed,
-    ).toBe(false); // fence 1 attestation against the current fence 2 expectation
+      decideHookInvocation(
+        { ...freshState, attestation: bindingState.attestation },
+        { tool_name: "Read", tool_input: {} },
+        LATER,
+        freshState.expectation.invocationFence,
+      ).allowed,
+    ).toBe(false);
 
     // ── Implement: PLANTED DEFECT first ──
     writeFileSync(path.join(worktreeB, "src", "greet.mjs"), GREET_WRONG);
@@ -652,6 +665,10 @@ describe("the thin one-handoff walking skeleton", () => {
   });
 });
 
-async function facadeStatePath(deliveryId: string): Promise<string> {
-  return path.join(await facade.namespaceDir(), "deliveries", deliveryId, "binding", "state.json");
+async function facadeStatePath(deliveryId: string, fence?: number): Promise<string> {
+  // Fence-scoped: a rebind writes a new file instead of overwriting this one,
+  // so a suite can name a SUPERSEDED invocation's state explicitly.
+  const deliveryDir = path.join(await facade.namespaceDir(), "deliveries", deliveryId);
+  const current = (JSON.parse(readFileSync(path.join(deliveryDir, "workspace.json"), "utf8")) as { fence: number }).fence;
+  return path.join(deliveryDir, "binding", `state-${fence ?? current}.json`);
 }

@@ -70,9 +70,24 @@ export function decideHookInvocation(
   state: HookBindingState | undefined,
   input: HookToolInput,
   observedAt: string,
+  /**
+   * The fence baked into THIS session's hook command at admission, and
+   * REQUIRED — a denial this load-bearing must not be opt-in by argument
+   * arity. The binding state and settings are fence-scoped, so a superseded
+   * session normally reads its own now-voided state; this check is the second
+   * lock, closing the case where it somehow reads a state file describing a
+   * different invocation.
+   */
+  sessionFence: number,
 ): HookDecision {
   if (state === undefined) {
     return { allowed: false, reason: "no binding state is attested for this session; tools stay closed until the grant is applied" };
+  }
+  if (state.expectation.invocationFence !== sessionFence) {
+    return {
+      allowed: false,
+      reason: `superseded_session: this session was admitted under fence ${sessionFence}, and the current fence is ${state.expectation.invocationFence}; a superseded invocation keeps no write path`,
+    };
   }
   const toolName = input.tool_name;
   if (typeof toolName !== "string" || toolName.length === 0) {
@@ -117,9 +132,17 @@ function nowInstant(): string {
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  const [subcommand, statePath] = argv;
+  const [subcommand, statePath, fenceArg] = argv;
   if (statePath === undefined || (subcommand !== "pre-tool-use" && subcommand !== "session-end")) {
-    process.stderr.write("usage: hook-main.ts <pre-tool-use|session-end> <state-path>\n");
+    process.stderr.write("usage: hook-main.ts <pre-tool-use|session-end> <state-path> <session-fence>\n");
+    return 2;
+  }
+  // The session's own fence, baked into the command at admission. A malformed
+  // or absent value denies rather than defers: an unidentifiable session is
+  // exactly the superseded case this check exists for.
+  const sessionFence = Number.parseInt(fenceArg ?? "", 10);
+  if (!Number.isSafeInteger(sessionFence) || sessionFence < 1) {
+    process.stderr.write("hook-main.ts: the session fence is required and must be a positive integer\n");
     return 2;
   }
   const state = loadState(statePath);
@@ -132,7 +155,7 @@ async function main(argv: readonly string[]): Promise<number> {
       input = {};
     }
     const observedAt = nowInstant();
-    const decision = decideHookInvocation(state, input, observedAt);
+    const decision = decideHookInvocation(state, input, observedAt, sessionFence);
     if (decision.allowed && state !== undefined) {
       // The invocation-fence observation the lazy-unknown rule consumes.
       try {
@@ -151,7 +174,17 @@ async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  // session-end: trusted graceful lifecycle evidence — honest `paused`.
+  // session-end: trusted graceful lifecycle evidence — honest `paused`. A
+  // superseded session reports nothing: its `paused` would name a fence that
+  // is no longer current and would age the LIVE invocation toward unknown.
+  if (state !== undefined && state.expectation.invocationFence !== sessionFence) return 0;
+  //
+  // TERMINATION PROVENANCE IS DELIBERATELY NOT WRITTEN HERE. Provenance
+  // carries the host's graded descendant-teardown status, and that grade lives
+  // in the pinned generation's capability record, which this hook has no
+  // trustworthy path to. Reporting it from the binding state file would put a
+  // Tier 3 gate inside a per-delivery file, so provenance enters only through
+  // the facade's trusted lifecycle operation, which derives the grade itself.
   if (state?.journalPath === undefined || state.deliveryId === undefined) return 0;
   const store = createJournalStore(state.journalPath);
   const read = await store.read();

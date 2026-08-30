@@ -50,6 +50,9 @@ const attestation = {
   activeProfile: "confirmation-fixture",
 };
 
+/** The fence this fixture session was admitted under — the expectation's own. */
+const SESSION_FENCE = expectation.invocationFence;
+
 const state: HookBindingState = {
   expectation,
   grant,
@@ -63,7 +66,7 @@ describe("decideHookInvocation", () => {
     const decision = decideHookInvocation(state, {
       tool_name: "Write",
       tool_input: { file_path: "/work/tree/src/greet.mjs" },
-    }, "2026-08-30T12:01:00Z");
+    }, "2026-08-30T12:01:00Z", SESSION_FENCE);
     expect(decision.allowed).toBe(true);
   });
 
@@ -71,7 +74,7 @@ describe("decideHookInvocation", () => {
     const decision = decideHookInvocation(state, {
       tool_name: "Write",
       tool_input: { file_path: "/work/tree/.managed-projection/consumption.json" },
-    }, "2026-08-30T12:01:00Z");
+    }, "2026-08-30T12:01:00Z", SESSION_FENCE);
     expect(decision.allowed).toBe(false);
   });
 
@@ -79,12 +82,12 @@ describe("decideHookInvocation", () => {
     const decision = decideHookInvocation(state, {
       tool_name: "Write",
       tool_input: { file_path: "/etc/passwd" },
-    }, "2026-08-30T12:01:00Z");
+    }, "2026-08-30T12:01:00Z", SESSION_FENCE);
     expect(decision.allowed).toBe(false);
   });
 
   it("denies a capability outside the attested grant", () => {
-    const decision = decideHookInvocation(state, { tool_name: "WebFetch", tool_input: {} }, "2026-08-30T12:01:00Z");
+    const decision = decideHookInvocation(state, { tool_name: "WebFetch", tool_input: {} }, "2026-08-30T12:01:00Z", SESSION_FENCE);
     expect(decision.allowed).toBe(false);
   });
 
@@ -93,18 +96,27 @@ describe("decideHookInvocation", () => {
       state,
       { tool_name: "operator-confirmation.takeover-authorization", tool_input: {} },
       "2026-08-30T12:01:00Z",
+      SESSION_FENCE,
     );
     expect(decision.allowed).toBe(false);
   });
 
   it("denies everything when no binding state exists — deny-until-attested", () => {
-    const decision = decideHookInvocation(undefined, { tool_name: "Read", tool_input: {} }, "2026-08-30T12:01:00Z");
+    const decision = decideHookInvocation(undefined, { tool_name: "Read", tool_input: {} }, "2026-08-30T12:01:00Z", SESSION_FENCE);
     expect(decision.allowed).toBe(false);
   });
 
   it("re-denies once the attestation expires at the observation instant", () => {
-    const decision = decideHookInvocation(state, { tool_name: "Read", tool_input: {} }, "2026-08-30T13:00:00Z");
+    const decision = decideHookInvocation(state, { tool_name: "Read", tool_input: {} }, "2026-08-30T13:00:00Z", SESSION_FENCE);
     expect(decision.allowed).toBe(false);
+  });
+});
+
+describe("the superseded-session check", () => {
+  it("denies every tool when the session's admitted fence is not the state file's", () => {
+    const decision = decideHookInvocation(state, { tool_name: "Read", tool_input: {} }, "2026-08-30T12:01:00Z", SESSION_FENCE + 1);
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toContain("superseded_session");
   });
 });
 

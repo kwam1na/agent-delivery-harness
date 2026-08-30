@@ -139,13 +139,10 @@ async function resolveManaged(context: CommandContext): Promise<ResolvedManaged 
   try {
     const workspace = JSON.parse(
       await readFile(path.join(namespace, "deliveries", deliveryId, "workspace.json"), "utf8"),
-    ) as { worktreeDir?: string };
-    const binding = JSON.parse(
-      await readFile(path.join(namespace, "deliveries", deliveryId, "binding", "state.json"), "utf8"),
-    ) as { expectation?: { invocationFence?: number } };
-    if (typeof workspace.worktreeDir === "string" && typeof binding.expectation?.invocationFence === "number") {
+    ) as { worktreeDir?: string; fence?: number };
+    if (typeof workspace.worktreeDir === "string" && typeof workspace.fence === "number") {
       const [boundReal, hereReal] = await Promise.all([realpath(workspace.worktreeDir), realpath(context.rootDir)]);
-      if (boundReal === hereReal) fence = binding.expectation.invocationFence;
+      if (boundReal === hereReal) fence = workspace.fence;
     }
   } catch {
     fence = undefined; // no bound workspace yet; fence-carrying operations fail closed

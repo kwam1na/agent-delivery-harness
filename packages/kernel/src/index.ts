@@ -459,6 +459,26 @@ export {
   type ToolInvocationRequest,
 } from "./binding/host-admission.ts";
 
+// The host-integration conformance contract — the standing contract any
+// future host qualifies against, plus the fake host that exercises it with no
+// host at all.
+export {
+  HOST_ADMISSION_SCENARIOS,
+  HOST_CONFORMANCE_CASES,
+  HOST_INTERCEPTION_SCENARIOS,
+  runHostIntegrationConformance,
+  type HostAdmissionScenario,
+  type HostConformanceCase,
+  type HostConformanceResult,
+  type HostIntegrationPort,
+  type HostInterceptionScenario,
+  type NormalizedAdmission,
+  type NormalizedInterception,
+  type NormalizedTeardown,
+  type NormalizedTermination,
+} from "./host/conformance.ts";
+export { createFakeHostConformancePort } from "./host/fake-host.ts";
+
 export {
   FINISH_LINE_RESULT_SPEC,
   checkMergeReadyAgainstOutcome,
@@ -467,7 +487,10 @@ export {
 } from "./spine/finish-line.ts";
 export {
   APPROVAL_REQUEST_KINDS,
+  DESCENDANT_TEARDOWN_STATUSES,
   JOURNAL_ENTRY_SPEC,
+  RESUME_ELIGIBILITIES,
+  TERMINATION_PROVENANCE_KINDS,
   WORKSPACE_DISPOSITIONS,
   validateJournalEntry,
 } from "./spine/journal.ts";

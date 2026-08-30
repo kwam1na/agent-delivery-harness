@@ -86,9 +86,15 @@ import {
 import { composeMergeReadyResult } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
+  bindingStateFile,
   composeClaudeCodeSession,
+  discoveryConfigurationDigestOf,
+  gradeResumeEligibility,
+  gradedDescendantTeardown,
   materializeProjection,
   mintGrantAttestation,
+  readConsumptionMarker,
+  tearDownProjection,
   verifyProjection,
 } from "../host/claude-code.ts";
 import { createExecPort, type ExecPort } from "../host/exec-port.ts";
@@ -155,6 +161,9 @@ const CHECKOUT_ROOT = path.resolve(HERE, "..", "..", "..", "..");
 const HOOK_MAIN = path.resolve(HERE, "..", "host", "hook-main.ts");
 const TSX_BIN = path.join(CHECKOUT_ROOT, "node_modules", ".bin", "tsx");
 
+/** The host this facade's binding drives; the key into the graded record. */
+const HOST_ID = "claude-code";
+
 export interface ManagedInstallation {
   readonly installationPath: string;
   readonly receiptDir: string;
@@ -213,6 +222,10 @@ interface WorkspaceMeta {
   readonly workflowGraphSha256: string;
   readonly discoveryConfigurationDigest: string;
   readonly projectionDigest: string;
+  /** The fence this workspace was bound under. */
+  readonly fence: number;
+  /** The fence-scoped admission configuration this delivery's session carries. */
+  readonly settingsPath: string;
 }
 
 interface PendingTakeover {
@@ -440,7 +453,8 @@ export interface ManagedDeliveryFacade {
         readonly nextCheckpoint: ManagedCheckpoint;
         readonly policyRequiredInterruptions: number;
         readonly operatorInterventions: number;
-        readonly resume: "none" | "takeover-required";
+        /** `same-workspace` only under Tier 3 termination provenance for the current fence. */
+        readonly resume: "none" | "takeover-required" | "same-workspace";
         readonly blockers: readonly { readonly code: string; readonly summary: string }[];
       }
     | FacadeFailure
@@ -502,6 +516,45 @@ export interface ManagedDeliveryFacade {
   >;
 
   sessionEnded(input: { readonly deliveryId: string; readonly fence: number }): Promise<{ readonly ok: true } | FacadeFailure>;
+
+  /**
+   * TERMINATION PROVENANCE, and the only door it enters through. The caller is
+   * the trusted host-runtime lifecycle integration — never a model-callable
+   * tool — reporting that an invocation ended cleanly.
+   *
+   * The caller reports only THAT, and nothing else. Whether the clean end also
+   * proves the invocation's descendants are gone is not a claim any caller may
+   * make: the descendant-teardown status is read from the graded capability
+   * record inside the pinned generation — whose digest closure is verified on
+   * every guarded call — and the resume position is derived from it here. No
+   * argument to this operation, and nothing a session writes into the binding
+   * state file, can widen it.
+   *
+   * What this does NOT defend is the delivery journal itself. On a host with no
+   * protected common-Git authority path — which the graded record reflects by
+   * claiming `commonGitAuthorityPathProtected` for Codex and not for Claude
+   * Code — a granted shell capability writes the journal directly, and the
+   * payload grammar only enforces a record's internal consistency. Closing that
+   * belongs to the host's own sandbox, not to this operation.
+   *
+   * Crash provenance has no entrypoint at all: no supported host supplies it,
+   * no daemon exists to observe it, and the product never infers it.
+   */
+  recordTerminationProvenance(input: { readonly deliveryId: string; readonly fence: number }): Promise<
+    | {
+        readonly ok: true;
+        readonly descendantTeardown: "verified" | "unverified";
+        readonly resumeEligibility: "same-workspace" | "fresh-worktree-only";
+      }
+    | FacadeFailure
+  >;
+
+  /**
+   * Tears the run-pinned projection and the binding-written discovery
+   * configuration down with the worktree, so nothing the binding wrote
+   * outlives the workspace it was scoped to.
+   */
+  tearDownWorkspaceProjection(input: { readonly deliveryId: string }): Promise<{ readonly ok: true } | FacadeFailure>;
 
   /**
    * A waiver or contract-amendment proposal: journaled with a pending marker
@@ -615,6 +668,32 @@ export type ManagedCheckpoint =
   | { readonly kind: "finish-line" }
   | { readonly kind: "complete" }
   | { readonly kind: "blocked"; readonly code: string; readonly summary: string };
+
+/**
+ * Voids the attestation in every binding state file for a fence BELOW the
+ * given one. A superseded session's hook keeps reading its own fence-scoped
+ * file, and an attestation of `null` is the frozen deny-until-attested case,
+ * so the predecessor's tools close on its very next invocation without any
+ * callback plumbing. Passing an infinite fence voids every invocation, which
+ * is what cancellation wants.
+ */
+async function voidSupersededBindingStates(bindingDir: string, currentFence: number): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(bindingDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const match = /^state-(\d+)\.json$/.exec(name);
+    if (match === null) continue;
+    if (Number.parseInt(match[1] as string, 10) >= currentFence) continue;
+    const statePath = path.join(bindingDir, name);
+    const state = await readJson<Record<string, unknown>>(statePath);
+    if (state === undefined || state["attestation"] === null) continue;
+    await writeOwned(statePath, `${JSON.stringify({ ...state, attestation: null })}\n`);
+  }
+}
 
 export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDeliveryFacade {
   const exec = input.exec ?? createExecPort();
@@ -882,15 +961,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           ? projection.projectionDigest
           : `unverifiable: ${projection.blockers.map((blocker) => blocker.message).join("; ")}`.slice(0, 1900),
       };
-      let observedDiscovery: string;
-      try {
-        const settingsBytes = await readFile(path.join(dir, "binding", "settings.json"), "utf8");
-        const excludesBytes = await readFile(path.join(dir, "binding", "worktree-excludes"), "utf8");
-        observedDiscovery = digestCanonical({ settings: settingsBytes, worktreeExcludes: excludesBytes });
-      } catch {
-        observedDiscovery = "unreadable-discovery-configuration";
-      }
-      discoveryCheck = { kind: "compare", expected: workspace.discoveryConfigurationDigest, observed: observedDiscovery };
+      discoveryCheck = {
+        kind: "compare",
+        expected: workspace.discoveryConfigurationDigest,
+        observed:
+          (await discoveryConfigurationDigestOf({
+            settingsPath: workspace.settingsPath,
+            bindingDir: path.join(dir, "binding"),
+          })) ?? "unreadable-discovery-configuration",
+      };
+
     }
 
     const recheckValues: RecheckValues = {
@@ -976,6 +1056,44 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             "Quarantine the workspace and resume through an authorized takeover.",
           );
         }
+      }
+    }
+
+    // The consumption marker's READ-BACK half, AFTER the canonical recheck so
+    // it never preempts a frozen recheck verdict.
+    //
+    // The receipt digest already covers these bytes, and on an untampered
+    // workspace the two checks agree by construction — the marker is a
+    // receipted entry and the fence only advances through a re-materializing
+    // rebind. What the marker adds is a SECOND, differently-keyed statement of
+    // which run injected the projection, so an attacker who has reached the
+    // binding's own receipt still has to forge the marker in agreement with
+    // it. It is defense in depth on binding-owned files, not an independent
+    // proof against an uncompromised receipt.
+    if (options.fenceRequired === true && options.verifyWorkspace === true && workspace !== undefined) {
+      const marker = await readConsumptionMarker({ worktreeDir: workspace.worktreeDir });
+      const observedMarker = marker.ok
+        ? `${marker.deliveryId}@${marker.fence}`
+        : `unreadable (${marker.blockers.map((blocker) => blocker.code).join(", ")})`;
+      const expectedMarker = `${deliveryId}@${options.invokingFence ?? reduced.state.lastFence}`;
+      if (observedMarker !== expectedMarker) {
+        // Like every sibling workspace-integrity failure, this leaves a
+        // durable blocker rather than a silently retryable refusal.
+        if (reduced.state.state !== "blocked" && reduced.state.state !== "security_blocked") {
+          await recordBlockerAndTransition(
+            store,
+            deliveryId,
+            reduced.state.state,
+            "projection.consumption-marker-mismatch",
+            `the worktree's per-run consumption marker reads ${observedMarker}, not ${expectedMarker}`.slice(0, 1900),
+            "blocked",
+          );
+        }
+        return refuse(
+          "consumption_marker_mismatch",
+          `The worktree's per-run consumption marker reads ${observedMarker}, not ${expectedMarker}.`,
+          "Only the projection this invocation materialized may carry its outputs; quarantine the workspace and resume through an authorized takeover.",
+        );
       }
     }
 
@@ -1861,6 +1979,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const workspaceId = `ws-${hex(6)}`;
       const worktreeId = `wt-${sha256Hex(worktreeDir).slice(0, 16)}`;
 
+      // Every SUPERSEDED invocation's state is voided HERE — before the fresh
+      // worktree is materialized into, and before any refusal path below can
+      // return. Its session keeps reading its own fence-scoped file, and a null
+      // attestation is the frozen deny-until-attested case, so a still-running
+      // predecessor keeps no write path into the workspace the takeover just
+      // authorized — including the case where the operator recreated that
+      // worktree at the path the predecessor was bound to. A predecessor is
+      // already dead to the facade once a takeover is authorized, so voiding
+      // early is strictly safer than voiding on success. Same mechanism
+      // cancellation uses.
+      await voidSupersededBindingStates(bindingDir, guarded.lastFence + 1);
+
       const bound = await appendEntry(guarded.store, deliveryId, "workspace.bound", {
         workspaceId,
         repositoryId: guarded.meta.contract.repository.repositoryId,
@@ -1873,10 +2003,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       });
       if (!bound.ok) return bound;
 
+      // The fence this invocation will carry is known before materialization,
+      // so the per-run consumption marker binds it: the marker read back from
+      // a fence-bound submission proves the worktree holds THIS run's
+      // projection rather than a prior run's leftovers.
+      const fence = guarded.lastFence + 1;
       const materialized = await materializeProjection({
         worktreeDir,
         generationRoot: guarded.generationRoot,
         deliveryId,
+        fence,
         bindingDir,
         exec,
       });
@@ -1888,11 +2024,19 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         );
       }
 
-      const statePath = path.join(bindingDir, "state.json");
+      // FENCE-SCOPED, so a rebind writes new files instead of overwriting the
+      // predecessor's in place: this host reloads settings and hooks
+      // mid-session, and a superseded session must keep reading its own
+      // configuration and its own — now voided — state.
+      const statePath = path.join(bindingDir, bindingStateFile(fence));
       const session = await composeClaudeCodeSession({
         bindingDir,
         statePath,
         hookCommand: [TSX_BIN, HOOK_MAIN],
+        // The session's own identity, baked into its hook command: a later
+        // invocation overwrites the shared binding state, and this is how a
+        // superseded-but-still-running session recognizes that it has been.
+        fence,
         grant: DISPOSABLE_STAGE_GRANT,
       });
       if (!session.ok) {
@@ -1920,7 +2064,6 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
       }
       const registered = lastOf(guarded.views, "delivery.registered");
-      const fence = guarded.lastFence + 1;
       const expectation: CheckpointAdmissionExpectation = {
         profile: "checkpoint",
         hostVersion: input.hostVersion,
@@ -1970,6 +2113,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           workflowGraphSha256: graph.graphSha256,
           discoveryConfigurationDigest: session.discoveryConfigurationDigest,
           projectionDigest: materialized.projectionDigest,
+          fence,
+          settingsPath: session.settingsPath,
         } satisfies WorkspaceMeta)}\n`,
       );
 
@@ -2060,7 +2205,23 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       ).length;
 
       const terminal = reduced.state.state === "completed" || reduced.state.state === "cancelled" || reduced.state.state === "failed";
-      const resume = !terminal && activity !== "active" ? "takeover-required" : "none";
+      // Same-workspace resume is gated on TERMINATION PROVENANCE for the
+      // current fence, not on activity: an absent lifecycle event, a stale
+      // one, or one whose descendant teardown was unverified all leave the
+      // prior workspace unverified, and the designed path is an
+      // operator-authorized takeover into a fresh worktree.
+      const provenance = lastOf(views, "termination.provenance.recorded");
+      const sameWorkspaceResumable =
+        provenance !== undefined &&
+        provenance.payload["fence"] === reduced.state.lastFence &&
+        provenance.payload["resumeEligibility"] === "same-workspace";
+      const resume: "none" | "takeover-required" | "same-workspace" = terminal
+        ? "none"
+        : activity === "active"
+          ? "none"
+          : sameWorkspaceResumable
+            ? "same-workspace"
+            : "takeover-required";
 
       const blockers =
         reduced.state.state === "blocked" || reduced.state.state === "security_blocked"
@@ -2753,6 +2914,82 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true };
     },
 
+    async recordTerminationProvenance({ deliveryId, fence }) {
+      const guarded = await guard(deliveryId, { invokingFence: fence, fenceRequired: true });
+      if (!("store" in guarded)) return guarded;
+
+      // The GRADE, read from the pinned generation's capability record — not
+      // from this call, and not from anything a session can write.
+      const descendantTeardown = await gradedDescendantTeardown({
+        generationRoot: guarded.generationRoot,
+        hostId: HOST_ID,
+        hostVersion: input.hostVersion,
+      });
+      const resumeEligibility = gradeResumeEligibility({ descendantTeardown });
+
+      // One provenance record per invocation. A lifecycle integration that
+      // retries, or a late callback arriving after a takeover was presented,
+      // must not append again: the append advances the expected journal
+      // revision, which would void a pending takeover authorization.
+      const existing = lastOf(guarded.views, "termination.provenance.recorded");
+      if (existing !== undefined && existing.payload["fence"] === guarded.lastFence) {
+        // The DERIVED grade is returned, never the stored payload: this
+        // operation reports what the graded record currently says, and reading
+        // back a journal value would let a forged entry speak in its voice.
+        return { ok: true, descendantTeardown, resumeEligibility };
+      }
+
+      // One trusted lifecycle event, two distinct facts. Activity becomes an
+      // honest `paused`; the provenance record is the durable fact about the
+      // ended invocation and is NOT an activity marker.
+      const paused = await appendEntry(guarded.store, deliveryId, "activity.observed", {
+        activity: "paused",
+        fence: guarded.lastFence,
+      });
+      if (!paused.ok) return paused;
+      const appended = await appendEntry(guarded.store, deliveryId, "termination.provenance.recorded", {
+        fence: guarded.lastFence,
+        hostVersion: input.hostVersion,
+        provenance: "graceful",
+        descendantTeardown,
+        resumeEligibility,
+      });
+      if (!appended.ok) return appended;
+      return { ok: true, descendantTeardown, resumeEligibility };
+    },
+
+    async tearDownWorkspaceProjection({ deliveryId }) {
+      // Teardown destroys the binding's own receipts, so it runs through the
+      // canonical recheck like every other workspace operation, so a delivery
+      // whose trust or installation binding no longer holds cannot have its
+      // binding receipts removed by a passing caller — and a delivery with a
+      // takeover pending refuses outright. That workspace is quarantined
+      // precisely because it is not trusted, and teardown would delete the
+      // projection receipt that shows tampering while leaving the prior
+      // invocation's state file behind.
+      const guarded = await guard(deliveryId);
+      if (!("store" in guarded)) return guarded;
+      const dir = await deliveryDir(deliveryId);
+      const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
+      if (workspace === undefined) {
+        return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
+      }
+      const torn = await tearDownProjection({
+        worktreeDir: workspace.worktreeDir,
+        bindingDir: path.join(dir, "binding"),
+        settingsPath: workspace.settingsPath,
+        exec,
+      });
+      if (!torn.ok) {
+        return refuse(
+          "projection_teardown_failed",
+          `Tearing the projection down failed: ${torn.blockers.map((blocker) => blocker.message).join("; ")}`,
+          "Remove the projection subtree and the worktree-scoped exclusion before removing the worktree.",
+        );
+      }
+      return { ok: true };
+    },
+
     async recordApprovalRequest({ deliveryId, requestKind, criterionId, actorId, reason, fence }) {
       const guarded = await guard(deliveryId, {
         requireState: ["reviewing", "remediating", "admitting"],
@@ -2797,11 +3034,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // is then requested through the host's own primitive where one is
       // qualified; on this fixture host the revocation IS the request
       // (fence-revocation-only), and no claim of termination is made.
-      const statePath = path.join(await deliveryDir(deliveryId), "binding", "state.json");
-      const bindingState = await readJson<Record<string, unknown>>(statePath);
-      if (bindingState !== undefined) {
-        await writeOwned(statePath, `${JSON.stringify({ ...bindingState, attestation: null })}\n`);
-      }
+      const cancelBindingDir = path.join(await deliveryDir(deliveryId), "binding");
+      await voidSupersededBindingStates(cancelBindingDir, Number.POSITIVE_INFINITY);
       if (guarded.lastFence > 0) {
         await appendEntry(guarded.store, deliveryId, "activity.observed", {
           activity: "cancellation_pending",

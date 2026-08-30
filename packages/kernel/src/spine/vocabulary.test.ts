@@ -125,6 +125,9 @@ describe("the frozen event-kind vocabulary", () => {
         "trust.epoch.observed",
         "blocker.recorded",
         "finish.line.recorded",
+        // Defined out of reservation by the trusted host lifecycle
+        // integration — the sanctioned per-tranche path.
+        "termination.provenance.recorded",
       ].sort(),
     );
   });
@@ -133,7 +136,6 @@ describe("the frozen event-kind vocabulary", () => {
     expect(kindsIn("intake", "reserved")).toEqual([]);
     expect(kindsIn("delivery", "reserved")).toEqual(
       [
-        "termination.provenance.recorded",
         "contract.amended",
         "action.intent.recorded",
         "action.result.recorded",
@@ -146,9 +148,9 @@ describe("the frozen event-kind vocabulary", () => {
     expect(kindsIn("maintenance", "active")).toEqual(["maintenance.action.recorded", "retention.action.recorded"]);
   });
 
-  it("counts 25 active and 5 reserved (journal, kind) pairs", () => {
-    expect(activePairs.length).toBe(25);
-    expect(reservedPairs.length).toBe(5);
+  it("counts 26 active and 4 reserved (journal, kind) pairs", () => {
+    expect(activePairs.length).toBe(26);
+    expect(reservedPairs.length).toBe(4);
   });
 
   it("homes operator.confirmation.recorded in exactly two journals — the vocabulary is keyed by (journal, kind) pairs", () => {
@@ -197,7 +199,7 @@ describe("classifyEventKind", () => {
   });
 
   it("classifies an enumerated reserved pair as reserved — even the observation-only mirror kind", () => {
-    expect(classifyEventKind("delivery", "termination.provenance.recorded")).toEqual({ status: "reserved" });
+    expect(classifyEventKind("delivery", "contract.amended")).toEqual({ status: "reserved" });
     expect(classifyEventKind("delivery", "control.plane.mirror.recorded")).toEqual({ status: "reserved" });
   });
 

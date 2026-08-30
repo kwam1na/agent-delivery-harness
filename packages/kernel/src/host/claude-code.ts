@@ -23,7 +23,8 @@
  *     grant digest, workspace, projection digest, and the binding-written
  *     discovery configuration.
  */
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { compareUtf16CodeUnits } from "../canonical.ts";
 import { digestCanonical, sha256Hex } from "../digest.ts";
@@ -42,7 +43,22 @@ export const PROJECTION_ENTRY_PREFIXES = Object.freeze(["skills/", "workflows/",
 
 export const PROJECTION_RECEIPT_FILE = "projection-receipt.json";
 export const WORKTREE_EXCLUDES_FILE = "worktree-excludes";
-export const SESSION_SETTINGS_FILE = "settings.json";
+
+/**
+ * The session's admission configuration is FENCE-SCOPED, and that is
+ * load-bearing rather than cosmetic. A takeover rebind writes the successor's
+ * configuration into the same per-delivery binding directory; if the file name
+ * were fixed, the rebind would overwrite the predecessor's in place, and this
+ * host reloads settings, permissions, and hooks mid-session — so a
+ * superseded-but-still-running session would silently adopt the successor's
+ * hook command, its state file, and its workspace root. A distinct file per
+ * fence means the rebind writes somewhere else and the superseded session
+ * keeps reading its own, which supersession then voids.
+ */
+export const sessionSettingsFile = (fence: number): string => `settings-${fence}.json`;
+export const bindingStateFile = (fence: number): string => `state-${fence}.json`;
+/** The binding's per-run consumption marker, inside the receipted subtree. */
+export const CONSUMPTION_MARKER_FILE = "consumption.json";
 
 const OWNER_DIR = 0o700;
 const OWNER_FILE = 0o600;
@@ -57,6 +73,9 @@ export const HOST_BINDING_BLOCKER_CODES = Object.freeze([
   "projection_receipt_corrupt",
   "projection_digest_mismatch",
   "discovery_configuration_unreadable",
+  "consumption_marker_missing",
+  "consumption_marker_corrupt",
+  "teardown_failed",
 ] as const);
 export type HostBindingBlockerCode = (typeof HOST_BINDING_BLOCKER_CODES)[number];
 
@@ -83,6 +102,13 @@ export interface MaterializeProjectionInput {
   /** The pinned generation root (digest-addressed, already trust-checked). */
   readonly generationRoot: string;
   readonly deliveryId: string;
+  /**
+   * The invocation fence this materialization serves. The consumption marker
+   * binds it, so the marker read back from a fence-bound submission proves the
+   * bytes in the worktree are THIS run's projection and not a prior run's
+   * leftovers — and the projection digest moves with every new fence.
+   */
+  readonly fence: number;
   /** The binding-owned directory in the product namespace for receipts and configuration. */
   readonly bindingDir: string;
   readonly exec: ExecPort;
@@ -174,11 +200,15 @@ export async function materializeProjection(input: MaterializeProjectionInput): 
       await chmod(target, READONLY_FILE);
       entries.push({ path: name, sha256: sha256Hex(bytes) });
     }
-    const marker = `${JSON.stringify({ deliveryId: input.deliveryId, consumed: GENERATION_SKILLS_ARCHIVE })}\n`;
-    const markerPath = path.join(projectionRoot, "consumption.json");
+    const marker = `${JSON.stringify({
+      deliveryId: input.deliveryId,
+      fence: input.fence,
+      consumed: GENERATION_SKILLS_ARCHIVE,
+    })}\n`;
+    const markerPath = path.join(projectionRoot, CONSUMPTION_MARKER_FILE);
     await writeFile(markerPath, marker);
     await chmod(markerPath, READONLY_FILE);
-    entries.push({ path: "consumption.json", sha256: sha256Hex(marker) });
+    entries.push({ path: CONSUMPTION_MARKER_FILE, sha256: sha256Hex(marker) });
   } catch (error) {
     return fail(
       "projection_write_failed",
@@ -246,12 +276,218 @@ export async function verifyProjection(input: {
   return { ok: true, projectionDigest: receipt.projectionDigest };
 }
 
+// ── The consumption marker's read-back half ─────────────────────────────────
+
+export interface ConsumptionMarker {
+  readonly deliveryId: string;
+  readonly fence: number;
+  readonly consumed: string;
+}
+
+export type ReadConsumptionMarkerResult = ({ readonly ok: true } & ConsumptionMarker) | HostBindingFailure;
+
+/**
+ * Reads the per-run consumption marker back out of the worktree. Callers pair
+ * it with a fence-bound submission: the marker names the delivery and fence
+ * the projection was materialized for, so a submission arriving against
+ * different bytes than the ones this run injected is detectable on its own,
+ * independently of the receipt digest.
+ */
+export async function readConsumptionMarker(input: { readonly worktreeDir: string }): Promise<ReadConsumptionMarkerResult> {
+  let text: string;
+  try {
+    text = await readFile(path.join(input.worktreeDir, PROJECTION_DIR, CONSUMPTION_MARKER_FILE), "utf8");
+  } catch {
+    return fail("consumption_marker_missing", "the worktree carries no per-run consumption marker; nothing was materialized here");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return fail("consumption_marker_corrupt", "the consumption marker is not JSON");
+  }
+  const marker = parsed as Partial<ConsumptionMarker>;
+  if (
+    typeof marker !== "object" ||
+    marker === null ||
+    typeof marker.deliveryId !== "string" ||
+    typeof marker.fence !== "number" ||
+    typeof marker.consumed !== "string"
+  ) {
+    return fail("consumption_marker_corrupt", "the consumption marker is outside its shape");
+  }
+  return { ok: true, deliveryId: marker.deliveryId, fence: marker.fence, consumed: marker.consumed };
+}
+
+// ── The binding-written discovery-configuration set ─────────────────────────
+
+/**
+ * The digest over the binding-written host discovery-configuration set —
+ * exactly the session settings and the worktree-scoped exclusion, both
+ * per-delivery bytes in the binding's own directory. Host-writable settings
+ * (persisted permission decisions, which this host writes into the worktree's
+ * own project scope) are deliberately NOT members: the set is
+ * binding-exclusive, so any change to it is tampering rather than normal host
+ * behavior. One definition, used at application and at every recheck.
+ */
+export async function discoveryConfigurationDigestOf(input: {
+  readonly settingsPath: string;
+  readonly bindingDir: string;
+}): Promise<string | undefined> {
+  try {
+    const settings = await readFile(input.settingsPath, "utf8");
+    const worktreeExcludes = await readFile(path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE), "utf8");
+    return digestCanonical({ settings, worktreeExcludes });
+  } catch {
+    return undefined;
+  }
+}
+
+// ── Teardown ────────────────────────────────────────────────────────────────
+
+export type TearDownProjectionResult = { readonly ok: true } | HostBindingFailure;
+
+/**
+ * Tears the projection and the discovery configuration down with the
+ * worktree: the receipted subtree, the binding-written configuration bytes,
+ * and the worktree-scoped exclusion that made the subtree invisible.
+ *
+ * `extensions.worktreeConfig` — the single permitted common-configuration
+ * write — is deliberately LEFT enabled. With no worktree-scoped values set it
+ * changes nothing, while disabling it would silently drop any OTHER worktree's
+ * worktree-scoped configuration, which is the interference this teardown
+ * exists to avoid. Teardown is idempotent so worktree removal never races it
+ * into a blocker.
+ */
+export async function tearDownProjection(input: {
+  readonly worktreeDir: string;
+  readonly bindingDir: string;
+  /** The fence-scoped admission configuration this delivery's sessions carry. */
+  readonly settingsPath: string;
+  readonly exec: ExecPort;
+}): Promise<TearDownProjectionResult> {
+  const excludesPath = path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE);
+
+  // The worktree may already be gone — the host owns workspace lifecycle and
+  // may remove it first. That is the ordering this teardown is named for, so
+  // it is not an error; there is simply no worktree-scoped value left to
+  // clear. Read the current value BEFORE deleting the file it points at.
+  let clearExclusion = false;
+  if (existsSync(input.worktreeDir)) {
+    const current = await input.exec.run({
+      command: "git",
+      args: ["config", "--worktree", "--get", "core.excludesFile"],
+      cwd: input.worktreeDir,
+    });
+    // Unset ONLY the binding's own value. The apply side refuses to clobber an
+    // operator's excludes file; the teardown side must not delete one either —
+    // including the repository-level value `--worktree` silently falls back to
+    // when worktree configuration is not enabled.
+    clearExclusion = current.code === 0 && current.stdout.trim() === excludesPath;
+  }
+
+  try {
+    await rm(path.join(input.worktreeDir, PROJECTION_DIR), { recursive: true, force: true });
+    await rm(input.settingsPath, { force: true });
+    for (const file of [WORKTREE_EXCLUDES_FILE, PROJECTION_RECEIPT_FILE]) {
+      await rm(path.join(input.bindingDir, file), { force: true });
+    }
+  } catch (error) {
+    return fail("teardown_failed", `removing the projection failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!clearExclusion) return { ok: true };
+  // Exit code 5 is git's "the value was not set" — already torn down.
+  const unset = await input.exec.run({
+    command: "git",
+    args: ["config", "--worktree", "--unset", "core.excludesFile"],
+    cwd: input.worktreeDir,
+  });
+  if (unset.code !== 0 && unset.code !== 5) {
+    return fail("teardown_failed", `clearing the worktree-scoped exclusion failed: ${unset.stderr.trim()}`);
+  }
+  return { ok: true };
+}
+
+// ── The graded descendant-teardown status ───────────────────────────────────
+
+/** The graded capability record, carried inside the pinned generation root. */
+export const GENERATION_HOST_CAPABILITIES = "qualifications/host-admission-capabilities.json";
+
+/**
+ * Resolves the host's descendant-teardown status from the GRADED capability
+ * record in the pinned generation — never from a caller's claim and never from
+ * anything a session can write.
+ *
+ * Every doubt resolves to `unverified`: an unreadable record, an ungraded host
+ * version, a tier below 3, or a capability entry that is anything other than
+ * `supported`. That direction is safe by construction — `unverified` can only
+ * narrow resume eligibility to the fresh-worktree takeover path, never widen
+ * it — so a missing or malformed record closes same-workspace resume rather
+ * than opening it.
+ */
+export async function gradedDescendantTeardown(input: {
+  readonly generationRoot: string;
+  readonly hostId: string;
+  readonly hostVersion: string;
+}): Promise<"verified" | "unverified"> {
+  let record: unknown;
+  try {
+    record = JSON.parse(
+      await readFile(path.join(input.generationRoot, ...GENERATION_HOST_CAPABILITIES.split("/")), "utf8"),
+    );
+  } catch {
+    return "unverified";
+  }
+  const hosts = (record as { hosts?: unknown })?.hosts;
+  if (!Array.isArray(hosts)) return "unverified";
+  const graded = hosts.find(
+    (host: unknown) =>
+      typeof host === "object" &&
+      host !== null &&
+      (host as Record<string, unknown>)["hostId"] === input.hostId &&
+      (host as Record<string, unknown>)["hostVersion"] === input.hostVersion,
+  ) as Record<string, unknown> | undefined;
+  if (graded === undefined) return "unverified";
+
+  // Both halves must agree: the ladder grade AND the capability the grade
+  // rests on. Either one short of Tier 3 keeps same-workspace resume closed.
+  const tier = (graded["grade"] as { tier?: unknown } | undefined)?.tier;
+  const capability = (graded["capabilities"] as Record<string, { status?: unknown }> | undefined)?.[
+    "terminationProvenanceWithDescendantTeardown"
+  ]?.status;
+  return typeof tier === "number" && tier >= 3 && capability === "supported" ? "verified" : "unverified";
+}
+
+// ── The honest resume grade ─────────────────────────────────────────────────
+
+/**
+ * The only derivation of resume eligibility, so no caller can assert a Tier 3
+ * position the host's graded teardown behavior does not support: same-workspace
+ * resume requires VERIFIED descendant teardown, and anything else resumes only
+ * into a fresh worktree through an operator-authorized takeover.
+ */
+export function gradeResumeEligibility(input: {
+  readonly descendantTeardown: "verified" | "unverified";
+}): "same-workspace" | "fresh-worktree-only" {
+  return input.descendantTeardown === "verified" ? "same-workspace" : "fresh-worktree-only";
+}
+
 export interface ComposeClaudeCodeSessionInput {
   readonly bindingDir: string;
   /** The binding state file the model-external hook consults per invocation. */
   readonly statePath: string;
   /** The command vector that runs the hook entry (the caller supplies the runtime). */
   readonly hookCommand: readonly string[];
+  /**
+   * The fence THIS session is admitted under, baked into the hook command it
+   * carries. The binding state file is per-delivery and a later invocation
+   * overwrites it, so a superseded-but-still-running session would otherwise
+   * read the successor's consistent grant and attestation. The baked fence is
+   * the session's own identity: when it stops matching the state file, this
+   * session has been superseded and its tools close.
+   */
+  readonly fence: number;
   /** The stage grant whose allowed capabilities become the host's own permission allow rules. */
   readonly grant: { readonly allowedCapabilities: readonly string[] };
 }
@@ -275,7 +511,9 @@ export async function composeClaudeCodeSession(
   input: ComposeClaudeCodeSessionInput,
 ): Promise<ComposeClaudeCodeSessionResult> {
   const hook = (subcommand: string): string =>
-    [...input.hookCommand, subcommand, input.statePath].map((part) => JSON.stringify(part)).join(" ");
+    [...input.hookCommand, subcommand, input.statePath, String(input.fence)]
+      .map((part) => JSON.stringify(part))
+      .join(" ");
 
   const settings = {
     // The supported host enforces the grant through its OWN permission
@@ -301,27 +539,23 @@ export async function composeClaudeCodeSession(
   };
 
   const settingsBytes = `${JSON.stringify(settings, null, 2)}\n`;
-  const settingsPath = path.join(input.bindingDir, SESSION_SETTINGS_FILE);
+  const settingsPath = path.join(input.bindingDir, sessionSettingsFile(input.fence));
   await mkdir(input.bindingDir, { recursive: true, mode: OWNER_DIR });
   await writeFile(settingsPath, settingsBytes, { mode: OWNER_FILE });
   await chmod(settingsPath, OWNER_FILE);
 
-  let excludesBytes: string;
-  try {
-    excludesBytes = await readFile(path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE), "utf8");
-  } catch {
+  // The binding-written host discovery-configuration set, digest-bound at
+  // application through the one definition every recheck site also uses.
+  const discoveryConfigurationDigest = await discoveryConfigurationDigestOf({
+    settingsPath,
+    bindingDir: input.bindingDir,
+  });
+  if (discoveryConfigurationDigest === undefined) {
     return fail(
       "discovery_configuration_unreadable",
       "the worktree excludes file is missing; compose the session only after materializing the projection",
     );
   }
-
-  // The binding-written host discovery-configuration set, digest-bound at
-  // application: the session settings and the worktree-scoped exclusion.
-  const discoveryConfigurationDigest = digestCanonical({
-    settings: settingsBytes,
-    worktreeExcludes: excludesBytes,
-  });
 
   return {
     ok: true,

@@ -10,7 +10,7 @@
  * Written RED before `claude-code.ts` existed.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,8 +26,13 @@ import { createExecPort } from "./exec-port.ts";
 import {
   PROJECTION_DIR,
   composeClaudeCodeSession,
+  discoveryConfigurationDigestOf,
+  gradeResumeEligibility,
+  gradedDescendantTeardown,
   materializeProjection,
   mintGrantAttestation,
+  readConsumptionMarker,
+  tearDownProjection,
   verifyProjection,
 } from "./claude-code.ts";
 
@@ -85,6 +90,7 @@ describe("materializeProjection", () => {
       worktreeDir: bench.worktreeDir,
       generationRoot: bench.generationRoot,
       deliveryId: "dlv-host-1",
+      fence: 1,
       bindingDir: bench.bindingDir,
       exec,
     });
@@ -121,6 +127,7 @@ describe("materializeProjection", () => {
       worktreeDir: bench.worktreeDir,
       generationRoot: bench.generationRoot,
       deliveryId: "dlv-host-2",
+      fence: 1,
       bindingDir: bench.bindingDir,
       exec,
     });
@@ -143,6 +150,7 @@ describe("materializeProjection", () => {
       worktreeDir: bench.worktreeDir,
       generationRoot: bench.generationRoot,
       deliveryId: "dlv-host-3",
+      fence: 1,
       bindingDir: bench.bindingDir,
       exec,
     });
@@ -160,6 +168,7 @@ describe("composeClaudeCodeSession", () => {
       worktreeDir: bench.worktreeDir,
       generationRoot: bench.generationRoot,
       deliveryId: "dlv-host-4",
+      fence: 1,
       bindingDir: bench.bindingDir,
       exec,
     });
@@ -169,6 +178,7 @@ describe("composeClaudeCodeSession", () => {
       bindingDir: bench.bindingDir,
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
       grant: { allowedCapabilities: ["Bash", "Read", "Write"] },
     });
     expect(session.ok, JSON.stringify(session)).toBe(true);
@@ -223,5 +233,441 @@ describe("mintGrantAttestation", () => {
     expect(evaluateHostAdmission(expectation, grant, attestation).admitted).toBe(true);
     // And a superseded fence stops matching — stale attestations open no tools.
     expect(evaluateHostAdmission({ ...expectation, invocationFence: 2 }, grant, attestation).admitted).toBe(false);
+  });
+});
+
+describe("the consumption marker", () => {
+  it("is injected at materialization bound to the delivery AND the fence, and reads back", async () => {
+    const bench = await workbench("marker");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-marker-1",
+      fence: 4,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok, JSON.stringify(materialized)).toBe(true);
+
+    const marker = await readConsumptionMarker({ worktreeDir: bench.worktreeDir });
+    expect(marker.ok, JSON.stringify(marker)).toBe(true);
+    if (!marker.ok) return;
+    expect(marker.deliveryId).toBe("dlv-marker-1");
+    expect(marker.fence).toBe(4);
+    expect(marker.consumed).toBe("skills/agent-skills-core-v1.zip");
+  });
+
+  it("changes the projection digest when the fence changes — a marker is per-run, not per-generation", async () => {
+    const first = await workbench("marker-fence-a");
+    const second = await workbench("marker-fence-b");
+    const a = await materializeProjection({
+      worktreeDir: first.worktreeDir,
+      generationRoot: first.generationRoot,
+      deliveryId: "dlv-marker-2",
+      fence: 1,
+      bindingDir: first.bindingDir,
+      exec,
+    });
+    const b = await materializeProjection({
+      worktreeDir: second.worktreeDir,
+      generationRoot: second.generationRoot,
+      deliveryId: "dlv-marker-2",
+      fence: 2,
+      bindingDir: second.bindingDir,
+      exec,
+    });
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.projectionDigest).not.toBe(b.projectionDigest);
+  });
+
+  it("fails closed when the marker is absent or its bytes are not the marker shape", async () => {
+    const bench = await workbench("marker-absent");
+    const absent = await readConsumptionMarker({ worktreeDir: bench.worktreeDir });
+    expect(absent.ok).toBe(false);
+    if (!absent.ok) expect(absent.blockers.map((blocker) => blocker.code)).toContain("consumption_marker_missing");
+
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-marker-3",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const markerPath = path.join(bench.worktreeDir, PROJECTION_DIR, "consumption.json");
+    chmodSync(markerPath, 0o644);
+    writeFileSync(markerPath, "{}\n");
+    const corrupt = await readConsumptionMarker({ worktreeDir: bench.worktreeDir });
+    expect(corrupt.ok).toBe(false);
+    if (!corrupt.ok) expect(corrupt.blockers.map((blocker) => blocker.code)).toContain("consumption_marker_corrupt");
+  });
+});
+
+describe("the binding-written discovery configuration", () => {
+  it("matches the digest bound at application and moves when a byte is mutated", async () => {
+    const bench = await workbench("discovery");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-discovery-1",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const session = await composeClaudeCodeSession({
+      bindingDir: bench.bindingDir,
+      statePath: path.join(bench.bindingDir, "state.json"),
+      hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
+      grant: { allowedCapabilities: ["Read"] },
+    });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+
+    // One definition, used at application and at every canonical recheck.
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).toBe(session.discoveryConfigurationDigest);
+
+    // The set is BINDING-EXCLUSIVE: the host never mutates it, so any change
+    // to its bytes moves the digest and the recheck fails closed on it.
+    writeFileSync(session.settingsPath, JSON.stringify({ permissions: { allow: ["Bash"] } }));
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).not.toBe(session.discoveryConfigurationDigest);
+
+    // An unreadable member yields no digest at all, which can never equal an
+    // expected one — the recheck fails closed rather than skipping.
+    await rm(path.join(bench.bindingDir, "worktree-excludes"), { force: true });
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).toBeUndefined();
+  });
+
+  it("leaves host-writable settings outside the digest-bound set", async () => {
+    const bench = await workbench("host-writes");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-discovery-2",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const session = await composeClaudeCodeSession({
+      bindingDir: bench.bindingDir,
+      statePath: path.join(bench.bindingDir, "state.json"),
+      hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
+      grant: { allowedCapabilities: ["Read"] },
+    });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+
+    // The host persists a permission decision the way Claude Code does: into
+    // the worktree's own project scope. That scope is not loaded at admission
+    // and is not in the binding-written set, so neither digest moves.
+    mkdirSync(path.join(bench.worktreeDir, ".claude"), { recursive: true });
+    writeFileSync(
+      path.join(bench.worktreeDir, ".claude", "settings.local.json"),
+      JSON.stringify({ permissions: { allow: ["Bash(rm:*)"] } }),
+    );
+
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).toBe(session.discoveryConfigurationDigest);
+    const projection = await verifyProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir });
+    expect(projection.ok).toBe(true);
+  });
+});
+
+describe("tearDownProjection", () => {
+  it("removes the projection subtree and the binding-written discovery configuration with the worktree", async () => {
+    const bench = await workbench("teardown");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-teardown-1",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const session = await composeClaudeCodeSession({
+      bindingDir: bench.bindingDir,
+      statePath: path.join(bench.bindingDir, "state.json"),
+      hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
+      grant: { allowedCapabilities: ["Read"] },
+    });
+    expect(session.ok).toBe(true);
+
+    const torn = await tearDownProjection({
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      settingsPath: path.join(bench.bindingDir, "settings-1.json"),
+      exec,
+    });
+    expect(torn.ok, JSON.stringify(torn)).toBe(true);
+
+    expect(existsSync(path.join(bench.worktreeDir, PROJECTION_DIR))).toBe(false);
+    expect(existsSync(path.join(bench.bindingDir, "settings-1.json"))).toBe(false);
+    expect(existsSync(path.join(bench.bindingDir, "worktree-excludes"))).toBe(false);
+    expect(existsSync(path.join(bench.bindingDir, "projection-receipt.json"))).toBe(false);
+    // The worktree-scoped exclusion is gone with it, and the tree is clean:
+    // nothing the binding wrote survives as untracked candidate content.
+    expect(git(bench.worktreeDir, "config", "--worktree", "--default", "", "--get", "core.excludesFile")).toBe("");
+    expect(git(bench.worktreeDir, "status", "--porcelain")).toBe("");
+
+    // Teardown is idempotent — a second call on an already-torn-down worktree
+    // is not an error, so worktree removal never races it into a blocker.
+    const again = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
+    expect(again.ok).toBe(true);
+  });
+
+  it("does not disturb a sibling worktree — the one permitted common-configuration write is non-interfering", async () => {
+    const bench = await workbench("non-interference");
+    const sibling = path.join(path.dirname(bench.worktreeDir), "sibling");
+    git(bench.repoDir, "worktree", "add", "-b", "sibling", sibling, "main");
+    const siblingBinding = path.join(path.dirname(bench.worktreeDir), "sibling-binding");
+    const siblingMaterialized = await materializeProjection({
+      worktreeDir: sibling,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-sibling",
+      fence: 1,
+      bindingDir: siblingBinding,
+      exec,
+    });
+    expect(siblingMaterialized.ok, JSON.stringify(siblingMaterialized)).toBe(true);
+
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-non-interference",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok, JSON.stringify(materialized)).toBe(true);
+
+    // Each worktree carries its OWN excludes value: the write is worktree-
+    // scoped, never the shared pattern space.
+    expect(git(sibling, "config", "--worktree", "--get", "core.excludesFile")).toBe(
+      path.join(siblingBinding, "worktree-excludes"),
+    );
+    expect(git(bench.worktreeDir, "config", "--worktree", "--get", "core.excludesFile")).toBe(
+      path.join(bench.bindingDir, "worktree-excludes"),
+    );
+
+    // Tearing one down leaves the other's exclusion and clean status intact.
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
+    expect(torn.ok).toBe(true);
+    expect(git(sibling, "config", "--worktree", "--get", "core.excludesFile")).toBe(
+      path.join(siblingBinding, "worktree-excludes"),
+    );
+    expect(git(sibling, "status", "--porcelain")).toBe("");
+    expect(existsSync(path.join(sibling, PROJECTION_DIR))).toBe(true);
+  });
+});
+
+describe("gradeResumeEligibility", () => {
+  it("is the honest derivation: unverified descendant teardown never yields same-workspace resume", () => {
+    expect(gradeResumeEligibility({ descendantTeardown: "unverified" })).toBe("fresh-worktree-only");
+    expect(gradeResumeEligibility({ descendantTeardown: "verified" })).toBe("same-workspace");
+  });
+});
+
+describe("gradedDescendantTeardown", () => {
+  const REAL_RECORD = path.resolve(HERE, "..", "..", "..", "..", "qualifications", "host-admission-capabilities.json");
+
+  const generationWith = async (record: unknown): Promise<string> => {
+    const root = await mkdtemp(path.join(scratch, "graded-"));
+    mkdirSync(path.join(root, "qualifications"), { recursive: true });
+    writeFileSync(path.join(root, "qualifications", "host-admission-capabilities.json"), JSON.stringify(record));
+    return root;
+  };
+
+  it("reads UNVERIFIED for the real graded host — the record, not a caller, decides", async () => {
+    const root = await mkdtemp(path.join(scratch, "graded-real-"));
+    mkdirSync(path.join(root, "qualifications"), { recursive: true });
+    writeFileSync(path.join(root, "qualifications", "host-admission-capabilities.json"), readFileSync(REAL_RECORD));
+    expect(
+      await gradedDescendantTeardown({ generationRoot: root, hostId: "claude-code", hostVersion: "2.1.97" }),
+    ).toBe("unverified");
+  });
+
+  it("resolves the SHIPPED record's own key, so the Tier 3 lane cannot be silently dead", async () => {
+    // A wrong host id or an unexpected version format would look exactly like
+    // an honest Tier 2 grade — both return `unverified`. Taking the REAL record
+    // and flipping only the ladder position pins the key to what ships.
+    const upgraded = JSON.parse(readFileSync(REAL_RECORD, "utf8")) as {
+      hosts: { hostId: string; grade: { tier: number }; capabilities: Record<string, { status: string }> }[];
+    };
+    const graded = upgraded.hosts.find((host) => host.hostId === "claude-code");
+    expect(graded, "the shipped record grades claude-code").toBeDefined();
+    if (graded === undefined) return;
+    graded.grade.tier = 3;
+    (graded.capabilities["terminationProvenanceWithDescendantTeardown"] as { status: string }).status = "supported";
+    expect(
+      await gradedDescendantTeardown({
+        generationRoot: await generationWith(upgraded),
+        hostId: "claude-code",
+        hostVersion: "2.1.97",
+      }),
+    ).toBe("verified");
+  });
+
+  it("reads VERIFIED only when the ladder grade AND the capability entry both reach Tier 3", async () => {
+    const tier3 = {
+      hosts: [
+        {
+          hostId: "claude-code",
+          hostVersion: "9.9.9",
+          grade: { tier: 3 },
+          capabilities: { terminationProvenanceWithDescendantTeardown: { status: "supported" } },
+        },
+      ],
+    };
+    expect(
+      await gradedDescendantTeardown({
+        generationRoot: await generationWith(tier3),
+        hostId: "claude-code",
+        hostVersion: "9.9.9",
+      }),
+    ).toBe("verified");
+
+    // Either half short of Tier 3 keeps same-workspace resume closed.
+    for (const halfGraded of [
+      { ...tier3, hosts: [{ ...tier3.hosts[0], grade: { tier: 2 } }] },
+      {
+        ...tier3,
+        hosts: [
+          { ...tier3.hosts[0], capabilities: { terminationProvenanceWithDescendantTeardown: { status: "unsupported" } } },
+        ],
+      },
+    ]) {
+      expect(
+        await gradedDescendantTeardown({
+          generationRoot: await generationWith(halfGraded),
+          hostId: "claude-code",
+          hostVersion: "9.9.9",
+        }),
+      ).toBe("unverified");
+    }
+  });
+
+  it("resolves every doubt to UNVERIFIED — a missing, malformed, or ungraded record closes same-workspace resume", async () => {
+    const cases: (string | Promise<string>)[] = [
+      path.join(scratch, "no-such-generation"),
+      generationWith({ hosts: "not an array" }),
+      generationWith({}),
+      generationWith({ hosts: [{ hostId: "claude-code", hostVersion: "9.9.9", grade: { tier: 3 } }] }),
+    ];
+    for (const candidate of cases) {
+      const generationRoot = await candidate;
+      expect(
+        await gradedDescendantTeardown({ generationRoot, hostId: "claude-code", hostVersion: "9.9.9" }),
+        generationRoot,
+      ).toBe("unverified");
+    }
+    // A record that does not grade THIS version is not a grade for it.
+    const root = await generationWith({
+      hosts: [
+        {
+          hostId: "claude-code",
+          hostVersion: "9.9.9",
+          grade: { tier: 3 },
+          capabilities: { terminationProvenanceWithDescendantTeardown: { status: "supported" } },
+        },
+      ],
+    });
+    expect(await gradedDescendantTeardown({ generationRoot: root, hostId: "claude-code", hostVersion: "2.1.97" })).toBe(
+      "unverified",
+    );
+    expect(await gradedDescendantTeardown({ generationRoot: root, hostId: "codex-cli", hostVersion: "9.9.9" })).toBe(
+      "unverified",
+    );
+  });
+
+  it("fails closed on a corrupt record rather than throwing", async () => {
+    const root = await mkdtemp(path.join(scratch, "graded-corrupt-"));
+    mkdirSync(path.join(root, "qualifications"), { recursive: true });
+    writeFileSync(path.join(root, "qualifications", "host-admission-capabilities.json"), "{ not json");
+    expect(await gradedDescendantTeardown({ generationRoot: root, hostId: "claude-code", hostVersion: "2.1.97" })).toBe(
+      "unverified",
+    );
+  });
+});
+
+describe("tearDownProjection, against the host's own workspace lifecycle", () => {
+  it("preserves an operator excludes value it did not write", async () => {
+    const bench = await workbench("teardown-operator-excludes");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-teardown-2",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+
+    // An operator repoints the exclusion after materialization. Teardown must
+    // not delete a value it did not write — the apply side refuses to clobber
+    // one, and the teardown side must be symmetric.
+    git(bench.worktreeDir, "config", "--worktree", "core.excludesFile", "/tmp/operator-owned-excludes");
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
+    expect(torn.ok, JSON.stringify(torn)).toBe(true);
+    expect(git(bench.worktreeDir, "config", "--worktree", "--get", "core.excludesFile")).toBe(
+      "/tmp/operator-owned-excludes",
+    );
+  });
+
+  it("does not delete a repository-level excludes value that --worktree falls back to", async () => {
+    const bench = await workbench("teardown-local-fallback");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-teardown-4",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+
+    // `git config --worktree` falls back to the LOCAL scope when worktree
+    // configuration is off, and a session can turn it off. Teardown must not
+    // then delete the repository's own value.
+    git(bench.worktreeDir, "config", "--local", "core.excludesFile", "/tmp/repository-owned-excludes");
+    git(bench.worktreeDir, "config", "--unset", "extensions.worktreeConfig");
+
+    const torn = await tearDownProjection({
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      settingsPath: path.join(bench.bindingDir, "settings-1.json"),
+      exec,
+    });
+    expect(torn.ok, JSON.stringify(torn)).toBe(true);
+    expect(git(bench.worktreeDir, "config", "--local", "--get", "core.excludesFile")).toBe(
+      "/tmp/repository-owned-excludes",
+    );
+  });
+
+  it("succeeds when the host already removed the worktree — teardown never races workspace removal into a blocker", async () => {
+    const bench = await workbench("teardown-worktree-gone");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-teardown-3",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+
+    // The host owns workspace lifecycle and may remove the worktree first.
+    git(bench.repoDir, "worktree", "remove", "--force", bench.worktreeDir);
+    expect(existsSync(bench.worktreeDir)).toBe(false);
+
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
+    expect(torn.ok, JSON.stringify(torn)).toBe(true);
+    expect(existsSync(path.join(bench.bindingDir, "settings-1.json"))).toBe(false);
+    expect(existsSync(path.join(bench.bindingDir, "worktree-excludes"))).toBe(false);
   });
 });
