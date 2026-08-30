@@ -565,6 +565,64 @@ export {
   compileDisposablePolicy,
   type CompileDisposablePolicyInput,
 } from "./policy/disposable.ts";
+
+// ── The policy compiler and adapter SDK ─────────────────────────────────────
+//
+// Layered repository policy: a declarative document plus executable adapter
+// descriptors, compiled with the portable defaults into one digest-bound
+// snapshot; the harness admission configuration is derived from it; and the
+// separate monotonic authority-revocation epoch is the emergency ceiling.
+export {
+  ADAPTER_CAPABILITY_SPEC,
+  OPERATION_CLAIM_SPEC,
+  OPERATION_RESULT_SPEC,
+  POLICY_CAPABILITY_KINDS,
+  PRIVILEGED_ACTIONS,
+  PRIVILEGED_CAPABILITY_KINDS,
+  READ_ONLY_CAPABILITY_KINDS,
+  checkClaimAuthorized,
+  validateAdapterCapability,
+  validateAdapterSet,
+  type AdapterCapability,
+  type ClaimAuthorityView,
+  type PolicyCapabilityKind,
+  type PolicyRejection,
+  type PolicyVerdict,
+} from "./policy/capabilities.ts";
+export {
+  APPROVAL_REQUIREMENTS,
+  REPOSITORY_POLICY_DOCUMENT_SPEC,
+  TRACKER_ABSENCE_FALLBACKS,
+  validateRepositoryPolicyDocument,
+  type CheckpointOverride,
+  type RepositoryPolicyDocument,
+} from "./policy/document.ts";
+export {
+  COMPILED_POLICY_SPEC,
+  POLICY_COMPILE_CODES,
+  PORTABLE_MODEL_DRIVEN_STAGES,
+  PORTABLE_PRIVILEGED_CREDENTIALS,
+  PORTABLE_STAGE_GRANT,
+  checkBoundPolicy,
+  compileRepositoryPolicy,
+  verifyCompiledPolicy,
+  type CompiledCheckpointGrant,
+  type CompiledPolicy,
+  type CompileRepositoryPolicyInput,
+  type CompileRepositoryPolicyResult,
+} from "./policy/compile.ts";
+export {
+  AUTHORITY_REVOCATION_SPEC,
+  checkActionAuthorization,
+  effectiveDeliveryAuthority,
+  observeAuthorityEpoch,
+  validateAuthorityRevocation,
+  type AuthorityGrantView,
+  type AuthorityRevocation,
+  type CheckActionAuthorizationInput,
+  type EffectiveDeliveryAuthorityInput,
+  type ObserveAuthorityEpochResult,
+} from "./policy/authority.ts";
 export {
   createIntakeJournalStore,
   createJournalStore,
