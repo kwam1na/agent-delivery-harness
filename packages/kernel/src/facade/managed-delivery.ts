@@ -52,7 +52,7 @@ import { buildDeliveryRecord, deliveryRecordBytes, deliveryRecordPathFor, parseD
 import { publishPreparationReceipt } from "../preparation.ts";
 import { discoverRecords, resolveRecordStorage } from "../records.ts";
 import { submitManifest } from "../recorder.ts";
-import { createCandidateCapture, evaluateCandidateActivation } from "../candidate.ts";
+import { createCandidateCapture, evaluateCandidateActivation, type CandidateCommandRunner } from "../candidate.ts";
 import { withDeliverableIdentity } from "../identity.ts";
 import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
 import type { HarnessConfig } from "../config.ts";
@@ -376,6 +376,45 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     return { code: outcome.code, out: outcome.stdout.trim() };
   };
 
+  /**
+   * The evidence kernel's capture/activation git plumbing, routed through the
+   * SAME exec port as every other product launch — the inventory the negative
+   * process sensor asserts is complete only because nothing bypasses the
+   * port. The kernel's scrubbed-environment semantics are preserved: the
+   * whole GIT_ namespace is dropped and prompts/optional locks are disabled,
+   * exactly as the kernel's own default runner does.
+   */
+  const candidateRunner: CandidateCommandRunner = async (command, options) => {
+    const [executable, ...args] = command;
+    if (executable === undefined) return { exitCode: -1, stdout: "", stderr: "no command was given" };
+    const environment: Record<string, string> = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (name.startsWith("GIT_") || value === undefined) continue;
+      environment[name] = value;
+    }
+    const outcome = await exec.run({
+      command: executable,
+      args,
+      cwd: options.cwd,
+      env: { ...environment, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+    });
+    return { exitCode: outcome.code, stdout: outcome.stdout, stderr: outcome.stderr };
+  };
+
+  /**
+   * The record-storage flavor of the same rule: every `RecordStorageOptions`
+   * consumer the facade drives (store resolution, receipts, submission,
+   * admission, record discovery) resolves git through the port. Throws on a
+   * non-zero exit, exactly like the kernel's default runner.
+   */
+  const storageGitRunner = async (cwd: string, args: readonly string[]): Promise<string> => {
+    const outcome = await exec.run({ command: "git", args: [...args], cwd });
+    if (outcome.code !== 0) {
+      throw new Error(`git ${args.join(" ")} failed (${outcome.code}): ${outcome.stderr.trim()}`);
+    }
+    return outcome.stdout.trim();
+  };
+
   let namespaceDirCache: string | undefined;
   const namespaceDir = async (): Promise<string> => {
     if (namespaceDirCache !== undefined) return namespaceDirCache;
@@ -450,6 +489,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     readonly store: JournalStore;
     readonly meta: DeliveryMeta;
     readonly state: DeliveryState;
+    readonly lastActiveState: DeliveryState;
     readonly expectedRevision: number;
     readonly lastFence: number;
     readonly views: readonly JournalEntryView[];
@@ -460,12 +500,27 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   /** The canonical rechecks every mutation-capable operation runs. */
   const guard = async (
     deliveryId: string,
-    options: { readonly requireState?: readonly DeliveryState[]; readonly verifyWorkspace?: boolean } = {},
+    options: {
+      readonly requireState?: readonly DeliveryState[];
+      readonly verifyWorkspace?: boolean;
+      /** Only the takeover rebind consumes a pending authorization. */
+      readonly allowPendingTakeover?: boolean;
+    } = {},
   ): Promise<GuardedContext | FacadeFailure> => {
     const dir = await deliveryDir(deliveryId);
     const meta = await readJson<DeliveryMeta>(path.join(dir, "delivery.json"));
     if (meta === undefined) {
       return refuse("unknown_delivery", `No registered delivery ${deliveryId}.`, "Register a delivery through the contract handoff first.");
+    }
+    // A consumed takeover authorization quarantines the prior workspace; no
+    // checkpoint operation runs until the authorized fresh worktree is bound.
+    // A superseded-but-still-running task keeps no write path this way.
+    if (options.allowPendingTakeover !== true && (await readJson<PendingTakeover>(path.join(dir, "takeover.json"))) !== undefined) {
+      return refuse(
+        "takeover_pending",
+        "A consumed takeover authorization is pending; the quarantined workspace accepts no further checkpoints.",
+        "Bind the fresh worktree the takeover authorized, then continue from the last trustworthy checkpoint.",
+      );
     }
     const store = await journalStoreFor(deliveryId);
     const reduced = await store.state();
@@ -569,6 +624,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             store,
             meta,
             state: reduced.state.state,
+            lastActiveState: reduced.state.lastActiveState,
             expectedRevision: reduced.state.expectedRevision,
             lastFence: reduced.state.lastFence,
             views,
@@ -892,7 +948,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     },
 
     async bindWorkspace({ deliveryId, worktreeDir, hostTaskId, observedAt, attestationExpiry, observationLifetimeSeconds }) {
-      const guarded = await guard(deliveryId);
+      const guarded = await guard(deliveryId, { allowPendingTakeover: true });
       if (!("store" in guarded)) return guarded;
       const takeover = await readJson<PendingTakeover>(path.join(await deliveryDir(deliveryId), "takeover.json"));
       if (guarded.state !== "preparing" && takeover === undefined) {
@@ -1065,6 +1121,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           workspaceId,
           disposition: "takeover",
         });
+        // A blocked delivery resumes at its last trustworthy checkpoint — the
+        // frozen reducer's journal-dependent rule — once the authorized fresh
+        // worktree stands. (Leaving security_blocked stays a maintenance-lane
+        // operation outside this skeleton; the trust recheck above already
+        // refuses that path.)
+        if (guarded.state === "blocked") {
+          const resumed = await appendEntry(guarded.store, deliveryId, "transition.committed", {
+            from: "blocked",
+            to: guarded.lastActiveState,
+          });
+          if (!resumed.ok) return resumed;
+        }
         await rm(path.join(dir, "takeover.json"), { force: true });
       } else {
         const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "preparing", to: "planning" });
@@ -1264,6 +1332,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const current = currentCandidateOf(guarded.views);
       if (current === undefined) return refuse("no_candidate", "No candidate is checkpointed.", "Checkpoint a candidate first.");
 
+      // Attempt identities are single-use: a recorded attempt — verdict and
+      // all — is never replaced, so a findings verdict cannot be laundered
+      // into an approval by re-submitting under the same identity.
+      const attemptPath = path.join(await deliveryDir(deliveryId), "attempts", `${attemptId}.json`);
+      if ((await readJson<AttemptFile>(attemptPath)) !== undefined) {
+        return refuse(
+          "duplicate_attempt",
+          `Attempt ${attemptId} is already recorded; review attempts complete under distinct, single-use identities.`,
+          "Submit a fresh attempt under a new identity with an independently constructed context.",
+        );
+      }
+
       // Independence is falsifiable: the digest is over the attempt's own
       // context materials, so identically-contexted lenses collide.
       const contextDigest = digestCanonical({ candidateTreeSha: current.treeSha, context: contextBytes });
@@ -1356,7 +1436,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
 
       const rootDir = workspace.worktreeDir;
-      const capture = await captureFor(rootDir, input.config);
+      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
       if (captured.treeSha !== current.treeSha) {
@@ -1388,8 +1468,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
 
       // The EXISTING harness admission: preparation receipt, evidence
       // manifest from the two lens attempts, submission, and the gate.
-      const storage = await resolveRecordStorage(rootDir, { storageNamespace: input.config.storageNamespace });
-      await publishPreparationReceipt(rootDir, { config: input.config, candidate: captured }, { storageNamespace: input.config.storageNamespace });
+      const storage = await resolveRecordStorage(rootDir, { storageNamespace: input.config.storageNamespace, runGit: storageGitRunner });
+      await publishPreparationReceipt(rootDir, { config: input.config, candidate: captured }, { storageNamespace: input.config.storageNamespace, runGit: storageGitRunner });
 
       const artifacts = createArtifactsPort();
       const providerRegistration = input.config.providers[0];
@@ -1468,7 +1548,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
 
       const submission = await submitManifest(
         { rootDir, manifestPath, config: input.config },
-        { captureCandidate: capture.captureCandidate, artifacts, storageNamespace: input.config.storageNamespace },
+        { captureCandidate: capture.captureCandidate, artifacts, storageNamespace: input.config.storageNamespace, runGit: storageGitRunner },
       );
       if (submission.status !== "accepted") {
         await recordBlockerAndTransition(
@@ -1486,8 +1566,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         { rootDir, config: input.config, context: classifyExecutionContext({ config: input.config, env, stdinIsTTY: false, stdoutIsTTY: false }) },
         {
           captureCandidate: capture.captureCandidate,
-          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config: input.config }),
+          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config: input.config, run: candidateRunner }),
           storageNamespace: input.config.storageNamespace,
+          runGit: storageGitRunner,
         },
       );
       if (!admission.admitted) {
@@ -1521,15 +1602,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
       const rootDir = workspace.worktreeDir;
-      const capture = await captureFor(rootDir, input.config);
+      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
 
       const admission = await runAdmission(
         { rootDir, config: input.config, context: classifyExecutionContext({ config: input.config, env, stdinIsTTY: false, stdoutIsTTY: false }) },
         {
           captureCandidate: capture.captureCandidate,
-          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config: input.config }),
+          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config: input.config, run: candidateRunner }),
           storageNamespace: input.config.storageNamespace,
+          runGit: storageGitRunner,
         },
       );
       if (!admission.admitted || admission.decision === undefined) {
@@ -1541,6 +1623,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           gateId: input.config.gateId,
           obligationId: obligation.id,
           storageNamespace: input.config.storageNamespace,
+          runGit: storageGitRunner,
         });
         evidenceRecords.push(...discovery.records);
       }
@@ -1563,7 +1646,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (porcelain.code !== 0 || porcelain.out !== "") {
         return refuse("record_uncommitted", "The tracked record is not checkpoint-committed.", "Commit the record through the host's native git tooling.");
       }
-      const capture = await captureFor(rootDir, input.config);
+      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
 
@@ -1648,7 +1731,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuse("no_trusted_commit", "No trusted commit exists to reconstruct from.", "Bind a workspace first.");
       }
       const nonce = `nonce-${hex(8)}`;
-      const takeoverBranchRef = `takeover-${guarded.lastFence + 1}`;
+      // Branch names are repository-global; the delivery identity keeps two
+      // deliveries' takeover branches from colliding in one repository.
+      const takeoverBranchRef = `takeover-${deliveryId}-${guarded.lastFence + 1}`;
       const confirmation = {
         spec: "operator-confirmation/1",
         confirmationClass: "takeover-authorization",
@@ -1757,13 +1842,19 @@ type CaptureOutcome =
   | { readonly ok: true; readonly candidate: CapturedCandidate; readonly captureCandidate: CaptureCandidate }
   | { readonly ok: false; readonly failure: FacadeFailure };
 
-async function captureFor(rootDir: string, config: HarnessConfig): Promise<CaptureOutcome> {
-  const storage = await resolveRecordStorage(rootDir, { storageNamespace: config.storageNamespace });
+async function captureFor(
+  rootDir: string,
+  config: HarnessConfig,
+  run: CandidateCommandRunner,
+  runGit: (cwd: string, args: readonly string[]) => Promise<string>,
+): Promise<CaptureOutcome> {
+  const storage = await resolveRecordStorage(rootDir, { storageNamespace: config.storageNamespace, runGit });
   const captureCandidate = createCandidateCapture({
     rootDir,
     config,
     workspaceId: storage.workspaceId,
     computeIdentity: withDeliverableIdentity(),
+    run,
   });
   const capture = await captureCandidate();
   if (!capture.ok) {

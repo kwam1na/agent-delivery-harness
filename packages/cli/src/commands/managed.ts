@@ -87,10 +87,26 @@ async function resolveManaged(context: CommandContext): Promise<ResolvedManaged 
   const active: string[] = [];
   for (const candidate of deliveries) {
     // The walking skeleton addresses the one delivery still in flight; a
-    // terminal journal stays durable but is not the CLI's subject.
+    // terminal journal stays durable but is not the CLI's subject. Terminal
+    // means a committed transition into a terminal state — never a substring
+    // of some model-authored payload.
     try {
       const journal = await readFile(path.join(namespace, "deliveries", candidate, "journal.jsonl"), "utf8");
-      if (!journal.includes('"to":"completed"') && !journal.includes('"to":"cancelled"')) active.push(candidate);
+      const terminal = journal
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .some((line) => {
+          try {
+            const entry = JSON.parse(line) as { kind?: string; payload?: { to?: string } };
+            return (
+              entry.kind === "transition.committed" &&
+              ["completed", "cancelled", "failed"].includes(entry.payload?.to ?? "")
+            );
+          } catch {
+            return false;
+          }
+        });
+      if (!terminal) active.push(candidate);
     } catch {
       active.push(candidate);
     }

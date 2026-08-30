@@ -243,6 +243,15 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(authorized.ok, JSON.stringify(authorized)).toBe(true);
     if (!authorized.ok) return;
 
+    // A consumed takeover quarantines the prior workspace for real: no
+    // checkpoint operation runs until the authorized fresh worktree is bound,
+    // so a superseded-but-still-running task keeps no write path.
+    const quarantined = await facade.runSensor({ deliveryId });
+    expect(quarantined.ok).toBe(false);
+    if (!quarantined.ok) {
+      expect(quarantined.blockers[0]?.code).toBe("takeover_pending");
+    }
+
     worktreeB = path.join(scratch, "worktree-b");
     git(repoDir, "worktree", "add", "--quiet", "-b", authorized.takeoverBranchRef, worktreeB, authorized.targetBaseCommit);
     const rebound = await facade.bindWorkspace({
@@ -357,6 +366,24 @@ describe("the thin one-handoff walking skeleton", () => {
     });
     const poisoned = await facade.reduceReview({ deliveryId });
     expect(poisoned.ok).toBe(false); // the floor is not met by a re-invocation
+    if (!poisoned.ok) {
+      expect(poisoned.blockers[0]?.summary).toContain("same context digest");
+    }
+
+    // An attempt identity is single-use: the recorded findings-free verdict
+    // cannot be replaced by re-submitting under the same id.
+    const laundered = await facade.submitReviewAttempt({
+      deliveryId,
+      attemptId: "attempt-r2-outcome",
+      lensId: "lens.outcome-correctness",
+      verdict: "approved",
+      contextBytes: "a different context under a reused identity",
+      artifactBytes: "approved (laundered)",
+    });
+    expect(laundered.ok).toBe(false);
+    if (!laundered.ok) {
+      expect(laundered.blockers[0]?.code).toBe("duplicate_attempt");
+    }
 
     await facade.submitReviewAttempt({
       deliveryId,
@@ -487,6 +514,34 @@ describe("the thin one-handoff walking skeleton", () => {
     for (const text of [explained.blocker?.summary ?? "", explained.blocker?.remediation ?? ""]) {
       expect(text).not.toMatch(/--import|tsx|hook-main|managed-delivery\.ts|node /);
     }
+
+    // The remediation the blocker advertises actually works: an authorized
+    // takeover into a fresh worktree resumes the blocked delivery at its last
+    // trustworthy checkpoint.
+    const resumeTakeover = await facade.presentTakeover({ deliveryId: confirmed.deliveryId, expiry: EXPIRY });
+    expect(resumeTakeover.ok, JSON.stringify(resumeTakeover)).toBe(true);
+    if (!resumeTakeover.ok) return;
+    const resumeAuthorized = await facade.confirmTakeover({
+      deliveryId: confirmed.deliveryId,
+      echo: operatorEcho(resumeTakeover.channelPath),
+    });
+    expect(resumeAuthorized.ok, JSON.stringify(resumeAuthorized)).toBe(true);
+    if (!resumeAuthorized.ok) return;
+    const worktreeD = path.join(scratch, "worktree-d");
+    git(repoDir, "worktree", "add", "--quiet", "-b", resumeAuthorized.takeoverBranchRef, worktreeD, resumeAuthorized.targetBaseCommit);
+    const rebound = await facade.bindWorkspace({
+      deliveryId: confirmed.deliveryId,
+      worktreeDir: worktreeD,
+      hostTaskId: "host-task-4",
+      observedAt: LATER,
+      attestationExpiry: EXPIRY,
+    });
+    expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
+    const resumedStatus = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
+    expect(resumedStatus.ok, JSON.stringify(resumedStatus)).toBe(true);
+    if (!resumedStatus.ok) return;
+    expect(resumedStatus.state).toBe("planning"); // the last trustworthy checkpoint, not a dead end
+    expect(resumedStatus.nextCheckpoint).toMatchObject({ kind: "workflow-stage", stageId: "plan" });
 
     // Falsifiability of the intervention counter: a journaled operator-input
     // blocker moves it.

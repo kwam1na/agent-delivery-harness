@@ -15,6 +15,8 @@ export interface ExecInvocation {
   readonly command: string;
   readonly args: readonly string[];
   readonly cwd?: string;
+  /** Absent inherits the ambient environment; present replaces it entirely. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface ExecOutcome {
@@ -35,7 +37,12 @@ export function createExecPort(): ExecPort {
         execFile(
           invocation.command,
           [...invocation.args],
-          { cwd: invocation.cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+          {
+            cwd: invocation.cwd,
+            ...(invocation.env === undefined ? {} : { env: { ...invocation.env } }),
+            encoding: "utf8",
+            maxBuffer: 16 * 1024 * 1024,
+          },
           (error, stdout, stderr) => {
             const code =
               error === null

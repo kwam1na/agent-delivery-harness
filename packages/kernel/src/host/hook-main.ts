@@ -185,9 +185,10 @@ if (invokedDirectly()) {
       process.exitCode = code;
     })
     .catch(() => {
-      // A crashed hook must still fail closed: no output means no allow was
-      // ever printed, and PreToolUse without a decision defers to the host's
-      // own (denying) permission evaluation.
-      process.exitCode = 1;
+      // A crashed hook must still fail CLOSED. The session's own permission
+      // rules ALLOW the granted tools, so deferring would admit them with no
+      // admission recheck — exit 2 is the host's blocking hook outcome, and a
+      // crashed interceptor therefore denies rather than defers.
+      process.exitCode = 2;
     });
 }

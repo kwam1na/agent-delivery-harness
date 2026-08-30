@@ -162,6 +162,11 @@ export async function materializeProjection(input: MaterializeProjectionInput): 
     }
     for (const name of names) {
       if (!PROJECTION_ENTRY_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+      // Defense in depth under the digest pin: an entry name may never
+      // traverse out of the projection subtree.
+      if (name.startsWith("/") || name.split("/").some((segment) => segment === ".." || segment === "." || segment === "")) {
+        return fail("projection_write_failed", `archive entry ${JSON.stringify(name)} is not a normalized relative path — refusing`);
+      }
       const bytes = readArchiveEntry(archive, name);
       const target = path.join(projectionRoot, ...name.split("/"));
       await mkdir(path.dirname(target), { recursive: true });
