@@ -35,7 +35,7 @@ import {
   validateGrantAttestation,
   type GrantProfile,
 } from "../spine/grant.ts";
-import { SPINE_INSTANT, isAbsentByState } from "../spine/grammar.ts";
+import { SPINE_INSTANT, isAbsentByState, isSpineRecord } from "../spine/grammar.ts";
 
 // ── Denial vocabulary ───────────────────────────────────────────────────────
 
@@ -144,9 +144,6 @@ export type AdmissionDecision = AdmittedInvocation | DeniedInvocation;
 
 const deny = (code: AdmissionDenialCode, message: string): AdmissionDenial => ({ code, message });
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 /** Attested member equals the expected value — absent-by-state never matches a real expectation. */
 const bound = (attested: unknown, expected: string | number): boolean =>
   !isAbsentByState(attested) && attested === expected;
@@ -165,7 +162,7 @@ export function evaluateHostAdmission(
 ): AdmissionDecision {
   const denials: AdmissionDenial[] = [];
 
-  if (!isRecord(expectation) || !GRANT_PROFILES.includes(expectation.profile) || !SPINE_INSTANT.test(expectation.observedAt ?? "")) {
+  if (!isSpineRecord(expectation) || !GRANT_PROFILES.includes(expectation.profile) || !SPINE_INSTANT.test(expectation.observedAt ?? "")) {
     return { admitted: false, denials: [deny("malformed_expectation", "the binding's own expectation is not well-formed; nothing can be admitted against it")] };
   }
   if (grant === undefined || grant === null) {
@@ -270,6 +267,17 @@ export function evaluateHostAdmission(
 /** The prefix every operator-confirmation operation lives under (D15). */
 export const CONFIRMATION_OPERATION_PREFIX = "operator-confirmation.";
 
+/**
+ * Case-folded, and the bare family name counts too: the exclusion holds for
+ * "operator-confirmation" itself and for any case variant, so a grant whose
+ * bytes smuggle a confirmation operation under a different spelling still
+ * cannot open it.
+ */
+const isConfirmationOperation = (name: string): boolean => {
+  const folded = name.toLowerCase();
+  return folded === "operator-confirmation" || folded.startsWith(CONFIRMATION_OPERATION_PREFIX);
+};
+
 export interface ToolInvocationRequest {
   /** The host tool / MCP capability name being invoked. */
   readonly capability: string;
@@ -288,14 +296,38 @@ export interface ToolDenial {
 
 export type ToolInvocationDecision = { readonly allowed: true } | { readonly allowed: false; readonly denials: readonly ToolDenial[] };
 
+/**
+ * Fail-closed normalized-relative check. Backslashes are refused outright —
+ * a workspace-relative grant path is always '/'-separated, and a backslash is
+ * how a '..' hides inside one segment on a host that treats '\' as a
+ * separator. NUL and drive-letter forms are refused for the same reason.
+ */
 const normalizedRelative = (p: string): boolean =>
-  p.length > 0 && !p.startsWith("/") && !p.split("/").some((segment) => segment === ".." || segment === "." || segment === "");
+  p.length > 0 &&
+  !p.startsWith("/") &&
+  !p.includes("\\") &&
+  !p.includes("\0") &&
+  !/^[A-Za-z]:/.test(p) &&
+  !p.split("/").some((segment) => segment === ".." || segment === "." || segment === "");
 
 const underAny = (p: string, prefixes: readonly string[]): boolean =>
   prefixes.some((prefix) => {
     const clean = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
     return p === clean || p.startsWith(`${clean}/`);
   });
+
+/**
+ * The protected-authority check widens to case-folded comparison: on a
+ * case-insensitive filesystem a case alias of a protected path still lands
+ * inside it, so the deny side matches case-insensitively while the allow
+ * side (writable paths) stays byte-exact — asymmetric, in the closed
+ * direction.
+ */
+const underAnyFolded = (p: string, prefixes: readonly string[]): boolean =>
+  underAny(
+    p.toLowerCase(),
+    prefixes.map((prefix) => prefix.toLowerCase()),
+  );
 
 /**
  * The interceptor decision for one tool invocation: re-evaluates admission
@@ -327,10 +359,7 @@ export function evaluateToolInvocation(
   const denials: ToolDenial[] = [];
   const { capability, operation, writes } = request;
 
-  if (
-    capability.startsWith(CONFIRMATION_OPERATION_PREFIX) ||
-    (operation !== undefined && operation.startsWith(CONFIRMATION_OPERATION_PREFIX))
-  ) {
+  if (isConfirmationOperation(capability) || (operation !== undefined && isConfirmationOperation(operation))) {
     denials.push({
       code: "confirmation_operation_excluded",
       message: "operator confirmations are excluded from every grant and served only by the binding-owned facade channel",
@@ -347,7 +376,7 @@ export function evaluateToolInvocation(
       denials.push({ code: "unnormalized_path", message: `write path "${write}" is not a normalized workspace-relative path` });
       continue;
     }
-    if (underAny(write, admission.protectedPaths)) {
+    if (underAnyFolded(write, admission.protectedPaths)) {
       denials.push({ code: "protected_path", message: `write path "${write}" is under a protected authority path` });
       continue;
     }
@@ -419,7 +448,13 @@ export function evaluateConfirmationEcho(
   if (rendered.consumed) {
     denials.push({ code: "challenge_consumed", message: "the challenge is single-use and was already consumed" });
   }
-  if (!SPINE_INSTANT.test(attempt.observedAt) || rendered.expiry <= attempt.observedAt) {
+  // Both sides of the lexicographic comparison must be the fixed-width
+  // grammar; a malformed expiry on the rendered challenge fails closed too.
+  if (
+    !SPINE_INSTANT.test(attempt.observedAt) ||
+    !SPINE_INSTANT.test(rendered.expiry) ||
+    rendered.expiry <= attempt.observedAt
+  ) {
     denials.push({ code: "challenge_expired", message: "the challenge expired at the caller's observation instant" });
   }
   if (attempt.presentedChallenge !== rendered.challenge) {

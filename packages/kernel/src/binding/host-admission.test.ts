@@ -101,12 +101,22 @@ describe("evaluateToolInvocation path scoping", () => {
     expect(decide(["src"]).allowed).toBe(true);
   });
 
-  it("absolute, dot-segment, and empty-segment paths fail closed as unnormalized", () => {
-    for (const write of ["/etc/passwd", "src/./x.ts", "src//x.ts", ""]) {
+  it("absolute, dot-segment, empty-segment, backslash, NUL, and drive-letter paths fail closed as unnormalized", () => {
+    for (const write of ["/etc/passwd", "src/./x.ts", "src//x.ts", "", "src/..\\..\\.git/config", "src\\x.ts", "C:/anything", "src/a\0b"]) {
       const decision = decide([write]);
-      expect(decision.allowed, write).toBe(false);
+      expect(decision.allowed, JSON.stringify(write)).toBe(false);
       if (!decision.allowed) expect(decision.denials[0]?.code).toBe("unnormalized_path");
     }
+  });
+
+  it("a case alias of a protected path is denied, while the writable side stays byte-exact", () => {
+    const aliased = decide([".GIT/hooks/pre-commit"]);
+    expect(aliased.allowed).toBe(false);
+    if (!aliased.allowed) expect(aliased.denials[0]?.code).toBe("protected_path");
+    // Case variance never widens the allow side: 'SRC' is not 'src'.
+    const caseWritable = decide(["SRC/x.ts"]);
+    expect(caseWritable.allowed).toBe(false);
+    if (!caseWritable.allowed) expect(caseWritable.denials[0]?.code).toBe("write_outside_grant");
   });
 
   it("one bad path denies the whole invocation", () => {
@@ -114,9 +124,28 @@ describe("evaluateToolInvocation path scoping", () => {
     expect(decision.allowed).toBe(false);
     if (!decision.allowed) expect(decision.denials.map((d) => d.code)).toContain("protected_path");
   });
+
+  it("the confirmation exclusion covers the bare family name and case variants", () => {
+    for (const capability of ["operator-confirmation", "Operator-Confirmation.takeover-authorization", "OPERATOR-CONFIRMATION.CONTRACT-CONFIRMATION"]) {
+      const decision = evaluateToolInvocation(expectation, grant, attestation, { capability });
+      expect(decision.allowed, capability).toBe(false);
+      if (!decision.allowed) {
+        expect(decision.denials.map((d) => d.code)).toContain("confirmation_operation_excluded");
+      }
+    }
+  });
 });
 
 describe("evaluateConfirmationEcho totality", () => {
+  it("a malformed rendered expiry fails closed as expired", () => {
+    const decision = evaluateConfirmationEcho(
+      { channelId: "ch-1", channelOpen: true, interactive: true, challenge: "c-1", consumed: false, expiry: "TBD" },
+      { presentedChallenge: "c-1", presentedOnChannelId: "ch-1", observedAt: "2026-08-30T12:00:00Z", viaModelVisibleSurface: false, interactive: true },
+    );
+    expect(decision.completed).toBe(false);
+    if (!decision.completed) expect(decision.denials.map((d) => d.code)).toEqual(["challenge_expired"]);
+  });
+
   it("accumulates every failing condition", () => {
     const decision = evaluateConfirmationEcho(
       { channelId: "ch-1", channelOpen: false, interactive: true, challenge: "c-1", consumed: true, expiry: "2026-08-30T12:00:00Z" },

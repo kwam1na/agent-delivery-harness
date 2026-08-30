@@ -483,6 +483,27 @@ describe("rule d1 — true purity", () => {
     );
   });
 
+  it("rejects the process-spawning module inside the binding — the binding can never launch an agent child", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/binding/host-admission.ts": `import { spawn } from "node:child_process";\nexport const launch = (): unknown => spawn("claude", ["--print"]);\n`,
+      },
+      "packages/kernel/src/binding/host-admission.ts",
+    );
+  });
+
+  it("rejects a binding import off its subdirectory-shaped allowlist — spine/grant.ts is in, the evidence validator is not", () => {
+    const findings = expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/binding/host-admission.ts": `import { CODES } from "../validator/codes.ts";\nexport const admissible = (): string => CODES[0];\n`,
+      },
+      "packages/kernel/src/binding/host-admission.ts",
+    );
+    expect(findings[0]?.message).toContain("validator/codes.ts");
+  });
+
   it("rejects a relative import that resolves to nothing", () => {
     const findings = expectFalsified(
       "d1-kernel-purity",

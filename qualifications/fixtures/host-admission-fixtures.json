@@ -3,7 +3,12 @@
   "description": "Frozen fixtures for the trusted host-control binding's model-external admission decisions. Grants and attestations use the contract spine's frozen shapes; every attestation digest is recomputed by the sensor test, so a fixture that stops matching its own bytes fails the suite.",
   "grantBindings": {
     "validCheckpoint": "checkpointGrant",
+    "confirmationListing": "confirmationListingGrant",
     "forgedDigest": null,
+    "wrongHostVersion": "checkpointGrant",
+    "wrongInstallation": "checkpointGrant",
+    "wrongActiveProfile": "checkpointGrant",
+    "wrongIntakeDraft": "intakeGrant",
     "staleFence": "checkpointGrant",
     "siblingDelivery": "checkpointGrant",
     "wrongProjection": "checkpointGrant",
@@ -109,6 +114,32 @@
       ],
       "protectedPaths": [],
       "forbiddenOperations": []
+    },
+    "confirmationListingGrant": {
+      "spec": "execution-grant/1",
+      "profile": "checkpoint",
+      "allowedCapabilities": [
+        "fs.read",
+        "operator-confirmation.contract-confirmation"
+      ],
+      "writablePaths": [
+        "src"
+      ],
+      "protectedPaths": [
+        ".git"
+      ],
+      "forbiddenOperations": []
+    },
+    "malformedGrantMissingWritable": {
+      "spec": "execution-grant/1",
+      "profile": "checkpoint",
+      "allowedCapabilities": [
+        "fs.read"
+      ],
+      "protectedPaths": [
+        ".git"
+      ],
+      "forbiddenOperations": []
     }
   },
   "attestations": {
@@ -117,6 +148,22 @@
       "profile": "checkpoint",
       "hostVersion": "fixture-host/1.0.0",
       "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "confirmationListing": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "9f1a0b1fb4e50775c153b075f927f427516e590fed31789dae98947df240df6d",
       "productTrustRevocationEpoch": 3,
       "expiry": "2026-08-30T12:05:00Z",
       "intakeDraftId": "absent-by-state",
@@ -143,6 +190,70 @@
       "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
       "registeringInstallationId": "install-fixture-01",
       "activeProfile": "default"
+    },
+    "wrongHostVersion": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/9.9.9",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "wrongInstallation": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-99",
+      "activeProfile": "default"
+    },
+    "wrongActiveProfile": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "some-other-profile"
+    },
+    "wrongIntakeDraft": {
+      "spec": "grant-attestation/1",
+      "profile": "intake",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "52450683176c7543e18a4e516f02604272dc5d6d492e9ce2da37cb42d5f308a6",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "intake-fixture-99",
+      "deliveryId": "absent-by-state",
+      "invocationFence": "absent-by-state",
+      "workspaceId": "absent-by-state",
+      "projectionDigest": "absent-by-state",
+      "discoveryConfigurationDigest": "absent-by-state",
+      "registeringInstallationId": "absent-by-state",
+      "activeProfile": "absent-by-state"
     },
     "staleFence": {
       "spec": "grant-attestation/1",
@@ -469,13 +580,69 @@
       }
     },
     {
+      "id": "malformed-grant-fails-closed",
+      "expectation": "checkpoint",
+      "grant": "malformedGrantMissingWritable",
+      "attestation": "validCheckpoint",
+      "expect": {
+        "denials": [
+          "malformed_grant"
+        ]
+      }
+    },
+    {
+      "id": "foreign-host-version-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongHostVersion",
+      "expect": {
+        "denials": [
+          "host_version_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "foreign-installation-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongInstallation",
+      "expect": {
+        "denials": [
+          "installation_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "foreign-active-profile-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongActiveProfile",
+      "expect": {
+        "denials": [
+          "active_profile_mismatch"
+        ]
+      }
+    },
+    {
       "id": "intake-attestation-for-wrong-draft-rejected",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "wrongIntakeDraft",
+      "expect": {
+        "denials": [
+          "intake_draft_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "checkpoint-attestation-on-intake-expectation-rejected",
       "expectation": "intake",
       "grant": "intakeGrant",
       "attestation": "validCheckpoint",
       "expect": {
         "denials": [
-          "profile_mismatch"
+          "profile_mismatch",
+          "grant_digest_mismatch"
         ]
       }
     }
@@ -608,6 +775,40 @@
       }
     },
     {
+      "id": "backslash-traversal-fails-closed",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          "src/..\\..\\.git/config"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "unnormalized_path"
+        ]
+      }
+    },
+    {
+      "id": "case-aliased-protected-path-denied",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          ".Git/hooks/pre-commit"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
       "id": "model-minted-confirmation-denied",
       "expectation": "checkpoint",
       "grant": "checkpointGrant",
@@ -629,6 +830,34 @@
       "request": {
         "capability": "shell.exec",
         "operation": "operator-confirmation.takeover-authorization"
+      },
+      "expect": {
+        "denials": [
+          "confirmation_operation_excluded"
+        ]
+      }
+    },
+    {
+      "id": "confirmation-operation-denied-even-when-grant-lists-it",
+      "expectation": "checkpoint",
+      "grant": "confirmationListingGrant",
+      "attestation": "confirmationListing",
+      "request": {
+        "capability": "operator-confirmation.contract-confirmation"
+      },
+      "expect": {
+        "denials": [
+          "confirmation_operation_excluded"
+        ]
+      }
+    },
+    {
+      "id": "case-variant-confirmation-operation-denied",
+      "expectation": "checkpoint",
+      "grant": "confirmationListingGrant",
+      "attestation": "confirmationListing",
+      "request": {
+        "capability": "Operator-Confirmation.Contract-Confirmation"
       },
       "expect": {
         "denials": [
@@ -689,7 +918,41 @@
       "request": {
         "capability": "fs.read",
         "writes": [
-          "journal/entries.jsonl"
+          ".delivery/journal/entries.jsonl"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "intake-turn-cannot-write-product-namespaces",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "request": {
+        "capability": "fs.read",
+        "writes": [
+          ".delivery/namespaces/registration.json"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "intake-turn-write-outside-any-grant-path-rejected",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "request": {
+        "capability": "fs.read",
+        "writes": [
+          "notes/scratch.md"
         ]
       },
       "expect": {

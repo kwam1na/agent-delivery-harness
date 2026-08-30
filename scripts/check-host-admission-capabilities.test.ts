@@ -30,11 +30,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   HOST_ACTIVITY_STATES,
-  digestCanonical,
+  SPINE_INSTANT,
   evaluateConfirmationEcho,
   evaluateHostAdmission,
   evaluateToolInvocation,
   assertionLaneAvailability,
+  grantDigest,
   validateExecutionGrant,
   validateGrantAttestation,
   type AdmissionExpectation,
@@ -70,7 +71,8 @@ const record = readJson("qualifications/host-admission-capabilities.json");
 const fixtures = readJson("qualifications/fixtures/host-admission-fixtures.json");
 
 const VERIFICATION_KINDS = ["live-probe", "recorded-observation", "fixture"] as const;
-const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+// The provenance-instant grammar is the spine's, not a hand copy.
+const INSTANT = SPINE_INSTANT;
 
 const hosts: any[] = record.hosts;
 const hostById = new Map<string, any>(hosts.map((h) => [h.hostId, h]));
@@ -209,35 +211,53 @@ describe("host-admission capability record document", () => {
 });
 
 describe("frozen admission fixtures", () => {
-  it("binds every attestation to the exact bytes of its declared grant", () => {
+  it("binds every attestation to the exact bytes of its declared grant — none escapes the registry", () => {
+    // Bidirectional: every attestation has a binding entry, every binding
+    // entry has an attestation. An attestation outside the registry could
+    // carry any digest it liked.
+    expect(Object.keys(fixtures.attestations).sort()).toEqual(Object.keys(fixtures.grantBindings).sort());
     for (const [name, binding] of Object.entries<any>(fixtures.grantBindings)) {
       const attestation = fixtures.attestations[name];
-      expect(attestation, `attestation ${name} vanished`).toBeDefined();
       if (binding === null) {
         // A forged digest must not accidentally equal any fixture grant.
         for (const grant of Object.values(fixtures.grants)) {
-          expect(attestation.grantDigest).not.toBe(digestCanonical(grant));
+          expect(attestation.grantDigest).not.toBe(grantDigest(grant));
         }
         continue;
       }
       const grant = fixtures.grants[binding];
       expect(grant, `attestation ${name} binds unknown grant ${binding}`).toBeDefined();
-      expect(attestation.grantDigest, `attestation ${name} digest drift`).toBe(digestCanonical(grant));
+      expect(attestation.grantDigest, `attestation ${name} digest drift`).toBe(grantDigest(grant));
     }
   });
 
   it("keeps the fixture shapes on the frozen spine contracts", () => {
+    // Entries named malformed* exist to be rejected; everything else must be
+    // exactly on the frozen contract.
     for (const [name, grant] of Object.entries(fixtures.grants)) {
-      expect(validateExecutionGrant(grant).ok, `grant ${name} rejected by the spine`).toBe(true);
+      expect(validateExecutionGrant(grant).ok, `grant ${name}`).toBe(!name.startsWith("malformed"));
     }
-    expect(validateGrantAttestation(fixtures.attestations.validCheckpoint).ok).toBe(true);
-    expect(validateGrantAttestation(fixtures.attestations.validIntake).ok).toBe(true);
-    expect(validateGrantAttestation(fixtures.attestations.malformedMissingWorkspace).ok).toBe(false);
+    for (const [name, attestation] of Object.entries(fixtures.attestations)) {
+      expect(validateGrantAttestation(attestation).ok, `attestation ${name}`).toBe(!name.startsWith("malformed"));
+    }
   });
 
-  const expectation = (name: string): AdmissionExpectation => fixtures.expectations[name];
-  const grantOf = (ref: string | null): unknown => (ref === null ? null : fixtures.grants[ref]);
-  const attestationOf = (ref: string | null): unknown => (ref === null ? null : fixtures.attestations[ref]);
+  // A mistyped fixture reference must fail loudly, not degrade into a
+  // missing-input denial that happens to satisfy a deny-case.
+  const expectation = (name: string): AdmissionExpectation => {
+    expect(fixtures.expectations[name], `unknown expectation ref ${name}`).toBeDefined();
+    return fixtures.expectations[name];
+  };
+  const grantOf = (ref: string | null): unknown => {
+    if (ref === null) return null;
+    expect(fixtures.grants[ref], `unknown grant ref ${ref}`).toBeDefined();
+    return fixtures.grants[ref];
+  };
+  const attestationOf = (ref: string | null): unknown => {
+    if (ref === null) return null;
+    expect(fixtures.attestations[ref], `unknown attestation ref ${ref}`).toBeDefined();
+    return fixtures.attestations[ref];
+  };
 
   it("admission cases decide exactly as frozen", () => {
     for (const c of fixtures.admissionCases) {
