@@ -1,0 +1,109 @@
+/**
+ * CHARACTERIZATION of the existing `HarnessConfig` loader — captured GREEN
+ * before any policy-compiler code existed in this module, so the admission
+ * projection is later proven against observed behavior rather than remembered
+ * behavior. The fixture mirrors the shape of a real adopting configuration
+ * (this repository's own gate): one obligation, one provider, consumer-owned
+ * identity token, defaults left to the loader.
+ *
+ * The characterized facts the projection relies on:
+ *   - `validateHarnessConfig` accepts the shape and fills the three defaults;
+ *   - unknown members reject (`config_unknown_member`) — the loader is a
+ *     closed grammar, so embedding it in the policy document keeps the
+ *     document closed;
+ *   - duplicate obligation ids reject (`config_duplicate_id`);
+ *   - a dangling provider reference rejects (`config_dangling_provider`);
+ *   - normalization is deterministic: validating twice yields deep-equal
+ *     configs, so a projected config can be digest-bound.
+ */
+import { describe, expect, it } from "vitest";
+import { validateHarnessConfig, type HarnessConfigInput } from "../config.ts";
+
+/** A repo-shaped admission gate, shared with the projection suite. */
+export const admissionFixture = (): HarnessConfigInput =>
+  ({
+    gateId: "adopter.pr-admission",
+    acceptedEnvelopeSpecs: ["delivery-evidence/1"],
+    identityVersions: ["adopter-tree/v1"],
+    computingIdentityVersion: "adopter-tree/v1",
+    reviewNeutral: [{ prefix: "docs/reports/" }, { prefix: "delivery/records/" }],
+    recordNeutral: [{ prefix: "delivery/records/" }],
+    pathClassification: {
+      generated: [],
+      test: [{ kind: "glob", value: "**/*.test.ts" }],
+      lockfile: [{ kind: "glob", value: "**/package-lock.json" }],
+    },
+    sensitivePaths: [{ id: "gate-kernel", patterns: [{ kind: "prefix", value: "src/" }] }],
+    activationThreshold: 1,
+    providers: [{ id: "adopter.review-provider", findingCodes: [] }],
+    agentEnvSignals: ["CLAUDE_CODE"],
+    ciPolicies: [{ id: "github-actions", requiredEnv: [{ variable: "CI", equals: "true" }] }],
+    ciPolicyEnvKey: "ADOPTER_CI_POLICY",
+    preparationWiringPaths: ["harness.config.ts"],
+    obligations: [
+      {
+        id: "review.green",
+        activation: { kind: "relevant_change" },
+        freshness: "exact_candidate",
+        providers: ["adopter.review-provider"],
+        acceptedPayloadSpecs: ["review.green/1"],
+        allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
+        humanWaiverAllowed: true,
+        minimumAttestationLevel: "self",
+        ciDelegationPolicyIds: [],
+        remediation: {
+          default: [{ id: "run-the-review", kind: "manual_action", summary: "Run the review and submit its manifest." }],
+        },
+        waivableCodes: ["review_evidence_missing", "stale_evidence", "evidence_not_green", "unresolved_actionable_findings"],
+        nonWaivableCodes: [
+          "ambiguous_records",
+          "malformed_record",
+          "unknown_provider",
+          "live_provider_missing",
+          "ambiguous_live_provider",
+          "live_provider_failed",
+          "resolution_not_allowed",
+        ],
+      },
+    ],
+    deliveryRecordPath: "delivery/records/record.json",
+  }) as HarnessConfigInput;
+
+const blockerCodes = (verdict: ReturnType<typeof validateHarnessConfig>): readonly string[] =>
+  verdict.ok ? [] : verdict.blockers.map((blocker) => blocker.code);
+
+describe("characterization: the existing HarnessConfig loader", () => {
+  it("accepts the adopter-shaped input and fills the three documented defaults", () => {
+    const verdict = validateHarnessConfig(admissionFixture());
+    expect(verdict.ok, JSON.stringify(verdict)).toBe(true);
+    if (!verdict.ok) return;
+    expect(verdict.config.baseRef).toBe("origin/main");
+    expect(verdict.config.storageNamespace).toBe("delivery-harness/");
+    expect(verdict.config.deliveryRecordVerification).toEqual({ baseMovement: "stale" });
+  });
+
+  it("is a closed grammar: an unknown member rejects", () => {
+    const verdict = validateHarnessConfig({ ...admissionFixture(), surprise: true });
+    expect(blockerCodes(verdict)).toContain("config_unknown_member");
+  });
+
+  it("rejects duplicate obligation ids", () => {
+    const fixture = admissionFixture();
+    const verdict = validateHarnessConfig({ ...fixture, obligations: [...fixture.obligations, fixture.obligations[0]] });
+    expect(blockerCodes(verdict)).toContain("config_duplicate_id");
+  });
+
+  it("rejects an obligation naming a provider the config never registered", () => {
+    const fixture = admissionFixture();
+    const broken = { ...fixture.obligations[0], providers: ["nobody"] };
+    const verdict = validateHarnessConfig({ ...fixture, obligations: [broken] });
+    expect(blockerCodes(verdict)).toContain("config_dangling_provider");
+  });
+
+  it("normalizes deterministically — the same input validates to deep-equal configs", () => {
+    const first = validateHarnessConfig(admissionFixture());
+    const second = validateHarnessConfig(admissionFixture());
+    expect(first.ok && second.ok).toBe(true);
+    if (first.ok && second.ok) expect(first.config).toEqual(second.config);
+  });
+});
