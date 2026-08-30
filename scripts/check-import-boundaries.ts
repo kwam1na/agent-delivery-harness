@@ -181,6 +181,33 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     d1Allowlist: ["spine/grant.ts", "spine/grammar.ts"],
     d1SiblingAllowance: true,
   },
+  // The local composition substrate. The manifest grammar and the trust-store
+  // decisions are pure; the installer is the substrate's one filesystem
+  // module (registered for the time ban — install, activation, and trust
+  // decisions never consult a clock).
+  {
+    id: "substrate-manifest",
+    path: "packages/kernel/src/substrate/manifest.ts",
+    kind: "file",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["canonical.ts", "digest.ts", "spine/composition.ts", "spine/grammar.ts"],
+  },
+  {
+    id: "substrate-trust-store",
+    path: "packages/kernel/src/substrate/trust-store.ts",
+    kind: "file",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["spine/composition.ts"],
+  },
+  {
+    id: "substrate-installer",
+    path: "packages/kernel/src/substrate/installer.ts",
+    kind: "file",
+    rules: ["e"],
+    status: "present",
+  },
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "present" },
   { id: "kernel-context", path: "packages/kernel/src/context.ts", kind: "file", rules: ["d1"], status: "present" },
   { id: "kernel-recorder", path: "packages/kernel/src/recorder.ts", kind: "file", rules: ["d2", "e"], status: "present" },
