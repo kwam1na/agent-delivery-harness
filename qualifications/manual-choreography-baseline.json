@@ -1,0 +1,166 @@
+{
+  "schemaVersion": "manual-choreography-baseline/1",
+  "capturedAt": "2026-08-30T11:05:00Z",
+  "purpose": "The frozen quantitative baseline of manual delivery choreography on the proving host: operator-intervention counts and blocked-versus-progressing wall-clock shares for three real Athena deliveries executed with the current skills/harness choreography. The later single-host shadow comparison must measure a like-for-like set (same mix and count) against these numbers.",
+  "plan": {
+    "repository": "athena",
+    "path": "docs/plans/2026-08-29-001-feat-managed-agent-delivery-system-plan.md",
+    "commit": "e44ce9cacbbbcb7e8370aee773ad1f0e40ee7548",
+    "sha256": "1c0c26165910074bd9ee3012e6c7f8a3f649b5c41f27e3d99a15e80b2aa92bf9"
+  },
+  "provingHost": "claude-code",
+  "operatorInterventionRubric": {
+    "source": {
+      "repository": "athena",
+      "path": "docs/plans/2026-08-29-001-feat-managed-agent-delivery-system-plan.md",
+      "section": "the walking-skeleton unit's sensor text",
+      "planSha256": "1c0c26165910074bd9ee3012e6c7f8a3f649b5c41f27e3d99a15e80b2aa92bf9"
+    },
+    "text": "an operator-intervention counter that must remain zero while the active host can proceed — an intervention is any human input the delivery cannot proceed without while the host could otherwise continue (answering a product question, re-prompting or restarting the host, manual stage invocation, or a permission grant beyond the applied admission grant); host-native prompts already covered by the admission grant, D15 operator confirmations (the single contract confirmation and takeover authorizations), and policy-required D15 sensitive approvals are policy-required interruptions tracked separately, not interventions.",
+    "sha256": "b269d39f3308ba176d11231e206c105ca8e96102fa486cc0222692621a53f38a"
+  },
+  "reRecordTriggers": [
+    "Host grading moves the proving host away from claude-code.",
+    "The operator-intervention rubric text in the plan is amended (its sha256 here stops matching)."
+  ],
+  "categoryDefinitions": {
+    "code": "The deliverable changes product or application behavior.",
+    "docs": "The deliverable changes documentation or standing agent guidance only.",
+    "operations": "The deliverable changes the repository's delivery-operations machinery (gates, harness scripts, telemetry, remediation tooling) or performs an operational action."
+  },
+  "method": {
+    "evidence": "Claude Code session transcripts (JSONL event streams with per-event timestamps) for each delivery, cross-checked against the merged PR commits in the Athena repository.",
+    "scoring": [
+      "The delivery window opens at the operator's scoped handoff message and closes at the PR merge event.",
+      "An operator input is scored an intervention only when the host had stopped and the delivery could not proceed without it (re-prompting a stopped host, restarting after a host limit, manual stage invocation, answering a question the host was blocked on); operator inputs made while the host was actively progressing are recorded as steering or observation inputs, not interventions, matching the rubric's 'while the host could otherwise continue' boundary.",
+      "Blocked wall-clock is the sum, over interventions, of the idle gap from the host's last event to the operator input that restarted it (idle gaps are detected at 300-second granularity); all remaining window time is progressing, including waits on the host's own background tasks.",
+      "Policy-required interruptions are tracked separately per the rubric; the current choreography has no admission-grant, operator-confirmation, or sensitive-approval mechanism, so every scored event falls in the intervention or steering categories and the policy-required count is zero."
+    ],
+    "limitations": [
+      "Transcripts do not record silently granted host permission prompts, so intervention counts are lower bounds under the rubric's permission-grant clause.",
+      "The three deliveries ran on 2026-08-22 under the then-active vendored skills generation; they predate Athena's switch to the qualified portable core (2026-08-29). The orchestration choreography (repository execute skill, pr:athena, operator-chaperoned merge) is unchanged, and no post-switch delivery on the proving host exists to score.",
+      "The docs delivery ran nested inside the code delivery's session, so their wall-clock windows overlap; each window is scored independently."
+    ]
+  },
+  "mix": {
+    "code": 1,
+    "docs": 1,
+    "operations": 1,
+    "total": 3
+  },
+  "deliveries": [
+    {
+      "id": "athena-pr-783-harness-blockers",
+      "category": "operations",
+      "description": "Make Athena's fail-closed delivery-harness blockers typed and self-remediating (delivery-operations machinery: gate scripts, telemetry, remediation surfaces). The worktree carried prior implementation work from an earlier session; this window scores the proving-host delivery from its scoped handoff (complete, validate, review, merge) to the merged PR.",
+      "pullRequest": 783,
+      "mergeCommit": "7e7c047ca2a1faf3831f8e3b5626a7f881113ee2",
+      "evidence": {
+        "host": "claude-code",
+        "sessionId": "79a02c08-68e2-437b-8233-1d8237908f41",
+        "transcriptProject": "-Users-kwamina-athena"
+      },
+      "window": {
+        "startedAt": "2026-08-22T03:47:02Z",
+        "endedAt": "2026-08-22T10:25:48Z",
+        "windowSeconds": 23926
+      },
+      "score": {
+        "interventionCount": 2,
+        "interventions": [
+          {
+            "at": "2026-08-22T06:17:55Z",
+            "kind": "re-prompt",
+            "summary": "Host turn had ended after opening the PR; the operator re-stated the already-granted finish line to push the delivery through CI verification and merge.",
+            "blockedSecondsBefore": 1047
+          },
+          {
+            "at": "2026-08-22T08:44:57Z",
+            "kind": "host-restart",
+            "summary": "The host session limit stopped the task mid-delivery; the operator had to resume it manually once the limit reset.",
+            "blockedSecondsBefore": 7886
+          }
+        ],
+        "policyRequiredInterruptionCount": 0,
+        "policyRequiredInterruptions": [],
+        "steeringInputs": [
+          {
+            "at": "2026-08-22T05:09:37Z",
+            "summary": "Review-scope guidance issued while the host was actively iterating the review loop; the host could otherwise continue, so this is not an intervention under the rubric."
+          }
+        ],
+        "blockedSeconds": 8933,
+        "progressingSeconds": 14993,
+        "blockedShare": 0.3734
+      }
+    },
+    {
+      "id": "athena-pr-784-pos-sync-review-convergence",
+      "category": "code",
+      "description": "POS sync-review convergence: drawer freshness, conflict settlement, expense open-work, obsolete-drawer repair (product behavior).",
+      "pullRequest": 784,
+      "mergeCommit": "db9e21c71f691f4b74a9845b7edebc4915a46a88",
+      "evidence": {
+        "host": "claude-code",
+        "sessionId": "217226c7-3bad-4366-b724-1813982fc605",
+        "transcriptProject": "-Users-kwamina-athena--claude-worktrees-subagent-orchestration-v26-7f93a1"
+      },
+      "window": {
+        "startedAt": "2026-08-22T03:53:33Z",
+        "endedAt": "2026-08-22T06:29:16Z",
+        "windowSeconds": 9343
+      },
+      "score": {
+        "interventionCount": 0,
+        "interventions": [],
+        "policyRequiredInterruptionCount": 0,
+        "policyRequiredInterruptions": [],
+        "steeringInputs": [
+          {
+            "at": "2026-08-22T04:02:39Z",
+            "summary": "Operator question about worktree topology, answered while background implementers kept progressing."
+          },
+          {
+            "at": "2026-08-22T04:02:53Z",
+            "summary": "Operator follow-up about PR integration shape, answered while background implementers kept progressing."
+          }
+        ],
+        "blockedSeconds": 0,
+        "progressingSeconds": 9343,
+        "blockedShare": 0.0
+      }
+    },
+    {
+      "id": "athena-pr-782-review-scope-doctrine",
+      "category": "docs",
+      "description": "Encode the diff-scoped review doctrine into the repository's standing code-review guidance (documentation-only change).",
+      "pullRequest": 782,
+      "mergeCommit": "78fd049a20cf120826a54b61888ec44cdc65d352",
+      "evidence": {
+        "host": "claude-code",
+        "sessionId": "217226c7-3bad-4366-b724-1813982fc605",
+        "transcriptProject": "-Users-kwamina-athena--claude-worktrees-subagent-orchestration-v26-7f93a1"
+      },
+      "window": {
+        "startedAt": "2026-08-22T04:52:26Z",
+        "endedAt": "2026-08-22T05:38:11Z",
+        "windowSeconds": 2745
+      },
+      "score": {
+        "interventionCount": 0,
+        "interventions": [],
+        "policyRequiredInterruptionCount": 0,
+        "policyRequiredInterruptions": [],
+        "steeringInputs": [
+          {
+            "at": "2026-08-22T05:16:14Z",
+            "summary": "Operator scope amendment (record out-of-scope suggestions as deferred work) while auto-merge was armed; the wording was amended and the PR still merged on its own, so this is steering, not an intervention."
+          }
+        ],
+        "blockedSeconds": 0,
+        "progressingSeconds": 2745,
+        "blockedShare": 0.0
+      }
+    }
+  ]
+}

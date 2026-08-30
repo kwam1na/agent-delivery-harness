@@ -1,0 +1,541 @@
+{
+  "schemaVersion": "composition-baseline/1",
+  "capturedAt": "2026-08-30T11:05:00Z",
+  "purpose": "One versioned, executable statement of the current qualified module identities, behaviors, and ownership boundaries across the three repositories the managed delivery product composes, captured before any composition change. Each assertion is classified retained (the composition must preserve it), changed-by-this-plan (the composition replaces or supersedes it), or excluded (outside the composition baseline).",
+  "plan": {
+    "repository": "athena",
+    "path": "docs/plans/2026-08-29-001-feat-managed-agent-delivery-system-plan.md",
+    "commit": "e44ce9cacbbbcb7e8370aee773ad1f0e40ee7548",
+    "sha256": "1c0c26165910074bd9ee3012e6c7f8a3f649b5c41f27e3d99a15e80b2aa92bf9"
+  },
+  "classificationSemantics": {
+    "retained": "Behavior or identity the composition must preserve; weakening it requires an explicit requirements decision.",
+    "changed-by-this-plan": "A surface the composition plan deliberately replaces or supersedes; its current form is captured here as the compatibility floor.",
+    "excluded": "Outside the composition baseline; captured only to bound scope."
+  },
+  "repositories": {
+    "agentDeliveryHarness": {
+      "role": "Evidence kernel and fail-closed merge admission; becomes the adopter-facing managed product repository.",
+      "baselineCommit": "47eca5780548153852799bb4c088c5371085809c",
+      "packages": {
+        "@agent-delivery-harness/kernel": "0.1.0",
+        "@agent-delivery-harness/cli": "0.1.0",
+        "@agent-delivery-harness/conformance": "0.1.0",
+        "@agent-delivery-harness/mcp": "0.1.0",
+        "@agent-delivery-harness/action": "0.1.0"
+      },
+      "gateId": "delivery-harness.pr-admission",
+      "cliCommands": [
+        "prepare",
+        "review-context",
+        "submit-evidence",
+        "gate",
+        "record",
+        "verify",
+        "check"
+      ],
+      "absentDeliveryRunCommands": [
+        "start",
+        "resume",
+        "status",
+        "watch",
+        "next-checkpoint",
+        "submit-result",
+        "confirm",
+        "approve",
+        "request-cancellation",
+        "explain-blocker",
+        "update",
+        "rollback"
+      ],
+      "conformanceKit": {
+        "spec": "delivery-evidence/1",
+        "counts": {
+          "total": 89,
+          "accept": 8,
+          "reject": 81
+        },
+        "rejectionEvidenceVectors": [
+          "sub-1-raw-tree-changed",
+          "gen-1-unknown-envelope-member",
+          "env-6-unknown-identity-version",
+          "env-11-artifact-digest-mismatch",
+          "rg-4-approval-malformed"
+        ]
+      },
+      "skillsInteroperabilityPin": {
+        "releaseId": "core-v1",
+        "profile": "core",
+        "skillsCommit": "ddd04495d4fd5d8bac214cb4b81f9dd985d8dd0d",
+        "archiveSha256": "004bfcf1c8d245a75d9f696d9f1ac83af4b0e6f2c90a48e3927a916a5b8c5ef8",
+        "protocolVersion": "delivery-provider-rails/1"
+      }
+    },
+    "agentSkills": {
+      "role": "Portable workflow corpus and authenticated release lifecycle; becomes the mandatory internal workflow module.",
+      "baselineCommit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+      "profiles": [
+        "bootstrap",
+        "core",
+        "linear"
+      ],
+      "coreQualification": {
+        "releaseId": "core-v1",
+        "archiveSha256": "25dd462a818cf2134c08be27181ba123adfa74bf2c367884a411b8b664523fc6",
+        "metadataSha256": "e3b4904148b45df90937f2f383f1ef1e5cb0ba60a27291602edf89609c3a3ffa",
+        "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+        "scenarios": {
+          "passed": 12,
+          "required": 12
+        },
+        "assertionCount": 91
+      },
+      "providerQualification": {
+        "protocolVersion": "delivery-provider-rails/1",
+        "scenarios": {
+          "passed": 10,
+          "required": 10
+        },
+        "assertionCount": 47
+      },
+      "provenanceLockSha256": "12cebfaf0848f102931d6f1794cce5f79de58533678b9bcd6c8347dee5cb09ff"
+    },
+    "athena": {
+      "role": "Reference adopter and policy authority; contributes read-only baseline inputs and becomes a policy overlay.",
+      "planPinnedCommit": "539ae232f022bb78aac421fd8b4defbf51efa7e7",
+      "observedCommit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+      "activeGenerationSha256": "f8b39590bae786767cff1cfd849382884a0b66f12ef9978f752dbcb28c230f26",
+      "hostExposures": [
+        {
+          "host": "codex",
+          "root": ".agents/skills",
+          "mode": "relative-symlink"
+        },
+        {
+          "host": "claude-code",
+          "root": ".claude/skills",
+          "mode": "relative-symlink"
+        }
+      ],
+      "overlayClassificationCounts": {
+        "portable-candidate": 6,
+        "retained-overlay": 7,
+        "optional-adapter": 2,
+        "excluded": 3
+      },
+      "characterizationBaseline": {
+        "baselineId": "athena-portable-workflows-v1-2026-08-27",
+        "assertions": 34,
+        "scenarioFixtures": 7,
+        "readOnly": true
+      },
+      "mergeReadyAuthority": "bun run pr:athena"
+    }
+  },
+  "contractTokens": {
+    "envelopeSpec": "delivery-evidence/1",
+    "reviewPayloadSpec": "review.green/1",
+    "trackedRecordSpec": "delivery-record/1",
+    "providerRail": "delivery-provider-rails/1",
+    "kernelIdentityToken": "deliverable-tree/v1",
+    "trackedRecordIdentityToken": "delivery-harness-tree/v1",
+    "workflowGraph": "workflow-graph/1",
+    "profileSchema": "agent-skills-profile/1",
+    "attestationLevel": "self"
+  },
+  "workflowCheckpoints": {
+    "contract": "workflow-graph/1",
+    "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+    "stages": [
+      "intake",
+      "diagnose",
+      "plan",
+      "implement",
+      "review.acquire",
+      "review.reduce",
+      "publish.handoff",
+      "feedback.handoff",
+      "finish.verify",
+      "compound"
+    ]
+  },
+  "independentLifecycleBurden": {
+    "statement": "Three exact release identities, all named core-v1, currently coexist and disagree; every repository reconciles its own skills release and no single compatibility authority exists.",
+    "harnessInteroperabilityArchiveSha256": "004bfcf1c8d245a75d9f696d9f1ac83af4b0e6f2c90a48e3927a916a5b8c5ef8",
+    "athenaActiveGenerationSha256": "f8b39590bae786767cff1cfd849382884a0b66f12ef9978f752dbcb28c230f26",
+    "skillsCurrentQualificationArchiveSha256": "25dd462a818cf2134c08be27181ba123adfa74bf2c367884a411b8b664523fc6",
+    "assertionId": "independent-release-reconciliation"
+  },
+  "assertions": [
+    {
+      "id": "harness-baseline-commit",
+      "statement": "agent-delivery-harness main is 47eca5780548153852799bb4c088c5371085809c at capture, with `npm run check` green (typecheck, import/CLI inventory sensors, full Vitest suite).",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-delivery-harness",
+          "commit": "47eca5780548153852799bb4c088c5371085809c",
+          "source": "git rev-parse HEAD; npm run check",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "harness-package-identities",
+      "statement": "The workspace publishes exactly five packages — @agent-delivery-harness/{kernel,cli,conformance,mcp,action} at 0.1.0 — whose only runtime dependencies are sibling packages in the same scope (zero third-party runtime dependencies).",
+      "classification": "retained",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-cli-evidence-loop-only",
+      "statement": "The CLI surface is exactly the evidence loop — prepare, review-context, submit-evidence, gate, record, verify, plus the check preflight. It registers no scoped work, persists no delivery checkpoints, exposes no resume/status/approval operation, and actions no finish line.",
+      "classification": "changed-by-this-plan",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-provider-bridge-not-composed",
+      "statement": "Ordinary gate execution constructs no skills provider bridge: the configured review provider carries no rail command, and the exact agent-skills bridge exists only inside the interoperability qualification script.",
+      "classification": "changed-by-this-plan",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-evidence-rejection-authority",
+      "statement": "The delivery-evidence/1 conformance kit holds 89 vectors (8 accept, 81 reject) and rejects stale candidates (candidate drift after review) and malformed evidence (unknown envelope members, unknown identity versions, artifact digest mismatches, malformed reviewer approvals) by named vectors.",
+      "classification": "retained",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-envelope-and-record-tokens",
+      "statement": "Accepted evidence is the delivery-evidence/1 envelope with review.green/1 payloads; the tracked record is delivery-record/1 under the consumer-owned identity token delivery-harness-tree/v1 for gate delivery-harness.pr-admission.",
+      "classification": "retained",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-provider-rail-contract",
+      "statement": "The vendored neutral provider rail is delivery-provider-rails/1: version negotiation, ordered events, idempotency, cancellation, and fail-closed terminal states, qualified by the retained interoperability record's scenarios.",
+      "classification": "retained",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-exact-skills-pin",
+      "statement": "The interoperability qualification pins agent-skills release core-v1 at commit ddd04495d4fd5d8bac214cb4b81f9dd985d8dd0d with archive sha256 004bfcf1c8d245a75d9f696d9f1ac83af4b0e6f2c90a48e3927a916a5b8c5ef8, and the vendored fixture archive bytes match that digest.",
+      "classification": "changed-by-this-plan",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-l0-attestation-honesty",
+      "statement": "Evidence remains L0, workspace-scoped process and freshness evidence: every tracked delivery record attests at level 'self' and claims process discipline and freshness, never provenance.",
+      "classification": "retained",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "harness-no-product-lifecycle",
+      "statement": "The harness has no installable product generation, composition manifest, update journal, or rollback pointer; release checks are per-package npm publish dry-runs, and nothing is published to npm.",
+      "classification": "changed-by-this-plan",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-delivery-harness",
+          "commit": "47eca5780548153852799bb4c088c5371085809c",
+          "source": "scripts/check-release.ts; repository inspection (no install/update/rollback surface)",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "skills-baseline-commit",
+      "statement": "agent-skills main is 0de253bc3c5a6837590602b42194b9a7de2b3296 at capture. Registry validation and the 8 hostile registry-mutation sensors pass; the full unit suite passes 294 tests with the pinned jsonschema==4.23.0 test extra installed (without the extra, 252 tests run locally and the jsonschema-dependent modules fail to import).",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-skills",
+          "commit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+          "source": "python3 scripts/validate-registry.py; python3 tests/test_registry.py; python -m unittest discover -s tests -p 'test_*.py' (venv with jsonschema==4.23.0)",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "skills-release-identity",
+      "statement": "The core profile's current qualified release is core-v1: archive sha256 25dd462a818cf2134c08be27181ba123adfa74bf2c367884a411b8b664523fc6, metadata sha256 e3b4904148b45df90937f2f383f1ef1e5cb0ba60a27291602edf89609c3a3ffa, workflow-graph sha256 49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7; the core qualification passes 12/12 scenarios with 91 assertions.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-skills",
+          "commit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+          "source": "qualifications/core-v1.json",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "skills-provider-review-only",
+      "statement": "The skills delivery provider speaks delivery-provider-rails/1 and emits only review.green evidence (10/10 provider qualification scenarios, 47 assertions); it owns no workflow selection, agent invocation, durable recovery, repository policy, or broader lifecycle evidence.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-skills",
+          "commit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+          "source": "qualifications/provider-v1.json",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "skills-workflow-graph-pinned",
+      "statement": "The machine-readable workflow contract is workflow-graph/1 (workflows/delivery-v1.json) with ten stages and a stage-result schema; the composition plan pins this released contract rather than authoring a new one.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-skills",
+          "commit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+          "source": "workflows/delivery-v1.json; schemas/workflow-graph.schema.json; schemas/workflow-stage-result.schema.json",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "skills-transactional-lifecycle",
+      "statement": "The deterministic core archive installs through a transactional repository lifecycle with predecessor capture, and rollback restores the prior generation; proven by the repository's lifecycle, adoption, and receipt unit suites.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-skills",
+          "commit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+          "source": "tests/test_lifecycle.py; tests/test_adoption.py; tests/test_receipt.py (green in the full-suite run)",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "skills-host-projections",
+      "statement": "Fixed Codex and Claude Code projections expose one immutable repository-local generation to both hosts, and fresh sessions are required after projection activation.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-skills",
+          "commit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+          "source": "tests/test_host_exposure.py; AGENTS.md release-surface statement",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "skills-license-boundary",
+      "statement": "11 of 12 provenance-lock entries are LicenseRef-Athena-internal (1 NOASSERTION), so public distribution of bundled workflow bytes stays blocked pending an explicit license/provenance audit or relicensing.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "agent-skills",
+          "commit": "0de253bc3c5a6837590602b42194b9a7de2b3296",
+          "source": "provenance.lock.json license fields",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "athena-baseline-commits",
+      "statement": "The composition plan pins Athena main at 539ae232f022bb78aac421fd8b4defbf51efa7e7; observed main at capture is 5a6b8f71676486c1e4ab41efd4f5e201b7826b84 (three subsequent ordinary deliveries), with all portable baseline facts re-verified at the observed commit.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+          "source": "git rev-parse; bun run portable-baseline:check",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "athena-dual-host-exposure",
+      "statement": "Athena's active skills generation f8b39590bae786767cff1cfd849382884a0b66f12ef9978f752dbcb28c230f26 is exposed to Codex (.agents/skills) and Claude Code (.claude/skills) as relative symlinks into one immutable generation root: both hosts discover the same workflow bytes.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+          "source": ".agent-skills/active.json exposures; .agent-skills/current -> generations/f8b39590…; bun run portable-canary:check",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "athena-predecessor-rollback",
+      "statement": "Athena retains predecessor and batch-predecessor pointers plus the prior generation bytes, keeping rollback executable and source-independent; the canary and batch adoption sensors rehearse restoration with unrelated bytes preserved.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+          "source": "bun run portable-canary:check; bun run portable-batches:check (rollback rehearsals: restored=true, source-independent=true, unrelated-bytes-preserved=true)",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "athena-overlay-classifications",
+      "statement": "Athena's overlay map (baseline athena-portable-workflows-v1-2026-08-27, read-only) classifies 6 portable-candidate, 7 retained-overlay, 2 optional-adapter, and 3 excluded slices; the characterization baseline carries 34 assertions and 7 scenario fixtures, and the baseline sensor validates 31 source-backed assertions, 24 bounded-closure members, and 145 out-of-scope discovery files.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+          "source": ".agents/portable-overlay-map.json; .agents/characterization-baseline.json; bun run portable-baseline:check",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "athena-merge-ready-authority",
+      "statement": "`bun run pr:athena` (the delivery-run orchestration chain: prepare, preflight, mechanical, validate, record-proof) remains Athena's authoritative merge-ready gate; no other surface admits an Athena merge.",
+      "classification": "retained",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+          "source": "package.json pr:athena script chain",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "athena-vendored-system-bytes",
+      "statement": "Athena tracks the full workflow runtime, skill generations, and harness machinery in-repository and operates their lifecycle (selection, activation, rollback) itself, in addition to owning repository policy.",
+      "classification": "changed-by-this-plan",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+          "source": ".agent-skills/ generations and pointers; .agents/skills/ vendored corpus; scripts/pr-athena-*.ts",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "independent-release-reconciliation",
+      "statement": "Three exact release identities all named core-v1 coexist and disagree: the harness interoperability pin (archive 004bfcf1…, skills commit ddd04495…), Athena's active generation (f8b39590…), and the skills-main qualification (25dd462a… at 0de253b…). Each repository reconciles its own skills release; no single compatibility authority exists.",
+      "classification": "changed-by-this-plan",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "manual-choreography-baseline-frozen",
+      "statement": "The quantitative manual-choreography baseline (operator-intervention counts and blocked-versus-progressing wall-clock on one code, one docs, and one operations Athena delivery, scored on Claude Code under the plan's operator-intervention rubric) is frozen in qualifications/manual-choreography-baseline.json.",
+      "classification": "changed-by-this-plan",
+      "verification": {
+        "kind": "executable",
+        "suite": "scripts/check-composition-baseline.test.ts"
+      }
+    },
+    {
+      "id": "athena-domain-behavior-excluded",
+      "statement": "Athena domain and product behavior — the overlay map's excluded classes (domain or dependency material outside the bounded portable corpus) and every application surface behind them — is outside this composition baseline.",
+      "classification": "excluded",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "5a6b8f71676486c1e4ab41efd4f5e201b7826b84",
+          "source": ".agents/portable-overlay-map.json classificationSemantics.excluded",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    },
+    {
+      "id": "hosted-and-signing-surfaces-excluded",
+      "statement": "Hosted control-plane services, fleet administration, cryptographic release signing, and hosted revocation authorities are outside this baseline; each is deferred behind the explicit trigger the composition plan records.",
+      "classification": "excluded",
+      "verification": {
+        "kind": "recorded-observation",
+        "provenance": {
+          "repository": "athena",
+          "commit": "e44ce9cacbbbcb7e8370aee773ad1f0e40ee7548",
+          "source": "docs/plans/2026-08-29-001-feat-managed-agent-delivery-system-plan.md (out-of-scope enumeration)",
+          "observedAt": "2026-08-30T11:05:00Z"
+        }
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "skills-archive-installs-and-rolls-back",
+      "statement": "The current skills archive installs and rolls back.",
+      "assertionIds": [
+        "skills-transactional-lifecycle",
+        "athena-predecessor-rollback"
+      ]
+    },
+    {
+      "id": "both-hosts-discover-the-same-workflow-bytes",
+      "statement": "Codex and Claude Code discover the same workflow bytes.",
+      "assertionIds": [
+        "skills-host-projections",
+        "athena-dual-host-exposure"
+      ]
+    },
+    {
+      "id": "harness-rejects-stale-or-malformed-evidence",
+      "statement": "The harness rejects stale or malformed evidence.",
+      "assertionIds": [
+        "harness-evidence-rejection-authority",
+        "harness-l0-attestation-honesty"
+      ]
+    },
+    {
+      "id": "athena-merge-ready-authority-stands",
+      "statement": "Athena's pr:athena remains the merge-ready authority.",
+      "assertionIds": [
+        "athena-merge-ready-authority"
+      ]
+    },
+    {
+      "id": "ordinary-harness-execution-cannot-own-a-delivery-run",
+      "statement": "Ordinary harness execution cannot yet own a full delivery run.",
+      "assertionIds": [
+        "harness-cli-evidence-loop-only",
+        "harness-provider-bridge-not-composed",
+        "harness-no-product-lifecycle"
+      ]
+    }
+  ]
+}
