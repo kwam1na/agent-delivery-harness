@@ -142,17 +142,32 @@ const exists = async (target: string): Promise<boolean> => {
   }
 };
 
-/** Deterministic recursive walk: sorted, files only, '/'-separated paths. */
-async function walkFiles(root: string, relative = ""): Promise<string[]> {
+/**
+ * Deterministic recursive walk: sorted, files only, '/'-separated paths.
+ * The source walk skips development artifacts (hidden entries, node_modules,
+ * dist) because a checkout legitimately carries them; the raw walk skips
+ * NOTHING — closure verification and root materialization must see every
+ * byte, or an unlisted hidden file could ride along unverified.
+ */
+async function walkFiles(
+  root: string,
+  mode: "skip-dev-artifacts" | "raw",
+  relative = "",
+): Promise<string[]> {
   const absolute = relative === "" ? root : path.join(root, relative);
   const entries = await readdir(absolute, { withFileTypes: true });
   entries.sort((a, b) => compareUtf16CodeUnits(a.name, b.name));
   const out: string[] = [];
   for (const entry of entries) {
-    if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist") continue;
+    if (
+      mode === "skip-dev-artifacts" &&
+      (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist")
+    ) {
+      continue;
+    }
     const childRelative = relative === "" ? entry.name : `${relative}/${entry.name}`;
     if (entry.isDirectory()) {
-      out.push(...(await walkFiles(root, childRelative)));
+      out.push(...(await walkFiles(root, mode, childRelative)));
     } else if (entry.isFile()) {
       out.push(childRelative);
     }
@@ -231,7 +246,7 @@ export async function packComposition(input: PackCompositionInput): Promise<Pack
       version: string;
     };
     harnessModuleVersions[manifest.name] = manifest.version;
-    for (const relative of await walkFiles(packageRoot)) {
+    for (const relative of await walkFiles(packageRoot, "skip-dev-artifacts")) {
       await stage(`harness/packages/${packageLeaf}/${relative}`, await readFile(path.join(packageRoot, ...relative.split("/"))));
     }
   }
@@ -279,7 +294,7 @@ async function verifyGenerationClosure(
   if (!(await exists(root))) {
     return fail("missing_generation", `generation root ${root} does not exist`);
   }
-  const present = await walkFiles(root);
+  const present = await walkFiles(root, "raw");
   if (present.length === 0) {
     return fail("missing_generation", `generation root ${root} is empty`);
   }
@@ -475,7 +490,7 @@ async function materializeRoot(packedDir: string, root: string): Promise<void> {
   const parent = path.dirname(root);
   await mkdir(parent, { recursive: true, mode: OWNER_DIR });
   const staging = `${root}.staging-${randomBytes(6).toString("hex")}`;
-  const files = await walkFiles(packedDir);
+  const files = await walkFiles(packedDir, "raw");
   const directories = new Set<string>([staging]);
   for (const relative of files.includes(COMPOSITION_MANIFEST_FILE) ? files : [...files, COMPOSITION_MANIFEST_FILE]) {
     const source = path.join(packedDir, ...relative.split("/"));

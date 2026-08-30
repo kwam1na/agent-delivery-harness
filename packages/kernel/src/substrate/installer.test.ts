@@ -220,6 +220,15 @@ describe("install rejections", () => {
     expect(codesOf(installed)).toContain("closure_digest_mismatch");
   });
 
+  it("rejects an unlisted hidden file — the closure walk skips nothing", async () => {
+    const smuggled = await mkdtemp(path.join(scratch, "smuggled-"));
+    cpSync(packedDir, smuggled, { recursive: true });
+    writeFileSync(path.join(smuggled, "harness", ".rider"), "unbound bytes\n");
+    const target = await freshTarget();
+    const installed = await installComposition({ packedDir: smuggled, ...target });
+    expect(codesOf(installed)).toContain("closure_digest_mismatch");
+  });
+
   it("rejects a composition profile that does not match the installation's receipt-recorded profile", async () => {
     const { installationPath, receiptDir } = await installFresh();
     const production = await pack({ profile: "production", sequence: 2 });
