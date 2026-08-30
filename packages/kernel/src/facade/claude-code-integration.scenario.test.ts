@@ -54,9 +54,6 @@ const LATER = "2026-08-30T12:00:30Z";
 const EXPIRY = "2026-08-31T12:00:00Z";
 const HOST_VERSION = "2.1.97";
 
-/** The graded finding this unit inherits as its characterization baseline. */
-const GRADED_DESCENDANT_TEARDOWN = "unverified" as const;
-
 let scratch: string;
 let installationPath: string;
 let receiptDir: string;
@@ -223,11 +220,23 @@ const journalEntries = async (deliveryId: string): Promise<readonly { kind: stri
   }));
 };
 
-const bindingState = async (deliveryId: string): Promise<HookBindingState> => {
-  const namespaceDir = await facade.namespaceDir();
-  return JSON.parse(
-    readFileSync(path.join(namespaceDir, "deliveries", deliveryId, "binding", "state.json"), "utf8"),
-  ) as HookBindingState;
+/** The CURRENT invocation's fence-scoped binding state, named by the workspace. */
+const bindingStatePath = async (deliveryId: string): Promise<string> => {
+  const deliveryDir = path.join(await facade.namespaceDir(), "deliveries", deliveryId);
+  const meta = JSON.parse(readFileSync(path.join(deliveryDir, "workspace.json"), "utf8")) as {
+    fence: number;
+    settingsPath: string;
+  };
+  return path.join(deliveryDir, "binding", `state-${meta.fence}.json`);
+};
+
+const bindingState = async (deliveryId: string): Promise<HookBindingState> =>
+  JSON.parse(readFileSync(await bindingStatePath(deliveryId), "utf8")) as HookBindingState;
+
+const settingsPathOf = async (deliveryId: string): Promise<string> => {
+  const deliveryDir = path.join(await facade.namespaceDir(), "deliveries", deliveryId);
+  return (JSON.parse(readFileSync(path.join(deliveryDir, "workspace.json"), "utf8")) as { settingsPath: string })
+    .settingsPath;
 };
 
 // ── The scenarios ───────────────────────────────────────────────────────────
@@ -250,7 +259,7 @@ describe("the pre-admission binding layer", () => {
     // The in-session layer may VERIFY the attestation — the same decision the
     // interceptor takes — but the state it verifies against is binding-owned
     // and lives outside every writable path in the grant.
-    expect(decideHookInvocation(state, { tool_name: "Read", tool_input: {} }, LATER).allowed).toBe(true);
+    expect(decideHookInvocation(state, { tool_name: "Read", tool_input: {} }, LATER, state.expectation.invocationFence).allowed).toBe(true);
     const grant = state.grant as { writablePaths: string[]; protectedPaths: string[] };
     for (const writable of grant.writablePaths) {
       expect(path.join(session.worktree, writable).startsWith(await facade.namespaceDir())).toBe(false);
@@ -266,20 +275,22 @@ describe("the pre-admission binding layer", () => {
     // Writing the binding's own state file — the only place a grant could be
     // widened from — is a write to a protected authority path.
     const attempts = [
-      path.join(namespaceDir, "deliveries", session.deliveryId, "binding", "state.json"),
-      path.join(namespaceDir, "deliveries", session.deliveryId, "binding", "settings.json"),
+      await bindingStatePath(session.deliveryId),
+      await settingsPathOf(session.deliveryId),
       path.join(session.worktree, ".claude", "settings.json"),
       path.join(session.worktree, PROJECTION_DIR, "consumption.json"),
     ];
     for (const file_path of attempts) {
-      expect(decideHookInvocation(state, { tool_name: "Write", tool_input: { file_path } }, LATER).allowed, file_path).toBe(
-        false,
-      );
+      expect(
+        decideHookInvocation(state, { tool_name: "Write", tool_input: { file_path } }, LATER, state.expectation.invocationFence)
+          .allowed,
+        file_path,
+      ).toBe(false);
     }
 
     // And the confirmation channel is closed to it even by name.
     expect(
-      decideHookInvocation(state, { tool_name: "operator-confirmation.contract", tool_input: {} }, LATER).allowed,
+      decideHookInvocation(state, { tool_name: "operator-confirmation.contract", tool_input: {} }, LATER, state.expectation.invocationFence).allowed,
     ).toBe(false);
   });
 
@@ -387,11 +398,9 @@ describe("session end, before and after mutation", () => {
     // a session could plausibly plant a teardown status. Plant every spelling
     // of it, in both files a session might reach.
     const bindingDir = path.join(namespaceDir, "deliveries", session.deliveryId, "binding");
-    const planted = JSON.parse(readFileSync(path.join(bindingDir, "state.json"), "utf8")) as Record<string, unknown>;
-    writeFileSync(
-      path.join(bindingDir, "state.json"),
-      `${JSON.stringify({ ...planted, descendantTeardown: "verified", tier: 3 })}\n`,
-    );
+    const statePath = await bindingStatePath(session.deliveryId);
+    const planted = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+    writeFileSync(statePath, `${JSON.stringify({ ...planted, descendantTeardown: "verified", tier: 3 })}\n`);
     writeFileSync(path.join(session.worktree, "descendantTeardown"), "verified\n");
 
     const ended = await facade.recordTerminationProvenance({ deliveryId: session.deliveryId, fence: session.fence });
@@ -484,7 +493,7 @@ describe("host cancellation racing a checkpoint submission", () => {
     // The interceptor is deny-until-attested, so the revoked attestation
     // re-denies every subsequent tool call — including a late subagent's.
     const state = await bindingState(session.deliveryId);
-    expect(decideHookInvocation(state, { tool_name: "Read", tool_input: {} }, LATER).allowed).toBe(false);
+    expect(decideHookInvocation(state, { tool_name: "Read", tool_input: {} }, LATER, state.expectation.invocationFence).allowed).toBe(false);
 
     // The submission that raced the cancellation is refused by state, not
     // accepted-then-undone.
@@ -518,6 +527,8 @@ describe("a stale session and a fresh one", () => {
     await plan(session);
     await implement(session);
     const staleState = await bindingState(session.deliveryId);
+    const staleStatePath = await bindingStatePath(session.deliveryId);
+    const staleSettingsPath = await settingsPathOf(session.deliveryId);
     const staleWorktree = session.worktree;
 
     // The operator authorizes a takeover; the fresh worktree gets its own
@@ -544,38 +555,49 @@ describe("a stale session and a fresh one", () => {
     expect(rebound.fence).toBeGreaterThan(session.fence);
     expect(rebound.projectionDigest).not.toBe(staleState.expectation.projectionDigest);
 
-    // THE STALE SESSION, as it actually is on disk. The binding state file is
-    // per-delivery and the rebind overwrote it, so the superseded session's
-    // hook re-reads a state file describing the FRESH invocation — a
-    // consistent grant and attestation whose workspace root is the fresh
-    // worktree. What stops it is the fence baked into its OWN hook command at
-    // admission: it no longer matches, so every tool closes.
+    // THE STALE SESSION, as it actually is on disk. Its admission
+    // configuration is FENCE-SCOPED, so the rebind wrote new files rather than
+    // overwriting the predecessor's in place — which matters because this host
+    // reloads settings and hooks mid-session. The predecessor therefore keeps
+    // reading its OWN state file and its OWN hook command.
+    const currentStatePath = await bindingStatePath(session.deliveryId);
+    const currentSettingsPath = await settingsPathOf(session.deliveryId);
+    expect(currentStatePath).not.toBe(staleStatePath);
+    expect(currentSettingsPath).not.toBe(staleSettingsPath);
+    expect(existsSync(staleStatePath), "the predecessor's own state file survives the rebind").toBe(true);
+    // Its hook command still names its own fence and its own state file, so a
+    // mid-session settings reload cannot hand it the successor's.
+    const staleHook = JSON.stringify(
+      (JSON.parse(readFileSync(staleSettingsPath, "utf8")) as { hooks: unknown }).hooks,
+    );
+    expect(staleHook).toContain(`\\"${String(session.fence)}\\"`);
+    expect(staleHook).toContain(staleStatePath.replaceAll("/", "/"));
+    expect(staleHook).not.toContain(currentStatePath);
+
+    // And supersession VOIDED it: a null attestation is the frozen
+    // deny-until-attested case, so the predecessor's tools close on its very
+    // next invocation.
+    const superseded = JSON.parse(readFileSync(staleStatePath, "utf8")) as HookBindingState;
+    expect(superseded.attestation).toBeNull();
+    for (const invocation of [
+      { tool_name: "Read", tool_input: {} },
+      { tool_name: "Write", tool_input: { file_path: path.join(fresh, "src", "greet.mjs") } },
+      { tool_name: "Write", tool_input: { file_path: path.join(staleWorktree, "src", "greet.mjs") } },
+    ]) {
+      expect(decideHookInvocation(superseded, invocation, LATER, session.fence).allowed, JSON.stringify(invocation)).toBe(
+        false,
+      );
+    }
+    // Even were it not voided, the baked fence alone closes it.
+    const notVoided: HookBindingState = { ...superseded, attestation: staleState.attestation };
+    const byFence = decideHookInvocation(notVoided, { tool_name: "Read", tool_input: {} }, LATER, rebound.fence);
+    expect(byFence.allowed).toBe(false);
+    if (!byFence.allowed) expect(byFence.reason).toContain("superseded_session");
+
+    // The fresh session, reading its own state under its own fence, proceeds.
     const current = await bindingState(session.deliveryId);
     expect(current.expectation.invocationFence).toBe(rebound.fence);
-    const supersededSession = decideHookInvocation(
-      current,
-      { tool_name: "Read", tool_input: {} },
-      LATER,
-      session.fence, // the fence THIS session was admitted under
-    );
-    expect(supersededSession.allowed).toBe(false);
-    if (!supersededSession.allowed) expect(supersededSession.reason).toContain("superseded_session");
-
-    // A write is refused for the same reason, so the superseded session keeps
-    // no write path into the newly authorized workspace either.
-    expect(
-      decideHookInvocation(
-        current,
-        { tool_name: "Write", tool_input: { file_path: path.join(fresh, "src", "greet.mjs") } },
-        LATER,
-        session.fence,
-      ).allowed,
-    ).toBe(false);
-    // The fresh session, admitted under the current fence, proceeds.
     expect(decideHookInvocation(current, { tool_name: "Read", tool_input: {} }, LATER, rebound.fence).allowed).toBe(true);
-    // The stale session's own settings baked its own fence, so the two
-    // sessions are distinguishable at all: the composed hook command carries it.
-    expect(staleState.expectation.invocationFence).toBe(session.fence);
 
     // And the stale worktree's projection is not the fresh one: its per-run
     // marker still names the superseded fence.
@@ -601,13 +623,13 @@ describe("required host capability unavailable", () => {
 
     // The stage grant does not list this capability, so the host's own
     // permission system never allows it and the interceptor denies it too.
-    const denied = decideHookInvocation(state, { tool_name: "WebFetch", tool_input: {} }, LATER);
+    const denied = decideHookInvocation(state, { tool_name: "WebFetch", tool_input: {} }, LATER, state.expectation.invocationFence);
     expect(denied.allowed).toBe(false);
     if (!denied.allowed) expect(denied.reason).toContain("capability_not_granted");
 
     // A missing binding state — the shape a failed grant application leaves —
     // denies everything.
-    expect(decideHookInvocation(undefined, { tool_name: "Read", tool_input: {} }, LATER).allowed).toBe(false);
+    expect(decideHookInvocation(undefined, { tool_name: "Read", tool_input: {} }, LATER, 1).allowed).toBe(false);
   });
 });
 
@@ -635,7 +657,7 @@ describe("the delivery journal's durable bytes", () => {
 
     // Privileged credentials are absent from the model-driven surface too:
     // the binding state the session can read carries none.
-    const state = readFileSync(path.join(namespaceDir, "deliveries", session.deliveryId, "binding", "state.json"), "utf8");
+    const state = readFileSync(await bindingStatePath(session.deliveryId), "utf8");
     expect(state).not.toMatch(/token|password|secret|credential/i);
   });
 });
@@ -646,14 +668,15 @@ describe("teardown with the worktree", () => {
     const namespaceDir = await facade.namespaceDir();
     const bindingDir = path.join(namespaceDir, "deliveries", session.deliveryId, "binding");
 
+    const settingsPath = await settingsPathOf(session.deliveryId);
     expect(existsSync(path.join(session.worktree, PROJECTION_DIR))).toBe(true);
-    expect(existsSync(path.join(bindingDir, "settings.json"))).toBe(true);
+    expect(existsSync(settingsPath)).toBe(true);
 
     const torn = await facade.tearDownWorkspaceProjection({ deliveryId: session.deliveryId });
     must(torn, "tearDownWorkspaceProjection");
 
     expect(existsSync(path.join(session.worktree, PROJECTION_DIR))).toBe(false);
-    expect(existsSync(path.join(bindingDir, "settings.json"))).toBe(false);
+    expect(existsSync(settingsPath)).toBe(false);
     expect(existsSync(path.join(bindingDir, "worktree-excludes"))).toBe(false);
     expect(git(session.worktree, "status", "--porcelain")).toBe("");
     // Removing the worktree afterwards is the host's business and now leaves
@@ -682,9 +705,13 @@ describe("negative process instrumentation", () => {
         `launched ${runtime}`,
       ).toEqual([]);
     }
-    // It runs git and the repository's own sensor, and nothing that creates,
-    // moves, or removes a worktree — the host owns workspace lifecycle.
-    expect([...new Set(executables)].sort()).toEqual(["git", "node"]);
+    // It runs git and — when a stage calls for it — the repository's own
+    // sensor under node, and nothing else. Asserted as a subset so the claim
+    // does not depend on which stages this suite's other cases happened to
+    // reach; what matters is that no third executable ever appears.
+    for (const executable of new Set(executables)) {
+      expect(["git", "node"], `launched ${executable}`).toContain(executable);
+    }
     const commands = argv.map((tokens) => tokens.join(" "));
     for (const worktreeVerb of ["worktree add", "worktree remove", "worktree move", "worktree prune"]) {
       expect(commands.filter((command) => command.includes(worktreeVerb)), worktreeVerb).toEqual([]);
@@ -706,7 +733,7 @@ describe("the in-session projection's immutable context", () => {
 
     // Immutable context: the session reads it, and every write into the
     // subtree is a protected-authority-path denial.
-    expect(decideHookInvocation(state, { tool_name: "Write", tool_input: { file_path: graphPath } }, LATER).allowed).toBe(
+    expect(decideHookInvocation(state, { tool_name: "Write", tool_input: { file_path: graphPath } }, LATER, state.expectation.invocationFence).allowed).toBe(
       false,
     );
     mkdirSync(path.join(session.worktree, "src"), { recursive: true });
@@ -715,6 +742,7 @@ describe("the in-session projection's immutable context", () => {
         state,
         { tool_name: "Write", tool_input: { file_path: path.join(session.worktree, "src", "greet.mjs") } },
         LATER,
+        state.expectation.invocationFence,
       ).allowed,
     ).toBe(true);
   });

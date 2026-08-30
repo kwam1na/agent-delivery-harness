@@ -328,17 +328,17 @@ describe("the binding-written discovery configuration", () => {
     if (!session.ok) return;
 
     // One definition, used at application and at every canonical recheck.
-    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).toBe(session.discoveryConfigurationDigest);
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).toBe(session.discoveryConfigurationDigest);
 
     // The set is BINDING-EXCLUSIVE: the host never mutates it, so any change
     // to its bytes moves the digest and the recheck fails closed on it.
     writeFileSync(session.settingsPath, JSON.stringify({ permissions: { allow: ["Bash"] } }));
-    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).not.toBe(session.discoveryConfigurationDigest);
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).not.toBe(session.discoveryConfigurationDigest);
 
     // An unreadable member yields no digest at all, which can never equal an
     // expected one — the recheck fails closed rather than skipping.
     await rm(path.join(bench.bindingDir, "worktree-excludes"), { force: true });
-    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).toBeUndefined();
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).toBeUndefined();
   });
 
   it("leaves host-writable settings outside the digest-bound set", async () => {
@@ -371,7 +371,7 @@ describe("the binding-written discovery configuration", () => {
       JSON.stringify({ permissions: { allow: ["Bash(rm:*)"] } }),
     );
 
-    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).toBe(session.discoveryConfigurationDigest);
+    expect(await discoveryConfigurationDigestOf({ settingsPath: session.settingsPath, bindingDir: bench.bindingDir })).toBe(session.discoveryConfigurationDigest);
     const projection = await verifyProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir });
     expect(projection.ok).toBe(true);
   });
@@ -401,12 +401,13 @@ describe("tearDownProjection", () => {
     const torn = await tearDownProjection({
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
+      settingsPath: path.join(bench.bindingDir, "settings-1.json"),
       exec,
     });
     expect(torn.ok, JSON.stringify(torn)).toBe(true);
 
     expect(existsSync(path.join(bench.worktreeDir, PROJECTION_DIR))).toBe(false);
-    expect(existsSync(path.join(bench.bindingDir, "settings.json"))).toBe(false);
+    expect(existsSync(path.join(bench.bindingDir, "settings-1.json"))).toBe(false);
     expect(existsSync(path.join(bench.bindingDir, "worktree-excludes"))).toBe(false);
     expect(existsSync(path.join(bench.bindingDir, "projection-receipt.json"))).toBe(false);
     // The worktree-scoped exclusion is gone with it, and the tree is clean:
@@ -416,7 +417,7 @@ describe("tearDownProjection", () => {
 
     // Teardown is idempotent — a second call on an already-torn-down worktree
     // is not an error, so worktree removal never races it into a blocker.
-    const again = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, exec });
+    const again = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
     expect(again.ok).toBe(true);
   });
 
@@ -455,7 +456,7 @@ describe("tearDownProjection", () => {
     );
 
     // Tearing one down leaves the other's exclusion and clean status intact.
-    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, exec });
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
     expect(torn.ok).toBe(true);
     expect(git(sibling, "config", "--worktree", "--get", "core.excludesFile")).toBe(
       path.join(siblingBinding, "worktree-excludes"),
@@ -489,6 +490,27 @@ describe("gradedDescendantTeardown", () => {
     expect(
       await gradedDescendantTeardown({ generationRoot: root, hostId: "claude-code", hostVersion: "2.1.97" }),
     ).toBe("unverified");
+  });
+
+  it("resolves the SHIPPED record's own key, so the Tier 3 lane cannot be silently dead", async () => {
+    // A wrong host id or an unexpected version format would look exactly like
+    // an honest Tier 2 grade — both return `unverified`. Taking the REAL record
+    // and flipping only the ladder position pins the key to what ships.
+    const upgraded = JSON.parse(readFileSync(REAL_RECORD, "utf8")) as {
+      hosts: { hostId: string; grade: { tier: number }; capabilities: Record<string, { status: string }> }[];
+    };
+    const graded = upgraded.hosts.find((host) => host.hostId === "claude-code");
+    expect(graded, "the shipped record grades claude-code").toBeDefined();
+    if (graded === undefined) return;
+    graded.grade.tier = 3;
+    (graded.capabilities["terminationProvenanceWithDescendantTeardown"] as { status: string }).status = "supported";
+    expect(
+      await gradedDescendantTeardown({
+        generationRoot: await generationWith(upgraded),
+        hostId: "claude-code",
+        hostVersion: "2.1.97",
+      }),
+    ).toBe("verified");
   });
 
   it("reads VERIFIED only when the ladder grade AND the capability entry both reach Tier 3", async () => {
@@ -590,10 +612,40 @@ describe("tearDownProjection, against the host's own workspace lifecycle", () =>
     // not delete a value it did not write — the apply side refuses to clobber
     // one, and the teardown side must be symmetric.
     git(bench.worktreeDir, "config", "--worktree", "core.excludesFile", "/tmp/operator-owned-excludes");
-    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, exec });
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
     expect(torn.ok, JSON.stringify(torn)).toBe(true);
     expect(git(bench.worktreeDir, "config", "--worktree", "--get", "core.excludesFile")).toBe(
       "/tmp/operator-owned-excludes",
+    );
+  });
+
+  it("does not delete a repository-level excludes value that --worktree falls back to", async () => {
+    const bench = await workbench("teardown-local-fallback");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-teardown-4",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+
+    // `git config --worktree` falls back to the LOCAL scope when worktree
+    // configuration is off, and a session can turn it off. Teardown must not
+    // then delete the repository's own value.
+    git(bench.worktreeDir, "config", "--local", "core.excludesFile", "/tmp/repository-owned-excludes");
+    git(bench.worktreeDir, "config", "--unset", "extensions.worktreeConfig");
+
+    const torn = await tearDownProjection({
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      settingsPath: path.join(bench.bindingDir, "settings-1.json"),
+      exec,
+    });
+    expect(torn.ok, JSON.stringify(torn)).toBe(true);
+    expect(git(bench.worktreeDir, "config", "--local", "--get", "core.excludesFile")).toBe(
+      "/tmp/repository-owned-excludes",
     );
   });
 
@@ -613,9 +665,9 @@ describe("tearDownProjection, against the host's own workspace lifecycle", () =>
     git(bench.repoDir, "worktree", "remove", "--force", bench.worktreeDir);
     expect(existsSync(bench.worktreeDir)).toBe(false);
 
-    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, exec });
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, settingsPath: path.join(bench.bindingDir, "settings-1.json"), exec });
     expect(torn.ok, JSON.stringify(torn)).toBe(true);
-    expect(existsSync(path.join(bench.bindingDir, "settings.json"))).toBe(false);
+    expect(existsSync(path.join(bench.bindingDir, "settings-1.json"))).toBe(false);
     expect(existsSync(path.join(bench.bindingDir, "worktree-excludes"))).toBe(false);
   });
 });

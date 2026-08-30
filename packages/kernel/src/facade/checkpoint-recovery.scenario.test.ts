@@ -500,9 +500,16 @@ describe("durable checkpoints and host-driven recovery", () => {
     expect(status.activity).toBe("cancellation_pending");
     // The fence is revoked for the interceptor: the voided attestation
     // re-denies every tool, including a late subagent's.
-    const statePath = path.join(await facade.namespaceDir(), "deliveries", before.deliveryId, "binding", "state.json");
+    // The binding state is fence-scoped, so a rebind writes a new file rather
+    // than overwriting the predecessor's; the current one is named by the
+    // bound workspace's fence.
+    const statePath = (await (async () => {
+      const deliveryDir = path.join(await facade.namespaceDir(), "deliveries", before.deliveryId);
+      const meta = JSON.parse(readFileSync(path.join(deliveryDir, "workspace.json"), "utf8")) as { fence: number };
+      return path.join(deliveryDir, "binding", `state-${meta.fence}.json`);
+    })());
     const revokedState = JSON.parse(readFileSync(statePath, "utf8")) as HookBindingState;
-    expect(decideHookInvocation(revokedState, { tool_name: "Read", tool_input: {} }, LATER).allowed).toBe(false);
+    expect(decideHookInvocation(revokedState, { tool_name: "Read", tool_input: {} }, LATER, revokedState.expectation.invocationFence).allowed).toBe(false);
     // Checkpoint operations refuse in cancellation_requested.
     const lateStage = await facade.submitStageResult({ deliveryId: before.deliveryId, stageId: "plan", resultBytes: "late", fence: before.fence });
     expect(lateStage.ok).toBe(false);
@@ -712,15 +719,19 @@ describe("durable checkpoints and host-driven recovery", () => {
 
   it("denies authority-store writes through the model-external interceptor", async () => {
     const driven = await driveTo("planning");
-    const statePath = path.join(await facade.namespaceDir(), "deliveries", driven.deliveryId, "binding", "state.json");
+    const statePath = (await (async () => {
+      const deliveryDir = path.join(await facade.namespaceDir(), "deliveries", driven.deliveryId);
+      const meta = JSON.parse(readFileSync(path.join(deliveryDir, "workspace.json"), "utf8")) as { fence: number };
+      return path.join(deliveryDir, "binding", `state-${meta.fence}.json`);
+    })());
     const bindingState = JSON.parse(readFileSync(statePath, "utf8")) as HookBindingState;
     // The delivery authority namespace lives under the common git directory —
     // outside the workspace and inside the protected `.git` space; both
     // spellings deny.
     const journalTarget = path.join(await facade.namespaceDir(), "deliveries", driven.deliveryId, "journal.jsonl");
-    expect(decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: journalTarget } }, LATER).allowed).toBe(false);
+    expect(decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: journalTarget } }, LATER, bindingState.expectation.invocationFence).allowed).toBe(false);
     expect(
-      decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: path.join(driven.worktree, ".git") } }, LATER).allowed,
+      decideHookInvocation(bindingState, { tool_name: "Write", tool_input: { file_path: path.join(driven.worktree, ".git") } }, LATER, bindingState.expectation.invocationFence).allowed,
     ).toBe(false);
     // A direct byte-level tamper of the journal fails the whole journal
     // closed at the next read (proven at the store layer); the interceptor

@@ -134,9 +134,12 @@ describe("the record's legs", () => {
     expect(packageJson.scripts.check).not.toContain("qualify");
   });
 
-  it("states what was not exercised live rather than implying full coverage", () => {
+  it("states what was not exercised live, and what the integration does not defend", () => {
     expect(Array.isArray(record.notExercisedLive)).toBe(true);
     expect(record.notExercisedLive.length).toBeGreaterThan(0);
+    // The record must name its own limits rather than implying completeness.
+    expect(Array.isArray(record.knownLimitations)).toBe(true);
+    expect(record.knownLimitations.length).toBeGreaterThan(0);
   });
 
   it("meets every acceptance criterion with a named leg and evidence", () => {

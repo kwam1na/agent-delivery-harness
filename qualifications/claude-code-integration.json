@@ -23,7 +23,7 @@
     "tierVerdict": "Tier 2. Tier 1 mutation floor and Tier 2 graceful lifecycle events are live-probed on this host version. Tier 3 is REFUSED: a detached background child survived a clean session end in both the admission spike and this unit's own live lane, so descendant teardown is unverified, same-workspace resume stays gated, and operator-authorized takeover into a fresh worktree remains the designed — not degraded — resume path.",
     "grammarEnforcement": "the honesty rule lives in the frozen payload grammar, not in a caller: an unverified descendant teardown may only ever carry fresh-worktree-only resume, so a journal entry cannot record a Tier 3 claim this host does not support",
     "entrypoint": "the trusted host-runtime lifecycle integration only — the SessionEnd hook the binding wires, and the facade operation it drives. No model-callable tool can reach it, and the operation is absent from the CLI's session-facing command surface.",
-    "gradeSource": "the graded capability record carried inside the pinned generation (qualifications/host-admission-capabilities.json), keyed on host id and exact host version. The facade operation takes no teardown parameter, the binding state file carries no teardown field, and every doubt — unreadable record, ungraded version, tier below 3, or a capability entry that is not `supported` — resolves to `unverified`, which can only narrow resume eligibility."
+    "gradeSource": "the graded capability record carried inside the pinned generation (qualifications/host-admission-capabilities.json), keyed on host id and exact host version. The facade operation takes no teardown parameter, the binding state file carries no teardown field, and every doubt — unreadable record, ungraded version, tier below 3, or a capability entry that is not `supported` — resolves to `unverified`, which can only narrow resume eligibility. The record is inside the pinned generation's digest closure, which the canonical recheck verifies before the read, so a session cannot edit it without fencing the delivery into security_blocked first."
   },
   "liveProbes": [
     {
@@ -57,9 +57,9 @@
       "conclusive": true,
       "verification": {
         "kind": "live-probe",
-        "surface": "claude -p (v2.1.97) in a directory carrying a planted .claude/settings.json allowing Bash, admitted with the attested grant allowing only Write",
-        "method": "the session was asked to run a Bash command writing a file; the file was checked on disk and was absent",
-        "observedAt": "2026-08-30T18:26:00Z"
+        "surface": "claude -p (v2.1.97) in a directory carrying a planted .claude/settings.json allowing Bash and Write, admitted with an attested grant allowing only Read",
+        "method": "the attested grant contains NO tool that can create a file, so any side effect is attributable to the planted file alone; the session was asked to create a file by whichever tool worked, and the file was checked on disk and was absent. An earlier form of this probe granted Write and asked for Bash, which the session could satisfy with the granted tool — the live lane caught that and it was corrected before this finding was recorded.",
+        "observedAt": "2026-08-30T19:16:00Z"
       }
     },
     {
@@ -194,6 +194,16 @@
       "property": "the conformance contract is not satisfied by a host that simply denies everything",
       "sensor": "packages/kernel/src/host/conformance.test.ts",
       "caseName": "catches a host that simply denies everything"
+    },
+    {
+      "property": "the graded record's own key resolves, so a future Tier 3 grade is reachable rather than silently dead",
+      "sensor": "packages/kernel/src/host/claude-code.test.ts",
+      "caseName": "resolves the SHIPPED record's own key"
+    },
+    {
+      "property": "teardown does not delete a repository-level excludes value that --worktree falls back to when worktree configuration is off",
+      "sensor": "packages/kernel/src/host/claude-code.test.ts",
+      "caseName": "does not delete a repository-level excludes value"
     }
   ],
   "acceptanceCriteria": [
@@ -220,5 +230,9 @@
     "the durable journal half of the SessionEnd path — the lifecycle hook firing was live-probed, and the records it writes are proven in-process by the scenario sensor",
     "native subagent delegation inside a qualified session — the product neither supervises nor observes it by design; what is proven is that the product launches no agent process and manages no host agents or workspaces",
     "same-workspace resume — unreachable on this host version by construction, and exercised only through a host graded with verified descendant teardown in the fixture leg"
+  ],
+  "knownLimitations": [
+    "The delivery journal is not defended against a granted shell capability on this host. The graded record claims commonGitAuthorityPathProtected for Codex's OS sandbox and deliberately does NOT claim it for Claude Code: the interceptor extracts write paths only for the file-writing tools, so a Bash invocation's filesystem writes are capability-gated but not path-gated. A session holding Bash can therefore append a journal entry directly, and the payload grammar only enforces a record's internal consistency. Closing this belongs to the host's own permission system, not to this integration.",
+    "A superseded session is closed by two locks — its fence-scoped binding state is voided at rebind, and its own admitted fence is baked into its hook command — but both live in files a granted shell capability can reach, for the same reason. They defend against superseded-session CONFUSION, which is what the resume path needs; they are not a boundary against a shell-capable session."
   ]
 }

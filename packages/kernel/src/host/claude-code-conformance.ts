@@ -17,10 +17,11 @@ import { evaluateHostAdmission, evaluateToolInvocation, type CheckpointAdmission
 import {
   PROJECTION_DIR,
   PROJECTION_RECEIPT_FILE,
-  SESSION_SETTINGS_FILE,
   WORKTREE_EXCLUDES_FILE,
+  bindingStateFile,
   composeClaudeCodeSession,
   gradeResumeEligibility,
+  sessionSettingsFile,
   materializeProjection,
   mintGrantAttestation,
   tearDownProjection,
@@ -92,7 +93,7 @@ export function createClaudeCodeConformancePort(input: ClaudeCodeConformancePort
     if (!materialized.ok) return;
     const session = await composeClaudeCodeSession({
       bindingDir: input.bindingDir,
-      statePath: path.join(input.bindingDir, "state.json"),
+      statePath: path.join(input.bindingDir, bindingStateFile(input.fence)),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
       fence: input.fence,
       grant: STAGE_GRANT,
@@ -197,6 +198,7 @@ export function createClaudeCodeConformancePort(input: ClaudeCodeConformancePort
       const torn = await tearDownProjection({
         worktreeDir: input.worktreeDir,
         bindingDir: input.bindingDir,
+        settingsPath: path.join(input.bindingDir, sessionSettingsFile(input.fence)),
         exec,
       });
       if (!torn.ok) {
@@ -204,7 +206,7 @@ export function createClaudeCodeConformancePort(input: ClaudeCodeConformancePort
       }
       const residue = [
         path.join(input.worktreeDir, PROJECTION_DIR),
-        path.join(input.bindingDir, SESSION_SETTINGS_FILE),
+        path.join(input.bindingDir, sessionSettingsFile(input.fence)),
         path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE),
         path.join(input.bindingDir, PROJECTION_RECEIPT_FILE),
       ].filter((candidate) => existsSync(candidate));

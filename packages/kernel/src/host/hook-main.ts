@@ -71,19 +71,19 @@ export function decideHookInvocation(
   input: HookToolInput,
   observedAt: string,
   /**
-   * The fence baked into THIS session's hook command at admission. The state
-   * file is per-delivery and a later invocation overwrites it, so without this
-   * a superseded-but-still-running session would read the successor's
-   * consistent grant and attestation — and its writes would resolve against
-   * the successor's workspace root. A session whose baked fence no longer
-   * matches the state file has been superseded and gets nothing.
+   * The fence baked into THIS session's hook command at admission, and
+   * REQUIRED — a denial this load-bearing must not be opt-in by argument
+   * arity. The binding state and settings are fence-scoped, so a superseded
+   * session normally reads its own now-voided state; this check is the second
+   * lock, closing the case where it somehow reads a state file describing a
+   * different invocation.
    */
-  sessionFence?: number,
+  sessionFence: number,
 ): HookDecision {
   if (state === undefined) {
     return { allowed: false, reason: "no binding state is attested for this session; tools stay closed until the grant is applied" };
   }
-  if (sessionFence !== undefined && state.expectation.invocationFence !== sessionFence) {
+  if (state.expectation.invocationFence !== sessionFence) {
     return {
       allowed: false,
       reason: `superseded_session: this session was admitted under fence ${sessionFence}, and the current fence is ${state.expectation.invocationFence}; a superseded invocation keeps no write path`,

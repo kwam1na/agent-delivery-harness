@@ -43,7 +43,20 @@ export const PROJECTION_ENTRY_PREFIXES = Object.freeze(["skills/", "workflows/",
 
 export const PROJECTION_RECEIPT_FILE = "projection-receipt.json";
 export const WORKTREE_EXCLUDES_FILE = "worktree-excludes";
-export const SESSION_SETTINGS_FILE = "settings.json";
+
+/**
+ * The session's admission configuration is FENCE-SCOPED, and that is
+ * load-bearing rather than cosmetic. A takeover rebind writes the successor's
+ * configuration into the same per-delivery binding directory; if the file name
+ * were fixed, the rebind would overwrite the predecessor's in place, and this
+ * host reloads settings, permissions, and hooks mid-session — so a
+ * superseded-but-still-running session would silently adopt the successor's
+ * hook command, its state file, and its workspace root. A distinct file per
+ * fence means the rebind writes somewhere else and the superseded session
+ * keeps reading its own, which supersession then voids.
+ */
+export const sessionSettingsFile = (fence: number): string => `settings-${fence}.json`;
+export const bindingStateFile = (fence: number): string => `state-${fence}.json`;
 /** The binding's per-run consumption marker, inside the receipted subtree. */
 export const CONSUMPTION_MARKER_FILE = "consumption.json";
 
@@ -60,7 +73,6 @@ export const HOST_BINDING_BLOCKER_CODES = Object.freeze([
   "projection_receipt_corrupt",
   "projection_digest_mismatch",
   "discovery_configuration_unreadable",
-  "discovery_configuration_digest_mismatch",
   "consumption_marker_missing",
   "consumption_marker_corrupt",
   "teardown_failed",
@@ -318,10 +330,13 @@ export async function readConsumptionMarker(input: { readonly worktreeDir: strin
  * binding-exclusive, so any change to it is tampering rather than normal host
  * behavior. One definition, used at application and at every recheck.
  */
-export async function discoveryConfigurationDigestOf(bindingDir: string): Promise<string | undefined> {
+export async function discoveryConfigurationDigestOf(input: {
+  readonly settingsPath: string;
+  readonly bindingDir: string;
+}): Promise<string | undefined> {
   try {
-    const settings = await readFile(path.join(bindingDir, SESSION_SETTINGS_FILE), "utf8");
-    const worktreeExcludes = await readFile(path.join(bindingDir, WORKTREE_EXCLUDES_FILE), "utf8");
+    const settings = await readFile(input.settingsPath, "utf8");
+    const worktreeExcludes = await readFile(path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE), "utf8");
     return digestCanonical({ settings, worktreeExcludes });
   } catch {
     return undefined;
@@ -347,6 +362,8 @@ export type TearDownProjectionResult = { readonly ok: true } | HostBindingFailur
 export async function tearDownProjection(input: {
   readonly worktreeDir: string;
   readonly bindingDir: string;
+  /** The fence-scoped admission configuration this delivery's sessions carry. */
+  readonly settingsPath: string;
   readonly exec: ExecPort;
 }): Promise<TearDownProjectionResult> {
   const excludesPath = path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE);
@@ -371,7 +388,8 @@ export async function tearDownProjection(input: {
 
   try {
     await rm(path.join(input.worktreeDir, PROJECTION_DIR), { recursive: true, force: true });
-    for (const file of [SESSION_SETTINGS_FILE, WORKTREE_EXCLUDES_FILE, PROJECTION_RECEIPT_FILE]) {
+    await rm(input.settingsPath, { force: true });
+    for (const file of [WORKTREE_EXCLUDES_FILE, PROJECTION_RECEIPT_FILE]) {
       await rm(path.join(input.bindingDir, file), { force: true });
     }
   } catch (error) {
@@ -521,14 +539,17 @@ export async function composeClaudeCodeSession(
   };
 
   const settingsBytes = `${JSON.stringify(settings, null, 2)}\n`;
-  const settingsPath = path.join(input.bindingDir, SESSION_SETTINGS_FILE);
+  const settingsPath = path.join(input.bindingDir, sessionSettingsFile(input.fence));
   await mkdir(input.bindingDir, { recursive: true, mode: OWNER_DIR });
   await writeFile(settingsPath, settingsBytes, { mode: OWNER_FILE });
   await chmod(settingsPath, OWNER_FILE);
 
   // The binding-written host discovery-configuration set, digest-bound at
   // application through the one definition every recheck site also uses.
-  const discoveryConfigurationDigest = await discoveryConfigurationDigestOf(input.bindingDir);
+  const discoveryConfigurationDigest = await discoveryConfigurationDigestOf({
+    settingsPath,
+    bindingDir: input.bindingDir,
+  });
   if (discoveryConfigurationDigest === undefined) {
     return fail(
       "discovery_configuration_unreadable",
