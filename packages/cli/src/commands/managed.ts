@@ -180,7 +180,25 @@ export const managedCommand: CommandDescriptor = {
       );
     const emit = (value: unknown): void => context.write(`${JSON.stringify(value, null, 2)}\n`);
 
-    const summaryArg = (): string => flag(rest, "--summary") ?? rest.filter((argument) => !argument.startsWith("-")).join(" ");
+    /**
+     * The typed stage-result document a checkpoint submits. Prose cannot
+     * advance the reducer, so these operations read a
+     * `workflow-stage-result/1` file rather than accepting free text.
+     */
+    const resultFileArg = async (operation: string): Promise<string | CommandResult> => {
+      const file = flag(rest, "--result-file");
+      if (file === undefined) {
+        return {
+          kind: "usage",
+          message: `${operation} requires --result-file <path> containing a typed workflow-stage-result/1 document; prose cannot advance a checkpoint.`,
+        };
+      }
+      try {
+        return await readFile(path.resolve(context.rootDir, file), "utf8");
+      } catch (error) {
+        return { kind: "usage", message: `${operation} could not read ${file}: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    };
 
     switch (operation) {
       case "status": {
@@ -198,14 +216,18 @@ export const managedCommand: CommandDescriptor = {
       case "submit-plan": {
         const invokingFence = requireFence();
         if (typeof invokingFence !== "number") return invokingFence;
-        const submitted = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: summaryArg(), fence: invokingFence });
+        const resultBytes = await resultFileArg("submit-plan");
+        if (typeof resultBytes !== "string") return resultBytes;
+        const submitted = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes, fence: invokingFence });
         if (!submitted.ok) return { kind: "blocked", blockers: [...submitted.blockers] };
         return { kind: "ok", summary: `plan accepted; delivery is ${submitted.state}` };
       }
       case "checkpoint": {
         const invokingFence = requireFence();
         if (typeof invokingFence !== "number") return invokingFence;
-        const checkpointed = await facade.checkpointCandidate({ deliveryId, resultBytes: summaryArg(), fence: invokingFence });
+        const resultBytes = await resultFileArg("checkpoint");
+        if (typeof resultBytes !== "string") return resultBytes;
+        const checkpointed = await facade.checkpointCandidate({ deliveryId, resultBytes, fence: invokingFence });
         if (!checkpointed.ok) return { kind: "blocked", blockers: [...checkpointed.blockers] };
         return { kind: "ok", summary: `candidate ${checkpointed.treeSha} checkpointed; delivery is ${checkpointed.state}` };
       }
@@ -258,7 +280,9 @@ export const managedCommand: CommandDescriptor = {
       case "compound": {
         const invokingFence = requireFence();
         if (typeof invokingFence !== "number") return invokingFence;
-        const compounded = await facade.submitStageResult({ deliveryId, stageId: "compound", resultBytes: summaryArg(), fence: invokingFence });
+        const resultBytes = await resultFileArg("compound");
+        if (typeof resultBytes !== "string") return resultBytes;
+        const compounded = await facade.submitStageResult({ deliveryId, stageId: "compound", resultBytes, fence: invokingFence });
         if (!compounded.ok) return { kind: "blocked", blockers: [...compounded.blockers] };
         return { kind: "ok", summary: `compound recorded; delivery is ${compounded.state}` };
       }

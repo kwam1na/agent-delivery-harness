@@ -581,3 +581,84 @@ describe("the intake journal reducer", () => {
     expect(outcome.rejections.map((rejection) => rejection.code)).toContain("journal_terminal");
   });
 });
+
+describe("the iterative-intake records", () => {
+  const DRAFT_A = "a".repeat(64);
+  const DRAFT_B = "b".repeat(64);
+  const clarification = { question: "Which greeting text is contracted?", answer: "hello, skeleton" };
+
+  it("retains clarification history while awaiting clarification, and counts it", () => {
+    const outcome = reduceIntakeJournal([
+      intakeEntry(0, "intake.state.changed", { from: "draft_scope", to: "awaiting_clarification" }),
+      intakeEntry(1, "intake.clarification.recorded", clarification),
+      intakeEntry(2, "intake.clarification.recorded", { question: "Which module?", answer: "src/greet.mjs" }),
+      intakeEntry(3, "intake.draft.recorded", { draftDigest: DRAFT_A }),
+      intakeEntry(4, "intake.state.changed", { from: "awaiting_clarification", to: "awaiting_confirmation" }),
+    ]);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state).toMatchObject({
+      state: "awaiting_confirmation",
+      clarificationCount: 2,
+      lastDraftDigest: DRAFT_A,
+    });
+  });
+
+  it("rejects a clarification outside awaiting_clarification", () => {
+    const outcome = reduceIntakeJournal([intakeEntry(0, "intake.clarification.recorded", clarification)]);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.rejections.map((rejection) => rejection.code)).toContain("invalid_transition");
+  });
+
+  it("accepts a draft record in draft_scope, awaiting_clarification, and awaiting_confirmation — nowhere later", () => {
+    const inDraftScope = reduceIntakeJournal([intakeEntry(0, "intake.draft.recorded", { draftDigest: DRAFT_A })]);
+    expect(inDraftScope.ok, JSON.stringify(inDraftScope)).toBe(true);
+
+    const afterConsumption = reduceIntakeJournal([
+      intakeEntry(0, "intake.state.changed", { from: "draft_scope", to: "awaiting_clarification" }),
+      intakeEntry(1, "intake.draft.recorded", { draftDigest: DRAFT_A }),
+      intakeEntry(2, "intake.state.changed", { from: "awaiting_clarification", to: "awaiting_confirmation" }),
+      intakeEntry(3, "operator.confirmation.recorded", {
+        confirmation: { ...contractConfirmationPayload.confirmation, normalizedContractDigest: DRAFT_A },
+      }),
+      intakeEntry(4, "intake.state.changed", { from: "awaiting_confirmation", to: "validating_acceptance" }),
+      intakeEntry(5, "intake.draft.recorded", { draftDigest: DRAFT_B }),
+    ]);
+    expect(afterConsumption.ok).toBe(false);
+    if (afterConsumption.ok) return;
+    expect(afterConsumption.rejections.map((rejection) => rejection.code)).toContain("invalid_transition");
+  });
+
+  it("rejects consuming a confirmation whose digest is not the retained draft — a mutated draft voids it", () => {
+    const outcome = reduceIntakeJournal([
+      intakeEntry(0, "intake.state.changed", { from: "draft_scope", to: "awaiting_clarification" }),
+      intakeEntry(1, "intake.draft.recorded", { draftDigest: DRAFT_A }),
+      intakeEntry(2, "intake.state.changed", { from: "awaiting_clarification", to: "awaiting_confirmation" }),
+      // The draft mutates AFTER presentation; the pending confirmation still
+      // binds the digest presented to the operator.
+      intakeEntry(3, "intake.draft.recorded", { draftDigest: DRAFT_B }),
+      intakeEntry(4, "operator.confirmation.recorded", {
+        confirmation: { ...contractConfirmationPayload.confirmation, normalizedContractDigest: DRAFT_A },
+      }),
+    ]);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.rejections.map((rejection) => rejection.code)).toContain("digest_mismatch");
+  });
+
+  it("consumes a confirmation over the retained draft's exact digest", () => {
+    const outcome = reduceIntakeJournal([
+      intakeEntry(0, "intake.state.changed", { from: "draft_scope", to: "awaiting_clarification" }),
+      intakeEntry(1, "intake.draft.recorded", { draftDigest: DRAFT_A }),
+      intakeEntry(2, "intake.state.changed", { from: "awaiting_clarification", to: "awaiting_confirmation" }),
+      intakeEntry(3, "operator.confirmation.recorded", {
+        confirmation: { ...contractConfirmationPayload.confirmation, normalizedContractDigest: DRAFT_A },
+      }),
+      intakeEntry(4, "intake.state.changed", { from: "awaiting_confirmation", to: "validating_acceptance" }),
+    ]);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.contractConfirmed).toBe(true);
+  });
+});

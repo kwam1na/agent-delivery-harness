@@ -15,6 +15,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineHarnessConfig, type HarnessConfig } from "../config.ts";
+import { PINNED_AGENT_SKILLS } from "../spine/composition.ts";
 import type { AcceptedContract } from "../spine/contract.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -56,6 +57,46 @@ try {
 
 export const GREET_RIGHT = `export function greet() {\n  return "hello, skeleton";\n}\n`;
 export const GREET_WRONG = `export function greet() {\n  return "hello, world";\n}\n`;
+
+/**
+ * A host-side typed stage result, bound to the pinned release and graph the
+ * way a real host task binds one — the SAME normalized envelope the released
+ * result templates freeze. `candidate` is the exact tree the stage's released
+ * candidate-binding policy requires (the current checkpoint candidate, or the
+ * newly produced tree for a successful `implement`); omit it only where the
+ * policy omits it.
+ */
+export function typedStageResultBytes(input: {
+  readonly stageId: "plan" | "implement" | "review.acquire" | "compound";
+  readonly deliveryId: string;
+  readonly outputKind: string;
+  readonly candidate?: string;
+  readonly preservationHandoffRef?: string;
+}): string {
+  return JSON.stringify({
+    schemaVersion: "workflow-stage-result/1",
+    release: {
+      releaseId: PINNED_AGENT_SKILLS.releaseId,
+      profile: PINNED_AGENT_SKILLS.profile,
+      archiveSha256: PINNED_AGENT_SKILLS.archiveSha256,
+      metadataSha256: PINNED_AGENT_SKILLS.metadataSha256,
+    },
+    graphSha256: PINNED_AGENT_SKILLS.workflowGraphSha256,
+    stageId: input.stageId,
+    subjectRef: { schemaVersion: "workflow-subject-ref/1", opaque: input.deliveryId },
+    ...(input.candidate === undefined
+      ? {}
+      : { candidateRef: { schemaVersion: "workflow-candidate-ref/1", opaque: input.candidate } }),
+    status: "succeeded",
+    output: {
+      kind: input.outputKind,
+      evidenceRef: "retained-output",
+      ...(input.preservationHandoffRef === undefined ? {} : { preservationHandoffRef: input.preservationHandoffRef }),
+    },
+    evidenceRefs: ["retained-observation"],
+    limitations: [],
+  });
+}
 
 /**
  * The gate config, one literal, rendered twice: once as the tracked

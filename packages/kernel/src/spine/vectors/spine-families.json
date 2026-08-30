@@ -21,6 +21,75 @@
           }
         },
         {
+          "name": "intake clarification exchange",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "intake",
+            "subjectId": "intake-1",
+            "expectedRevision": 1,
+            "idempotencyKey": "ik-1",
+            "kind": "intake.clarification.recorded",
+            "payload": {
+              "question": "Which greeting text is contracted?",
+              "answer": "hello, skeleton"
+            }
+          }
+        },
+        {
+          "name": "intake draft retention",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "intake",
+            "subjectId": "intake-1",
+            "expectedRevision": 2,
+            "idempotencyKey": "ik-2",
+            "kind": "intake.draft.recorded",
+            "payload": {
+              "draftDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "name": "an intake clarification with an unknown member",
+          "verdict": "reject",
+          "codes": [
+            "unknown_member"
+          ],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "intake",
+            "subjectId": "intake-1",
+            "expectedRevision": 1,
+            "idempotencyKey": "ik-1b",
+            "kind": "intake.clarification.recorded",
+            "payload": {
+              "question": "Which greeting text is contracted?",
+              "answer": "hello, skeleton",
+              "attachment": "inline-bytes"
+            }
+          }
+        },
+        {
+          "name": "an intake draft retention carrying inline draft bytes instead of a digest",
+          "verdict": "reject",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "intake",
+            "subjectId": "intake-1",
+            "expectedRevision": 2,
+            "idempotencyKey": "ik-2b",
+            "kind": "intake.draft.recorded",
+            "payload": {
+              "draftDigest": "{\"task\":\"inline draft\"}"
+            }
+          }
+        },
+        {
           "name": "intake contract confirmation",
           "verdict": "accept",
           "value": {
@@ -418,11 +487,11 @@
           ],
           "value": {
             "spec": "journal-entry/1",
-            "journal": "intake",
-            "subjectId": "intake-1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
             "expectedRevision": 0,
-            "idempotencyKey": "ik-9",
-            "kind": "intake.draft.recorded"
+            "idempotencyKey": "dk-9",
+            "kind": "termination.provenance.recorded"
           }
         },
         {

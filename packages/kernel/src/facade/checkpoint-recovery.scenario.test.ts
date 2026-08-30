@@ -49,6 +49,7 @@ import {
   GREET_WRONG,
   buildDisposableRepository,
   disposableHarnessConfig,
+  typedStageResultBytes,
 } from "./disposable-repository.fixture.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -184,15 +185,31 @@ async function newDelivery(): Promise<Driven> {
   return { deliveryId: confirmed.deliveryId, worktree, branch, fence: bound.fence, round: 0 };
 }
 
+const treeOf = (worktree: string): string => git(worktree, "rev-parse", "HEAD^{tree}");
+
 async function plan(driven: Driven): Promise<void> {
-  const planned = await facade.submitStageResult({ deliveryId: driven.deliveryId, stageId: "plan", resultBytes: "bounded plan", fence: driven.fence });
+  const planned = await facade.submitStageResult({
+    deliveryId: driven.deliveryId,
+    stageId: "plan",
+    resultBytes: typedStageResultBytes({ stageId: "plan", deliveryId: driven.deliveryId, outputKind: "bounded-plan", candidate: treeOf(driven.worktree) }),
+    fence: driven.fence,
+  });
   must(planned, "plan");
 }
 
 async function implement(driven: Driven, bytes: string, message: string): Promise<void> {
   writeFileSync(path.join(driven.worktree, "src", "greet.mjs"), bytes);
   commitAll(driven.worktree, message);
-  const checkpointed = await facade.checkpointCandidate({ deliveryId: driven.deliveryId, resultBytes: message, fence: driven.fence });
+  const checkpointed = await facade.checkpointCandidate({
+    deliveryId: driven.deliveryId,
+    resultBytes: typedStageResultBytes({
+      stageId: "implement",
+      deliveryId: driven.deliveryId,
+      outputKind: "delivery-candidate",
+      candidate: treeOf(driven.worktree),
+    }),
+    fence: driven.fence,
+  });
   must(checkpointed, "checkpointCandidate");
 }
 
@@ -224,7 +241,17 @@ async function review(driven: Driven): Promise<void> {
 }
 
 async function compound(driven: Driven): Promise<void> {
-  const compounded = await facade.submitStageResult({ deliveryId: driven.deliveryId, stageId: "compound", resultBytes: "no durable learning", fence: driven.fence });
+  const compounded = await facade.submitStageResult({
+    deliveryId: driven.deliveryId,
+    stageId: "compound",
+    resultBytes: typedStageResultBytes({
+      stageId: "compound",
+      deliveryId: driven.deliveryId,
+      outputKind: "no-reusable-learning",
+      candidate: treeOf(driven.worktree),
+    }),
+    fence: driven.fence,
+  });
   must(compounded, "compound");
 }
 
@@ -564,7 +591,16 @@ describe("durable checkpoints and host-driven recovery", () => {
       }),
       "recordApprovalRequest (parked)",
     );
-    const rechk = await facade.checkpointCandidate({ deliveryId: parked.deliveryId, resultBytes: "no mutation", fence: parked.fence });
+    const rechk = await facade.checkpointCandidate({
+      deliveryId: parked.deliveryId,
+      resultBytes: typedStageResultBytes({
+        stageId: "implement",
+        deliveryId: parked.deliveryId,
+        outputKind: "delivery-candidate",
+        candidate: treeOf(parked.worktree),
+      }),
+      fence: parked.fence,
+    });
     must(rechk, "identical-tree re-checkpoint");
     await sensor(parked, "failed"); // the planted defect still fails the trusted sensor
     expect(await stateOf(parked.deliveryId)).toBe("remediating"); // back where it parked — never admitted
@@ -612,7 +648,15 @@ describe("durable checkpoints and host-driven recovery", () => {
     if (!refused.ok) expect(refused.blockers[0]?.code).toBe("workspace_missing");
     await takeoverResume(driven);
     expect(await stateOf(driven.deliveryId)).toBe("planning");
-    must(await facade.submitStageResult({ deliveryId: driven.deliveryId, stageId: "plan", resultBytes: "plan", fence: driven.fence }), "plan after resume");
+    must(
+      await facade.submitStageResult({
+        deliveryId: driven.deliveryId,
+        stageId: "plan",
+        resultBytes: typedStageResultBytes({ stageId: "plan", deliveryId: driven.deliveryId, outputKind: "bounded-plan", candidate: treeOf(driven.worktree) }),
+        fence: driven.fence,
+      }),
+      "plan after resume",
+    );
   });
 
   it("keeps evidence worktree-local — another worktree resolves a disjoint store with no records", async () => {

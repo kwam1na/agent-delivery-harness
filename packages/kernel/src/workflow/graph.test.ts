@@ -86,6 +86,30 @@ describe("the skeleton's checkpoint bindings", () => {
     }
   });
 
+  it("declares product-realized prerequisites only where the graph declares a prerequisite", () => {
+    // The deferral is pinned to the released graph: every product-realized
+    // name must be an `always` prerequisite the bound stage actually
+    // declares, so a released graph change (a new or renamed prerequisite)
+    // surfaces here and forces an explicit adapter decision.
+    const loaded = loadBundledWorkflowGraph(archiveBytes);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    for (const binding of WORKFLOW_CHECKPOINT_BINDINGS) {
+      const stage = loaded.graph.stages.find((candidate) => candidate.id === binding.stageId);
+      expect(stage, binding.stageId).toBeDefined();
+      const declared = new Set(
+        (stage?.prerequisites ?? []).filter((prerequisite) => prerequisite.when === "always").map((prerequisite) => prerequisite.stageId),
+      );
+      for (const name of binding.productRealizedPrerequisites) {
+        expect(declared.has(name), `${binding.stageId} defers ${name}`).toBe(true);
+      }
+    }
+    // And the one deferral in the table is exactly the compound stage's
+    // finish-line prerequisite — the frozen delivery matrix realizes it
+    // through the product-owned checkpoints after compounding.
+    expect(WORKFLOW_CHECKPOINT_BINDINGS.flatMap((binding) => [...binding.productRealizedPrerequisites])).toEqual(["finish.verify"]);
+  });
+
   it("maps the model-driven delivery states onto the graph", () => {
     expect(workflowStageBindingFor("planning")?.stageId).toBe("plan");
     expect(workflowStageBindingFor("implementing")?.stageId).toBe("implement");

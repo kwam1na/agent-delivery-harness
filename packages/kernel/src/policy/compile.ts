@@ -84,6 +84,21 @@ export const PORTABLE_STAGE_GRANT = Object.freeze({
   forbiddenOperations: Object.freeze(["git.push", "merge", "deploy"]),
 } as const);
 
+/**
+ * The read-only grant product-owned intake turns run under — the spine's
+ * `intake` profile, whose grammar already refuses any writable path. The
+ * scope workflow reads the repository to draft a contract; it mutates
+ * nothing, and its admission decision is never mutation-capable.
+ */
+export const PORTABLE_INTAKE_GRANT = Object.freeze({
+  spec: EXECUTION_GRANT_SPEC,
+  profile: "intake",
+  allowedCapabilities: Object.freeze(["Read", "Glob", "Grep"]),
+  writablePaths: Object.freeze([]),
+  protectedPaths: Object.freeze([".git", ".managed-projection", ".claude"]),
+  forbiddenOperations: Object.freeze(["git.push", "merge", "deploy"]),
+} as const);
+
 export interface CompiledCheckpointGrant {
   readonly stageId: string;
   readonly grant: {

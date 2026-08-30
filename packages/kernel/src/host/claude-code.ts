@@ -27,7 +27,7 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { compareUtf16CodeUnits } from "../canonical.ts";
 import { digestCanonical, sha256Hex } from "../digest.ts";
-import type { CheckpointAdmissionExpectation } from "../binding/host-admission.ts";
+import type { AdmissionExpectation } from "../binding/host-admission.ts";
 import { listArchiveEntries, readArchiveEntry } from "../workflow/archive.ts";
 import type { ExecPort } from "./exec-port.ts";
 
@@ -338,19 +338,41 @@ export async function composeClaudeCodeSession(
 
 export interface MintGrantAttestationInput {
   readonly grant: unknown;
-  readonly expectation: CheckpointAdmissionExpectation;
+  readonly expectation: AdmissionExpectation;
   readonly expiry: string;
 }
 
-/** The binding's attestation mint: binds the exact expectation and grant bytes. */
+/**
+ * The binding's attestation mint: binds the exact expectation and grant
+ * bytes. A checkpoint attestation binds every delivery-scoped identity; an
+ * intake attestation binds the intake draft and records every delivery-scoped
+ * member EXPLICITLY absent-by-state — pre-delivery there is no fence,
+ * workspace, projection, or registration to bind.
+ */
 export function mintGrantAttestation(input: MintGrantAttestationInput): Record<string, unknown> {
-  return {
+  const base = {
     spec: "grant-attestation/1",
-    profile: "checkpoint",
+    profile: input.expectation.profile,
     hostVersion: input.expectation.hostVersion,
     grantDigest: digestCanonical(input.grant),
     productTrustRevocationEpoch: input.expectation.productTrustRevocationEpoch,
     expiry: input.expiry,
+  };
+  if (input.expectation.profile === "intake") {
+    return {
+      ...base,
+      intakeDraftId: input.expectation.intakeDraftId,
+      deliveryId: "absent-by-state",
+      invocationFence: "absent-by-state",
+      workspaceId: "absent-by-state",
+      projectionDigest: "absent-by-state",
+      discoveryConfigurationDigest: "absent-by-state",
+      registeringInstallationId: "absent-by-state",
+      activeProfile: "absent-by-state",
+    };
+  }
+  return {
+    ...base,
     intakeDraftId: "absent-by-state",
     deliveryId: input.expectation.deliveryId,
     invocationFence: input.expectation.invocationFence,
