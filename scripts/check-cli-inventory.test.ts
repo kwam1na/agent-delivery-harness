@@ -96,10 +96,10 @@ describe("runCliInventorySensor", () => {
     expect(findings.some((f) => f.rule === "registry-unreadable")).toBe(true);
   });
 
-  it("passes on the repository's own CLI registry (all seven commands)", () => {
+  it("passes on the repository's own CLI registry (all eight commands)", () => {
     const result = runCliInventorySensor({ root: repoRootFromHere() });
     expect(result.findings).toEqual([]);
-    expect(result.commandFiles).toHaveLength(7);
-    expect(result.registeredFiles).toHaveLength(7);
+    expect(result.commandFiles).toHaveLength(8);
+    expect(result.registeredFiles).toHaveLength(8);
   });
 });

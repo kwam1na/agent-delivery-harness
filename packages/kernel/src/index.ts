@@ -548,3 +548,67 @@ export {
   type SubstrateFailure,
   type TrustCheckInput,
 } from "./substrate/installer.ts";
+
+// ── The walking skeleton's V-slice modules ──────────────────────────────────
+//
+// The final module boundaries of the managed delivery product — policy,
+// checkpoint, workflow, host binding, evidence, finish line, and the facade —
+// at their narrowest production slice: one fixed disposable policy and stage
+// grant, one append-only checkpoint path, the exact bundled workflow graph,
+// the qualified Claude Code admission composition, the mandatory review
+// floor, the merge-ready finish line, and one typed status/resume surface.
+export {
+  DISPOSABLE_REVIEW_LENSES,
+  DISPOSABLE_SENSOR_CAPABILITY,
+  DISPOSABLE_STAGE_GRANT,
+  MANDATORY_LENS_CATEGORIES,
+  compileDisposablePolicy,
+  type CompileDisposablePolicyInput,
+} from "./policy/disposable.ts";
+export {
+  createIntakeJournalStore,
+  createJournalStore,
+  type IntakeJournalStore,
+  type JournalAppendResult,
+  type JournalStore,
+} from "./checkpoint/journal-store.ts";
+export { listArchiveEntries, readArchiveEntry } from "./workflow/archive.ts";
+export {
+  WORKFLOW_CHECKPOINT_BINDINGS,
+  WORKFLOW_GRAPH_ENTRY,
+  loadBundledWorkflowGraph,
+  workflowStageBindingFor,
+  type WorkflowCheckpointBinding,
+  type WorkflowGraph,
+  type WorkflowStage,
+} from "./workflow/graph.ts";
+export {
+  HOST_BINDING_BLOCKER_CODES,
+  PROJECTION_DIR,
+  composeClaudeCodeSession,
+  materializeProjection,
+  mintGrantAttestation,
+  verifyProjection,
+  type HostBindingBlocker,
+  type HostBindingBlockerCode,
+} from "./host/claude-code.ts";
+export { createExecPort, type ExecInvocation, type ExecOutcome, type ExecPort } from "./host/exec-port.ts";
+export {
+  checkReviewFloor,
+  composeOutcomeVerification,
+  qualifyReviewAttempts,
+  type QualifiedAttempts,
+  type RecordedReviewAttempt,
+  type RecordedSensorResult,
+  type ReviewRejection,
+  type ReviewVerdict,
+} from "./evidence/review.ts";
+export { composeMergeReadyResult, type ComposeMergeReadyResult } from "./finish-line/merge-ready.ts";
+export {
+  createManagedDeliveryFacade,
+  type CreateFacadeInput,
+  type FacadeFailure,
+  type ManagedCheckpoint,
+  type ManagedDeliveryFacade,
+  type ManagedInstallation,
+} from "./facade/managed-delivery.ts";
