@@ -208,6 +208,54 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     rules: ["e"],
     status: "present",
   },
+  // The walking skeleton's V-slice modules — the final module boundaries the
+  // later policy/checkpoint/workflow/host/evidence/finish-line/facade units
+  // harden. Pure modules carry d1 allowlists naming exactly the spine and
+  // digest edges they consume; the impure modules (checkpoint store, host
+  // binding, facade) are registered for the time ban. `host/hook-main.ts` is
+  // deliberately NOT time-banned: it is a process boundary (like the CLI
+  // main) that stamps the ambient clock into the observation marker, while
+  // every decision it takes is the pure admission module's.
+  {
+    id: "kernel-workflow",
+    path: "packages/kernel/src/workflow",
+    kind: "dir",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["digest.ts", "spine/composition.ts"],
+    d1SiblingAllowance: true,
+  },
+  {
+    id: "kernel-policy",
+    path: "packages/kernel/src/policy",
+    kind: "dir",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["digest.ts"],
+    d1SiblingAllowance: true,
+  },
+  {
+    id: "kernel-evidence",
+    path: "packages/kernel/src/evidence",
+    kind: "dir",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["spine/grammar.ts"],
+    d1SiblingAllowance: true,
+  },
+  {
+    id: "kernel-finish-line",
+    path: "packages/kernel/src/finish-line",
+    kind: "dir",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["digest.ts", "spine/finish-line.ts"],
+    d1SiblingAllowance: true,
+  },
+  { id: "kernel-checkpoint", path: "packages/kernel/src/checkpoint", kind: "dir", rules: ["e"], status: "present" },
+  { id: "host-claude-code", path: "packages/kernel/src/host/claude-code.ts", kind: "file", rules: ["e"], status: "present" },
+  { id: "host-exec-port", path: "packages/kernel/src/host/exec-port.ts", kind: "file", rules: ["e"], status: "present" },
+  { id: "kernel-facade", path: "packages/kernel/src/facade", kind: "dir", rules: ["e"], status: "present" },
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "present" },
   { id: "kernel-context", path: "packages/kernel/src/context.ts", kind: "file", rules: ["d1"], status: "present" },
   { id: "kernel-recorder", path: "packages/kernel/src/recorder.ts", kind: "file", rules: ["d2", "e"], status: "present" },

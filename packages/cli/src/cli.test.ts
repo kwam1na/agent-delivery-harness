@@ -3,7 +3,7 @@
  *
  * Two kinds of test live here. The boundary tests drive synthetic commands to
  * pin the exit-code and rendering contract deterministically. The loop tests
- * drive the seven real commands against real temporary git repositories — the
+ * drive the evidence-loop commands against real temporary git repositories — the
  * only way to prove capture, the store, admission, the record write, and the
  * verify core agree about one repository. Nothing here stubs git.
  */

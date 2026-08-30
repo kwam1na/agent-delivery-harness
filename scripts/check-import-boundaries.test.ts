@@ -92,6 +92,33 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     `import { manifestDigestOf } from "./manifest.ts";\n` +
     `export const digestOfFile = (p: string): string => manifestDigestOf(readFileSync(p, "utf8"));\n`,
 
+  // The walking skeleton's V-slice modules, mirroring their real import
+  // shapes: the pure modules reach the kernel only through their named
+  // allowlists (plus siblings), and the impure ones are time-banned only.
+  "packages/kernel/src/spine/finish-line.ts": `export const FINISH_LINE_RESULT_SPEC = "finish-line-result/1";\n`,
+  "packages/kernel/src/workflow/archive.ts": `export const listArchiveEntries = (bytes: Uint8Array): number => bytes.length;\n`,
+  "packages/kernel/src/workflow/graph.ts":
+    `import { sha256 } from "../digest.ts";\n` +
+    `import { PRODUCT_TRUST_LABEL } from "../spine/composition.ts";\n` +
+    `import { listArchiveEntries } from "./archive.ts";\n` +
+    `export const describeGraph = (bytes: Uint8Array): string => sha256(String(listArchiveEntries(bytes))) + PRODUCT_TRUST_LABEL;\n`,
+  "packages/kernel/src/policy/disposable.ts":
+    `import { sha256 } from "../digest.ts";\nexport const policyDigestOf = (v: string): string => sha256(v);\n`,
+  "packages/kernel/src/evidence/review.ts":
+    `import { SPINE_INSTANT } from "../spine/grammar.ts";\nexport const contextObservedAtOk = (v: string): boolean => SPINE_INSTANT.test(v);\n`,
+  "packages/kernel/src/finish-line/merge-ready.ts":
+    `import { sha256 } from "../digest.ts";\n` +
+    `import { FINISH_LINE_RESULT_SPEC } from "../spine/finish-line.ts";\n` +
+    `export const resultDigestOf = (v: string): string => sha256(v + FINISH_LINE_RESULT_SPEC);\n`,
+  "packages/kernel/src/checkpoint/journal-store.ts":
+    `import { appendFile } from "node:fs/promises";\nexport const append = (p: string, line: string): Promise<void> => appendFile(p, line);\n`,
+  "packages/kernel/src/host/claude-code.ts":
+    `import { readFile } from "node:fs/promises";\nexport const projectionBytes = (p: string): Promise<Uint8Array> => readFile(p);\n`,
+  "packages/kernel/src/host/exec-port.ts":
+    `import { execFile } from "node:child_process";\nexport const run = (cmd: string): void => void execFile(cmd, []);\n`,
+  "packages/kernel/src/facade/managed-delivery.ts":
+    `import { readFile } from "node:fs/promises";\nexport const readJournal = (p: string): Promise<string> => readFile(p, "utf8");\n`,
+
   // d2 — fs only through the artifacts port.
   "packages/kernel/src/recorder.ts": `import type { ArtifactsPort } from "./artifacts.types.ts";\nexport const submit = (port: ArtifactsPort, p: string): Promise<string> => port.read(p);\n`,
   "packages/kernel/src/admission.ts": `import type { RecordShape } from "./records.types.ts";\nimport { evaluate } from "./evaluator.ts";\nexport const admit = (r: RecordShape): string => r.id + evaluate({ digest: r.id }, {});\n`,

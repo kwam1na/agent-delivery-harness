@@ -65,10 +65,11 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the seven-command operator surface and
+- **`@agent-delivery-harness/cli`** — the eight-command operator surface and
   opt-in `delivery-provider-rails/1` stdio adapter:
   `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
-  `check`.
+  `check`, and `managed` (the managed-delivery facade's host-facing checkpoint
+  surface).
 - **`@agent-delivery-harness/mcp`** — MCP server exposing `review-context` and
   `submit-evidence` to agent frameworks over stdio, at strict CLI parity across
   the four protocol revisions it speaks (`2026-07-28`, `2025-11-25`,
