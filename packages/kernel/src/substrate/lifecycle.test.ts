@@ -371,15 +371,12 @@ describe("journaled update recovery", () => {
           : packed[2].generationDigest;
       expect(active).toBe(expected);
 
-      // The lane reopens: a retried update reaches the target generation.
+      // The lane reopens: a retried update reaches the target generation —
+      // a real update after a rolled-back recovery, a no-op after a
+      // rolled-forward one.
       const retried = await updateTo(target, 2);
-      if (active === packed[2].generationDigest) {
-        // Already rolled forward; the retry is a no-op reinstall refusal or a
-        // clean success — either way the lane is open and consistent.
-        expect(retried.ok || !retried.ok).toBe(true);
-      } else {
-        expect(retried.ok, JSON.stringify(retried)).toBe(true);
-      }
+      expect(retried.ok, JSON.stringify(retried)).toBe(true);
+      if (retried.ok) expect(retried.noOp).toBe(active === packed[2].generationDigest);
       expect(await activeOf(target)).toBe(packed[2].generationDigest);
     });
   }
