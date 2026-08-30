@@ -60,11 +60,18 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
 
   // The contract spine: pure, and independent of the evidence kernel. Its
   // fixture mirrors the real shape — a sibling import plus the canonicalizer.
+  "packages/kernel/src/spine/grammar.ts": `export const SPINE_INSTANT = /^\\d{4}/;\n`,
   "packages/kernel/src/spine/vocabulary.ts": `export const JOURNALS = ["intake", "delivery", "maintenance"] as const;\n`,
   "packages/kernel/src/spine/journal.ts":
     `import { canonicalize } from "../canonical.ts";\n` +
     `import { JOURNALS } from "./vocabulary.ts";\n` +
     `export const describeEntry = (v: unknown): string => canonicalize(v) + JOURNALS[0];\n`,
+
+  // The trusted host-control binding: pure, reaching the spine only through
+  // its named allowlist entries.
+  "packages/kernel/src/binding/host-admission.ts":
+    `import { SPINE_INSTANT } from "../spine/grammar.ts";\n` +
+    `export const observedAtIsWellFormed = (v: string): boolean => SPINE_INSTANT.test(v);\n`,
 
   // d2 — fs only through the artifacts port.
   "packages/kernel/src/recorder.ts": `import type { ArtifactsPort } from "./artifacts.types.ts";\nexport const submit = (port: ArtifactsPort, p: string): Promise<string> => port.read(p);\n`,
