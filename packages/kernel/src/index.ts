@@ -325,3 +325,126 @@ export {
   type RecomputedIdentity,
   type VerificationBase,
 } from "./delivery-record.ts";
+
+// ── The managed-delivery contract spine ─────────────────────────────────────
+//
+// The frozen M0-critical contract families, the closed (journal, kind) event
+// vocabulary with the intake/delivery state discriminators, and the pure
+// journal reducers. The spine and the evidence kernel stay independent — the
+// import-boundary sensor enforces both directions — and meet only here, at
+// the package barrel.
+export {
+  DELIVERY_STATES,
+  EVENT_VOCABULARY,
+  HOST_ACTIVITY_STATES,
+  INTAKE_STATES,
+  JOURNALS,
+  OBSERVATION_ONLY_KINDS,
+  SUSPENDED_DELIVERY_STATES,
+  TERMINAL_DELIVERY_STATES,
+  classifyEventKind,
+  type DeliveryState,
+  type EventClassification,
+  type EventKindEntry,
+  type HostActivityState,
+  type IntakeState,
+  type Journal,
+} from "./spine/vocabulary.ts";
+export {
+  ABSENT_BY_STATE,
+  SPINE_GIT_OID,
+  SPINE_ID,
+  SPINE_INSTANT,
+  SPINE_SHA256,
+  type SpineRejection,
+  type SpineRejectionCode,
+  type SpineVerdict,
+} from "./spine/grammar.ts";
+export {
+  PINNED_AGENT_SKILLS,
+  PRODUCT_COMPOSITION_PIN_SPEC,
+  PRODUCT_TRUST_LABEL,
+  PRODUCT_TRUST_STATE_SPEC,
+  localDigestTrustPredicate,
+  validateCompositionPin,
+  validateProductTrustState,
+  type ProductTrustPort,
+  type ProductTrustState,
+  type TrustDecision,
+} from "./spine/composition.ts";
+export {
+  CRITERION_DISPOSITIONS,
+  EVIDENCE_KINDS,
+  FINISH_LINES,
+  OUTCOME_VERIFICATION_SPEC,
+  REVIEW_VERDICTS,
+  SCOPED_DELIVERY_CONTRACT_SPEC,
+  checkContractWithinPolicy,
+  checkOutcomeCoversContract,
+  validateAcceptedContract,
+  validateOutcomeVerification,
+  type AcceptedContract,
+  type OutcomeCriterion,
+  type OutcomeVerification,
+  type PolicyGrantView,
+} from "./spine/contract.ts";
+export {
+  POLICY_SNAPSHOT_SPEC,
+  REVIEW_LENS_CATEGORIES,
+  validatePolicySnapshot,
+  type PolicySnapshot,
+} from "./spine/policy.ts";
+export {
+  INVOCATION_FENCE_SPEC,
+  REVIEWER_ATTEMPT_SPEC,
+  validateInvocationFence,
+  validateReviewerAttempt,
+} from "./spine/invocation.ts";
+export {
+  EXECUTION_GRANT_SPEC,
+  GRANT_ATTESTATION_SPEC,
+  GRANT_PROFILES,
+  grantDigest,
+  validateExecutionGrant,
+  validateGrantAttestation,
+  type GrantProfile,
+} from "./spine/grant.ts";
+export {
+  CONFIRMATION_CLASSES,
+  OPERATOR_CONFIRMATION_SPEC,
+  confirmationClassOf,
+  validateOperatorConfirmation,
+  type ConfirmationClass,
+} from "./spine/confirmation.ts";
+export {
+  CAPABILITY_DESCRIPTOR_SPEC,
+  CAPABILITY_KINDS,
+  SENSOR_OUTCOMES,
+  SENSOR_RESULT_SPEC,
+  validateCapabilityDescriptor,
+  validateSensorResult,
+} from "./spine/capability.ts";
+export {
+  FINISH_LINE_RESULT_SPEC,
+  checkMergeReadyAgainstOutcome,
+  validateFinishLineResult,
+  type FinishLineResult,
+} from "./spine/finish-line.ts";
+export {
+  APPROVAL_REQUEST_KINDS,
+  JOURNAL_ENTRY_SPEC,
+  WORKSPACE_DISPOSITIONS,
+  validateJournalEntry,
+} from "./spine/journal.ts";
+export {
+  DELIVERY_TRANSITION_TABLE,
+  isDeliveryTransitionValid,
+  isIntakeTransitionValid,
+  reduceDeliveryJournal,
+  reduceIntakeJournal,
+  type DeliveryJournalState,
+  type DeliveryTransitionRow,
+  type IntakeJournalState,
+  type ReduceDeliveryResult,
+  type ReduceIntakeResult,
+} from "./spine/reducer.ts";
