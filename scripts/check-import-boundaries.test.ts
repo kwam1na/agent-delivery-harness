@@ -91,6 +91,12 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     `import { readFileSync } from "node:fs";\n` +
     `import { manifestDigestOf } from "./manifest.ts";\n` +
     `export const digestOfFile = (p: string): string => manifestDigestOf(readFileSync(p, "utf8"));\n`,
+  "packages/kernel/src/substrate/lifecycle.ts":
+    `import { digestOfFile } from "./installer.ts";\n` +
+    `export const updateComposition = (p: string, now: string): string => digestOfFile(p) + now;\n`,
+  "packages/kernel/src/substrate/maintenance-journal.ts":
+    `import { readFileSync } from "node:fs";\n` +
+    `export const readMaintenanceJournal = (p: string): string => readFileSync(p, "utf8");\n`,
 
   // The walking skeleton's V-slice modules, mirroring their real import
   // shapes: the pure modules reach the kernel only through their named

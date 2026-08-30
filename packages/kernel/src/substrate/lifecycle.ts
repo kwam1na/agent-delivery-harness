@@ -86,8 +86,6 @@ const fail = (code: SubstrateBlockerCode, message: string): SubstrateFailure => 
   blockers: [{ code, message }],
 });
 
-const nowInstant = (): string => `${new Date().toISOString().slice(0, 19)}Z`;
-
 // ── Adopted-installation context ───────────────────────────────────────────
 
 interface AdoptedInstallation {
@@ -126,8 +124,8 @@ export interface SensitiveLaneInput {
   readonly receiptDir: string;
   /** Override the configured source's port (tests, host integrations). */
   readonly assertionSource?: AssertionSourcePort;
-  /** The consumption instant; defaults to the wall clock. */
-  readonly now?: string;
+  /** The consumption instant, caller-observed; the lane consults no clock. */
+  readonly now: string;
 }
 
 interface ConsumedAssertion {
@@ -185,8 +183,7 @@ async function consumeMaintenanceAssertion(
       "a fixture-sourced assertion can never approve a sensitive operation on a production installation",
     );
   }
-  const now = input.now ?? nowInstant();
-  if (evaluation.expiry < now) {
+  if (evaluation.expiry < input.now) {
     return fail(
       "assertion_stale",
       `the evaluation expired at ${evaluation.expiry}; an expired assertion is a cached credential and is treated as invalid`,
@@ -376,15 +373,20 @@ export async function rollbackComposition(
   const target = input.targetGenerationDigest;
 
   // Only a retained, previously accepted, non-revoked generation — never an
-  // arbitrary older archive.
+  // arbitrary older archive. Eligibility goes through the one trust port,
+  // the same seam every other check site consumes.
+  const trust = input.trust ?? localDigestTrustPredicate;
   if (!adopted.state.acceptedGenerationDigests.includes(target)) {
     return fail(
       "rollback_target_not_accepted",
       `generation ${target} was never accepted under this installation's local trust policy; rollback can never adopt an arbitrary archive`,
     );
   }
-  if (adopted.state.revokedGenerationDigests.includes(target)) {
-    return fail("generation_revoked", `generation ${target} is revoked; a formerly valid rollback target stops being one`);
+  const decision = trust.evaluate(target, adopted.state);
+  if (!decision.eligible) {
+    return decision.reason === "revoked"
+      ? fail("generation_revoked", `generation ${target} is revoked; a formerly valid rollback target stops being one`)
+      : fail("rollback_target_not_accepted", `generation ${target} is not execution-eligible under current local trust state`);
   }
   const root = generationRootFor(input.installationPath, target);
   const retained = await verifyGenerationClosure(root, target);
@@ -456,6 +458,14 @@ export async function maintainTrustState(
     if (state.revokedGenerationDigests.includes(input.generationDigest)) {
       return fail("generation_revoked", `generation ${input.generationDigest} is revoked and can never be pinned`);
     }
+    // The pin must land on retained bytes: an accepted-but-collected
+    // generation would leave the pin and the active pointer disagreeing with
+    // nothing loadable behind them.
+    const retained = await verifyGenerationClosure(
+      generationRootFor(input.installationPath, input.generationDigest),
+      input.generationDigest,
+    );
+    if (!retained.ok) return retained;
     next = { ...state, pinnedManifestDigest: input.generationDigest };
   } else if (input.operation === "revoke") {
     if (state.revokedGenerationDigests.includes(input.generationDigest)) {

@@ -127,7 +127,13 @@ export interface InterruptedMaintenance {
   readonly generationDigest: string;
 }
 
-/** The last phased action left `started` without a later terminal phase. */
+/**
+ * The last phased action left `started` without a later terminal phase. Only
+ * a terminal entry of the SAME action closes the marker: an interposed
+ * record of a different action — an installer repair is the one appender
+ * that legitimately runs while an interruption stands — must not erase an
+ * unrecovered interruption.
+ */
 export function interruptedMaintenanceOf(entries: readonly MaintenanceEntryView[]): InterruptedMaintenance | undefined {
   let open: InterruptedMaintenance | undefined;
   for (const entry of entries) {
@@ -137,7 +143,7 @@ export function interruptedMaintenanceOf(entries: readonly MaintenanceEntryView[
         action: entry.payload["action"] as string,
         generationDigest: entry.payload["generationDigest"] as string,
       };
-    } else if (phase === "completed" || phase === "recovered") {
+    } else if ((phase === "completed" || phase === "recovered") && entry.payload["action"] === open?.action) {
       open = undefined;
     }
   }

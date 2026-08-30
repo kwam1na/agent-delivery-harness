@@ -315,8 +315,7 @@ describe("generation-change migration", () => {
 
   it("refuses a migration assertion naming a revoked target generation, and the delivery remains security_blocked", { timeout: 120_000 }, async () => {
     const deliveryId = await registerDelivery(facadeA, "contract-migrate-2");
-    // Recorded pin is generation 2 now; revoke it, and also revoke the
-    // would-be target so the migration must refuse.
+    // Recorded pin is generation 2; revoke it to fence the delivery.
     const revoke2 = await maintainTrustState({
       ...installationA,
       operation: "revoke",
@@ -329,16 +328,8 @@ describe("generation-change migration", () => {
     expect(refused.ok).toBe(false);
     expect(await stateOf(facadeA, deliveryId)).toBe("security_blocked");
 
-    const migrated = await facadeA.recoverSecurityBlocked({
-      deliveryId,
-      targetGenerationDigest: packed[2].generationDigest,
-      assertionSource: fixtureSource(),
-      now: NOW,
-    });
-    expect(migrated.ok).toBe(false);
-    expect(await stateOf(facadeA, deliveryId)).toBe("security_blocked");
-
-    // Stale and replayed migration assertions reject the same way.
+    // The installation moves to generation 3, which is then ALSO revoked: a
+    // migration naming that revoked target is refused outright.
     const update3 = await updateComposition({
       packedDir: packed[3].packedDir,
       ...installationA,
@@ -347,6 +338,33 @@ describe("generation-change migration", () => {
       now: NOW,
     });
     expect(update3.ok, JSON.stringify(update3)).toBe(true);
+    const revoke3 = await maintainTrustState({
+      ...installationA,
+      operation: "revoke",
+      generationDigest: packed[3].generationDigest,
+      assertionSource: fixtureSource(),
+      now: NOW,
+    });
+    expect(revoke3.ok).toBe(true);
+    const revokedTarget = await facadeA.recoverSecurityBlocked({
+      deliveryId,
+      targetGenerationDigest: packed[3].generationDigest,
+      assertionSource: fixtureSource(),
+      now: NOW,
+    });
+    expect(codesOf(revokedTarget)).toContain("generation_revoked");
+    expect(await stateOf(facadeA, deliveryId)).toBe("security_blocked");
+
+    const unrevoke3 = await maintainTrustState({
+      ...installationA,
+      operation: "unrevoke",
+      generationDigest: packed[3].generationDigest,
+      assertionSource: fixtureSource(),
+      now: NOW,
+    });
+    expect(unrevoke3.ok).toBe(true);
+
+    // A stale migration assertion rejects the same way.
     const stale = await facadeA.recoverSecurityBlocked({
       deliveryId,
       targetGenerationDigest: packed[3].generationDigest,
@@ -364,15 +382,16 @@ describe("generation-change migration", () => {
     });
     expect(first.ok, JSON.stringify(first)).toBe(true);
 
-    // Fence again (revoke generation 3, the new pin), then attempt a replay.
-    const revoke3 = await maintainTrustState({
+    // Fence again (revoke generation 3, the new pin), then attempt a replay
+    // of the already-consumed nonce against an eligible target.
+    const revoke3Again = await maintainTrustState({
       ...installationA,
       operation: "revoke",
       generationDigest: packed[3].generationDigest,
       assertionSource: fixtureSource(),
       now: NOW,
     });
-    expect(revoke3.ok).toBe(true);
+    expect(revoke3Again.ok).toBe(true);
     const refenced = await bindFreshWorktree(facadeA, deliveryId);
     expect(refenced.ok).toBe(false);
     expect(await stateOf(facadeA, deliveryId)).toBe("security_blocked");
@@ -393,14 +412,14 @@ describe("generation-change migration", () => {
     expect(codesOf(replayed)).toContain("assertion_replayed");
 
     // Restore installation A to a healthy pin for the scenarios that follow.
-    const unrevoke3 = await maintainTrustState({
+    const unrevoke3Final = await maintainTrustState({
       ...installationA,
       operation: "unrevoke",
       generationDigest: packed[3].generationDigest,
       assertionSource: fixtureSource(),
       now: NOW,
     });
-    expect(unrevoke3.ok).toBe(true);
+    expect(unrevoke3Final.ok).toBe(true);
   });
 });
 

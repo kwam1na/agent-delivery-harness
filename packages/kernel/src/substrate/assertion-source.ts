@@ -131,10 +131,16 @@ const exists = async (target: string): Promise<boolean> => {
 };
 
 interface PlatformAuthentication {
-  /** Files whose presence means an interactive authentication context exists. */
-  readonly probePaths: readonly string[][];
-  /** One command per evaluation; a fresh process, never a cached grant. */
-  readonly command: (disclosure: string) => readonly string[][];
+  /**
+   * Groups of absolute-path candidates; each group must resolve to one
+   * existing file for an interactive authentication context to exist, and
+   * `command` receives exactly the resolved paths — an evaluation only ever
+   * spawns the absolute executable the probe verified, never a PATH lookup
+   * a planted binary could satisfy.
+   */
+  readonly probePaths: readonly (readonly string[])[];
+  /** One command list per evaluation; a fresh process, never a cached grant. */
+  readonly command: (disclosure: string, resolved: readonly string[]) => readonly (readonly string[])[];
   readonly detail: string;
 }
 
@@ -148,10 +154,11 @@ const PLATFORM_AUTHENTICATION: Readonly<Record<string, PlatformAuthentication>> 
     probePaths: [
       ["/System/Library/Frameworks/LocalAuthentication.framework"],
       ["/usr/bin/security"],
+      ["/usr/bin/osascript"],
     ],
-    command: (disclosure) => [
+    command: (disclosure, resolved) => [
       [
-        "/usr/bin/osascript",
+        resolved[2] as string,
         "-e",
         `do shell script "true" with prompt ${JSON.stringify(disclosure)} with administrator privileges`,
       ],
@@ -159,18 +166,18 @@ const PLATFORM_AUTHENTICATION: Readonly<Record<string, PlatformAuthentication>> 
     detail: "macOS Authorization Services prompt (LocalAuthentication-backed where enrolled)",
   },
   linux: {
-    probePaths: [["/usr/bin/sudo"], ["/bin/sudo"]],
-    command: (disclosure) => [
-      ["sudo", "-k"],
-      ["sudo", "-p", `${disclosure}\npassword for %u: `, "-v"],
+    probePaths: [["/usr/bin/sudo", "/bin/sudo"]],
+    command: (disclosure, resolved) => [
+      [resolved[0] as string, "-k"],
+      [resolved[0] as string, "-p", `${disclosure}\npassword for %u: `, "-v"],
     ],
     detail: "sudo re-authentication with the cached-credential window explicitly reset",
   },
   win32: {
     probePaths: [["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"]],
-    command: (disclosure) => [
+    command: (disclosure, resolved) => [
       [
-        "powershell.exe",
+        resolved[0] as string,
         "-NoProfile",
         "-Command",
         `[Windows.Security.Credentials.UI.UserConsentVerifier,Windows.Security.Credentials.UI,ContentType=WindowsRuntime] | Out-Null; ` +
@@ -182,6 +189,22 @@ const PLATFORM_AUTHENTICATION: Readonly<Record<string, PlatformAuthentication>> 
     detail: "Windows Hello / credential UI consent verification",
   },
 });
+
+/** First existing candidate per group, or the group that resolved nothing. */
+async function resolveProbeGroups(
+  authentication: PlatformAuthentication,
+): Promise<{ readonly resolved: readonly string[] } | { readonly missing: readonly string[] }> {
+  const resolved: string[] = [];
+  for (const candidates of authentication.probePaths) {
+    let found: string | undefined;
+    for (const candidate of candidates) {
+      if (found === undefined && (await exists(candidate))) found = candidate;
+    }
+    if (found === undefined) return { missing: candidates };
+    resolved.push(found);
+  }
+  return { resolved };
+}
 
 const runOnce = (command: readonly string[]): Promise<number> =>
   new Promise((resolve) => {
@@ -211,17 +234,12 @@ export function createOsNativeAssertionSource(options: OsNativeSourceOptions = {
       if (authentication === undefined) {
         return { available: false, detail: `no interactive authentication context is defined for platform ${platform}` };
       }
-      for (const candidates of authentication.probePaths) {
-        let found = false;
-        for (const candidate of candidates) {
-          if (await exists(candidate)) found = true;
-        }
-        if (!found) {
-          return {
-            available: false,
-            detail: `authentication surface missing on ${platform}: ${candidates.join(" or ")}`,
-          };
-        }
+      const groups = await resolveProbeGroups(authentication);
+      if ("missing" in groups) {
+        return {
+          available: false,
+          detail: `authentication surface missing on ${platform}: ${groups.missing.join(" or ")}`,
+        };
       }
       return { available: true, sourceKind: "os-native", detail: authentication.detail };
     },
@@ -229,7 +247,11 @@ export function createOsNativeAssertionSource(options: OsNativeSourceOptions = {
       if (authentication === undefined) {
         return { ok: false, reason: `no interactive authentication context is defined for platform ${platform}` };
       }
-      for (const command of authentication.command(request.disclosure)) {
+      const groups = await resolveProbeGroups(authentication);
+      if ("missing" in groups) {
+        return { ok: false, reason: `authentication surface missing on ${platform}: ${groups.missing.join(" or ")}` };
+      }
+      for (const command of authentication.command(request.disclosure, groups.resolved)) {
         const code = await runOnce(command);
         if (code !== 0) return { ok: false, reason: `interactive authentication was not granted (${command[0]})` };
       }

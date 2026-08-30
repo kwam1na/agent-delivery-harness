@@ -381,6 +381,43 @@ describe("journaled update recovery", () => {
     });
   }
 
+  it("is not masked by an installer repair run while the interruption stands", async () => {
+    const target = await installGen1();
+    await expect(
+      updateTo(target, 2, {
+        hooks: {
+          onPhase: (phase: string) => {
+            if (phase === "trust-state-written") throw new Error("injected fault after trust-state-written");
+          },
+        },
+      }),
+    ).rejects.toThrow("injected fault");
+
+    // The documented source-loss path: the assertion source is lost while
+    // the interruption stands, and the operator performs the repair.
+    rmSync(assertionProviderConfigPathFor(target.installationPath));
+    const repaired = await repairInstallation({
+      ...target,
+      interactive: true,
+      source: { sourceKind: "qualification-fixture", port: fixtureSource() },
+    });
+    expect(repaired.ok, JSON.stringify(repaired)).toBe(true);
+
+    // The repair's journal record must NOT erase the unrecovered
+    // interruption: the lane stays blocked until recovery reconciles it.
+    const blocked = await rollbackComposition({
+      ...target,
+      targetGenerationDigest: packed[1].generationDigest,
+      assertionSource: fixtureSource(),
+      now: NOW,
+    });
+    expect(codesOf(blocked)).toContain("maintenance_in_progress");
+    const recovered = await recoverInterruptedMaintenance({ installationPath: target.installationPath });
+    expect(recovered.ok, JSON.stringify(recovered)).toBe(true);
+    if (recovered.ok) expect(recovered.recovered).toBe(true);
+    expect(await activeOf(target)).toBe(trustStateOf(target).pinnedManifestDigest);
+  });
+
   it("reports nothing to recover on a healthy installation", async () => {
     const target = await installGen1();
     const recovered = await recoverInterruptedMaintenance({ installationPath: target.installationPath });
@@ -523,6 +560,26 @@ describe("trust-state maintenance operations", () => {
       now: NOW,
     });
     expect(codesOf(unaccepted)).toContain("rollback_target_not_accepted");
+  });
+
+  it("refuses to pin an accepted generation whose bytes were collected — the pin lands only on retained roots", async () => {
+    const target = await installGen1();
+    expect((await updateTo(target, 2)).ok).toBe(true);
+    expect((await updateTo(target, 3)).ok).toBe(true);
+    const collected = await garbageCollectGenerations({
+      installationPath: target.installationPath,
+      referencedGenerationDigests: [],
+    });
+    expect(collected.ok).toBe(true);
+    if (collected.ok) expect(collected.removed).toEqual([packed[1].generationDigest]);
+    const pinned = await maintainTrustState({
+      ...target,
+      operation: "pin",
+      generationDigest: packed[1].generationDigest,
+      assertionSource: fixtureSource(),
+      now: NOW,
+    });
+    expect(codesOf(pinned)).toContain("missing_generation");
   });
 
   it("advances the high-water mark forward only; an epoch or mark rollback rejects", async () => {
