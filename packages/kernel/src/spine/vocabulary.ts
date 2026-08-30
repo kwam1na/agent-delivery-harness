@@ -127,9 +127,12 @@ export const EVENT_VOCABULARY: readonly EventKindEntry[] = Object.freeze([
   entry("delivery", "trust.epoch.observed", "active", true),
   entry("delivery", "blocker.recorded", "active"),
   entry("delivery", "finish.line.recorded", "active"),
+  // Defined by the composition-lifecycle unit out of reservation — the
+  // sanctioned per-tranche path: the pair was enumerated with this owner from
+  // the start, and its payload is now frozen in `journal.ts`.
+  entry("delivery", "approval.assertion.consumed", "active"),
+  entry("maintenance", "maintenance.action.recorded", "active"),
   // Reserved — payloads belong to their owning units; reject until defined.
-  entry("delivery", "approval.assertion.consumed", "reserved", false, "sensitive-approval assertions"),
-  entry("maintenance", "maintenance.action.recorded", "reserved", false, "maintenance lane"),
   entry("maintenance", "retention.action.recorded", "reserved", false, "retention/export/deletion"),
   entry("intake", "intake.clarification.recorded", "reserved", false, "iterative intake"),
   entry("intake", "intake.draft.recorded", "reserved", false, "iterative intake"),
