@@ -73,6 +73,20 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     `import { SPINE_INSTANT } from "../spine/grammar.ts";\n` +
     `export const observedAtIsWellFormed = (v: string): boolean => SPINE_INSTANT.test(v);\n`,
 
+  // The local composition substrate: two pure modules reaching the kernel
+  // only through their named allowlists, and the installer — the substrate's
+  // one filesystem module, registered for the time ban only.
+  "packages/kernel/src/substrate/manifest.ts":
+    `import { canonicalize } from "../canonical.ts";\n` +
+    `import { sha256 } from "../digest.ts";\n` +
+    `export const manifestDigestOf = (v: unknown): string => sha256(canonicalize(v));\n`,
+  "packages/kernel/src/substrate/trust-store.ts":
+    `export const checkNoDowngrade = (sequence: number, mark: number): boolean => sequence >= mark;\n`,
+  "packages/kernel/src/substrate/installer.ts":
+    `import { readFileSync } from "node:fs";\n` +
+    `import { manifestDigestOf } from "./manifest.ts";\n` +
+    `export const digestOfFile = (p: string): string => manifestDigestOf(readFileSync(p, "utf8"));\n`,
+
   // d2 — fs only through the artifacts port.
   "packages/kernel/src/recorder.ts": `import type { ArtifactsPort } from "./artifacts.types.ts";\nexport const submit = (port: ArtifactsPort, p: string): Promise<string> => port.read(p);\n`,
   "packages/kernel/src/admission.ts": `import type { RecordShape } from "./records.types.ts";\nimport { evaluate } from "./evaluator.ts";\nexport const admit = (r: RecordShape): string => r.id + evaluate({ digest: r.id }, {});\n`,

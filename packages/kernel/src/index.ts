@@ -483,3 +483,68 @@ export {
   type ReduceDeliveryResult,
   type ReduceIntakeResult,
 } from "./spine/reducer.ts";
+
+// ── The local composition substrate ─────────────────────────────────────────
+//
+// The minimum composition manifest (nesting the frozen pin), the pure
+// trust-store decisions (fail-closed parsing, the first-install
+// discriminator, no-downgrade), and the local pack/install/activate path
+// with the M0-era canonical trust check sites behind the spine's
+// ProductTrustPort.
+export {
+  COMPOSITION_MANIFEST_SPEC,
+  COMPOSITION_PROFILES,
+  CONFIRMATION_FIXTURE_PROFILE,
+  SUPPORTED_CONTRACT_VERSIONS,
+  buildCompositionManifest,
+  compositionManifestBytes,
+  generationDigestOf,
+  validateCompositionManifest,
+  type BuildCompositionManifestInput,
+  type CompositionInventoryEntry,
+  type CompositionProfile,
+  type SubstrateRejection,
+  type SubstrateRejectionCode,
+  type SubstrateVerdict,
+} from "./substrate/manifest.ts";
+export {
+  OTHER_INSTALLATION_ARTIFACTS,
+  checkNoDowngrade,
+  discriminateInstall,
+  parseTrustState,
+  type ArtifactPresence,
+  type InstallDiscrimination,
+  type InstallationPresence,
+  type NoDowngradeDecision,
+  type OtherInstallationArtifact,
+  type ParseTrustStateResult,
+} from "./substrate/trust-store.ts";
+export {
+  ACTIVE_POINTER_SPEC,
+  COMPOSITION_MANIFEST_FILE,
+  INSTALL_RECEIPT_SPEC,
+  PACKED_HARNESS_PACKAGES,
+  SUBSTRATE_BLOCKER_CODES,
+  checkMutationLane,
+  installComposition,
+  loadPinnedGeneration,
+  packComposition,
+  receiptPathFor,
+  registrationBinding,
+  resolveActiveGeneration,
+  trustStorePathFor,
+  type InstallCompositionInput,
+  type InstallCompositionResult,
+  type InstallReceipt,
+  type LoadPinnedGenerationResult,
+  type MutationLaneResult,
+  type PackCompositionInput,
+  type PackCompositionResult,
+  type RegistrationBindingInput,
+  type RegistrationBindingResult,
+  type ResolveActiveGenerationResult,
+  type SubstrateBlocker,
+  type SubstrateBlockerCode,
+  type SubstrateFailure,
+  type TrustCheckInput,
+} from "./substrate/installer.ts";
