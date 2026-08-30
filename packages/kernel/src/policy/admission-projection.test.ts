@@ -12,8 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { validateHarnessConfig, type HarnessConfigInput } from "../config.ts";
 import { compileRepositoryPolicy } from "./compile.ts";
-import { policyDocumentFixture, repositoryAdapterSetFixture } from "./fixtures.ts";
-import { admissionFixture } from "./harness-config.characterization.test.ts";
+import { admissionFixture, policyDocumentFixture, repositoryAdapterSetFixture } from "./fixtures.ts";
 
 const compile = (document: unknown) =>
   compileRepositoryPolicy({

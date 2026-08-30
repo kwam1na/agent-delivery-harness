@@ -17,57 +17,8 @@
  *     configs, so a projected config can be digest-bound.
  */
 import { describe, expect, it } from "vitest";
-import { validateHarnessConfig, type HarnessConfigInput } from "../config.ts";
-
-/** A repo-shaped admission gate, shared with the projection suite. */
-export const admissionFixture = (): HarnessConfigInput =>
-  ({
-    gateId: "adopter.pr-admission",
-    acceptedEnvelopeSpecs: ["delivery-evidence/1"],
-    identityVersions: ["adopter-tree/v1"],
-    computingIdentityVersion: "adopter-tree/v1",
-    reviewNeutral: [{ prefix: "docs/reports/" }, { prefix: "delivery/records/" }],
-    recordNeutral: [{ prefix: "delivery/records/" }],
-    pathClassification: {
-      generated: [],
-      test: [{ kind: "glob", value: "**/*.test.ts" }],
-      lockfile: [{ kind: "glob", value: "**/package-lock.json" }],
-    },
-    sensitivePaths: [{ id: "gate-kernel", patterns: [{ kind: "prefix", value: "src/" }] }],
-    activationThreshold: 1,
-    providers: [{ id: "adopter.review-provider", findingCodes: [] }],
-    agentEnvSignals: ["CLAUDE_CODE"],
-    ciPolicies: [{ id: "github-actions", requiredEnv: [{ variable: "CI", equals: "true" }] }],
-    ciPolicyEnvKey: "ADOPTER_CI_POLICY",
-    preparationWiringPaths: ["harness.config.ts"],
-    obligations: [
-      {
-        id: "review.green",
-        activation: { kind: "relevant_change" },
-        freshness: "exact_candidate",
-        providers: ["adopter.review-provider"],
-        acceptedPayloadSpecs: ["review.green/1"],
-        allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
-        humanWaiverAllowed: true,
-        minimumAttestationLevel: "self",
-        ciDelegationPolicyIds: [],
-        remediation: {
-          default: [{ id: "run-the-review", kind: "manual_action", summary: "Run the review and submit its manifest." }],
-        },
-        waivableCodes: ["review_evidence_missing", "stale_evidence", "evidence_not_green", "unresolved_actionable_findings"],
-        nonWaivableCodes: [
-          "ambiguous_records",
-          "malformed_record",
-          "unknown_provider",
-          "live_provider_missing",
-          "ambiguous_live_provider",
-          "live_provider_failed",
-          "resolution_not_allowed",
-        ],
-      },
-    ],
-    deliveryRecordPath: "delivery/records/record.json",
-  }) as HarnessConfigInput;
+import { validateHarnessConfig } from "../config.ts";
+import { admissionFixture } from "./fixtures.ts";
 
 const blockerCodes = (verdict: ReturnType<typeof validateHarnessConfig>): readonly string[] =>
   verdict.ok ? [] : verdict.blockers.map((blocker) => blocker.code);

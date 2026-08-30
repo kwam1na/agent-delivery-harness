@@ -23,6 +23,7 @@ import { EXECUTION_GRANT_SPEC } from "../spine/grant.ts";
 import { POLICY_SNAPSHOT_SPEC, validatePolicySnapshot, type PolicySnapshot } from "../spine/policy.ts";
 import {
   PRIVILEGED_ACTIONS,
+  PRIVILEGED_CAPABILITY_KINDS,
   createPolicyCollector,
   validateAdapterSet,
   type AdapterCapability,
@@ -45,6 +46,7 @@ export const POLICY_COMPILE_CODES = Object.freeze([
   "contradictory_finish_line",
   "duplicate_obligation",
   "duplicate_review_lens",
+  "duplicate_checkpoint",
   "mandatory_lens_missing",
   "capability_unavailable",
   "capability_version_mismatch",
@@ -68,9 +70,10 @@ export const PORTABLE_PRIVILEGED_CREDENTIALS = Object.freeze([
 export const MANDATORY_LENS_CATEGORIES = Object.freeze(["outcome-correctness", "testing-policy"] as const);
 
 /**
- * The portable per-stage envelope a document may narrow but never weaken:
- * host tool families, the walking skeleton's writable source layout, the
- * delivery authority paths protected, the external operations forbidden.
+ * The portable per-stage envelope. A checkpoint override REPLACES the tool
+ * and writable-path lists — those are the owner-approved document's to shape
+ * — while protections and forbidden operations are union-only (`additional*`
+ * members), so weakening either of those is unspellable, not just rejected.
  */
 export const PORTABLE_STAGE_GRANT = Object.freeze({
   spec: EXECUTION_GRANT_SPEC,
@@ -238,18 +241,37 @@ export function compileRepositoryPolicy(input: CompileRepositoryPolicyInput): Co
   }
 
   // ── Checkpoint grant envelopes ───────────────────────────────────────────
-  const overrides = new Map<string, CheckpointOverride>((document.checkpoints ?? []).map((entry) => [entry.stageId, entry]));
-  for (const [stageId, override] of overrides) {
-    override.credentials.forEach((credential, index) => {
-      if ((PORTABLE_PRIVILEGED_CREDENTIALS as readonly string[]).includes(credential)) {
+  // The privileged credential set is not a naming convention: it is the
+  // portable names PLUS every credential a privileged-kind adapter actually
+  // declares, so renaming a merge token cannot smuggle it into a model-driven
+  // grant.
+  const privilegedCredentialIds = new Set<string>(PORTABLE_PRIVILEGED_CREDENTIALS);
+  for (const adapter of adapters) {
+    if ((PRIVILEGED_CAPABILITY_KINDS as readonly string[]).includes(adapter.kind) && adapter.credentialId !== undefined) {
+      privilegedCredentialIds.add(adapter.credentialId);
+    }
+  }
+  const seenStages = new Set<string>();
+  (document.checkpoints ?? []).forEach((override, index) => {
+    if (seenStages.has(override.stageId)) {
+      collector.emit(
+        "duplicate_checkpoint",
+        `/document/checkpoints/${index}/stageId`,
+        `stage ${override.stageId} carries more than one envelope; a duplicate rejects rather than resolving last-write-wins`,
+      );
+    }
+    seenStages.add(override.stageId);
+    override.credentials.forEach((credential, credentialIndex) => {
+      if (privilegedCredentialIds.has(credential)) {
         collector.emit(
           "privileged_credential_in_model_grant",
-          `/document/checkpoints/${stageId}/credentials/${index}`,
+          `/document/checkpoints/${index}/credentials/${credentialIndex}`,
           `${credential} is a privileged-action credential; it is excluded from every model-driven execution grant`,
         );
       }
     });
-  }
+  });
+  const overrides = new Map<string, CheckpointOverride>((document.checkpoints ?? []).map((entry) => [entry.stageId, entry]));
   const checkpointGrants: CompiledCheckpointGrant[] = PORTABLE_MODEL_DRIVEN_STAGES.map((stageId) => {
     const override = overrides.get(stageId);
     return {
@@ -335,7 +357,13 @@ export function verifyCompiledPolicy(value: unknown): PolicyVerdict {
   }
   const record = value as Record<string, unknown>;
   const { compiledDigest, ...body } = record;
-  if (typeof compiledDigest !== "string" || digestCanonical(body) !== compiledDigest) {
+  let recomputed: string | undefined;
+  try {
+    recomputed = digestCanonical(body);
+  } catch {
+    recomputed = undefined; // a body that does not canonicalize cannot match
+  }
+  if (typeof compiledDigest !== "string" || recomputed === undefined || recomputed !== compiledDigest) {
     collector.emit("digest_mismatch", "/compiledDigest", "the compiled digest does not recompute from the compiled body");
   }
   const snapshot = record["snapshot"];

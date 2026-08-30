@@ -27,6 +27,7 @@ import {
   verifyCompiledPolicy,
 } from "./compile.ts";
 import {
+  deployAdapterFixture,
   mergeAdapterFixture,
   mergeAuthorityDocumentFixture,
   policyDocumentFixture,
@@ -129,6 +130,15 @@ describe("the rejection corpus — every defect rejects before mutation", () => 
         compile(mergeAuthorityDocumentFixture({ forbiddenAuthority: ["merge"] }), [sensorAdapterFixture(), mergeAdapterFixture()]),
     },
     {
+      name: "contradictory deploy authority: granted and forbidden at once",
+      code: "contradictory_authority",
+      run: () =>
+        compile(
+          mergeAuthorityDocumentFixture({ grantedAuthority: ["merge", "deploy"], forbiddenAuthority: ["deploy"] }),
+          [sensorAdapterFixture(), mergeAdapterFixture(), deployAdapterFixture()],
+        ),
+    },
+    {
       name: "contradictory finish line: merge finish line without merge authority",
       code: "contradictory_finish_line",
       run: () => compile(policyDocumentFixture({ grantedFinishLines: ["merge-ready", "merge"] })),
@@ -199,6 +209,41 @@ describe("the rejection corpus — every defect rejects before mutation", () => 
             ],
           }),
         ),
+    },
+    {
+      name: "adapter-declared privileged credential in a model-driven grant — the exclusion is not a naming convention",
+      code: "privileged_credential_in_model_grant",
+      run: () =>
+        compile(
+          mergeAuthorityDocumentFixture({
+            checkpoints: [
+              {
+                stageId: "implement",
+                allowedCapabilities: ["Read", "Edit"],
+                writablePaths: ["src"],
+                credentials: ["gh.merge-token"],
+                additionalProtectedPaths: [],
+                additionalForbiddenOperations: [],
+              },
+            ],
+          }),
+          [sensorAdapterFixture(), { ...mergeAdapterFixture(), credentialId: "gh.merge-token" }],
+        ),
+    },
+    {
+      name: "duplicate checkpoint envelope for one stage",
+      code: "duplicate_checkpoint",
+      run: () => {
+        const envelope = {
+          stageId: "implement",
+          allowedCapabilities: ["Read"],
+          writablePaths: ["src"],
+          credentials: [],
+          additionalProtectedPaths: [],
+          additionalForbiddenOperations: [],
+        };
+        return compile(policyDocumentFixture({ checkpoints: [envelope, { ...envelope, writablePaths: ["docs"] }] }));
+      },
     },
     {
       name: "tracker declared blocking and absent",
