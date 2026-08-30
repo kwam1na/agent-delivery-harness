@@ -143,8 +143,14 @@ export const EVENT_VOCABULARY: readonly EventKindEntry[] = Object.freeze([
   // now frozen in `journal.ts`.
   entry("intake", "intake.clarification.recorded", "active"),
   entry("intake", "intake.draft.recorded", "active"),
+  // Defined by the trusted host lifecycle integration out of reservation —
+  // the sanctioned per-tranche path: the pair was enumerated with this owner
+  // from the start, and its payload is now frozen in `journal.ts`. It is
+  // explicitly distinct from `activity.observed`: a termination record is a
+  // durable fact about the PRIOR invocation, so it advances the expected
+  // journal revision and is not part of the observation-only exemption.
+  entry("delivery", "termination.provenance.recorded", "active"),
   // Reserved — payloads belong to their owning units; reject until defined.
-  entry("delivery", "termination.provenance.recorded", "reserved", false, "trusted host lifecycle integration"),
   entry("delivery", "contract.amended", "reserved", false, "amendment/waiver admission"),
   entry("delivery", "action.intent.recorded", "reserved", false, "finish-line actions"),
   entry("delivery", "action.result.recorded", "reserved", false, "finish-line actions"),

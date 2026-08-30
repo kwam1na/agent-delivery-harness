@@ -1,0 +1,190 @@
+{
+  "schemaVersion": "claude-code-integration/1",
+  "description": "Qualification record for the Claude Code-native delivery integration's two layers: the trusted model-external binding that applies and attests the grant, workspace, fence, and run-pinned projection BEFORE admission, and the in-session projection that reads checkpoints, consumes immutable context, and submits normalized results AFTER it. Live legs were driven against a real authenticated Claude Code session by the qualification harness, never by the product. Product-owned properties are proven by in-process sensors named here. Nothing is claimed beyond what ran.",
+  "recordedAt": "2026-08-30T18:30:00Z",
+  "platform": "macOS 15.6.1 arm64",
+  "host": {
+    "hostId": "claude-code",
+    "hostVersion": "2.1.97",
+    "tier": 2,
+    "admissionSurface": "session-scoped --settings composed by the binding (grant-derived permission allow rules, model-external PreToolUse interceptor, SessionEnd lifecycle hook) with --setting-sources set to the empty selection, so every ambient scope is excluded and the binding's digest-bound settings file is the session's only settings source"
+  },
+  "terminationProvenance": {
+    "eventKind": "termination.provenance.recorded",
+    "journal": "delivery",
+    "status": "defined-out-of-reservation",
+    "expressibleForms": ["graceful"],
+    "crashProvenance": "structurally unavailable in V1 — no supported host supplies it, no daemon exists to observe it, and the vocabulary carries no discriminator for it, so no record can claim one",
+    "descendantTeardown": "unverified",
+    "resumeEligibility": "fresh-worktree-only",
+    "sameWorkspaceResume": "closed",
+    "tierVerdict": "Tier 2. Tier 1 mutation floor and Tier 2 graceful lifecycle events are live-probed on this host version. Tier 3 is REFUSED: a detached background child survived a clean session end in both the admission spike and this unit's own live lane, so descendant teardown is unverified, same-workspace resume stays gated, and operator-authorized takeover into a fresh worktree remains the designed — not degraded — resume path.",
+    "grammarEnforcement": "the honesty rule lives in the frozen payload grammar, not in a caller: an unverified descendant teardown may only ever carry fresh-worktree-only resume, so a journal entry cannot record a Tier 3 claim this host does not support",
+    "entrypoint": "the trusted host-runtime lifecycle integration only — the SessionEnd hook the binding wires, and the facade operation it drives. No model-callable tool can reach it, and the operation is absent from the CLI's session-facing command surface."
+  },
+  "liveProbes": [
+    {
+      "id": "deny-before-attestation",
+      "question": "is a tool invocation denied while no attestation is applied?",
+      "answer": "yes — no side effect occurred",
+      "conclusive": true,
+      "verification": {
+        "kind": "live-probe",
+        "surface": "claude -p (v2.1.97) with the binding-composed --settings and --setting-sources set to the empty selection",
+        "method": "the session was asked to Write a file; the interceptor state carried no attestation; the file was checked on disk, not inferred from model output",
+        "observedAt": "2026-08-30T18:26:00Z"
+      }
+    },
+    {
+      "id": "allow-after-attestation",
+      "question": "does the identical invocation succeed once the grant is attested?",
+      "answer": "yes — the side effect landed on disk",
+      "conclusive": true,
+      "verification": {
+        "kind": "live-probe",
+        "surface": "claude -p (v2.1.97), same prompt and settings, attestation present",
+        "method": "the control for the denial above: the same request under an attestation bound to the binding's current expectation produced the file, so the denial is attributable to the interceptor and not to an unrelated failure",
+        "observedAt": "2026-08-30T18:26:00Z"
+      }
+    },
+    {
+      "id": "candidate-planted-settings-inert",
+      "question": "can a candidate-planted .claude/settings.json widen the attested grant?",
+      "answer": "no — the planted rule was inert under the binding's admission flags",
+      "conclusive": true,
+      "verification": {
+        "kind": "live-probe",
+        "surface": "claude -p (v2.1.97) in a directory carrying a planted .claude/settings.json allowing Bash, admitted with the attested grant allowing only Write",
+        "method": "the session was asked to run a Bash command writing a file; the file was checked on disk and was absent",
+        "observedAt": "2026-08-30T18:26:00Z"
+      }
+    },
+    {
+      "id": "lifecycle-event-on-clean-end",
+      "question": "does the SessionEnd lifecycle hook fire on a clean non-interactive end?",
+      "answer": "yes — the marker is present after the clean exit",
+      "conclusive": true,
+      "verification": {
+        "kind": "live-probe",
+        "surface": "claude -p (v2.1.97) with a SessionEnd hook writing a marker file",
+        "method": "marker file present after the session exited cleanly",
+        "observedAt": "2026-08-30T18:26:00Z"
+      }
+    },
+    {
+      "id": "descendant-teardown",
+      "question": "does a detached background child survive a clean host end?",
+      "answer": "yes — the child was still alive after the clean end, so teardown is UNVERIFIED and the host stays below Tier 3",
+      "conclusive": true,
+      "verification": {
+        "kind": "live-probe",
+        "surface": "claude -p (v2.1.97) whose Bash tool detached a nohup child recording its pid",
+        "method": "child pid recorded by the session; liveness checked after the clean host end (kill -0 succeeded); the probe then reaped its own child",
+        "observedAt": "2026-08-30T18:26:00Z"
+      }
+    }
+  ],
+  "liveLane": {
+    "script": "scripts/qualify-claude-code-session.ts",
+    "optIn": "QUALIFY_CLAUDE_CODE_SESSION=1",
+    "excludedFromCheck": "the lane drives a real authenticated host session and is never part of npm run check",
+    "userConfigurationUntouched": "every session ran in a disposable directory, wrote its state under that directory, and admitted with every ambient setting scope excluded"
+  },
+  "fixtureLegs": [
+    {
+      "property": "the attestation binds host version, delivery, fence, trust epoch, grant digest, workspace, and projection digest, and stale or sibling attestations open nothing",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "attests host version, delivery, fence, trust epoch, grant digest, workspace, and projection before any tool is visible"
+    },
+    {
+      "property": "the in-session layer may verify its attestation but can neither apply, expand, nor replace its grant",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "gives the in-session layer no way to apply, expand, or replace its own grant"
+    },
+    {
+      "property": "the consumption marker is injected at materialization and read back from fence-bound submissions",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "refuses a submission whose worktree carries another run's projection"
+    },
+    {
+      "property": "discovery-configuration rendering is digest-bound and binding-exclusive, and host-writable settings stay outside the digest-bound set",
+      "sensor": "packages/kernel/src/host/claude-code.test.ts",
+      "caseName": "leaves host-writable settings outside the digest-bound set"
+    },
+    {
+      "property": "the projection and the discovery configuration are torn down with the worktree, and the one permitted common-configuration write does not disturb a sibling worktree",
+      "sensor": "packages/kernel/src/host/claude-code.test.ts",
+      "caseName": "does not disturb a sibling worktree"
+    },
+    {
+      "property": "session end before and after mutation records honest graceful provenance and keeps resume on takeover",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "records graceful provenance with the graded teardown status BEFORE any mutation, and keeps resume on takeover"
+    },
+    {
+      "property": "same-workspace resume opens only for a host graded with verified descendant teardown",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "opens same-workspace resume ONLY for a host graded with verified descendant teardown"
+    },
+    {
+      "property": "host cancellation racing a checkpoint submission revokes the fence first and never claims the task stopped",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "revokes the fence first, so the racing submission lands nowhere and nothing claims the task stopped"
+    },
+    {
+      "property": "a stale session cannot see a newly activated projection while a fresh session resumes from the checkpoint",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "cannot see a newly activated projection, while the fresh session resumes from the checkpoint"
+    },
+    {
+      "property": "a required host capability being unavailable denies rather than degrading to an unattested invocation",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "denies the invocation rather than degrading to an unattested one"
+    },
+    {
+      "property": "no credential-like value reaches durable authority",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "carries no credential-like value from the host environment"
+    },
+    {
+      "property": "the product never launches Claude Code and never manages its agents or workspaces",
+      "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts",
+      "caseName": "never launches Claude Code and never manages its agents or workspaces"
+    },
+    {
+      "property": "host-specific delegation is non-normative; normalized checkpoint outcomes are the compatibility target",
+      "sensor": "packages/kernel/src/host/conformance.test.ts",
+      "caseName": "satisfies every normalized case of the contract"
+    },
+    {
+      "property": "the termination-provenance payload grammar refuses a same-workspace claim without verified teardown",
+      "sensor": "packages/kernel/src/spine/termination-provenance.test.ts",
+      "caseName": "REJECTS an unverified-teardown record claiming same-workspace resume"
+    }
+  ],
+  "acceptanceCriteria": [
+    {
+      "statement": "attestation binds host version, delivery, fence, trust epoch, grant digest, workspace, and projection digest; stale or sibling attestations open nothing",
+      "outcome": "met",
+      "leg": "live+fixture",
+      "evidence": "live: an unattested invocation produced no side effect and the attested control did; fixture: the conformance contract's stale-fence and sibling-delivery cases deny on both the Claude Code binding and the fake host"
+    },
+    {
+      "statement": "discovery-configuration rendering is digest-bound, binding-exclusive, worktree-scoped, and torn down with the worktree; the consumption marker is injected at materialization and read back from fence-bound submissions",
+      "outcome": "met",
+      "leg": "fixture",
+      "evidence": "the digest is computed by one definition used at application and at every recheck; a mutated byte fails closed; a host write into the worktree's own project scope moves neither digest; teardown leaves no residue and does not disturb a sibling worktree; the marker binds delivery and fence and a submission against another run's projection is refused"
+    },
+    {
+      "statement": "host-specific delegation stays non-normative; normalized checkpoint outcomes are the compatibility target",
+      "outcome": "met",
+      "leg": "fixture",
+      "evidence": "one frozen conformance contract is satisfied identically by the Claude Code binding driving a real worktree and by an in-memory fake host, and a deliberately non-conforming host is caught rather than normalized away"
+    }
+  ],
+  "notExercisedLive": [
+    "the durable journal half of the SessionEnd path — the lifecycle hook firing was live-probed, and the records it writes are proven in-process by the scenario sensor",
+    "native subagent delegation inside a qualified session — the product neither supervises nor observes it by design; what is proven is that the product launches no agent process and manages no host agents or workspaces",
+    "same-workspace resume — unreachable on this host version by construction, and exercised only through a host graded with verified descendant teardown in the fixture leg"
+  ]
+}

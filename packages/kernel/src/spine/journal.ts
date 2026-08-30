@@ -84,6 +84,21 @@ export const PHASED_MAINTENANCE_ACTIONS = Object.freeze(["update", "rollback"] a
 /** The frozen retention/export/deletion action vocabulary. */
 export const RETENTION_ACTIONS = Object.freeze(["export", "delete"] as const);
 
+/**
+ * Termination provenance has two distinct forms, and only ONE of them is
+ * expressible. Graceful provenance is a trusted host-runtime lifecycle event
+ * at clean end. Crash provenance is structurally unavailable in V1 — no
+ * supported host supplies it and no daemon exists to observe it — so the
+ * vocabulary carries no discriminator for it and no record can claim one.
+ */
+export const TERMINATION_PROVENANCE_KINDS = Object.freeze(["graceful"] as const);
+
+/** Whether the host's descendant teardown was verified for this host version. */
+export const DESCENDANT_TEARDOWN_STATUSES = Object.freeze(["verified", "unverified"] as const);
+
+/** The two resume positions the capability ladder defines. */
+export const RESUME_ELIGIBILITIES = Object.freeze(["same-workspace", "fresh-worktree-only"] as const);
+
 type PayloadCheck = (payload: Record<string, unknown>, at: string, collector: SpineCollector) => void;
 
 const table =
@@ -288,6 +303,36 @@ const maintenanceActionPayload: PayloadCheck = (payload, at, collector) => {
   }
 };
 
+/**
+ * `termination.provenance.recorded`: the trusted host-runtime lifecycle
+ * provenance for one ended invocation. The honesty rule lives in the grammar
+ * itself rather than in a caller: an UNVERIFIED descendant teardown may only
+ * ever carry fresh-worktree-only resume, so a journal entry cannot record a
+ * same-workspace claim the host's graded teardown behavior does not support.
+ * A verified teardown may still choose the conservative position.
+ */
+const terminationProvenancePayload: PayloadCheck = (payload, at, collector) => {
+  checkClosed(
+    payload,
+    at,
+    [
+      { name: "fence", check: positiveInt },
+      { name: "hostVersion", check: text },
+      { name: "provenance", check: oneOf(TERMINATION_PROVENANCE_KINDS) },
+      { name: "descendantTeardown", check: oneOf(DESCENDANT_TEARDOWN_STATUSES) },
+      { name: "resumeEligibility", check: oneOf(RESUME_ELIGIBILITIES) },
+    ],
+    collector,
+  );
+  if (payload["descendantTeardown"] === "unverified" && payload["resumeEligibility"] === "same-workspace") {
+    collector.emit(
+      "unsupported_combination",
+      `${at}/resumeEligibility`,
+      "same-workspace resume requires verified descendant teardown; an unverified teardown leaves the prior workspace unverified and resumes only into a fresh worktree",
+    );
+  }
+};
+
 /** Payload tables for every ACTIVE (journal, kind) pair — frozen here. */
 const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "intake/intake.state.changed": table([
@@ -387,6 +432,7 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
     { name: "summary", check: boundedText },
   ]),
   "delivery/finish.line.recorded": table([{ name: "result", check: embedded(validateFinishLineResult) }]),
+  "delivery/termination.provenance.recorded": terminationProvenancePayload,
   "delivery/approval.assertion.consumed": assertionConsumedPayload,
   "maintenance/maintenance.action.recorded": maintenanceActionPayload,
   // The retention/export/deletion contract family. The record names its

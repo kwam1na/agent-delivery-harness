@@ -25,6 +25,7 @@ import {
   type CheckpointAdmissionExpectation,
 } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
+import { gradeResumeEligibility } from "./claude-code.ts";
 
 export interface HookBindingState {
   readonly expectation: CheckpointAdmissionExpectation;
@@ -34,6 +35,13 @@ export interface HookBindingState {
   readonly observationPath: string;
   readonly journalPath?: string;
   readonly deliveryId?: string;
+  /**
+   * The host's GRADED descendant-teardown status, written into the binding
+   * state at admission from the capability record. The hook reports it; it
+   * never decides it, and it cannot observe teardown from inside the session
+   * that is ending.
+   */
+  readonly descendantTeardown?: "verified" | "unverified";
 }
 
 export interface HookToolInput {
@@ -151,12 +159,22 @@ async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  // session-end: trusted graceful lifecycle evidence — honest `paused`.
+  // session-end: the trusted host-runtime lifecycle event, which carries TWO
+  // distinct facts and keeps them distinct.
+  //
+  //   1. Activity: an honest `paused` — the session ended cleanly.
+  //   2. Termination provenance: graceful provenance for this fence, carrying
+  //      the host's GRADED descendant-teardown status. The resume position is
+  //      derived from that status, so on a host whose background children
+  //      survive a clean end this record says fresh-worktree-only and the
+  //      prior workspace stays explicitly unverified. The hook never claims
+  //      the prior task's descendants stopped.
   if (state?.journalPath === undefined || state.deliveryId === undefined) return 0;
   const store = createJournalStore(state.journalPath);
   const read = await store.read();
   const reduced = await store.state();
   if (!read.ok || !reduced.ok) return 0;
+  const fence = state.expectation.invocationFence;
   await store.append({
     spec: "journal-entry/1",
     journal: "delivery",
@@ -164,7 +182,26 @@ async function main(argv: readonly string[]): Promise<number> {
     expectedRevision: reduced.state.expectedRevision,
     idempotencyKey: `e${read.entries.length}-activity.observed`,
     kind: "activity.observed",
-    payload: { activity: "paused", fence: state.expectation.invocationFence },
+    payload: { activity: "paused", fence },
+  });
+  if (state.descendantTeardown === undefined) return 0;
+  const afterActivity = await store.read();
+  const afterState = await store.state();
+  if (!afterActivity.ok || !afterState.ok) return 0;
+  await store.append({
+    spec: "journal-entry/1",
+    journal: "delivery",
+    subjectId: state.deliveryId,
+    expectedRevision: afterState.state.expectedRevision,
+    idempotencyKey: `e${afterActivity.entries.length}-termination.provenance.recorded`,
+    kind: "termination.provenance.recorded",
+    payload: {
+      fence,
+      hostVersion: state.expectation.hostVersion,
+      provenance: "graceful",
+      descendantTeardown: state.descendantTeardown,
+      resumeEligibility: gradeResumeEligibility({ descendantTeardown: state.descendantTeardown }),
+    },
   });
   return 0;
 }

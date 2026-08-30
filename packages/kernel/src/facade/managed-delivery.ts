@@ -87,8 +87,12 @@ import { composeMergeReadyResult } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
   composeClaudeCodeSession,
+  discoveryConfigurationDigestOf,
+  gradeResumeEligibility,
   materializeProjection,
   mintGrantAttestation,
+  readConsumptionMarker,
+  tearDownProjection,
   verifyProjection,
 } from "../host/claude-code.ts";
 import { createExecPort, type ExecPort } from "../host/exec-port.ts";
@@ -417,6 +421,12 @@ export interface ManagedDeliveryFacade {
     readonly observedAt: string;
     readonly attestationExpiry: string;
     readonly observationLifetimeSeconds?: number;
+    /**
+     * The host's graded descendant-teardown status from the capability
+     * record. It defaults to `unverified` — the conservative position — so a
+     * caller that says nothing never widens resume eligibility by omission.
+     */
+    readonly descendantTeardown?: "verified" | "unverified";
   }): Promise<
     | {
         readonly ok: true;
@@ -440,7 +450,8 @@ export interface ManagedDeliveryFacade {
         readonly nextCheckpoint: ManagedCheckpoint;
         readonly policyRequiredInterruptions: number;
         readonly operatorInterventions: number;
-        readonly resume: "none" | "takeover-required";
+        /** `same-workspace` only under Tier 3 termination provenance for the current fence. */
+        readonly resume: "none" | "takeover-required" | "same-workspace";
         readonly blockers: readonly { readonly code: string; readonly summary: string }[];
       }
     | FacadeFailure
@@ -502,6 +513,35 @@ export interface ManagedDeliveryFacade {
   >;
 
   sessionEnded(input: { readonly deliveryId: string; readonly fence: number }): Promise<{ readonly ok: true } | FacadeFailure>;
+
+  /**
+   * TERMINATION PROVENANCE, and the only door it enters through. The caller is
+   * the trusted host-runtime lifecycle integration — never a model-callable
+   * tool — reporting that an invocation ended cleanly. Whether that clean end
+   * also proves the invocation's descendants are gone is NOT the caller's
+   * claim to make: `descendantTeardown` comes from the host's graded
+   * capability record, and the resume position is derived from it here, so a
+   * host whose background children survive a clean end can never produce a
+   * same-workspace resume record.
+   *
+   * Crash provenance has no entrypoint at all: no supported host supplies it,
+   * no daemon exists to observe it, and the product never infers it.
+   */
+  recordTerminationProvenance(input: {
+    readonly deliveryId: string;
+    readonly fence: number;
+    readonly hostVersion: string;
+    readonly descendantTeardown: "verified" | "unverified";
+  }): Promise<
+    { readonly ok: true; readonly resumeEligibility: "same-workspace" | "fresh-worktree-only" } | FacadeFailure
+  >;
+
+  /**
+   * Tears the run-pinned projection and the binding-written discovery
+   * configuration down with the worktree, so nothing the binding wrote
+   * outlives the workspace it was scoped to.
+   */
+  tearDownWorkspaceProjection(input: { readonly deliveryId: string }): Promise<{ readonly ok: true } | FacadeFailure>;
 
   /**
    * A waiver or contract-amendment proposal: journaled with a pending marker
@@ -882,15 +922,12 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           ? projection.projectionDigest
           : `unverifiable: ${projection.blockers.map((blocker) => blocker.message).join("; ")}`.slice(0, 1900),
       };
-      let observedDiscovery: string;
-      try {
-        const settingsBytes = await readFile(path.join(dir, "binding", "settings.json"), "utf8");
-        const excludesBytes = await readFile(path.join(dir, "binding", "worktree-excludes"), "utf8");
-        observedDiscovery = digestCanonical({ settings: settingsBytes, worktreeExcludes: excludesBytes });
-      } catch {
-        observedDiscovery = "unreadable-discovery-configuration";
-      }
-      discoveryCheck = { kind: "compare", expected: workspace.discoveryConfigurationDigest, observed: observedDiscovery };
+      discoveryCheck = {
+        kind: "compare",
+        expected: workspace.discoveryConfigurationDigest,
+        observed: (await discoveryConfigurationDigestOf(path.join(dir, "binding"))) ?? "unreadable-discovery-configuration",
+      };
+
     }
 
     const recheckValues: RecheckValues = {
@@ -976,6 +1013,27 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             "Quarantine the workspace and resume through an authorized takeover.",
           );
         }
+      }
+    }
+
+    // The consumption marker's READ-BACK half, AFTER the canonical recheck so
+    // it never preempts a frozen recheck verdict. The receipt digest already
+    // proves the projected bytes are intact; the marker independently proves
+    // WHICH run injected them, so a fence-bound operation running against a
+    // projection materialized for another delivery or another fence fails
+    // closed rather than recording output against the wrong bytes.
+    if (options.fenceRequired === true && options.verifyWorkspace === true && workspace !== undefined) {
+      const marker = await readConsumptionMarker({ worktreeDir: workspace.worktreeDir });
+      const observedMarker = marker.ok
+        ? `${marker.deliveryId}@${marker.fence}`
+        : `unreadable (${marker.blockers.map((blocker) => blocker.code).join(", ")})`;
+      const expectedMarker = `${deliveryId}@${options.invokingFence ?? reduced.state.lastFence}`;
+      if (observedMarker !== expectedMarker) {
+        return refuse(
+          "consumption_marker_mismatch",
+          `The worktree's per-run consumption marker reads ${observedMarker}, not ${expectedMarker}.`,
+          "Only the projection this invocation materialized may carry its outputs; rebind the workspace for the current fence.",
+        );
       }
     }
 
@@ -1817,7 +1875,15 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return runAcceptance(intakeId, store, meta);
     },
 
-    async bindWorkspace({ deliveryId, worktreeDir, hostTaskId, observedAt, attestationExpiry, observationLifetimeSeconds }) {
+    async bindWorkspace({
+      deliveryId,
+      worktreeDir,
+      hostTaskId,
+      observedAt,
+      attestationExpiry,
+      observationLifetimeSeconds,
+      descendantTeardown,
+    }) {
       const guarded = await guard(deliveryId, { allowPendingTakeover: true });
       if (!("store" in guarded)) return guarded;
       const takeover = await readJson<PendingTakeover>(path.join(await deliveryDir(deliveryId), "takeover.json"));
@@ -1873,10 +1939,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       });
       if (!bound.ok) return bound;
 
+      // The fence this invocation will carry is known before materialization,
+      // so the per-run consumption marker binds it: the marker read back from
+      // a fence-bound submission proves the worktree holds THIS run's
+      // projection rather than a prior run's leftovers.
+      const fence = guarded.lastFence + 1;
       const materialized = await materializeProjection({
         worktreeDir,
         generationRoot: guarded.generationRoot,
         deliveryId,
+        fence,
         bindingDir,
         exec,
       });
@@ -1920,7 +1992,6 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
       }
       const registered = lastOf(guarded.views, "delivery.registered");
-      const fence = guarded.lastFence + 1;
       const expectation: CheckpointAdmissionExpectation = {
         profile: "checkpoint",
         hostVersion: input.hostVersion,
@@ -1955,6 +2026,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           observationPath,
           journalPath: guarded.store.journalPath,
           deliveryId,
+          // The host's graded teardown status, carried into the lifecycle hook
+          // so its termination record reports the capability record's finding
+          // rather than an in-session guess.
+          descendantTeardown: descendantTeardown ?? "unverified",
         })}\n`,
       );
       await writeOwned(observationPath, `${JSON.stringify({ fence, observedAt })}\n`);
@@ -2060,7 +2135,23 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       ).length;
 
       const terminal = reduced.state.state === "completed" || reduced.state.state === "cancelled" || reduced.state.state === "failed";
-      const resume = !terminal && activity !== "active" ? "takeover-required" : "none";
+      // Same-workspace resume is gated on TERMINATION PROVENANCE for the
+      // current fence, not on activity: an absent lifecycle event, a stale
+      // one, or one whose descendant teardown was unverified all leave the
+      // prior workspace unverified, and the designed path is an
+      // operator-authorized takeover into a fresh worktree.
+      const provenance = lastOf(views, "termination.provenance.recorded");
+      const sameWorkspaceResumable =
+        provenance !== undefined &&
+        provenance.payload["fence"] === reduced.state.lastFence &&
+        provenance.payload["resumeEligibility"] === "same-workspace";
+      const resume: "none" | "takeover-required" | "same-workspace" = terminal
+        ? "none"
+        : activity === "active"
+          ? "none"
+          : sameWorkspaceResumable
+            ? "same-workspace"
+            : "takeover-required";
 
       const blockers =
         reduced.state.state === "blocked" || reduced.state.state === "security_blocked"
@@ -2750,6 +2841,53 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         fence: guarded.lastFence,
       });
       if (!appended.ok) return appended;
+      return { ok: true };
+    },
+
+    async recordTerminationProvenance({ deliveryId, fence, hostVersion, descendantTeardown }) {
+      const guarded = await guard(deliveryId, { invokingFence: fence, fenceRequired: true });
+      if (!("store" in guarded)) return guarded;
+      // One trusted lifecycle event, two distinct facts — the same pair the
+      // model-external hook records at clean session end. Activity becomes an
+      // honest `paused`; the provenance record is the durable fact about the
+      // ended invocation and is NOT an activity marker.
+      const paused = await appendEntry(guarded.store, deliveryId, "activity.observed", {
+        activity: "paused",
+        fence: guarded.lastFence,
+      });
+      if (!paused.ok) return paused;
+      // The honest derivation, in one place: the record can only ever claim
+      // what the host's graded teardown behavior supports.
+      const resumeEligibility = gradeResumeEligibility({ descendantTeardown });
+      const appended = await appendEntry(guarded.store, deliveryId, "termination.provenance.recorded", {
+        fence: guarded.lastFence,
+        hostVersion,
+        provenance: "graceful",
+        descendantTeardown,
+        resumeEligibility,
+      });
+      if (!appended.ok) return appended;
+      return { ok: true, resumeEligibility };
+    },
+
+    async tearDownWorkspaceProjection({ deliveryId }) {
+      const dir = await deliveryDir(deliveryId);
+      const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
+      if (workspace === undefined) {
+        return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
+      }
+      const torn = await tearDownProjection({
+        worktreeDir: workspace.worktreeDir,
+        bindingDir: path.join(dir, "binding"),
+        exec,
+      });
+      if (!torn.ok) {
+        return refuse(
+          "projection_teardown_failed",
+          `Tearing the projection down failed: ${torn.blockers.map((blocker) => blocker.message).join("; ")}`,
+          "Remove the projection subtree and the worktree-scoped exclusion before removing the worktree.",
+        );
+      }
       return { ok: true };
     },
 

@@ -23,7 +23,7 @@
  *     grant digest, workspace, projection digest, and the binding-written
  *     discovery configuration.
  */
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { compareUtf16CodeUnits } from "../canonical.ts";
 import { digestCanonical, sha256Hex } from "../digest.ts";
@@ -43,6 +43,8 @@ export const PROJECTION_ENTRY_PREFIXES = Object.freeze(["skills/", "workflows/",
 export const PROJECTION_RECEIPT_FILE = "projection-receipt.json";
 export const WORKTREE_EXCLUDES_FILE = "worktree-excludes";
 export const SESSION_SETTINGS_FILE = "settings.json";
+/** The binding's per-run consumption marker, inside the receipted subtree. */
+export const CONSUMPTION_MARKER_FILE = "consumption.json";
 
 const OWNER_DIR = 0o700;
 const OWNER_FILE = 0o600;
@@ -57,6 +59,10 @@ export const HOST_BINDING_BLOCKER_CODES = Object.freeze([
   "projection_receipt_corrupt",
   "projection_digest_mismatch",
   "discovery_configuration_unreadable",
+  "discovery_configuration_digest_mismatch",
+  "consumption_marker_missing",
+  "consumption_marker_corrupt",
+  "teardown_failed",
 ] as const);
 export type HostBindingBlockerCode = (typeof HOST_BINDING_BLOCKER_CODES)[number];
 
@@ -83,6 +89,13 @@ export interface MaterializeProjectionInput {
   /** The pinned generation root (digest-addressed, already trust-checked). */
   readonly generationRoot: string;
   readonly deliveryId: string;
+  /**
+   * The invocation fence this materialization serves. The consumption marker
+   * binds it, so the marker read back from a fence-bound submission proves the
+   * bytes in the worktree are THIS run's projection and not a prior run's
+   * leftovers — and the projection digest moves with every new fence.
+   */
+  readonly fence: number;
   /** The binding-owned directory in the product namespace for receipts and configuration. */
   readonly bindingDir: string;
   readonly exec: ExecPort;
@@ -174,11 +187,15 @@ export async function materializeProjection(input: MaterializeProjectionInput): 
       await chmod(target, READONLY_FILE);
       entries.push({ path: name, sha256: sha256Hex(bytes) });
     }
-    const marker = `${JSON.stringify({ deliveryId: input.deliveryId, consumed: GENERATION_SKILLS_ARCHIVE })}\n`;
-    const markerPath = path.join(projectionRoot, "consumption.json");
+    const marker = `${JSON.stringify({
+      deliveryId: input.deliveryId,
+      fence: input.fence,
+      consumed: GENERATION_SKILLS_ARCHIVE,
+    })}\n`;
+    const markerPath = path.join(projectionRoot, CONSUMPTION_MARKER_FILE);
     await writeFile(markerPath, marker);
     await chmod(markerPath, READONLY_FILE);
-    entries.push({ path: "consumption.json", sha256: sha256Hex(marker) });
+    entries.push({ path: CONSUMPTION_MARKER_FILE, sha256: sha256Hex(marker) });
   } catch (error) {
     return fail(
       "projection_write_failed",
@@ -246,6 +263,144 @@ export async function verifyProjection(input: {
   return { ok: true, projectionDigest: receipt.projectionDigest };
 }
 
+// ── The consumption marker's read-back half ─────────────────────────────────
+
+export interface ConsumptionMarker {
+  readonly deliveryId: string;
+  readonly fence: number;
+  readonly consumed: string;
+}
+
+export type ReadConsumptionMarkerResult = ({ readonly ok: true } & ConsumptionMarker) | HostBindingFailure;
+
+/**
+ * Reads the per-run consumption marker back out of the worktree. Callers pair
+ * it with a fence-bound submission: the marker names the delivery and fence
+ * the projection was materialized for, so a submission arriving against
+ * different bytes than the ones this run injected is detectable on its own,
+ * independently of the receipt digest.
+ */
+export async function readConsumptionMarker(input: { readonly worktreeDir: string }): Promise<ReadConsumptionMarkerResult> {
+  let text: string;
+  try {
+    text = await readFile(path.join(input.worktreeDir, PROJECTION_DIR, CONSUMPTION_MARKER_FILE), "utf8");
+  } catch {
+    return fail("consumption_marker_missing", "the worktree carries no per-run consumption marker; nothing was materialized here");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return fail("consumption_marker_corrupt", "the consumption marker is not JSON");
+  }
+  const marker = parsed as Partial<ConsumptionMarker>;
+  if (
+    typeof marker !== "object" ||
+    marker === null ||
+    typeof marker.deliveryId !== "string" ||
+    typeof marker.fence !== "number" ||
+    typeof marker.consumed !== "string"
+  ) {
+    return fail("consumption_marker_corrupt", "the consumption marker is outside its shape");
+  }
+  return { ok: true, deliveryId: marker.deliveryId, fence: marker.fence, consumed: marker.consumed };
+}
+
+// ── The binding-written discovery-configuration set ─────────────────────────
+
+/**
+ * The digest over the binding-written host discovery-configuration set —
+ * exactly the session settings and the worktree-scoped exclusion, both
+ * per-delivery bytes in the binding's own directory. Host-writable settings
+ * (persisted permission decisions, which this host writes into the worktree's
+ * own project scope) are deliberately NOT members: the set is
+ * binding-exclusive, so any change to it is tampering rather than normal host
+ * behavior. One definition, used at application and at every recheck.
+ */
+export async function discoveryConfigurationDigestOf(bindingDir: string): Promise<string | undefined> {
+  try {
+    const settings = await readFile(path.join(bindingDir, SESSION_SETTINGS_FILE), "utf8");
+    const worktreeExcludes = await readFile(path.join(bindingDir, WORKTREE_EXCLUDES_FILE), "utf8");
+    return digestCanonical({ settings, worktreeExcludes });
+  } catch {
+    return undefined;
+  }
+}
+
+export type VerifyDiscoveryConfigurationResult = { readonly ok: true } | HostBindingFailure;
+
+export async function verifyDiscoveryConfiguration(input: {
+  readonly bindingDir: string;
+  readonly expectedDigest: string;
+}): Promise<VerifyDiscoveryConfigurationResult> {
+  const observed = await discoveryConfigurationDigestOf(input.bindingDir);
+  if (observed === undefined) {
+    return fail("discovery_configuration_unreadable", "the binding-written discovery configuration is unreadable");
+  }
+  if (observed !== input.expectedDigest) {
+    return fail(
+      "discovery_configuration_digest_mismatch",
+      `the discovery configuration hashes to ${observed}, not the ${input.expectedDigest} bound at application; the set is binding-exclusive, so a change is tampering`,
+    );
+  }
+  return { ok: true };
+}
+
+// ── Teardown ────────────────────────────────────────────────────────────────
+
+export type TearDownProjectionResult = { readonly ok: true } | HostBindingFailure;
+
+/**
+ * Tears the projection and the discovery configuration down with the
+ * worktree: the receipted subtree, the binding-written configuration bytes,
+ * and the worktree-scoped exclusion that made the subtree invisible.
+ *
+ * `extensions.worktreeConfig` — the single permitted common-configuration
+ * write — is deliberately LEFT enabled. With no worktree-scoped values set it
+ * changes nothing, while disabling it would silently drop any OTHER worktree's
+ * worktree-scoped configuration, which is the interference this teardown
+ * exists to avoid. Teardown is idempotent so worktree removal never races it
+ * into a blocker.
+ */
+export async function tearDownProjection(input: {
+  readonly worktreeDir: string;
+  readonly bindingDir: string;
+  readonly exec: ExecPort;
+}): Promise<TearDownProjectionResult> {
+  try {
+    await rm(path.join(input.worktreeDir, PROJECTION_DIR), { recursive: true, force: true });
+    for (const file of [SESSION_SETTINGS_FILE, WORKTREE_EXCLUDES_FILE, PROJECTION_RECEIPT_FILE]) {
+      await rm(path.join(input.bindingDir, file), { force: true });
+    }
+  } catch (error) {
+    return fail("teardown_failed", `removing the projection failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Exit code 5 is git's "the value was not set" — already torn down.
+  const unset = await input.exec.run({
+    command: "git",
+    args: ["config", "--worktree", "--unset", "core.excludesFile"],
+    cwd: input.worktreeDir,
+  });
+  if (unset.code !== 0 && unset.code !== 5) {
+    return fail("teardown_failed", `clearing the worktree-scoped exclusion failed: ${unset.stderr.trim()}`);
+  }
+  return { ok: true };
+}
+
+// ── The honest resume grade ─────────────────────────────────────────────────
+
+/**
+ * The only derivation of resume eligibility, so no caller can assert a Tier 3
+ * position the host's graded teardown behavior does not support: same-workspace
+ * resume requires VERIFIED descendant teardown, and anything else resumes only
+ * into a fresh worktree through an operator-authorized takeover.
+ */
+export function gradeResumeEligibility(input: {
+  readonly descendantTeardown: "verified" | "unverified";
+}): "same-workspace" | "fresh-worktree-only" {
+  return input.descendantTeardown === "verified" ? "same-workspace" : "fresh-worktree-only";
+}
+
 export interface ComposeClaudeCodeSessionInput {
   readonly bindingDir: string;
   /** The binding state file the model-external hook consults per invocation. */
@@ -306,22 +461,15 @@ export async function composeClaudeCodeSession(
   await writeFile(settingsPath, settingsBytes, { mode: OWNER_FILE });
   await chmod(settingsPath, OWNER_FILE);
 
-  let excludesBytes: string;
-  try {
-    excludesBytes = await readFile(path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE), "utf8");
-  } catch {
+  // The binding-written host discovery-configuration set, digest-bound at
+  // application through the one definition every recheck site also uses.
+  const discoveryConfigurationDigest = await discoveryConfigurationDigestOf(input.bindingDir);
+  if (discoveryConfigurationDigest === undefined) {
     return fail(
       "discovery_configuration_unreadable",
       "the worktree excludes file is missing; compose the session only after materializing the projection",
     );
   }
-
-  // The binding-written host discovery-configuration set, digest-bound at
-  // application: the session settings and the worktree-scoped exclusion.
-  const discoveryConfigurationDigest = digestCanonical({
-    settings: settingsBytes,
-    worktreeExcludes: excludesBytes,
-  });
 
   return {
     ok: true,
