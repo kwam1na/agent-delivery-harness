@@ -1,5 +1,5 @@
 /**
- * The evidence module's V-slice: the D14 review floor over recorded reviewer
+ * The evidence module's V-slice: the mandatory review floor over recorded reviewer
  * attempts, and the criterion-by-criterion outcome composition that keeps a
  * green-but-unrelated change from passing.
  *

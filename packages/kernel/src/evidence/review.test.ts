@@ -1,5 +1,5 @@
 /**
- * The evidence module's V-slice: the D14 review floor over reviewer attempts,
+ * The evidence module's V-slice: the mandatory review floor over reviewer attempts,
  * and the criterion mapping that keeps a green-but-unrelated change from
  * passing. Independence is falsifiable through the context digest — distinct
  * attempt identities carrying identical contexts are exactly what these

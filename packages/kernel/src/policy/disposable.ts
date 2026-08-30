@@ -6,7 +6,7 @@
  * final module boundary that unit hardens: callers consume a compiled
  * `policy-snapshot/1` and an `execution-grant/1`, never ad-hoc values.
  *
- * The compiled snapshot activates BOTH mandatory D14 lenses and a non-empty
+ * The compiled snapshot activates BOTH mandatory review lenses and a non-empty
  * obligation set, so `reviewing` and `admitting` can never be passed by
  * absence; it grants exactly the merge-ready finish line and no external
  * authority — absence of a grant is denial, and nothing model-written can

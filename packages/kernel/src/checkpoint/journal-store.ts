@@ -10,7 +10,7 @@
  * file, and durable bytes are only ever extended (`flag: "a"`), never
  * rewritten.
  *
- * Durability protections are D16's: owner-only directories and files from
+ * Durability protections are the plan's owner-only discipline: directories and files from
  * first write. Retention, export, and deletion are the checkpoint unit's
  * hardening; the append path and its discipline stay.
  */

@@ -13,7 +13,7 @@
  * injected exec port so the scenario sensor can assert the complete launch
  * inventory.
  *
- * CONFIRMATIONS. Contract confirmation and takeover authorization are D15
+ * CONFIRMATIONS. Contract confirmation and takeover authorization are
  * operator confirmations: excluded from every execution grant, denied by the
  * interceptor, and served only by this facade's channel. The walking skeleton
  * runs under the composition's `confirmation-fixture` profile — valid only in
