@@ -53,7 +53,13 @@ afterAll(async () => {
 });
 
 /** A disposable repo + linked worktree + a stand-in pinned generation root. */
-async function claudeCodePort(descendantTeardown: "verified" | "unverified"): Promise<HostIntegrationPort> {
+async function claudeCodePort(
+  descendantTeardown: "verified" | "unverified",
+  // A `verified` port must NOT claim the graded host version: 2.1.97 is
+  // graded below Tier 3, so pairing the two would be a contradiction the
+  // record and the fixture state differently.
+  hostVersion = descendantTeardown === "verified" ? "hypothetical-tier-3/1.0.0" : "claude-code/2.1.97",
+): Promise<HostIntegrationPort> {
   const base = await mkdtemp(path.join(scratch, "cc-"));
   const repoDir = path.join(base, "repo");
   mkdirSync(repoDir, { recursive: true });
@@ -75,7 +81,7 @@ async function claudeCodePort(descendantTeardown: "verified" | "unverified"): Pr
     bindingDir: path.join(base, "binding"),
     deliveryId: "dlv-conformance-1",
     fence: 5,
-    hostVersion: "claude-code/2.1.97",
+    hostVersion,
     descendantTeardown,
   });
 }
@@ -87,6 +93,7 @@ describe("the host-integration conformance contract", () => {
       "denies-every-tool-before-attestation",
       "denies-a-stale-fence-attestation",
       "denies-a-sibling-delivery-attestation",
+      "allows-a-granted-capability",
       "denies-a-capability-outside-the-grant",
       "denies-a-write-to-a-protected-authority-path",
       "denies-an-operator-confirmation-inside-the-grant",
@@ -144,6 +151,18 @@ describe("a non-conforming host", () => {
     const results = await runHostIntegrationConformance(lax);
     const stale = results.find((result) => result.caseId === "denies-a-stale-fence-attestation");
     expect(stale?.satisfied).toBe(false);
+  });
+
+  it("catches a host that simply denies everything", async () => {
+    const honest = createFakeHostConformancePort({ descendantTeardown: "unverified" });
+    const denyEverything: HostIntegrationPort = {
+      ...honest,
+      admit: async () => ({ outcome: "denied", codes: ["denies_everything"] }),
+      intercept: async () => ({ outcome: "denied", codes: ["denies_everything"] }),
+    };
+    const results = await runHostIntegrationConformance(denyEverything);
+    expect(results.find((result) => result.caseId === "admits-the-currently-attested-grant")?.satisfied).toBe(false);
+    expect(results.find((result) => result.caseId === "allows-a-granted-capability")?.satisfied).toBe(false);
   });
 
   it("catches a host that claims same-workspace resume without verified teardown", async () => {

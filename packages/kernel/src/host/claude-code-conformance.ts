@@ -43,7 +43,15 @@ export interface ClaudeCodeConformancePortInput {
   readonly deliveryId: string;
   readonly fence: number;
   readonly hostVersion: string;
-  /** From the graded capability record — never observed from inside a session. */
+  /**
+   * The graded teardown status this qualification port reports. It is a
+   * FIXTURE parameter, so the contract can be exercised against both grades
+   * without waiting for a Tier 3 host to exist — the delivery lane reads the
+   * grade from the pinned generation's capability record instead and accepts
+   * no such parameter. A caller pairing `verified` with a host version the
+   * record grades below Tier 3 is stating a contradiction, so tests pair
+   * `verified` with a hypothetical version.
+   */
   readonly descendantTeardown: "verified" | "unverified";
 }
 
@@ -86,6 +94,7 @@ export function createClaudeCodeConformancePort(input: ClaudeCodeConformancePort
       bindingDir: input.bindingDir,
       statePath: path.join(input.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: input.fence,
       grant: STAGE_GRANT,
     });
     if (!session.ok) return;

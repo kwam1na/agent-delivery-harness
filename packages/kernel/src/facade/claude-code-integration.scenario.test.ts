@@ -156,9 +156,7 @@ interface Session {
 
 let sequence = 0;
 
-async function openSession(
-  descendantTeardown: "verified" | "unverified" = GRADED_DESCENDANT_TEARDOWN,
-): Promise<Session> {
+async function openSession(): Promise<Session> {
   sequence += 1;
   const contract = { ...DISPOSABLE_CONTRACT, contractId: `contract-cc-${sequence}` };
   const presented = await facade.presentContract({ contract, expiry: EXPIRY });
@@ -176,7 +174,6 @@ async function openSession(
     hostTaskId: `host-${sequence}`,
     observedAt: NOW,
     attestationExpiry: EXPIRY,
-    descendantTeardown,
   });
   must(bound, "bindWorkspace");
   return { deliveryId: confirmed.deliveryId, worktree, fence: bound.fence };
@@ -341,12 +338,7 @@ describe("the pre-admission binding layer", () => {
 describe("session end, before and after mutation", () => {
   it("records graceful provenance with the graded teardown status BEFORE any mutation, and keeps resume on takeover", async () => {
     const session = await openSession();
-    const ended = await facade.recordTerminationProvenance({
-      deliveryId: session.deliveryId,
-      fence: session.fence,
-      hostVersion: HOST_VERSION,
-      descendantTeardown: GRADED_DESCENDANT_TEARDOWN,
-    });
+    const ended = await facade.recordTerminationProvenance({ deliveryId: session.deliveryId, fence: session.fence });
     must(ended, "recordTerminationProvenance");
     expect(ended.resumeEligibility).toBe("fresh-worktree-only");
 
@@ -374,12 +366,7 @@ describe("session end, before and after mutation", () => {
     const before = await facade.status({ deliveryId: session.deliveryId, observedAt: NOW });
     must(before, "status before");
 
-    const ended = await facade.recordTerminationProvenance({
-      deliveryId: session.deliveryId,
-      fence: session.fence,
-      hostVersion: HOST_VERSION,
-      descendantTeardown: GRADED_DESCENDANT_TEARDOWN,
-    });
+    const ended = await facade.recordTerminationProvenance({ deliveryId: session.deliveryId, fence: session.fence });
     must(ended, "recordTerminationProvenance");
 
     const after = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
@@ -391,20 +378,85 @@ describe("session end, before and after mutation", () => {
     expect(entries.some((entry) => entry.kind === "candidate.recaptured")).toBe(true);
   });
 
-  it("opens same-workspace resume ONLY for a host graded with verified descendant teardown", async () => {
-    const session = await openSession("verified");
-    const ended = await facade.recordTerminationProvenance({
-      deliveryId: session.deliveryId,
-      fence: session.fence,
-      hostVersion: "hypothetical-tier-3/1.0.0",
-      descendantTeardown: "verified",
-    });
+  it("takes NO teardown claim from its caller — the grade comes from the pinned generation", async () => {
+    const session = await openSession();
+    const namespaceDir = await facade.namespaceDir();
+
+    // The whole attack surface for a Tier 3 overclaim: a granted Bash call can
+    // write inside the workspace, and the binding state file is the only place
+    // a session could plausibly plant a teardown status. Plant every spelling
+    // of it, in both files a session might reach.
+    const bindingDir = path.join(namespaceDir, "deliveries", session.deliveryId, "binding");
+    const planted = JSON.parse(readFileSync(path.join(bindingDir, "state.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(
+      path.join(bindingDir, "state.json"),
+      `${JSON.stringify({ ...planted, descendantTeardown: "verified", tier: 3 })}\n`,
+    );
+    writeFileSync(path.join(session.worktree, "descendantTeardown"), "verified\n");
+
+    const ended = await facade.recordTerminationProvenance({ deliveryId: session.deliveryId, fence: session.fence });
     must(ended, "recordTerminationProvenance");
-    expect(ended.resumeEligibility).toBe("same-workspace");
+    // The graded record inside the pinned generation says otherwise, and it is
+    // the only thing consulted.
+    expect(ended.descendantTeardown).toBe("unverified");
+    expect(ended.resumeEligibility).toBe("fresh-worktree-only");
+
+    const status = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
+    must(status, "status");
+    expect(status.resume).toBe("takeover-required");
+  });
+
+  it("maps a Tier 3 provenance record onto same-workspace resume, so the gate is the grade and not a refusal", async () => {
+    // The grade cannot be faked through the product's own door, so the
+    // status MAPPING is proven against a journal that already carries a Tier 3
+    // host's record — the shape `gradedDescendantTeardown` produces when a
+    // capability record grades a host at Tier 3 (proven separately against a
+    // synthetic record in the host module's own suite).
+    const session = await openSession();
+    const ended = await facade.sessionEnded({ deliveryId: session.deliveryId, fence: session.fence });
+    must(ended, "sessionEnded");
+    const namespaceDir = await facade.namespaceDir();
+    const store = createJournalStore(path.join(namespaceDir, "deliveries", session.deliveryId, "journal.jsonl"));
+    const read = await store.read();
+    const reduced = await store.state();
+    if (!read.ok || !reduced.ok) throw new Error("journal unreadable");
+    const appended = await store.append({
+      spec: "journal-entry/1",
+      journal: "delivery",
+      subjectId: session.deliveryId,
+      expectedRevision: reduced.state.expectedRevision,
+      idempotencyKey: `e${read.entries.length}-termination.provenance.recorded`,
+      kind: "termination.provenance.recorded",
+      payload: {
+        fence: session.fence,
+        hostVersion: "hypothetical-tier-3/1.0.0",
+        provenance: "graceful",
+        descendantTeardown: "verified",
+        resumeEligibility: "same-workspace",
+      },
+    });
+    expect(appended.ok, JSON.stringify(appended)).toBe(true);
 
     const status = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
     must(status, "status");
     expect(status.resume).toBe("same-workspace");
+  });
+
+  it("records provenance once per invocation, so a retrying lifecycle integration cannot void a pending takeover", async () => {
+    const session = await openSession();
+    const first = await facade.recordTerminationProvenance({ deliveryId: session.deliveryId, fence: session.fence });
+    must(first, "first provenance");
+    const before = await journalEntries(session.deliveryId);
+
+    const again = await facade.recordTerminationProvenance({ deliveryId: session.deliveryId, fence: session.fence });
+    must(again, "repeat provenance");
+    expect(again.resumeEligibility).toBe(first.resumeEligibility);
+
+    const after = await journalEntries(session.deliveryId);
+    // No second append, so the expected journal revision a pending takeover
+    // authorization binds is untouched.
+    expect(after.length).toBe(before.length);
+    expect(after.filter((entry) => entry.kind === "termination.provenance.recorded").length).toBe(1);
   });
 
   it("does not let a superseded invocation record termination provenance for the live fence", async () => {
@@ -412,8 +464,6 @@ describe("session end, before and after mutation", () => {
     const stale = await facade.recordTerminationProvenance({
       deliveryId: session.deliveryId,
       fence: session.fence - 1,
-      hostVersion: HOST_VERSION,
-      descendantTeardown: "verified",
     });
     expect(stale.ok).toBe(false);
     if (!stale.ok) expect(stale.blockers[0]?.code).toBe("stale_fence");
@@ -489,20 +539,43 @@ describe("a stale session and a fresh one", () => {
       hostTaskId: `host-${sequence}-fresh`,
       observedAt: LATER,
       attestationExpiry: EXPIRY,
-      descendantTeardown: GRADED_DESCENDANT_TEARDOWN,
     });
     must(rebound, "rebind");
     expect(rebound.fence).toBeGreaterThan(session.fence);
     expect(rebound.projectionDigest).not.toBe(staleState.expectation.projectionDigest);
 
-    // The stale session holds a stale attestation: its interceptor denies
-    // every tool, so it cannot reach the newly activated projection at all.
-    expect(decideHookInvocation({ ...staleState }, { tool_name: "Read", tool_input: {} }, LATER).allowed).toBe(true);
-    const supersededState: HookBindingState = {
-      ...staleState,
-      expectation: { ...staleState.expectation, invocationFence: rebound.fence },
-    };
-    expect(decideHookInvocation(supersededState, { tool_name: "Read", tool_input: {} }, LATER).allowed).toBe(false);
+    // THE STALE SESSION, as it actually is on disk. The binding state file is
+    // per-delivery and the rebind overwrote it, so the superseded session's
+    // hook re-reads a state file describing the FRESH invocation — a
+    // consistent grant and attestation whose workspace root is the fresh
+    // worktree. What stops it is the fence baked into its OWN hook command at
+    // admission: it no longer matches, so every tool closes.
+    const current = await bindingState(session.deliveryId);
+    expect(current.expectation.invocationFence).toBe(rebound.fence);
+    const supersededSession = decideHookInvocation(
+      current,
+      { tool_name: "Read", tool_input: {} },
+      LATER,
+      session.fence, // the fence THIS session was admitted under
+    );
+    expect(supersededSession.allowed).toBe(false);
+    if (!supersededSession.allowed) expect(supersededSession.reason).toContain("superseded_session");
+
+    // A write is refused for the same reason, so the superseded session keeps
+    // no write path into the newly authorized workspace either.
+    expect(
+      decideHookInvocation(
+        current,
+        { tool_name: "Write", tool_input: { file_path: path.join(fresh, "src", "greet.mjs") } },
+        LATER,
+        session.fence,
+      ).allowed,
+    ).toBe(false);
+    // The fresh session, admitted under the current fence, proceeds.
+    expect(decideHookInvocation(current, { tool_name: "Read", tool_input: {} }, LATER, rebound.fence).allowed).toBe(true);
+    // The stale session's own settings baked its own fence, so the two
+    // sessions are distinguishable at all: the composed hook command carries it.
+    expect(staleState.expectation.invocationFence).toBe(session.fence);
 
     // And the stale worktree's projection is not the fresh one: its per-run
     // marker still names the superseded fence.
@@ -595,12 +668,7 @@ describe("negative process instrumentation", () => {
     const session = await openSession();
     await plan(session);
     await implement(session);
-    await facade.recordTerminationProvenance({
-      deliveryId: session.deliveryId,
-      fence: session.fence,
-      hostVersion: HOST_VERSION,
-      descendantTeardown: GRADED_DESCENDANT_TEARDOWN,
-    });
+    await facade.recordTerminationProvenance({ deliveryId: session.deliveryId, fence: session.fence });
 
     // Everything the PRODUCT has executed across this whole suite. Matching is
     // on the executable and its arguments as TOKENS — a scratch directory that

@@ -26,9 +26,12 @@
  * the normalized checkpoint outcomes — is proven by the in-process sensors and
  * is deliberately not re-litigated here.
  *
- * The user's own configuration is never touched: the session runs in a
- * disposable directory, writes its state under that directory, and admits with
- * every ambient setting scope excluded.
+ * ISOLATION, STATED HONESTLY. The session runs in a disposable directory, the
+ * binding writes nothing outside it, and admission excludes every ambient
+ * setting scope, so no user, project, or local settings are read. The lane does
+ * NOT isolate the host's own state: the session authenticates with, and writes
+ * its project history and transcripts into, the operator's real Claude Code
+ * configuration directory, exactly as any session that operator runs does.
  */
 import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -81,8 +84,11 @@ function runSession(input: {
   });
 }
 
+/** The probe's single invocation fence, baked into the hook command as the binding bakes it. */
+const PROBE_FENCE = 1;
+
 const hookCommand = (subcommand: string, statePath: string): string =>
-  [TSX_BIN, HOOK_MAIN, subcommand, statePath].map((part) => JSON.stringify(part)).join(" ");
+  [TSX_BIN, HOOK_MAIN, subcommand, statePath, String(PROBE_FENCE)].map((part) => JSON.stringify(part)).join(" ");
 
 /** The binding-composed session settings, in the shape the binding writes them. */
 function writeSettings(input: {
@@ -138,7 +144,7 @@ function writeState(input: {
     productTrustRevocationEpoch: 0,
     observedAt: "2026-01-01T00:00:00Z",
     deliveryId: "dlv-live-probe",
-    invocationFence: 1,
+    invocationFence: PROBE_FENCE,
     workspaceId: "ws-live-probe",
     projectionDigest: "a".repeat(64),
     discoveryConfigurationDigest: "b".repeat(64),
@@ -267,17 +273,18 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
       const cwd = path.join(root, "lifecycle");
       const bindingDir = path.join(cwd, "binding");
       mkdirSync(bindingDir, { recursive: true });
+      mkdirSync(path.join(cwd, "work"), { recursive: true });
       const statePath = path.join(bindingDir, "state.json");
       writeState({ statePath, workspaceRoot: cwd, attested: true, allow: ["Bash"] });
       const endMarker = path.join(cwd, "session-end.marker");
       const settingsPath = writeSettings({ bindingDir, statePath, allow: ["Bash"], sessionEndMarker: endMarker });
-      const pidFile = path.join(cwd, "child.pid");
+      const pidFile = path.join(cwd, "work", "child.pid");
       await runSession({
         cwd,
         settingsPath,
         prompt:
           `Use the Bash tool once to run exactly this and nothing else: ` +
-          `nohup sh -c 'sleep 120' > /dev/null 2>&1 & echo $! > child.pid`,
+          `nohup sleep 120 > /dev/null 2>&1 & echo $! > work/child.pid`,
         timeoutMs: 180_000,
       });
 
@@ -296,7 +303,9 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
           try {
             process.kill(pid, 0);
             survived = true;
-            process.kill(pid, "SIGKILL"); // reap the probe's own child
+            // The recorded pid IS the `sleep` (not an intermediate shell),
+            // so killing it leaves nothing orphaned behind the probe.
+            process.kill(pid, "SIGKILL");
           } catch {
             survived = false;
           }

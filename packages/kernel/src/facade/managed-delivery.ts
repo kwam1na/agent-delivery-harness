@@ -89,6 +89,7 @@ import {
   composeClaudeCodeSession,
   discoveryConfigurationDigestOf,
   gradeResumeEligibility,
+  gradedDescendantTeardown,
   materializeProjection,
   mintGrantAttestation,
   readConsumptionMarker,
@@ -158,6 +159,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CHECKOUT_ROOT = path.resolve(HERE, "..", "..", "..", "..");
 const HOOK_MAIN = path.resolve(HERE, "..", "host", "hook-main.ts");
 const TSX_BIN = path.join(CHECKOUT_ROOT, "node_modules", ".bin", "tsx");
+
+/** The host this facade's binding drives; the key into the graded record. */
+const HOST_ID = "claude-code";
 
 export interface ManagedInstallation {
   readonly installationPath: string;
@@ -421,12 +425,6 @@ export interface ManagedDeliveryFacade {
     readonly observedAt: string;
     readonly attestationExpiry: string;
     readonly observationLifetimeSeconds?: number;
-    /**
-     * The host's graded descendant-teardown status from the capability
-     * record. It defaults to `unverified` — the conservative position — so a
-     * caller that says nothing never widens resume eligibility by omission.
-     */
-    readonly descendantTeardown?: "verified" | "unverified";
   }): Promise<
     | {
         readonly ok: true;
@@ -517,23 +515,26 @@ export interface ManagedDeliveryFacade {
   /**
    * TERMINATION PROVENANCE, and the only door it enters through. The caller is
    * the trusted host-runtime lifecycle integration — never a model-callable
-   * tool — reporting that an invocation ended cleanly. Whether that clean end
-   * also proves the invocation's descendants are gone is NOT the caller's
-   * claim to make: `descendantTeardown` comes from the host's graded
-   * capability record, and the resume position is derived from it here, so a
-   * host whose background children survive a clean end can never produce a
-   * same-workspace resume record.
+   * tool — reporting that an invocation ended cleanly.
+   *
+   * The caller reports only THAT, and nothing else. Whether the clean end also
+   * proves the invocation's descendants are gone is not a claim any caller may
+   * make: the descendant-teardown status is read from the graded capability
+   * record inside the pinned generation, and the resume position is derived
+   * from it here. A host whose background children survive a clean end can
+   * therefore never produce a same-workspace resume record, however the
+   * operation is called and whatever a session may have written.
    *
    * Crash provenance has no entrypoint at all: no supported host supplies it,
    * no daemon exists to observe it, and the product never infers it.
    */
-  recordTerminationProvenance(input: {
-    readonly deliveryId: string;
-    readonly fence: number;
-    readonly hostVersion: string;
-    readonly descendantTeardown: "verified" | "unverified";
-  }): Promise<
-    { readonly ok: true; readonly resumeEligibility: "same-workspace" | "fresh-worktree-only" } | FacadeFailure
+  recordTerminationProvenance(input: { readonly deliveryId: string; readonly fence: number }): Promise<
+    | {
+        readonly ok: true;
+        readonly descendantTeardown: "verified" | "unverified";
+        readonly resumeEligibility: "same-workspace" | "fresh-worktree-only";
+      }
+    | FacadeFailure
   >;
 
   /**
@@ -1017,11 +1018,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     }
 
     // The consumption marker's READ-BACK half, AFTER the canonical recheck so
-    // it never preempts a frozen recheck verdict. The receipt digest already
-    // proves the projected bytes are intact; the marker independently proves
-    // WHICH run injected them, so a fence-bound operation running against a
-    // projection materialized for another delivery or another fence fails
-    // closed rather than recording output against the wrong bytes.
+    // it never preempts a frozen recheck verdict.
+    //
+    // The receipt digest already covers these bytes, and on an untampered
+    // workspace the two checks agree by construction — the marker is a
+    // receipted entry and the fence only advances through a re-materializing
+    // rebind. What the marker adds is a SECOND, differently-keyed statement of
+    // which run injected the projection, so an attacker who has reached the
+    // binding's own receipt still has to forge the marker in agreement with
+    // it. It is defense in depth on binding-owned files, not an independent
+    // proof against an uncompromised receipt.
     if (options.fenceRequired === true && options.verifyWorkspace === true && workspace !== undefined) {
       const marker = await readConsumptionMarker({ worktreeDir: workspace.worktreeDir });
       const observedMarker = marker.ok
@@ -1029,10 +1035,22 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         : `unreadable (${marker.blockers.map((blocker) => blocker.code).join(", ")})`;
       const expectedMarker = `${deliveryId}@${options.invokingFence ?? reduced.state.lastFence}`;
       if (observedMarker !== expectedMarker) {
+        // Like every sibling workspace-integrity failure, this leaves a
+        // durable blocker rather than a silently retryable refusal.
+        if (reduced.state.state !== "blocked" && reduced.state.state !== "security_blocked") {
+          await recordBlockerAndTransition(
+            store,
+            deliveryId,
+            reduced.state.state,
+            "projection.consumption-marker-mismatch",
+            `the worktree's per-run consumption marker reads ${observedMarker}, not ${expectedMarker}`.slice(0, 1900),
+            "blocked",
+          );
+        }
         return refuse(
           "consumption_marker_mismatch",
           `The worktree's per-run consumption marker reads ${observedMarker}, not ${expectedMarker}.`,
-          "Only the projection this invocation materialized may carry its outputs; rebind the workspace for the current fence.",
+          "Only the projection this invocation materialized may carry its outputs; quarantine the workspace and resume through an authorized takeover.",
         );
       }
     }
@@ -1875,15 +1893,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return runAcceptance(intakeId, store, meta);
     },
 
-    async bindWorkspace({
-      deliveryId,
-      worktreeDir,
-      hostTaskId,
-      observedAt,
-      attestationExpiry,
-      observationLifetimeSeconds,
-      descendantTeardown,
-    }) {
+    async bindWorkspace({ deliveryId, worktreeDir, hostTaskId, observedAt, attestationExpiry, observationLifetimeSeconds }) {
       const guarded = await guard(deliveryId, { allowPendingTakeover: true });
       if (!("store" in guarded)) return guarded;
       const takeover = await readJson<PendingTakeover>(path.join(await deliveryDir(deliveryId), "takeover.json"));
@@ -1965,6 +1975,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         bindingDir,
         statePath,
         hookCommand: [TSX_BIN, HOOK_MAIN],
+        // The session's own identity, baked into its hook command: a later
+        // invocation overwrites the shared binding state, and this is how a
+        // superseded-but-still-running session recognizes that it has been.
+        fence,
         grant: DISPOSABLE_STAGE_GRANT,
       });
       if (!session.ok) {
@@ -2026,10 +2040,6 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           observationPath,
           journalPath: guarded.store.journalPath,
           deliveryId,
-          // The host's graded teardown status, carried into the lifecycle hook
-          // so its termination record reports the capability record's finding
-          // rather than an in-session guess.
-          descendantTeardown: descendantTeardown ?? "unverified",
         })}\n`,
       );
       await writeOwned(observationPath, `${JSON.stringify({ fence, observedAt })}\n`);
@@ -2844,11 +2854,33 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true };
     },
 
-    async recordTerminationProvenance({ deliveryId, fence, hostVersion, descendantTeardown }) {
+    async recordTerminationProvenance({ deliveryId, fence }) {
       const guarded = await guard(deliveryId, { invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
-      // One trusted lifecycle event, two distinct facts — the same pair the
-      // model-external hook records at clean session end. Activity becomes an
+
+      // The GRADE, read from the pinned generation's capability record — not
+      // from this call, and not from anything a session can write.
+      const descendantTeardown = await gradedDescendantTeardown({
+        generationRoot: guarded.generationRoot,
+        hostId: HOST_ID,
+        hostVersion: input.hostVersion,
+      });
+      const resumeEligibility = gradeResumeEligibility({ descendantTeardown });
+
+      // One provenance record per invocation. A lifecycle integration that
+      // retries, or a late callback arriving after a takeover was presented,
+      // must not append again: the append advances the expected journal
+      // revision, which would void a pending takeover authorization.
+      const existing = lastOf(guarded.views, "termination.provenance.recorded");
+      if (existing !== undefined && existing.payload["fence"] === guarded.lastFence) {
+        return {
+          ok: true,
+          descendantTeardown: existing.payload["descendantTeardown"] as "verified" | "unverified",
+          resumeEligibility: existing.payload["resumeEligibility"] as "same-workspace" | "fresh-worktree-only",
+        };
+      }
+
+      // One trusted lifecycle event, two distinct facts. Activity becomes an
       // honest `paused`; the provenance record is the durable fact about the
       // ended invocation and is NOT an activity marker.
       const paused = await appendEntry(guarded.store, deliveryId, "activity.observed", {
@@ -2856,21 +2888,24 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         fence: guarded.lastFence,
       });
       if (!paused.ok) return paused;
-      // The honest derivation, in one place: the record can only ever claim
-      // what the host's graded teardown behavior supports.
-      const resumeEligibility = gradeResumeEligibility({ descendantTeardown });
       const appended = await appendEntry(guarded.store, deliveryId, "termination.provenance.recorded", {
         fence: guarded.lastFence,
-        hostVersion,
+        hostVersion: input.hostVersion,
         provenance: "graceful",
         descendantTeardown,
         resumeEligibility,
       });
       if (!appended.ok) return appended;
-      return { ok: true, resumeEligibility };
+      return { ok: true, descendantTeardown, resumeEligibility };
     },
 
     async tearDownWorkspaceProjection({ deliveryId }) {
+      // Teardown destroys the binding's own receipts, so it runs through the
+      // canonical recheck like every other workspace operation: a delivery
+      // fenced into `security_blocked` is quarantined for audit, and its
+      // evidence is not removable by a passing caller.
+      const guarded = await guard(deliveryId);
+      if (!("store" in guarded)) return guarded;
       const dir = await deliveryDir(deliveryId);
       const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
       if (workspace === undefined) {

@@ -108,6 +108,11 @@ export const HOST_CONFORMANCE_CASES: readonly HostConformanceCase[] = Object.fre
     statement: "an attestation bound to another delivery opens nothing",
   }),
   Object.freeze({
+    caseId: "allows-a-granted-capability",
+    statement:
+      "a capability the attested grant lists, writing inside its writable paths, is allowed — without this the contract would be satisfied by a host that denies everything",
+  }),
+  Object.freeze({
     caseId: "denies-a-capability-outside-the-grant",
     statement: "a capability the attested grant does not list is denied",
   }),
@@ -199,6 +204,7 @@ export async function runHostIntegrationConformance(
   await admission("denies-every-tool-before-attestation", "before-attestation", "denied");
   await admission("denies-a-stale-fence-attestation", "stale-fence", "denied");
   await admission("denies-a-sibling-delivery-attestation", "sibling-delivery", "denied");
+  await interception("allows-a-granted-capability", "granted-capability", "allowed");
   await interception("denies-a-capability-outside-the-grant", "ungranted-capability", "denied");
   await interception("denies-a-write-to-a-protected-authority-path", "protected-path-write", "denied");
   await interception("denies-an-operator-confirmation-inside-the-grant", "operator-confirmation", "denied");

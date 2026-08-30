@@ -23,6 +23,7 @@
  *     grant digest, workspace, projection digest, and the binding-written
  *     discovery configuration.
  */
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { compareUtf16CodeUnits } from "../canonical.ts";
@@ -327,25 +328,6 @@ export async function discoveryConfigurationDigestOf(bindingDir: string): Promis
   }
 }
 
-export type VerifyDiscoveryConfigurationResult = { readonly ok: true } | HostBindingFailure;
-
-export async function verifyDiscoveryConfiguration(input: {
-  readonly bindingDir: string;
-  readonly expectedDigest: string;
-}): Promise<VerifyDiscoveryConfigurationResult> {
-  const observed = await discoveryConfigurationDigestOf(input.bindingDir);
-  if (observed === undefined) {
-    return fail("discovery_configuration_unreadable", "the binding-written discovery configuration is unreadable");
-  }
-  if (observed !== input.expectedDigest) {
-    return fail(
-      "discovery_configuration_digest_mismatch",
-      `the discovery configuration hashes to ${observed}, not the ${input.expectedDigest} bound at application; the set is binding-exclusive, so a change is tampering`,
-    );
-  }
-  return { ok: true };
-}
-
 // ── Teardown ────────────────────────────────────────────────────────────────
 
 export type TearDownProjectionResult = { readonly ok: true } | HostBindingFailure;
@@ -367,6 +349,26 @@ export async function tearDownProjection(input: {
   readonly bindingDir: string;
   readonly exec: ExecPort;
 }): Promise<TearDownProjectionResult> {
+  const excludesPath = path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE);
+
+  // The worktree may already be gone — the host owns workspace lifecycle and
+  // may remove it first. That is the ordering this teardown is named for, so
+  // it is not an error; there is simply no worktree-scoped value left to
+  // clear. Read the current value BEFORE deleting the file it points at.
+  let clearExclusion = false;
+  if (existsSync(input.worktreeDir)) {
+    const current = await input.exec.run({
+      command: "git",
+      args: ["config", "--worktree", "--get", "core.excludesFile"],
+      cwd: input.worktreeDir,
+    });
+    // Unset ONLY the binding's own value. The apply side refuses to clobber an
+    // operator's excludes file; the teardown side must not delete one either —
+    // including the repository-level value `--worktree` silently falls back to
+    // when worktree configuration is not enabled.
+    clearExclusion = current.code === 0 && current.stdout.trim() === excludesPath;
+  }
+
   try {
     await rm(path.join(input.worktreeDir, PROJECTION_DIR), { recursive: true, force: true });
     for (const file of [SESSION_SETTINGS_FILE, WORKTREE_EXCLUDES_FILE, PROJECTION_RECEIPT_FILE]) {
@@ -375,6 +377,8 @@ export async function tearDownProjection(input: {
   } catch (error) {
     return fail("teardown_failed", `removing the projection failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+
+  if (!clearExclusion) return { ok: true };
   // Exit code 5 is git's "the value was not set" — already torn down.
   const unset = await input.exec.run({
     command: "git",
@@ -385,6 +389,56 @@ export async function tearDownProjection(input: {
     return fail("teardown_failed", `clearing the worktree-scoped exclusion failed: ${unset.stderr.trim()}`);
   }
   return { ok: true };
+}
+
+// ── The graded descendant-teardown status ───────────────────────────────────
+
+/** The graded capability record, carried inside the pinned generation root. */
+export const GENERATION_HOST_CAPABILITIES = "qualifications/host-admission-capabilities.json";
+
+/**
+ * Resolves the host's descendant-teardown status from the GRADED capability
+ * record in the pinned generation — never from a caller's claim and never from
+ * anything a session can write.
+ *
+ * Every doubt resolves to `unverified`: an unreadable record, an ungraded host
+ * version, a tier below 3, or a capability entry that is anything other than
+ * `supported`. That direction is safe by construction — `unverified` can only
+ * narrow resume eligibility to the fresh-worktree takeover path, never widen
+ * it — so a missing or malformed record closes same-workspace resume rather
+ * than opening it.
+ */
+export async function gradedDescendantTeardown(input: {
+  readonly generationRoot: string;
+  readonly hostId: string;
+  readonly hostVersion: string;
+}): Promise<"verified" | "unverified"> {
+  let record: unknown;
+  try {
+    record = JSON.parse(
+      await readFile(path.join(input.generationRoot, ...GENERATION_HOST_CAPABILITIES.split("/")), "utf8"),
+    );
+  } catch {
+    return "unverified";
+  }
+  const hosts = (record as { hosts?: unknown })?.hosts;
+  if (!Array.isArray(hosts)) return "unverified";
+  const graded = hosts.find(
+    (host: unknown) =>
+      typeof host === "object" &&
+      host !== null &&
+      (host as Record<string, unknown>)["hostId"] === input.hostId &&
+      (host as Record<string, unknown>)["hostVersion"] === input.hostVersion,
+  ) as Record<string, unknown> | undefined;
+  if (graded === undefined) return "unverified";
+
+  // Both halves must agree: the ladder grade AND the capability the grade
+  // rests on. Either one short of Tier 3 keeps same-workspace resume closed.
+  const tier = (graded["grade"] as { tier?: unknown } | undefined)?.tier;
+  const capability = (graded["capabilities"] as Record<string, { status?: unknown }> | undefined)?.[
+    "terminationProvenanceWithDescendantTeardown"
+  ]?.status;
+  return typeof tier === "number" && tier >= 3 && capability === "supported" ? "verified" : "unverified";
 }
 
 // ── The honest resume grade ─────────────────────────────────────────────────
@@ -407,6 +461,15 @@ export interface ComposeClaudeCodeSessionInput {
   readonly statePath: string;
   /** The command vector that runs the hook entry (the caller supplies the runtime). */
   readonly hookCommand: readonly string[];
+  /**
+   * The fence THIS session is admitted under, baked into the hook command it
+   * carries. The binding state file is per-delivery and a later invocation
+   * overwrites it, so a superseded-but-still-running session would otherwise
+   * read the successor's consistent grant and attestation. The baked fence is
+   * the session's own identity: when it stops matching the state file, this
+   * session has been superseded and its tools close.
+   */
+  readonly fence: number;
   /** The stage grant whose allowed capabilities become the host's own permission allow rules. */
   readonly grant: { readonly allowedCapabilities: readonly string[] };
 }
@@ -430,7 +493,9 @@ export async function composeClaudeCodeSession(
   input: ComposeClaudeCodeSessionInput,
 ): Promise<ComposeClaudeCodeSessionResult> {
   const hook = (subcommand: string): string =>
-    [...input.hookCommand, subcommand, input.statePath].map((part) => JSON.stringify(part)).join(" ");
+    [...input.hookCommand, subcommand, input.statePath, String(input.fence)]
+      .map((part) => JSON.stringify(part))
+      .join(" ");
 
   const settings = {
     // The supported host enforces the grant through its OWN permission

@@ -26,12 +26,13 @@ import { createExecPort } from "./exec-port.ts";
 import {
   PROJECTION_DIR,
   composeClaudeCodeSession,
+  discoveryConfigurationDigestOf,
   gradeResumeEligibility,
+  gradedDescendantTeardown,
   materializeProjection,
   mintGrantAttestation,
   readConsumptionMarker,
   tearDownProjection,
-  verifyDiscoveryConfiguration,
   verifyProjection,
 } from "./claude-code.ts";
 
@@ -177,6 +178,7 @@ describe("composeClaudeCodeSession", () => {
       bindingDir: bench.bindingDir,
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
       grant: { allowedCapabilities: ["Bash", "Read", "Write"] },
     });
     expect(session.ok, JSON.stringify(session)).toBe(true);
@@ -303,8 +305,8 @@ describe("the consumption marker", () => {
   });
 });
 
-describe("verifyDiscoveryConfiguration", () => {
-  it("matches the digest bound at application and fails closed when a byte is mutated", async () => {
+describe("the binding-written discovery configuration", () => {
+  it("matches the digest bound at application and moves when a byte is mutated", async () => {
     const bench = await workbench("discovery");
     const materialized = await materializeProjection({
       worktreeDir: bench.worktreeDir,
@@ -319,28 +321,24 @@ describe("verifyDiscoveryConfiguration", () => {
       bindingDir: bench.bindingDir,
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
       grant: { allowedCapabilities: ["Read"] },
     });
     expect(session.ok).toBe(true);
     if (!session.ok) return;
 
-    const verified = await verifyDiscoveryConfiguration({
-      bindingDir: bench.bindingDir,
-      expectedDigest: session.discoveryConfigurationDigest,
-    });
-    expect(verified.ok, JSON.stringify(verified)).toBe(true);
+    // One definition, used at application and at every canonical recheck.
+    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).toBe(session.discoveryConfigurationDigest);
 
     // The set is BINDING-EXCLUSIVE: the host never mutates it, so any change
-    // to its bytes is tampering and fails closed.
+    // to its bytes moves the digest and the recheck fails closed on it.
     writeFileSync(session.settingsPath, JSON.stringify({ permissions: { allow: ["Bash"] } }));
-    const tampered = await verifyDiscoveryConfiguration({
-      bindingDir: bench.bindingDir,
-      expectedDigest: session.discoveryConfigurationDigest,
-    });
-    expect(tampered.ok).toBe(false);
-    if (!tampered.ok) {
-      expect(tampered.blockers.map((blocker) => blocker.code)).toContain("discovery_configuration_digest_mismatch");
-    }
+    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).not.toBe(session.discoveryConfigurationDigest);
+
+    // An unreadable member yields no digest at all, which can never equal an
+    // expected one — the recheck fails closed rather than skipping.
+    await rm(path.join(bench.bindingDir, "worktree-excludes"), { force: true });
+    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).toBeUndefined();
   });
 
   it("leaves host-writable settings outside the digest-bound set", async () => {
@@ -358,6 +356,7 @@ describe("verifyDiscoveryConfiguration", () => {
       bindingDir: bench.bindingDir,
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
       grant: { allowedCapabilities: ["Read"] },
     });
     expect(session.ok).toBe(true);
@@ -372,11 +371,7 @@ describe("verifyDiscoveryConfiguration", () => {
       JSON.stringify({ permissions: { allow: ["Bash(rm:*)"] } }),
     );
 
-    const discovery = await verifyDiscoveryConfiguration({
-      bindingDir: bench.bindingDir,
-      expectedDigest: session.discoveryConfigurationDigest,
-    });
-    expect(discovery.ok, JSON.stringify(discovery)).toBe(true);
+    expect(await discoveryConfigurationDigestOf(bench.bindingDir)).toBe(session.discoveryConfigurationDigest);
     const projection = await verifyProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir });
     expect(projection.ok).toBe(true);
   });
@@ -398,6 +393,7 @@ describe("tearDownProjection", () => {
       bindingDir: bench.bindingDir,
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
       grant: { allowedCapabilities: ["Read"] },
     });
     expect(session.ok).toBe(true);
@@ -473,5 +469,153 @@ describe("gradeResumeEligibility", () => {
   it("is the honest derivation: unverified descendant teardown never yields same-workspace resume", () => {
     expect(gradeResumeEligibility({ descendantTeardown: "unverified" })).toBe("fresh-worktree-only");
     expect(gradeResumeEligibility({ descendantTeardown: "verified" })).toBe("same-workspace");
+  });
+});
+
+describe("gradedDescendantTeardown", () => {
+  const REAL_RECORD = path.resolve(HERE, "..", "..", "..", "..", "qualifications", "host-admission-capabilities.json");
+
+  const generationWith = async (record: unknown): Promise<string> => {
+    const root = await mkdtemp(path.join(scratch, "graded-"));
+    mkdirSync(path.join(root, "qualifications"), { recursive: true });
+    writeFileSync(path.join(root, "qualifications", "host-admission-capabilities.json"), JSON.stringify(record));
+    return root;
+  };
+
+  it("reads UNVERIFIED for the real graded host — the record, not a caller, decides", async () => {
+    const root = await mkdtemp(path.join(scratch, "graded-real-"));
+    mkdirSync(path.join(root, "qualifications"), { recursive: true });
+    writeFileSync(path.join(root, "qualifications", "host-admission-capabilities.json"), readFileSync(REAL_RECORD));
+    expect(
+      await gradedDescendantTeardown({ generationRoot: root, hostId: "claude-code", hostVersion: "2.1.97" }),
+    ).toBe("unverified");
+  });
+
+  it("reads VERIFIED only when the ladder grade AND the capability entry both reach Tier 3", async () => {
+    const tier3 = {
+      hosts: [
+        {
+          hostId: "claude-code",
+          hostVersion: "9.9.9",
+          grade: { tier: 3 },
+          capabilities: { terminationProvenanceWithDescendantTeardown: { status: "supported" } },
+        },
+      ],
+    };
+    expect(
+      await gradedDescendantTeardown({
+        generationRoot: await generationWith(tier3),
+        hostId: "claude-code",
+        hostVersion: "9.9.9",
+      }),
+    ).toBe("verified");
+
+    // Either half short of Tier 3 keeps same-workspace resume closed.
+    for (const halfGraded of [
+      { ...tier3, hosts: [{ ...tier3.hosts[0], grade: { tier: 2 } }] },
+      {
+        ...tier3,
+        hosts: [
+          { ...tier3.hosts[0], capabilities: { terminationProvenanceWithDescendantTeardown: { status: "unsupported" } } },
+        ],
+      },
+    ]) {
+      expect(
+        await gradedDescendantTeardown({
+          generationRoot: await generationWith(halfGraded),
+          hostId: "claude-code",
+          hostVersion: "9.9.9",
+        }),
+      ).toBe("unverified");
+    }
+  });
+
+  it("resolves every doubt to UNVERIFIED — a missing, malformed, or ungraded record closes same-workspace resume", async () => {
+    const cases: (string | Promise<string>)[] = [
+      path.join(scratch, "no-such-generation"),
+      generationWith({ hosts: "not an array" }),
+      generationWith({}),
+      generationWith({ hosts: [{ hostId: "claude-code", hostVersion: "9.9.9", grade: { tier: 3 } }] }),
+    ];
+    for (const candidate of cases) {
+      const generationRoot = await candidate;
+      expect(
+        await gradedDescendantTeardown({ generationRoot, hostId: "claude-code", hostVersion: "9.9.9" }),
+        generationRoot,
+      ).toBe("unverified");
+    }
+    // A record that does not grade THIS version is not a grade for it.
+    const root = await generationWith({
+      hosts: [
+        {
+          hostId: "claude-code",
+          hostVersion: "9.9.9",
+          grade: { tier: 3 },
+          capabilities: { terminationProvenanceWithDescendantTeardown: { status: "supported" } },
+        },
+      ],
+    });
+    expect(await gradedDescendantTeardown({ generationRoot: root, hostId: "claude-code", hostVersion: "2.1.97" })).toBe(
+      "unverified",
+    );
+    expect(await gradedDescendantTeardown({ generationRoot: root, hostId: "codex-cli", hostVersion: "9.9.9" })).toBe(
+      "unverified",
+    );
+  });
+
+  it("fails closed on a corrupt record rather than throwing", async () => {
+    const root = await mkdtemp(path.join(scratch, "graded-corrupt-"));
+    mkdirSync(path.join(root, "qualifications"), { recursive: true });
+    writeFileSync(path.join(root, "qualifications", "host-admission-capabilities.json"), "{ not json");
+    expect(await gradedDescendantTeardown({ generationRoot: root, hostId: "claude-code", hostVersion: "2.1.97" })).toBe(
+      "unverified",
+    );
+  });
+});
+
+describe("tearDownProjection, against the host's own workspace lifecycle", () => {
+  it("preserves an operator excludes value it did not write", async () => {
+    const bench = await workbench("teardown-operator-excludes");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-teardown-2",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+
+    // An operator repoints the exclusion after materialization. Teardown must
+    // not delete a value it did not write — the apply side refuses to clobber
+    // one, and the teardown side must be symmetric.
+    git(bench.worktreeDir, "config", "--worktree", "core.excludesFile", "/tmp/operator-owned-excludes");
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, exec });
+    expect(torn.ok, JSON.stringify(torn)).toBe(true);
+    expect(git(bench.worktreeDir, "config", "--worktree", "--get", "core.excludesFile")).toBe(
+      "/tmp/operator-owned-excludes",
+    );
+  });
+
+  it("succeeds when the host already removed the worktree — teardown never races workspace removal into a blocker", async () => {
+    const bench = await workbench("teardown-worktree-gone");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-teardown-3",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+
+    // The host owns workspace lifecycle and may remove the worktree first.
+    git(bench.repoDir, "worktree", "remove", "--force", bench.worktreeDir);
+    expect(existsSync(bench.worktreeDir)).toBe(false);
+
+    const torn = await tearDownProjection({ worktreeDir: bench.worktreeDir, bindingDir: bench.bindingDir, exec });
+    expect(torn.ok, JSON.stringify(torn)).toBe(true);
+    expect(existsSync(path.join(bench.bindingDir, "settings.json"))).toBe(false);
+    expect(existsSync(path.join(bench.bindingDir, "worktree-excludes"))).toBe(false);
   });
 });

@@ -25,7 +25,6 @@ import {
   type CheckpointAdmissionExpectation,
 } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
-import { gradeResumeEligibility } from "./claude-code.ts";
 
 export interface HookBindingState {
   readonly expectation: CheckpointAdmissionExpectation;
@@ -35,13 +34,6 @@ export interface HookBindingState {
   readonly observationPath: string;
   readonly journalPath?: string;
   readonly deliveryId?: string;
-  /**
-   * The host's GRADED descendant-teardown status, written into the binding
-   * state at admission from the capability record. The hook reports it; it
-   * never decides it, and it cannot observe teardown from inside the session
-   * that is ending.
-   */
-  readonly descendantTeardown?: "verified" | "unverified";
 }
 
 export interface HookToolInput {
@@ -78,9 +70,24 @@ export function decideHookInvocation(
   state: HookBindingState | undefined,
   input: HookToolInput,
   observedAt: string,
+  /**
+   * The fence baked into THIS session's hook command at admission. The state
+   * file is per-delivery and a later invocation overwrites it, so without this
+   * a superseded-but-still-running session would read the successor's
+   * consistent grant and attestation — and its writes would resolve against
+   * the successor's workspace root. A session whose baked fence no longer
+   * matches the state file has been superseded and gets nothing.
+   */
+  sessionFence?: number,
 ): HookDecision {
   if (state === undefined) {
     return { allowed: false, reason: "no binding state is attested for this session; tools stay closed until the grant is applied" };
+  }
+  if (sessionFence !== undefined && state.expectation.invocationFence !== sessionFence) {
+    return {
+      allowed: false,
+      reason: `superseded_session: this session was admitted under fence ${sessionFence}, and the current fence is ${state.expectation.invocationFence}; a superseded invocation keeps no write path`,
+    };
   }
   const toolName = input.tool_name;
   if (typeof toolName !== "string" || toolName.length === 0) {
@@ -125,9 +132,17 @@ function nowInstant(): string {
 }
 
 async function main(argv: readonly string[]): Promise<number> {
-  const [subcommand, statePath] = argv;
+  const [subcommand, statePath, fenceArg] = argv;
   if (statePath === undefined || (subcommand !== "pre-tool-use" && subcommand !== "session-end")) {
-    process.stderr.write("usage: hook-main.ts <pre-tool-use|session-end> <state-path>\n");
+    process.stderr.write("usage: hook-main.ts <pre-tool-use|session-end> <state-path> <session-fence>\n");
+    return 2;
+  }
+  // The session's own fence, baked into the command at admission. A malformed
+  // or absent value denies rather than defers: an unidentifiable session is
+  // exactly the superseded case this check exists for.
+  const sessionFence = Number.parseInt(fenceArg ?? "", 10);
+  if (!Number.isSafeInteger(sessionFence) || sessionFence < 1) {
+    process.stderr.write("hook-main.ts: the session fence is required and must be a positive integer\n");
     return 2;
   }
   const state = loadState(statePath);
@@ -140,7 +155,7 @@ async function main(argv: readonly string[]): Promise<number> {
       input = {};
     }
     const observedAt = nowInstant();
-    const decision = decideHookInvocation(state, input, observedAt);
+    const decision = decideHookInvocation(state, input, observedAt, sessionFence);
     if (decision.allowed && state !== undefined) {
       // The invocation-fence observation the lazy-unknown rule consumes.
       try {
@@ -159,22 +174,22 @@ async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  // session-end: the trusted host-runtime lifecycle event, which carries TWO
-  // distinct facts and keeps them distinct.
+  // session-end: trusted graceful lifecycle evidence — honest `paused`. A
+  // superseded session reports nothing: its `paused` would name a fence that
+  // is no longer current and would age the LIVE invocation toward unknown.
+  if (state !== undefined && state.expectation.invocationFence !== sessionFence) return 0;
   //
-  //   1. Activity: an honest `paused` — the session ended cleanly.
-  //   2. Termination provenance: graceful provenance for this fence, carrying
-  //      the host's GRADED descendant-teardown status. The resume position is
-  //      derived from that status, so on a host whose background children
-  //      survive a clean end this record says fresh-worktree-only and the
-  //      prior workspace stays explicitly unverified. The hook never claims
-  //      the prior task's descendants stopped.
+  // TERMINATION PROVENANCE IS DELIBERATELY NOT WRITTEN HERE. Provenance
+  // carries the host's graded descendant-teardown status, and that grade lives
+  // in the pinned generation's capability record, which this hook has no
+  // trustworthy path to. Reporting it from the binding state file would put a
+  // Tier 3 gate inside a per-delivery file, so provenance enters only through
+  // the facade's trusted lifecycle operation, which derives the grade itself.
   if (state?.journalPath === undefined || state.deliveryId === undefined) return 0;
   const store = createJournalStore(state.journalPath);
   const read = await store.read();
   const reduced = await store.state();
   if (!read.ok || !reduced.ok) return 0;
-  const fence = state.expectation.invocationFence;
   await store.append({
     spec: "journal-entry/1",
     journal: "delivery",
@@ -182,26 +197,7 @@ async function main(argv: readonly string[]): Promise<number> {
     expectedRevision: reduced.state.expectedRevision,
     idempotencyKey: `e${read.entries.length}-activity.observed`,
     kind: "activity.observed",
-    payload: { activity: "paused", fence },
-  });
-  if (state.descendantTeardown === undefined) return 0;
-  const afterActivity = await store.read();
-  const afterState = await store.state();
-  if (!afterActivity.ok || !afterState.ok) return 0;
-  await store.append({
-    spec: "journal-entry/1",
-    journal: "delivery",
-    subjectId: state.deliveryId,
-    expectedRevision: afterState.state.expectedRevision,
-    idempotencyKey: `e${afterActivity.entries.length}-termination.provenance.recorded`,
-    kind: "termination.provenance.recorded",
-    payload: {
-      fence,
-      hostVersion: state.expectation.hostVersion,
-      provenance: "graceful",
-      descendantTeardown: state.descendantTeardown,
-      resumeEligibility: gradeResumeEligibility({ descendantTeardown: state.descendantTeardown }),
-    },
+    payload: { activity: "paused", fence: state.expectation.invocationFence },
   });
   return 0;
 }

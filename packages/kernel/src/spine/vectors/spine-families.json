@@ -675,18 +675,14 @@
               "action": "delete",
               "subjectDeliveryId": "delivery-1",
               "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "preservedAuditRecords": [
-                "audit/delivery-1.json"
-              ]
+              "preservedAuditRecords": ["audit/delivery-1.json"]
             }
           }
         },
         {
           "name": "a retention action outside the frozen vocabulary",
           "verdict": "reject",
-          "codes": [
-            "malformed_member"
-          ],
+          "codes": ["malformed_member"],
           "value": {
             "spec": "journal-entry/1",
             "journal": "maintenance",
@@ -743,9 +739,7 @@
         {
           "name": "an unverified descendant teardown claiming same-workspace resume",
           "verdict": "reject",
-          "codes": [
-            "unsupported_combination"
-          ],
+          "codes": ["unsupported_combination"],
           "value": {
             "spec": "journal-entry/1",
             "journal": "delivery",
@@ -765,9 +759,7 @@
         {
           "name": "a crash-provenance claim the vocabulary cannot express",
           "verdict": "reject",
-          "codes": [
-            "malformed_member"
-          ],
+          "codes": ["malformed_member"],
           "value": {
             "spec": "journal-entry/1",
             "journal": "delivery",
@@ -1093,7 +1085,7 @@
       "family": "policy-snapshot",
       "vectors": [
         {
-          "name": "the golden snapshot — the digest recomputes from its own members",
+          "name": "the golden snapshot \u2014 the digest recomputes from its own members",
           "verdict": "accept",
           "value": {
             "spec": "policy-snapshot/1",
@@ -1221,7 +1213,7 @@
           }
         },
         {
-          "name": "a missing context digest — independence must stay falsifiable",
+          "name": "a missing context digest \u2014 independence must stay falsifiable",
           "verdict": "reject",
           "codes": [
             "missing_member"
@@ -1289,7 +1281,7 @@
       "family": "grant-attestation",
       "vectors": [
         {
-          "name": "the golden intake attestation — absent-by-state, not omitted",
+          "name": "the golden intake attestation \u2014 absent-by-state, not omitted",
           "verdict": "accept",
           "value": {
             "spec": "grant-attestation/1",

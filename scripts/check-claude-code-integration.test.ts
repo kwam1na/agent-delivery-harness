@@ -88,6 +88,14 @@ describe("the termination-provenance verdict", () => {
       expect(provenance.resumeEligibility).toBe("fresh-worktree-only");
       expect(provenance.sameWorkspaceResume).toBe("closed");
       expect(record.host.tier).toBeLessThan(3);
+    } else {
+      // The symmetric arm, so a Tier 3 claim cannot be hand-asserted by
+      // editing this record's own free text: a `verified` status must be
+      // backed by the graded admission record's ladder position, which the
+      // host-version cross-check above pins.
+      expect(record.host.tier).toBeGreaterThanOrEqual(3);
+      const graded = (admissionRecord.hosts as any[]).find((host) => host.hostId === record.host.hostId);
+      expect(graded.capabilities.terminationProvenanceWithDescendantTeardown.status).toBe("supported");
     }
   });
 
