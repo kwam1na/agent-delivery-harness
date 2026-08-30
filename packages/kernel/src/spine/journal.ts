@@ -36,6 +36,7 @@ import {
   sha256,
   specLiteral,
   spineId,
+  stringArray,
   text,
   type MemberRule,
   type SpineCollector,
@@ -79,6 +80,9 @@ export const MAINTENANCE_PHASES = Object.freeze(["started", "completed", "recove
 
 /** The multi-phase maintenance actions; every other action records one `completed` entry. */
 export const PHASED_MAINTENANCE_ACTIONS = Object.freeze(["update", "rollback"] as const);
+
+/** The frozen retention/export/deletion action vocabulary. */
+export const RETENTION_ACTIONS = Object.freeze(["export", "delete"] as const);
 
 type PayloadCheck = (payload: Record<string, unknown>, at: string, collector: SpineCollector) => void;
 
@@ -374,6 +378,18 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "delivery/finish.line.recorded": table([{ name: "result", check: embedded(validateFinishLineResult) }]),
   "delivery/approval.assertion.consumed": assertionConsumedPayload,
   "maintenance/maintenance.action.recorded": maintenanceActionPayload,
+  // The retention/export/deletion contract family. The record names its
+  // target delivery, digests the produced artifact (the export bundle, or the
+  // preserved minimal audit record a deletion leaves behind), and reports
+  // which audit records policy required preserving — and it lives in the
+  // installation-scoped maintenance journal precisely so it survives the
+  // target's removal.
+  "maintenance/retention.action.recorded": table([
+    { name: "action", check: oneOf(RETENTION_ACTIONS) },
+    { name: "subjectDeliveryId", check: spineId },
+    { name: "artifactDigest", check: sha256 },
+    { name: "preservedAuditRecords", check: stringArray() },
+  ]),
 });
 
 const ENVELOPE_RULES: readonly MemberRule[] = [

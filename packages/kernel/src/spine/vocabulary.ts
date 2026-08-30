@@ -132,8 +132,12 @@ export const EVENT_VOCABULARY: readonly EventKindEntry[] = Object.freeze([
   // the start, and its payload is now frozen in `journal.ts`.
   entry("delivery", "approval.assertion.consumed", "active"),
   entry("maintenance", "maintenance.action.recorded", "active"),
+  // The retention/export/deletion family is likewise defined by its owning
+  // unit out of reservation: export and deletion operations journal here so
+  // their records survive the target delivery's removal; its payload is
+  // frozen in `journal.ts`.
+  entry("maintenance", "retention.action.recorded", "active"),
   // Reserved — payloads belong to their owning units; reject until defined.
-  entry("maintenance", "retention.action.recorded", "reserved", false, "retention/export/deletion"),
   entry("intake", "intake.clarification.recorded", "reserved", false, "iterative intake"),
   entry("intake", "intake.draft.recorded", "reserved", false, "iterative intake"),
   entry("delivery", "termination.provenance.recorded", "reserved", false, "trusted host lifecycle integration"),

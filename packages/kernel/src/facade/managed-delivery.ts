@@ -33,7 +33,7 @@
  * counted as an interruption, never as an operator intervention.
  */
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -45,6 +45,12 @@ import {
 } from "../binding/host-admission.ts";
 import { createBlocker, type Blocker } from "../blockers.ts";
 import { createIntakeJournalStore, createJournalStore, type JournalStore } from "../checkpoint/journal-store.ts";
+import { evaluateCanonicalRecheck, type CompareCheck, type RecheckValues, type ValueCheck } from "../checkpoint/recheck.ts";
+import {
+  deleteDelivery as runDeliveryDeletion,
+  exportDelivery as runDeliveryExport,
+  type RetentionContext,
+} from "../checkpoint/retention.ts";
 import { digestCanonical, sha256Hex } from "../digest.ts";
 import { createArtifactsPort } from "../artifacts.ts";
 import { runAdmission } from "../admission.ts";
@@ -336,14 +342,17 @@ export interface ManagedDeliveryFacade {
     readonly deliveryId: string;
     readonly stageId: "plan" | "compound";
     readonly resultBytes: string;
+    /** The fence the invoking task was bound under; an older fence's output is permanently rejected, and omitting it fails closed. */
+    readonly fence: number;
   }): Promise<{ readonly ok: true; readonly state: DeliveryState } | FacadeFailure>;
 
   checkpointCandidate(input: {
     readonly deliveryId: string;
     readonly resultBytes: string;
+    readonly fence: number;
   }): Promise<{ readonly ok: true; readonly state: DeliveryState; readonly treeSha: string } | FacadeFailure>;
 
-  runSensor(input: { readonly deliveryId: string }): Promise<
+  runSensor(input: { readonly deliveryId: string; readonly fence: number }): Promise<
     { readonly ok: true; readonly outcome: "passed" | "failed"; readonly state: DeliveryState } | FacadeFailure
   >;
 
@@ -354,28 +363,86 @@ export interface ManagedDeliveryFacade {
     readonly verdict: "approved" | "findings";
     readonly contextBytes: string;
     readonly artifactBytes: string;
+    readonly fence: number;
   }): Promise<{ readonly ok: true } | FacadeFailure>;
 
-  reduceReview(input: { readonly deliveryId: string }): Promise<{ readonly ok: true; readonly state: DeliveryState } | FacadeFailure>;
+  reduceReview(input: { readonly deliveryId: string; readonly fence: number }): Promise<
+    { readonly ok: true; readonly state: DeliveryState } | FacadeFailure
+  >;
 
   admit(input: {
     readonly deliveryId: string;
     readonly recordedAtInstant: string;
     readonly env: EnvSnapshot;
+    readonly fence: number;
   }): Promise<{ readonly ok: true; readonly state: DeliveryState } | FacadeFailure>;
 
   prepareTrackedRecord(input: {
     readonly deliveryId: string;
     readonly env: EnvSnapshot;
+    readonly fence: number;
   }): Promise<{ readonly ok: true; readonly relativePath: string } | FacadeFailure>;
 
-  confirmTrackedRecord(input: { readonly deliveryId: string }): Promise<{ readonly ok: true; readonly state: DeliveryState } | FacadeFailure>;
+  confirmTrackedRecord(input: { readonly deliveryId: string; readonly fence: number }): Promise<
+    { readonly ok: true; readonly state: DeliveryState } | FacadeFailure
+  >;
 
-  completeFinishLine(input: { readonly deliveryId: string }): Promise<
+  completeFinishLine(input: { readonly deliveryId: string; readonly fence: number }): Promise<
     { readonly ok: true; readonly state: DeliveryState; readonly resultDigest: string } | FacadeFailure
   >;
 
-  sessionEnded(input: { readonly deliveryId: string }): Promise<{ readonly ok: true } | FacadeFailure>;
+  sessionEnded(input: { readonly deliveryId: string; readonly fence: number }): Promise<{ readonly ok: true } | FacadeFailure>;
+
+  /**
+   * A waiver or contract-amendment proposal: journaled with a pending marker
+   * while the delivery remains in its current state. Consumption belongs to
+   * the sensitive-approval lane (its journal kind stays reserved here); a
+   * candidate change since proposal voids the stale proposal with a typed
+   * blocker record.
+   */
+  recordApprovalRequest(input: {
+    readonly deliveryId: string;
+    readonly requestKind: "waiver" | "amendment";
+    readonly criterionId: string;
+    readonly actorId: string;
+    readonly reason: string;
+    readonly fence: number;
+  }): Promise<{ readonly ok: true; readonly state: DeliveryState } | FacadeFailure>;
+
+  /**
+   * Cancellation, first half: enter `cancellation_requested`, revoke the
+   * invocation fence for the model-external interceptor, and request native
+   * host cancellation (fence-revocation-only on hosts without a trusted
+   * cancellation acknowledgement). The delivery is NOT terminal yet.
+   */
+  requestCancellation(input: { readonly deliveryId: string }): Promise<
+    { readonly ok: true; readonly state: DeliveryState } | FacadeFailure
+  >;
+
+  /**
+   * Cancellation, second half: terminal `cancelled` through permanent
+   * quarantine of the prior workspace and preservation of the last trusted
+   * candidate. This path never claims that the prior task or its descendants
+   * terminated.
+   */
+  finalizeCancellation(input: { readonly deliveryId: string }): Promise<
+    { readonly ok: true; readonly state: DeliveryState } | FacadeFailure
+  >;
+
+  /** Export the delivery's durable detail to an owned namespace path; journaled to the maintenance journal. */
+  exportDelivery(input: { readonly deliveryId: string }): Promise<
+    { readonly ok: true; readonly exportPath: string; readonly artifactDigest: string } | FacadeFailure
+  >;
+
+  /**
+   * Delete a TERMINAL delivery's durable detail, preserving the minimum
+   * candidate/policy/evidence/action audit record first. The maintenance
+   * journal record survives the target's removal and reports what was
+   * preserved.
+   */
+  deleteDelivery(input: { readonly deliveryId: string }): Promise<
+    { readonly ok: true; readonly preservedAuditRecords: readonly string[] } | FacadeFailure
+  >;
 
   presentTakeover(input: {
     readonly deliveryId: string;
@@ -566,9 +633,21 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     readonly views: readonly JournalEntryView[];
     readonly workspace: WorkspaceMeta | undefined;
     readonly generationRoot: string;
+    /** The gathered observations, reusable by consumption-substituted rechecks. */
+    readonly recheckValues: RecheckValues;
   }
 
-  /** The canonical rechecks every mutation-capable operation runs. */
+  /**
+   * THE CANONICAL RECHECK every mutation-capable operation runs, routed
+   * through the single substitution-aware helper: product trust, the
+   * repository authority-revocation epoch, the invocation fence, the
+   * registering installation identity and active profile, and the projection
+   * and discovery-configuration digests. The helper decides; this function
+   * gathers observations and maps failures onto the typed blocker/transition
+   * behavior — trust and installation failures fence into `security_blocked`,
+   * authority and workspace-integrity failures block, and a stale invoking
+   * fence is permanently refused without touching the journal.
+   */
   const guard = async (
     deliveryId: string,
     options: {
@@ -576,6 +655,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       readonly verifyWorkspace?: boolean;
       /** Only the takeover rebind consumes a pending authorization. */
       readonly allowPendingTakeover?: boolean;
+      /** The invoking task's claimed fence; an older fence is permanently rejected. */
+      readonly invokingFence?: number;
+      /** Fence-carrying operations fail closed when no fence is presented. */
+      readonly fenceRequired?: boolean;
     } = {},
   ): Promise<GuardedContext | FacadeFailure> => {
     const dir = await deliveryDir(deliveryId);
@@ -603,96 +686,179 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     const views = viewsOf(read.entries);
     const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
 
+    const pinned = reduced.state.generationDigest;
+    if (pinned === undefined) {
+      return refuse("unregistered", "The delivery has no pinned generation.", "Register the delivery first.");
+    }
+
+    // ── Gather the frozen rechecked-value observations ──
     // Product trust at the pinned generation, resolved only from the
     // installation store — planted repository-local trust files are ignored
     // by construction.
-    const pinned = reduced.state.generationDigest;
-    if (pinned !== undefined) {
-      const generation = await loadPinnedGeneration({
-        installationPath: input.installation.installationPath,
-        generationDigest: pinned,
+    const generation = await loadPinnedGeneration({
+      installationPath: input.installation.installationPath,
+      generationDigest: pinned,
+    });
+    const trustCheck: ValueCheck = generation.ok
+      ? { kind: "eligible", ok: true }
+      : {
+          kind: "eligible",
+          ok: false,
+          detail: generation.blockers.map((blocker) => blocker.message).join("; ").slice(0, 1900),
+        };
+
+    // The recheck resolves the LATEST recorded binding, so a consumed
+    // rebinding migration moves service to the new installation and away
+    // from the old one.
+    const recordedBinding = recordedBindingOf(views);
+    const binding = await registrationBinding({
+      installationPath: input.installation.installationPath,
+      receiptDir: input.installation.receiptDir,
+    });
+    const installationCheck: CompareCheck = {
+      kind: "compare",
+      expected: recordedBinding?.registeringInstallationId ?? "recorded-installation",
+      observed: binding.ok ? binding.registeringInstallationId : "unresolved-installation",
+    };
+    const profileCheck: CompareCheck = {
+      kind: "compare",
+      expected: recordedBinding?.activeCompositionProfile ?? "recorded-profile",
+      observed: binding.ok ? binding.activeCompositionProfile : "unresolved-profile",
+    };
+
+    const epochCheck: ValueCheck =
+      reduced.state.authorityEpoch === undefined
+        ? "absent-by-state"
+        : { kind: "compare", expected: reduced.state.authorityEpoch, observed: meta.policy.repositoryAuthorityRevocationEpoch };
+
+    if (options.fenceRequired === true && options.invokingFence === undefined) {
+      // A fence-carrying operation records host-task output; without the
+      // invoking fence the canonical recheck would be vacuous, so it fails
+      // closed instead.
+      return refuse(
+        "missing_fence",
+        "This operation records host-task output and presented no invocation fence.",
+        "Present the fence the invocation was bound under; only the currently fenced invocation may record outputs.",
+      );
+    }
+    const fenceCheck: ValueCheck = {
+      kind: "compare",
+      expected: reduced.state.lastFence,
+      observed: options.invokingFence ?? reduced.state.lastFence,
+    };
+
+    let projectionCheck: ValueCheck = "absent-by-state";
+    let discoveryCheck: ValueCheck = "absent-by-state";
+    if (options.verifyWorkspace === true && workspace !== undefined) {
+      // A vanished workspace is a typed refusal, not a mismatch: the delivery
+      // itself is unharmed and resumes through an authorized takeover.
+      try {
+        await stat(workspace.worktreeDir);
+      } catch {
+        return refuse(
+          "workspace_missing",
+          "The bound worktree no longer exists on disk.",
+          "Resume through an operator-authorized takeover into a fresh host-created worktree.",
+        );
+      }
+      const projection = await verifyProjection({
+        worktreeDir: workspace.worktreeDir,
+        bindingDir: path.join(dir, "binding"),
       });
-      if (!generation.ok) {
-        if (!(reduced.state.state === "security_blocked")) {
-          await recordBlockerAndTransition(
-            store,
-            deliveryId,
-            reduced.state.state,
-            "trust.generation-ineligible",
-            generation.blockers.map((blocker) => blocker.message).join("; ").slice(0, 1900),
-            "security_blocked",
+      projectionCheck = {
+        kind: "compare",
+        expected: workspace.projectionDigest,
+        observed: projection.ok
+          ? projection.projectionDigest
+          : `unverifiable: ${projection.blockers.map((blocker) => blocker.message).join("; ")}`.slice(0, 1900),
+      };
+      let observedDiscovery: string;
+      try {
+        const settingsBytes = await readFile(path.join(dir, "binding", "settings.json"), "utf8");
+        const excludesBytes = await readFile(path.join(dir, "binding", "worktree-excludes"), "utf8");
+        observedDiscovery = digestCanonical({ settings: settingsBytes, worktreeExcludes: excludesBytes });
+      } catch {
+        observedDiscovery = "unreadable-discovery-configuration";
+      }
+      discoveryCheck = { kind: "compare", expected: workspace.discoveryConfigurationDigest, observed: observedDiscovery };
+    }
+
+    const recheckValues: RecheckValues = {
+      "product-trust": trustCheck,
+      "repository-authority-epoch": epochCheck,
+      "invocation-fence": fenceCheck,
+      "registering-installation-id": installationCheck,
+      "active-profile": profileCheck,
+      "projection-digest": projectionCheck,
+      "discovery-configuration-digest": discoveryCheck,
+    };
+    const recheck = evaluateCanonicalRecheck({ consumption: { kind: "standard" }, values: recheckValues });
+    if (!recheck.ok) {
+      const failure = recheck.failures[0];
+      if (failure === undefined) {
+        return refuse("recheck_failed", "The canonical recheck failed without a named value.", "Inspect the durable journal file.");
+      }
+      switch (failure.value) {
+        case "product-trust": {
+          if (reduced.state.state !== "security_blocked") {
+            await recordBlockerAndTransition(store, deliveryId, reduced.state.state, "trust.generation-ineligible", failure.message.slice(0, 1900), "security_blocked");
+          }
+          return refuse(
+            "trust_ineligible",
+            "The pinned generation is no longer execution-eligible under current local trust state.",
+            "Restore local trust state through the operator maintenance lane.",
           );
         }
-        return refuse(
-          "trust_ineligible",
-          "The pinned generation is no longer execution-eligible under current local trust state.",
-          "Restore local trust state through the operator maintenance lane.",
-        );
-      }
-
-      // Registering installation and active profile are canonical recheck
-      // values: a different installation's trust state can never serve this
-      // delivery. The recheck resolves the LATEST recorded binding, so a
-      // consumed rebinding migration moves service to the new installation
-      // and away from the old one.
-      const recordedBinding = recordedBindingOf(views);
-      const binding = await registrationBinding({
-        installationPath: input.installation.installationPath,
-        receiptDir: input.installation.receiptDir,
-      });
-      if (
-        !binding.ok ||
-        recordedBinding === undefined ||
-        binding.registeringInstallationId !== recordedBinding.registeringInstallationId ||
-        binding.activeCompositionProfile !== recordedBinding.activeCompositionProfile
-      ) {
-        if (reduced.state.state !== "security_blocked") {
-          await recordBlockerAndTransition(
-            store,
-            deliveryId,
-            reduced.state.state,
-            "trust.installation-mismatch",
-            "the registering installation identity or active profile no longer matches this installation",
-            "security_blocked",
-          );
-        }
-        return refuse(
-          "installation_mismatch",
-          "This delivery is bound to a different registering installation or profile.",
-          "Rebinding a delivery is an explicit migration, not an ambient adoption.",
-        );
-      }
-
-      // The qualification profile's use-time binding: a fixture installation
-      // advances deliveries only in its receipt-listed disposable
-      // repositories. The receipt is the ONLY source of eligibility;
-      // repository content can never make itself eligible.
-      if (
-        binding.activeCompositionProfile === "confirmation-fixture" &&
-        !(binding.disposableRepositoryIds ?? []).includes(meta.contract.repository.repositoryId)
-      ) {
-        return refuse(
-          "disposable_repository_refused",
-          "A qualification installation serves only its receipt-listed disposable repositories; this repository is not listed.",
-          "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
-        );
-      }
-
-      if (options.verifyWorkspace === true && workspace !== undefined) {
-        const projection = await verifyProjection({
-          worktreeDir: workspace.worktreeDir,
-          bindingDir: path.join(dir, "binding"),
-        });
-        if (!projection.ok) {
-          if (reduced.state.state !== "blocked" && reduced.state.state !== "security_blocked") {
+        case "registering-installation-id":
+        case "active-profile": {
+          if (reduced.state.state !== "security_blocked") {
             await recordBlockerAndTransition(
               store,
               deliveryId,
               reduced.state.state,
-              "projection.tampered",
-              projection.blockers.map((blocker) => blocker.message).join("; ").slice(0, 1900),
-              "blocked",
+              "trust.installation-mismatch",
+              "the registering installation identity or active profile no longer matches this installation",
+              "security_blocked",
             );
+          }
+          return refuse(
+            "installation_mismatch",
+            "This delivery is bound to a different registering installation or profile.",
+            "Rebinding a delivery is an explicit migration, not an ambient adoption.",
+          );
+        }
+        case "repository-authority-epoch": {
+          if (reduced.state.state !== "blocked" && reduced.state.state !== "security_blocked") {
+            await recordBlockerAndTransition(store, deliveryId, reduced.state.state, "authority.epoch-changed", failure.message.slice(0, 1900), "blocked");
+          }
+          return refuse(
+            "authority_epoch_changed",
+            "The repository authority-revocation epoch changed; the delivery returns to policy evaluation.",
+            "Re-evaluate under the current compiled policy before continuing.",
+          );
+        }
+        case "invocation-fence": {
+          // Outputs from an older fence are PERMANENTLY rejected; the journal
+          // is untouched and the delivery itself is unharmed.
+          return refuse(
+            "stale_fence",
+            `The invocation fence ${String(options.invokingFence)} is not the current fence ${reduced.state.lastFence}; outputs from an older fence are permanently rejected.`,
+            "Only the currently fenced invocation may record outputs; resume through an authorized takeover.",
+          );
+        }
+        case "discovery-configuration-digest": {
+          if (reduced.state.state !== "blocked" && reduced.state.state !== "security_blocked") {
+            await recordBlockerAndTransition(store, deliveryId, reduced.state.state, "discovery.configuration-tampered", failure.message.slice(0, 1900), "blocked");
+          }
+          return refuse(
+            "discovery_configuration_tampered",
+            "The binding-written host discovery configuration no longer matches its application digest.",
+            "Quarantine the workspace and resume through an authorized takeover.",
+          );
+        }
+        default: {
+          if (reduced.state.state !== "blocked" && reduced.state.state !== "security_blocked") {
+            await recordBlockerAndTransition(store, deliveryId, reduced.state.state, "projection.tampered", failure.message.slice(0, 1900), "blocked");
           }
           return refuse(
             "projection_tampered",
@@ -701,26 +867,42 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           );
         }
       }
-
-      return options.requireState !== undefined && !options.requireState.includes(reduced.state.state)
-        ? refuse(
-            "wrong_state",
-            `This operation runs in ${options.requireState.join("/")}; the delivery is in ${reduced.state.state}.`,
-            "Read `status` for the next valid checkpoint.",
-          )
-        : {
-            store,
-            meta,
-            state: reduced.state.state,
-            lastActiveState: reduced.state.lastActiveState,
-            expectedRevision: reduced.state.expectedRevision,
-            lastFence: reduced.state.lastFence,
-            views,
-            workspace,
-            generationRoot: generation.root,
-          };
     }
-    return refuse("unregistered", "The delivery has no pinned generation.", "Register the delivery first.");
+
+    // The qualification profile's use-time binding: a fixture installation
+    // advances deliveries only in its receipt-listed disposable
+    // repositories. The receipt is the ONLY source of eligibility;
+    // repository content can never make itself eligible.
+    if (
+      binding.ok &&
+      binding.activeCompositionProfile === "confirmation-fixture" &&
+      !(binding.disposableRepositoryIds ?? []).includes(meta.contract.repository.repositoryId)
+    ) {
+      return refuse(
+        "disposable_repository_refused",
+        "A qualification installation serves only its receipt-listed disposable repositories; this repository is not listed.",
+        "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
+      );
+    }
+
+    return options.requireState !== undefined && !options.requireState.includes(reduced.state.state)
+      ? refuse(
+          "wrong_state",
+          `This operation runs in ${options.requireState.join("/")}; the delivery is in ${reduced.state.state}.`,
+          "Read `status` for the next valid checkpoint.",
+        )
+      : {
+          store,
+          meta,
+          state: reduced.state.state,
+          lastActiveState: reduced.state.lastActiveState,
+          expectedRevision: reduced.state.expectedRevision,
+          lastFence: reduced.state.lastFence,
+          views,
+          workspace,
+          generationRoot: generation.ok ? generation.root : "",
+          recheckValues,
+        };
   };
 
   const attemptsOf = async (deliveryId: string): Promise<RecordedReviewAttempt[]> => {
@@ -835,6 +1017,21 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     }
     await writeOwned(channelPath, `${JSON.stringify({ ...pending, rendered: { ...pending.rendered, consumed: true } })}\n`);
     return { confirmation: pending.confirmation };
+  };
+
+  const retentionContext = async (): Promise<RetentionContext | FacadeFailure> => {
+    const binding = await registrationBinding({
+      installationPath: input.installation.installationPath,
+      receiptDir: input.installation.receiptDir,
+    });
+    if (!binding.ok) {
+      return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+    }
+    return {
+      namespaceDir: await namespaceDir(),
+      installationId: binding.registeringInstallationId,
+      maintenanceJournalPath: path.join(input.installation.installationPath, "maintenance.jsonl"),
+    };
   };
 
   return {
@@ -1330,9 +1527,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, checkpoint: nextCheckpointOf(guarded.state, guarded.views) };
     },
 
-    async submitStageResult({ deliveryId, stageId, resultBytes }) {
+    async submitStageResult({ deliveryId, stageId, resultBytes, fence }) {
       const expected: readonly DeliveryState[] = stageId === "plan" ? ["planning"] : ["compounding"];
-      const guarded = await guard(deliveryId, { requireState: expected, verifyWorkspace: true });
+      const guarded = await guard(deliveryId, { requireState: expected, verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
@@ -1364,8 +1561,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, state: to };
     },
 
-    async checkpointCandidate({ deliveryId, resultBytes }) {
-      const guarded = await guard(deliveryId, { requireState: ["implementing", "remediating"], verifyWorkspace: true });
+    async checkpointCandidate({ deliveryId, resultBytes, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["implementing", "remediating"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
@@ -1380,9 +1577,27 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
       const treeSha = (await git(workspace.worktreeDir, "rev-parse", "HEAD^{tree}")).out;
       const branchRefValue = (await git(workspace.worktreeDir, "rev-parse", `refs/heads/${workspace.branchRef}`)).out;
+      const previous = currentCandidateOf(guarded.views);
 
       const recaptured = await appendEntry(guarded.store, deliveryId, "candidate.recaptured", { treeSha, branchRefValue });
       if (!recaptured.ok) return recaptured;
+      // A candidate change since a pending waiver/amendment proposal voids
+      // the stale proposal with a typed blocker record — its criterion
+      // binding must be re-evaluated against the new candidate. The delivery
+      // does not leave its state for this; blocker.recorded alone never
+      // suspends.
+      if (previous === undefined || previous.treeSha !== treeSha) {
+        const proposals = guarded.views.filter((view) => view.kind === "approval.request.recorded").length;
+        const voided = guarded.views.filter(
+          (view) => view.kind === "blocker.recorded" && view.payload["code"] === "approval.proposal-voided",
+        ).length;
+        for (let index = voided; index < proposals; index += 1) {
+          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+            code: "approval.proposal-voided",
+            summary: "the candidate changed since the proposal; the stale waiver/amendment proposal is void and must be re-proposed against the new candidate",
+          });
+        }
+      }
       if (guarded.state === "implementing") {
         const stage = await appendEntry(guarded.store, deliveryId, "stage.result.recorded", {
           stageId: "implement",
@@ -1399,8 +1614,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, state: "validating", treeSha };
     },
 
-    async runSensor({ deliveryId }) {
-      const guarded = await guard(deliveryId, { requireState: ["validating"], verifyWorkspace: true });
+    async runSensor({ deliveryId, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["validating"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
@@ -1433,8 +1648,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, outcome, state: to };
     },
 
-    async submitReviewAttempt({ deliveryId, attemptId, lensId, verdict, contextBytes, artifactBytes }) {
-      const guarded = await guard(deliveryId, { requireState: ["reviewing"], verifyWorkspace: true });
+    async submitReviewAttempt({ deliveryId, attemptId, lensId, verdict, contextBytes, artifactBytes, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["reviewing"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       if (!DISPOSABLE_REVIEW_LENSES.some((lens) => lens.lensId === lensId)) {
         return refuse("unknown_lens", `Lens ${lensId} is not selected by the compiled policy.`, "Use a policy-selected lens.");
@@ -1479,8 +1694,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true };
     },
 
-    async reduceReview({ deliveryId }) {
-      const guarded = await guard(deliveryId, { requireState: ["reviewing"], verifyWorkspace: true });
+    async reduceReview({ deliveryId, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["reviewing"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
@@ -1517,8 +1732,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, state: to };
     },
 
-    async admit({ deliveryId, recordedAtInstant, env }) {
-      const guarded = await guard(deliveryId, { requireState: ["admitting"], verifyWorkspace: true });
+    async admit({ deliveryId, recordedAtInstant, env, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["admitting"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
@@ -1706,8 +1921,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, state: "recording" };
     },
 
-    async prepareTrackedRecord({ deliveryId, env }) {
-      const guarded = await guard(deliveryId, { requireState: ["recording"], verifyWorkspace: true });
+    async prepareTrackedRecord({ deliveryId, env, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["recording"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
@@ -1745,8 +1960,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, relativePath };
     },
 
-    async confirmTrackedRecord({ deliveryId }) {
-      const guarded = await guard(deliveryId, { requireState: ["recording"], verifyWorkspace: true });
+    async confirmTrackedRecord({ deliveryId, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["recording"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
@@ -1793,8 +2008,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, state: "ready" };
     },
 
-    async completeFinishLine({ deliveryId }) {
-      const guarded = await guard(deliveryId, { requireState: ["ready"], verifyWorkspace: true });
+    async completeFinishLine({ deliveryId, fence }) {
+      const guarded = await guard(deliveryId, { requireState: ["ready"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const outcome = await readJson<OutcomeVerification>(path.join(await deliveryDir(deliveryId), "outcome.json"));
       if (outcome === undefined) {
@@ -1815,8 +2030,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, state: "completed", resultDigest: digestCanonical(composed.result) };
     },
 
-    async sessionEnded({ deliveryId }) {
-      const guarded = await guard(deliveryId);
+    async sessionEnded({ deliveryId, fence }) {
+      const guarded = await guard(deliveryId, { invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
       const appended = await appendEntry(guarded.store, deliveryId, "activity.observed", {
         activity: "paused",
@@ -1824,6 +2039,109 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       });
       if (!appended.ok) return appended;
       return { ok: true };
+    },
+
+    async recordApprovalRequest({ deliveryId, requestKind, criterionId, actorId, reason, fence }) {
+      const guarded = await guard(deliveryId, {
+        requireState: ["reviewing", "remediating", "admitting"],
+        verifyWorkspace: true,
+        invokingFence: fence,
+        fenceRequired: true,
+      });
+      if (!("store" in guarded)) return guarded;
+      const appended = await appendEntry(guarded.store, deliveryId, "approval.request.recorded", {
+        requestKind,
+        criterionId,
+        actorId,
+        reason,
+      });
+      if (!appended.ok) return appended;
+      // The proposal and its pending marker are journaled; the delivery
+      // remains in its current state. Consumption belongs to the
+      // sensitive-approval lane, whose journal kind stays reserved here.
+      return { ok: true, state: guarded.state };
+    },
+
+    async requestCancellation({ deliveryId }) {
+      const guarded = await guard(deliveryId, { allowPendingTakeover: true });
+      if (!("store" in guarded)) return guarded;
+      if (guarded.state === "cancellation_requested") {
+        return refuse(
+          "cancellation_already_requested",
+          "Cancellation is already requested; finalize it through quarantine or trusted termination.",
+          "Call finalizeCancellation once the prior workspace is quarantined.",
+        );
+      }
+      const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", {
+        from: guarded.state,
+        to: "cancellation_requested",
+      });
+      if (!transitioned.ok) return transitioned;
+
+      // Fence revocation, immediately: the model-external interceptor is
+      // deny-until-attested, so voiding the attestation in the binding state
+      // re-denies every subsequent tool invocation — including a late
+      // subagent's — without any callback plumbing. Native host cancellation
+      // is then requested through the host's own primitive where one is
+      // qualified; on this fixture host the revocation IS the request
+      // (fence-revocation-only), and no claim of termination is made.
+      const statePath = path.join(await deliveryDir(deliveryId), "binding", "state.json");
+      const bindingState = await readJson<Record<string, unknown>>(statePath);
+      if (bindingState !== undefined) {
+        await writeOwned(statePath, `${JSON.stringify({ ...bindingState, attestation: null })}\n`);
+      }
+      if (guarded.lastFence > 0) {
+        await appendEntry(guarded.store, deliveryId, "activity.observed", {
+          activity: "cancellation_pending",
+          fence: guarded.lastFence,
+        });
+      }
+      return { ok: true, state: "cancellation_requested" };
+    },
+
+    async finalizeCancellation({ deliveryId }) {
+      const guarded = await guard(deliveryId, { allowPendingTakeover: true });
+      if (!("store" in guarded)) return guarded;
+      if (guarded.state !== "cancellation_requested") {
+        return refuse(
+          "cancellation_not_requested",
+          `finalizeCancellation completes a requested cancellation; the delivery is in ${guarded.state}.`,
+          "Request cancellation first.",
+        );
+      }
+      // Terminal cancellation through PERMANENT QUARANTINE of the prior
+      // workspace and preservation of the last trusted candidate. Trusted
+      // termination provenance is the other path, and its journal kind stays
+      // reserved until the qualified host integration defines it — so this
+      // record never claims that the prior task or its descendants stopped.
+      const boundWorkspace = lastOf(guarded.views, "workspace.bound");
+      const disposed = await appendEntry(guarded.store, deliveryId, "workspace.disposition.recorded", {
+        workspaceId: (boundWorkspace?.payload["workspaceId"] as string | undefined) ?? "ws-unbound",
+        disposition: "quarantined",
+      });
+      if (!disposed.ok) return disposed;
+      const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", {
+        from: "cancellation_requested",
+        to: "cancelled",
+      });
+      if (!transitioned.ok) return transitioned;
+      return { ok: true, state: "cancelled" };
+    },
+
+    async exportDelivery({ deliveryId }) {
+      const context = await retentionContext();
+      if (!("namespaceDir" in context)) return context;
+      const outcome = await runDeliveryExport(context, deliveryId);
+      if (!outcome.ok) return refuse(outcome.code, outcome.summary, outcome.remediation);
+      return { ok: true, exportPath: outcome.exportPath, artifactDigest: outcome.artifactDigest };
+    },
+
+    async deleteDelivery({ deliveryId }) {
+      const context = await retentionContext();
+      if (!("namespaceDir" in context)) return context;
+      const outcome = await runDeliveryDeletion(context, deliveryId);
+      if (!outcome.ok) return refuse(outcome.code, outcome.summary, outcome.remediation);
+      return { ok: true, preservedAuditRecords: outcome.preservedAuditRecords };
     },
 
     async presentTakeover({ deliveryId, expiry }) {
@@ -1844,6 +2162,21 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // Branch names are repository-global; the delivery identity keeps two
       // deliveries' takeover branches from colliding in one repository.
       const takeoverBranchRef = `takeover-${deliveryId}-${guarded.lastFence + 1}`;
+      // A pre-existing branch of that name is a collision: a takeover
+      // reconstructs onto a DISTINCT branch and never adopts an existing ref,
+      // however plausible its tip. Checkpointed and failed closed.
+      const collision = await git(input.repoDir, "rev-parse", "--verify", "--quiet", `refs/heads/${takeoverBranchRef}`);
+      if (collision.code === 0) {
+        await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+          code: "workspace.branch-collision",
+          summary: `branch ${takeoverBranchRef} already exists; a takeover reconstructs onto a fresh branch and never adopts an existing ref`,
+        });
+        return refuse(
+          "branch_collision",
+          `The takeover branch ${takeoverBranchRef} already exists in this repository.`,
+          "Remove or rename the colliding branch through the host's native git tooling, then present the takeover again.",
+        );
+      }
       const confirmation = {
         spec: "operator-confirmation/1",
         confirmationClass: "takeover-authorization",
@@ -1890,17 +2223,45 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const consumed = await consumeChallenge(pending.nonce, echo);
       if (!("confirmation" in consumed)) return consumed;
 
-      // Consumption rechecks the bound identities against the CURRENT journal
-      // — any mismatch rejects.
+      // Consumption rechecks through the canonical helper's takeover
+      // substitution: the superseded fence, expected journal revision, and
+      // target base commit are evaluated IN PLACE OF the current fence and
+      // the prior worktree's projection and discovery-configuration digests,
+      // while every unsubstituted frozen value is still evaluated. Any
+      // mismatch rejects; observation-only appends never advanced the bound
+      // revision, so they never void a pending authorization.
       const confirmation = consumed.confirmation;
-      if (
-        confirmation["supersededInvocationFence"] !== guarded.lastFence ||
-        confirmation["expectedJournalRevision"] !== guarded.expectedRevision ||
-        confirmation["deliveryId"] !== deliveryId
-      ) {
+      if (confirmation["deliveryId"] !== deliveryId) {
         return refuse(
           "takeover_stale",
-          "The takeover authorization no longer matches the journal's fence or revision; nothing was consumed into the journal.",
+          "The takeover authorization binds a different delivery; nothing was consumed into the journal.",
+          "Present a fresh takeover against current durable state.",
+        );
+      }
+      const boundWorkspace = lastOf(guarded.views, "workspace.bound");
+      const currentTrusted = currentCandidateOf(guarded.views);
+      const observedTarget =
+        currentTrusted !== undefined
+          ? currentTrusted.branchRefValue
+          : ((boundWorkspace?.payload["baseTipSha"] as string | undefined) ?? "no-trusted-commit");
+      const consumptionRecheck = evaluateCanonicalRecheck({
+        consumption: {
+          kind: "takeover",
+          supersededFence: { kind: "compare", expected: Number(confirmation["supersededInvocationFence"]), observed: guarded.lastFence },
+          expectedJournalRevision: { kind: "compare", expected: Number(confirmation["expectedJournalRevision"]), observed: guarded.expectedRevision },
+          targetBaseCommit: { kind: "compare", expected: String(confirmation["targetBaseCommit"]), observed: observedTarget },
+        },
+        values: {
+          ...guarded.recheckValues,
+          "invocation-fence": "absent-by-state",
+          "projection-digest": "absent-by-state",
+          "discovery-configuration-digest": "absent-by-state",
+        },
+      });
+      if (!consumptionRecheck.ok) {
+        return refuse(
+          "takeover_stale",
+          `The takeover authorization no longer matches durable state (${consumptionRecheck.failures.map((failure) => failure.value).join(", ")}); nothing was consumed into the journal.`,
           "Present a fresh takeover against current durable state.",
         );
       }

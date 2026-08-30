@@ -14,6 +14,7 @@ import {
   isIntakeTransitionValid,
   reduceDeliveryJournal,
   reduceIntakeJournal,
+  reduceMaintenanceJournal,
 } from "./reducer.ts";
 import { DELIVERY_STATES, INTAKE_STATES, TERMINAL_DELIVERY_STATES } from "./vocabulary.ts";
 
@@ -342,6 +343,164 @@ describe("the delivery journal reducer", () => {
     expect(
       reduceCodes([...toCompleted, deliveryEntry(9, "activity.observed", { activity: "unknown", fence: 1 })]),
     ).toContain("journal_terminal");
+  });
+});
+
+// ── Approval requests and the remediating watch-item ───────────────────────
+
+const transitions = (start: number, ...pairs: readonly (readonly [string, string])[]): Entry[] =>
+  pairs.map(([from, to], index) => deliveryEntry(start + index, "transition.committed", { from, to }));
+
+/** openingEntries() left the delivery in `preparing` at revision 6. */
+const toState = (target: "implementing" | "validating" | "remediating" | "reviewing" | "admitting"): Entry[] => {
+  const chain: (readonly [string, string])[] = [
+    ["preparing", "planning"],
+    ["planning", "implementing"],
+  ];
+  if (target !== "implementing") chain.push(["implementing", "validating"]);
+  if (target === "remediating") chain.push(["validating", "remediating"]);
+  if (target === "reviewing" || target === "admitting") chain.push(["validating", "reviewing"]);
+  if (target === "admitting") chain.push(["reviewing", "compounding"], ["compounding", "admitting"]);
+  return [...openingEntries(), ...transitions(6, ...chain)];
+};
+
+const waiverRequest = (revision: number): Entry =>
+  deliveryEntry(revision, "approval.request.recorded", {
+    requestKind: "waiver",
+    criterionId: "greeting-behavior",
+    actorId: "operator-1",
+    reason: "criterion discharged by upstream fix; waiver proposed",
+  });
+
+describe("approval request discipline", () => {
+  it("accepts a waiver or amendment proposal only within reviewing, remediating, or admitting", () => {
+    for (const state of ["reviewing", "remediating", "admitting"] as const) {
+      const entries = toState(state);
+      const outcome = reduceDeliveryJournal([...entries, waiverRequest(entries.length)]);
+      expect(outcome.ok, `${state} accepts a pending proposal`).toBe(true);
+    }
+    for (const state of ["implementing", "validating"] as const) {
+      const entries = toState(state);
+      expect(reduceCodes([...entries, waiverRequest(entries.length)]), `${state} rejects a proposal`).toContain(
+        "invalid_transition",
+      );
+    }
+    // Before any candidate exists there is nothing to waive against.
+    expect(reduceCodes([...openingEntries(), waiverRequest(6)])).toContain("invalid_transition");
+  });
+
+  it("keeps the delivery in its current state while a proposal is pending — no dedicated wait state", () => {
+    const entries = toState("reviewing");
+    const outcome = reduceDeliveryJournal([...entries, waiverRequest(entries.length)]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("reviewing");
+  });
+});
+
+describe("the remediating zero-mutation watch-item", () => {
+  // The state table's only exit from `remediating` is a checkpointed candidate
+  // mutation. A finding discharged with zero mutation (a pending waiver) has
+  // no direct edge back to validation: these tests prove the typed escape —
+  // a bounded blocker.recorded — does not strand the delivery.
+  it("records a blocker in remediating without leaving remediating — blocker.recorded alone never suspends", () => {
+    const entries = toState("remediating");
+    const outcome = reduceDeliveryJournal([
+      ...entries,
+      waiverRequest(entries.length),
+      deliveryEntry(entries.length + 1, "blocker.recorded", {
+        code: "approval.pending-decision",
+        summary: "zero-mutation discharge awaits its approval lane; the mutation exit stays open",
+      }),
+    ]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("remediating");
+  });
+
+  it("keeps the mutation exit open after the typed escape — remediating -> validating still stands", () => {
+    const entries = toState("remediating");
+    const outcome = reduceDeliveryJournal([
+      ...entries,
+      deliveryEntry(entries.length, "blocker.recorded", { code: "approval.pending-decision", summary: "typed escape" }),
+      deliveryEntry(entries.length + 1, "candidate.recaptured", { treeSha: OID, branchRefValue: OID }),
+      deliveryEntry(entries.length + 2, "transition.committed", { from: "remediating", to: "validating" }),
+    ]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("validating");
+  });
+
+  it("resumes a delivery blocked out of remediating back to remediating — parked, never stranded", () => {
+    const entries = toState("remediating");
+    const outcome = reduceDeliveryJournal([
+      ...entries,
+      deliveryEntry(entries.length, "blocker.recorded", { code: "operator.rescope-required", summary: "no candidate mutation discharges the finding" }),
+      deliveryEntry(entries.length + 1, "transition.committed", { from: "remediating", to: "blocked" }),
+      deliveryEntry(entries.length + 2, "transition.committed", { from: "blocked", to: "remediating" }),
+    ]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("remediating");
+  });
+});
+
+// ── Maintenance journal reducer ────────────────────────────────────────────
+
+const maintenanceEntry = (revision: number, payload: Record<string, unknown>, key = `mkey-${revision}`): Entry => ({
+  spec: JOURNAL_ENTRY_SPEC,
+  journal: "maintenance",
+  subjectId: "install-1",
+  expectedRevision: revision,
+  idempotencyKey: key,
+  kind: "retention.action.recorded",
+  payload,
+});
+
+const retentionPayload = (action: "export" | "delete"): Record<string, unknown> => ({
+  action,
+  subjectDeliveryId: "dlv-1",
+  artifactDigest: DIGEST,
+  preservedAuditRecords: action === "delete" ? ["audit/dlv-1.json"] : [],
+});
+
+describe("the maintenance journal reducer", () => {
+  it("reduces retention actions with revision and idempotency discipline — entries survive their target's removal", () => {
+    const outcome = reduceMaintenanceJournal([
+      maintenanceEntry(0, retentionPayload("export")),
+      maintenanceEntry(1, retentionPayload("delete")),
+    ]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state).toMatchObject({ subjectId: "install-1", expectedRevision: 2 });
+  });
+
+  it("rejects a revision mismatch, a duplicate idempotency key, and a foreign subject", () => {
+    const opening = [maintenanceEntry(0, retentionPayload("export"))];
+    const codes = (entries: readonly Entry[]): string[] => {
+      const outcome = reduceMaintenanceJournal(entries);
+      return outcome.ok ? [] : outcome.rejections.map((rejection) => rejection.code);
+    };
+    expect(codes([...opening, maintenanceEntry(2, retentionPayload("delete"))])).toContain("revision_mismatch");
+    expect(codes([...opening, maintenanceEntry(1, retentionPayload("delete"), "mkey-0")])).toContain(
+      "duplicate_idempotency_key",
+    );
+    expect(codes([...opening, { ...maintenanceEntry(1, retentionPayload("delete")), subjectId: "install-2" }])).toContain(
+      "subject_mismatch",
+    );
+  });
+
+  it("rejects a foreign-journal kind and a foreign-journal entry", () => {
+    const codes = (entries: readonly Entry[]): string[] => {
+      const outcome = reduceMaintenanceJournal(entries);
+      return outcome.ok ? [] : outcome.rejections.map((rejection) => rejection.code);
+    };
+    expect(codes([{ ...maintenanceEntry(0, retentionPayload("export")), kind: "blocker.recorded" }])).toContain(
+      "unknown_kind",
+    );
+    expect(codes([deliveryEntry(0, "candidate.recaptured", { treeSha: OID, branchRefValue: OID })])).toContain(
+      "unsupported_combination",
+    );
   });
 });
 

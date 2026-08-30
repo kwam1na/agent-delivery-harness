@@ -676,10 +676,40 @@ export {
 export {
   createIntakeJournalStore,
   createJournalStore,
+  createMaintenanceJournalStore,
   type IntakeJournalStore,
   type JournalAppendResult,
+  type JournalReadResult,
   type JournalStore,
+  type MaintenanceJournalStore,
 } from "./checkpoint/journal-store.ts";
+export {
+  RECHECKED_VALUES,
+  evaluateCanonicalRecheck,
+  type CompareCheck,
+  type EligibleCheck,
+  type RecheckConsumption,
+  type RecheckFailure,
+  type RecheckResult,
+  type RecheckValues,
+  type RecheckedValue,
+  type ValueCheck,
+} from "./checkpoint/recheck.ts";
+export {
+  SECRET_PATTERNS,
+  applySecretDiscipline,
+  redactSecretText,
+  type SecretDisciplineResult,
+  type SecretPattern,
+} from "./checkpoint/redaction.ts";
+export {
+  deleteDelivery,
+  exportDelivery,
+  type DeleteDeliveryResult,
+  type ExportDeliveryResult,
+  type RetentionContext,
+  type RetentionFailure,
+} from "./checkpoint/retention.ts";
 export { listArchiveEntries, readArchiveEntry } from "./workflow/archive.ts";
 export {
   WORKFLOW_CHECKPOINT_BINDINGS,

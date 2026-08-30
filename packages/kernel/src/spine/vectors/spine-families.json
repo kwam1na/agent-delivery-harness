@@ -418,11 +418,11 @@
           ],
           "value": {
             "spec": "journal-entry/1",
-            "journal": "maintenance",
-            "subjectId": "install-1",
+            "journal": "intake",
+            "subjectId": "intake-1",
             "expectedRevision": 0,
-            "idempotencyKey": "mk-0",
-            "kind": "retention.action.recorded"
+            "idempotencyKey": "ik-9",
+            "kind": "intake.draft.recorded"
           }
         },
         {
@@ -589,6 +589,43 @@
               "generationDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "highWaterMark": "absent-by-state",
               "assertion": "absent-by-state"
+            }
+          }
+        },
+        {
+          "name": "maintenance retention action",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "maintenance",
+            "subjectId": "install-1",
+            "expectedRevision": 0,
+            "idempotencyKey": "mk-0",
+            "kind": "retention.action.recorded",
+            "payload": {
+              "action": "delete",
+              "subjectDeliveryId": "delivery-1",
+              "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "preservedAuditRecords": ["audit/delivery-1.json"]
+            }
+          }
+        },
+        {
+          "name": "a retention action outside the frozen vocabulary",
+          "verdict": "reject",
+          "codes": ["malformed_member"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "maintenance",
+            "subjectId": "install-1",
+            "expectedRevision": 1,
+            "idempotencyKey": "mk-1",
+            "kind": "retention.action.recorded",
+            "payload": {
+              "action": "purge",
+              "subjectDeliveryId": "delivery-1",
+              "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "preservedAuditRecords": []
             }
           }
         }

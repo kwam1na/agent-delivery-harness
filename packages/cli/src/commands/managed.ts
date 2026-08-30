@@ -18,7 +18,7 @@
  * repository: zero or several registered deliveries is a typed refusal.
  */
 import { execFile } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   createManagedDeliveryFacade,
@@ -60,6 +60,15 @@ const flag = (args: readonly string[], name: string): string | undefined => {
 interface ResolvedManaged {
   readonly facade: ManagedDeliveryFacade;
   readonly deliveryId: string;
+  /**
+   * The invoking task's fence, derived from the worktree this command runs
+   * in — never a caller-supplied flag. Fresh-worktree-only resume makes
+   * worktree and fence one-to-one, so a command invoked from the currently
+   * bound worktree carries the current fence, and a command invoked from a
+   * superseded or foreign worktree carries none: the fence-carrying
+   * operations then fail closed instead of recording a stale task's output.
+   */
+  readonly fence: number | undefined;
 }
 
 async function resolveManaged(context: CommandContext): Promise<ResolvedManaged | CommandResult> {
@@ -125,7 +134,23 @@ async function resolveManaged(context: CommandContext): Promise<ResolvedManaged 
     installation: { installationPath: pointer.installationPath, receiptDir: pointer.receiptDir },
     hostVersion: pointer.hostVersion,
   });
-  return { facade, deliveryId };
+
+  let fence: number | undefined;
+  try {
+    const workspace = JSON.parse(
+      await readFile(path.join(namespace, "deliveries", deliveryId, "workspace.json"), "utf8"),
+    ) as { worktreeDir?: string };
+    const binding = JSON.parse(
+      await readFile(path.join(namespace, "deliveries", deliveryId, "binding", "state.json"), "utf8"),
+    ) as { expectation?: { invocationFence?: number } };
+    if (typeof workspace.worktreeDir === "string" && typeof binding.expectation?.invocationFence === "number") {
+      const [boundReal, hereReal] = await Promise.all([realpath(workspace.worktreeDir), realpath(context.rootDir)]);
+      if (boundReal === hereReal) fence = binding.expectation.invocationFence;
+    }
+  } catch {
+    fence = undefined; // no bound workspace yet; fence-carrying operations fail closed
+  }
+  return { facade, deliveryId, fence };
 }
 
 const isCommandResult = (value: ResolvedManaged | CommandResult): value is CommandResult => "kind" in value;
@@ -145,7 +170,14 @@ export const managedCommand: CommandDescriptor = {
     }
     const resolved = await resolveManaged(context);
     if (isCommandResult(resolved)) return resolved;
-    const { facade, deliveryId } = resolved;
+    const { facade, deliveryId, fence } = resolved;
+    const requireFence = (): number | CommandResult =>
+      fence ??
+      blocked(
+        "workspace_superseded",
+        "This worktree is not the delivery's currently bound workspace, so it carries no invocation fence.",
+        "Drive checkpoints from the bound worktree; a superseded task's outputs are permanently rejected.",
+      );
     const emit = (value: unknown): void => context.write(`${JSON.stringify(value, null, 2)}\n`);
 
     const summaryArg = (): string => flag(rest, "--summary") ?? rest.filter((argument) => !argument.startsWith("-")).join(" ");
@@ -164,17 +196,23 @@ export const managedCommand: CommandDescriptor = {
         return { kind: "ok", summary: `next checkpoint: ${next.checkpoint.kind}` };
       }
       case "submit-plan": {
-        const submitted = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: summaryArg() });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const submitted = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: summaryArg(), fence: invokingFence });
         if (!submitted.ok) return { kind: "blocked", blockers: [...submitted.blockers] };
         return { kind: "ok", summary: `plan accepted; delivery is ${submitted.state}` };
       }
       case "checkpoint": {
-        const checkpointed = await facade.checkpointCandidate({ deliveryId, resultBytes: summaryArg() });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const checkpointed = await facade.checkpointCandidate({ deliveryId, resultBytes: summaryArg(), fence: invokingFence });
         if (!checkpointed.ok) return { kind: "blocked", blockers: [...checkpointed.blockers] };
         return { kind: "ok", summary: `candidate ${checkpointed.treeSha} checkpointed; delivery is ${checkpointed.state}` };
       }
       case "run-sensor": {
-        const sensed = await facade.runSensor({ deliveryId });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const sensed = await facade.runSensor({ deliveryId, fence: invokingFence });
         if (!sensed.ok) return { kind: "blocked", blockers: [...sensed.blockers] };
         return { kind: "ok", summary: `sensor ${sensed.outcome}; delivery is ${sensed.state}` };
       }
@@ -204,37 +242,51 @@ export const managedCommand: CommandDescriptor = {
         } catch (error) {
           return { kind: "usage", message: `submit-review could not read its files: ${error instanceof Error ? error.message : String(error)}` };
         }
-        const submitted = await facade.submitReviewAttempt({ deliveryId, attemptId, lensId, verdict, contextBytes, artifactBytes });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const submitted = await facade.submitReviewAttempt({ deliveryId, attemptId, lensId, verdict, contextBytes, artifactBytes, fence: invokingFence });
         if (!submitted.ok) return { kind: "blocked", blockers: [...submitted.blockers] };
         return { kind: "ok", summary: `attempt ${attemptId} recorded for ${lensId}` };
       }
       case "reduce-review": {
-        const reduced = await facade.reduceReview({ deliveryId });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const reduced = await facade.reduceReview({ deliveryId, fence: invokingFence });
         if (!reduced.ok) return { kind: "blocked", blockers: [...reduced.blockers] };
         return { kind: "ok", summary: `review reduced; delivery is ${reduced.state}` };
       }
       case "compound": {
-        const compounded = await facade.submitStageResult({ deliveryId, stageId: "compound", resultBytes: summaryArg() });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const compounded = await facade.submitStageResult({ deliveryId, stageId: "compound", resultBytes: summaryArg(), fence: invokingFence });
         if (!compounded.ok) return { kind: "blocked", blockers: [...compounded.blockers] };
         return { kind: "ok", summary: `compound recorded; delivery is ${compounded.state}` };
       }
       case "admit": {
-        const admitted = await facade.admit({ deliveryId, recordedAtInstant: nowInstant(), env: context.env });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const admitted = await facade.admit({ deliveryId, recordedAtInstant: nowInstant(), env: context.env, fence: invokingFence });
         if (!admitted.ok) return { kind: "blocked", blockers: [...admitted.blockers] };
         return { kind: "ok", summary: `admitted; delivery is ${admitted.state}` };
       }
       case "prepare-record": {
-        const prepared = await facade.prepareTrackedRecord({ deliveryId, env: context.env });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const prepared = await facade.prepareTrackedRecord({ deliveryId, env: context.env, fence: invokingFence });
         if (!prepared.ok) return { kind: "blocked", blockers: [...prepared.blockers] };
         return { kind: "ok", summary: `tracked record written at ${prepared.relativePath}; commit it through native git tooling` };
       }
       case "confirm-record": {
-        const confirmed = await facade.confirmTrackedRecord({ deliveryId });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const confirmed = await facade.confirmTrackedRecord({ deliveryId, fence: invokingFence });
         if (!confirmed.ok) return { kind: "blocked", blockers: [...confirmed.blockers] };
         return { kind: "ok", summary: `tracked record verified; delivery is ${confirmed.state}` };
       }
       case "finish": {
-        const finished = await facade.completeFinishLine({ deliveryId });
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        const finished = await facade.completeFinishLine({ deliveryId, fence: invokingFence });
         if (!finished.ok) return { kind: "blocked", blockers: [...finished.blockers] };
         return { kind: "ok", summary: `merge-ready; delivery is ${finished.state} (result ${finished.resultDigest})` };
       }

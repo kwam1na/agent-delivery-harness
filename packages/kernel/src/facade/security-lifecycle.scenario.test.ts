@@ -126,6 +126,13 @@ const stateOf = async (facade: ManagedDeliveryFacade, deliveryId: string): Promi
   return status.state;
 };
 
+/** The current invocation fence as durable state reports it (0 before any bind). */
+const currentFenceOf = async (facade: ManagedDeliveryFacade, deliveryId: string): Promise<number> => {
+  const status = await facade.status({ deliveryId, observedAt: LATER });
+  if (!status.ok) throw new Error(JSON.stringify(status));
+  return status.fence;
+};
+
 let worktreeCounter = 0;
 const bindFreshWorktree = async (facade: ManagedDeliveryFacade, deliveryId: string) => {
   worktreeCounter += 1;
@@ -268,7 +275,7 @@ describe("generation-change migration", () => {
 
     // Fenced at the next canonical site — here, an invocation-driven
     // checkpoint operation.
-    const refused = await facadeA.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan" });
+    const refused = await facadeA.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan", fence: await currentFenceOf(facadeA, deliveryId) });
     expect(refused.ok).toBe(false);
     expect(await stateOf(facadeA, deliveryId)).toBe("security_blocked");
 
@@ -324,7 +331,7 @@ describe("generation-change migration", () => {
       now: NOW,
     });
     expect(revoke2.ok, JSON.stringify(revoke2)).toBe(true);
-    const refused = await facadeA.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan" });
+    const refused = await facadeA.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan", fence: await currentFenceOf(facadeA, deliveryId) });
     expect(refused.ok).toBe(false);
     expect(await stateOf(facadeA, deliveryId)).toBe("security_blocked");
 
@@ -460,7 +467,7 @@ describe("rebinding migration", () => {
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
     // …and installation A no longer serves it: the recheck resolves the
     // LATEST recorded binding.
-    const refusedUnderA = await facadeA.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan" });
+    const refusedUnderA = await facadeA.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan", fence: await currentFenceOf(facadeB, deliveryId) });
     expect(refusedUnderA.ok).toBe(false);
   });
 
@@ -490,7 +497,7 @@ describe("rebinding migration", () => {
     const facadeProduction = facadeFor({ installationPath, receiptDir });
     // The mismatch fences the fixture delivery under the production
     // installation…
-    const fenced = await facadeProduction.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan" });
+    const fenced = await facadeProduction.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan", fence: await currentFenceOf(facadeProduction, deliveryId) });
     expect(fenced.ok).toBe(false);
     // …and the rebinding migration is refused on the profile mismatch; the
     // delivery remains security_blocked.
