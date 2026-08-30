@@ -1979,6 +1979,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const workspaceId = `ws-${hex(6)}`;
       const worktreeId = `wt-${sha256Hex(worktreeDir).slice(0, 16)}`;
 
+      // Every SUPERSEDED invocation's state is voided HERE — before the fresh
+      // worktree is materialized into, and before any refusal path below can
+      // return. Its session keeps reading its own fence-scoped file, and a null
+      // attestation is the frozen deny-until-attested case, so a still-running
+      // predecessor keeps no write path into the workspace the takeover just
+      // authorized — including the case where the operator recreated that
+      // worktree at the path the predecessor was bound to. A predecessor is
+      // already dead to the facade once a takeover is authorized, so voiding
+      // early is strictly safer than voiding on success. Same mechanism
+      // cancellation uses.
+      await voidSupersededBindingStates(bindingDir, guarded.lastFence + 1);
+
       const bound = await appendEntry(guarded.store, deliveryId, "workspace.bound", {
         workspaceId,
         repositoryId: guarded.meta.contract.repository.repositoryId,
@@ -2074,13 +2086,6 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           "Missing or failed grant application yields no mutation-capable invocation token.",
         );
       }
-
-      // Every SUPERSEDED invocation's state is voided before the new one is
-      // admitted. Its session keeps reading its own fence-scoped file, and a
-      // null attestation is the frozen deny-until-attested case — so a
-      // still-running predecessor keeps no write path into the workspace the
-      // takeover just authorized. Same mechanism cancellation already uses.
-      await voidSupersededBindingStates(bindingDir, fence);
 
       const observationPath = path.join(bindingDir, "observation.json");
       await writeOwned(
@@ -2957,10 +2962,12 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // Teardown destroys the binding's own receipts, so it runs through the
       // canonical recheck like every other workspace operation, so a delivery
       // whose trust or installation binding no longer holds cannot have its
-      // binding receipts removed by a passing caller. A pending takeover is
-      // allowed through: quarantining the prior workspace is exactly when an
-      // operator tears its projection down.
-      const guarded = await guard(deliveryId, { allowPendingTakeover: true });
+      // binding receipts removed by a passing caller — and a delivery with a
+      // takeover pending refuses outright. That workspace is quarantined
+      // precisely because it is not trusted, and teardown would delete the
+      // projection receipt that shows tampering while leaving the prior
+      // invocation's state file behind.
+      const guarded = await guard(deliveryId);
       if (!("store" in guarded)) return guarded;
       const dir = await deliveryDir(deliveryId);
       const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));

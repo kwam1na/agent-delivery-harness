@@ -571,7 +571,7 @@ describe("a stale session and a fresh one", () => {
       (JSON.parse(readFileSync(staleSettingsPath, "utf8")) as { hooks: unknown }).hooks,
     );
     expect(staleHook).toContain(`\\"${String(session.fence)}\\"`);
-    expect(staleHook).toContain(staleStatePath.replaceAll("/", "/"));
+    expect(staleHook).toContain(staleStatePath);
     expect(staleHook).not.toContain(currentStatePath);
 
     // And supersession VOIDED it: a null attestation is the frozen

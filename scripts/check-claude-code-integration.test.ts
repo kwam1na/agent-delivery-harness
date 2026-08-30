@@ -41,8 +41,9 @@ describe("the Claude Code integration record", () => {
     expect(record.host.tier).toBe(graded.grade.tier);
   });
 
-  it("carries only conclusive live probes, each with falsifiable provenance", () => {
+  it("carries only conclusive live probes, each with falsifiable provenance the record postdates", () => {
     expect(record.liveProbes.length).toBeGreaterThan(0);
+    expect(record.recordedAt).toMatch(SPINE_INSTANT);
     for (const probe of record.liveProbes as any[]) {
       expect(probe.conclusive, probe.id).toBe(true);
       expect(probe.verification.kind, probe.id).toBe("live-probe");
@@ -51,6 +52,9 @@ describe("the Claude Code integration record", () => {
       expect(typeof probe.verification.method, probe.id).toBe("string");
       expect(probe.verification.method.length, probe.id).toBeGreaterThan(0);
       expect(probe.verification.observedAt, probe.id).toMatch(SPINE_INSTANT);
+      // A record cannot carry an observation from after it was written. The
+      // grammar is fixed-width UTC, so lexicographic order is chronological.
+      expect(probe.verification.observedAt <= record.recordedAt, probe.id).toBe(true);
     }
   });
 

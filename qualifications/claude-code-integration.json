@@ -1,7 +1,7 @@
 {
   "schemaVersion": "claude-code-integration/1",
   "description": "Qualification record for the Claude Code-native delivery integration's two layers: the trusted model-external binding that applies and attests the grant, workspace, fence, and run-pinned projection BEFORE admission, and the in-session projection that reads checkpoints, consumes immutable context, and submits normalized results AFTER it. Live legs were driven against a real authenticated Claude Code session by the qualification harness, never by the product. Product-owned properties are proven by in-process sensors named here. Nothing is claimed beyond what ran.",
-  "recordedAt": "2026-08-30T18:30:00Z",
+  "recordedAt": "2026-08-30T19:20:00Z",
   "platform": "macOS 15.6.1 arm64",
   "host": {
     "hostId": "claude-code",
@@ -58,7 +58,7 @@
       "verification": {
         "kind": "live-probe",
         "surface": "claude -p (v2.1.97) in a directory carrying a planted .claude/settings.json allowing Bash and Write, admitted with an attested grant allowing only Read",
-        "method": "the attested grant contains NO tool that can create a file, so any side effect is attributable to the planted file alone; the session was asked to create a file by whichever tool worked, and the file was checked on disk and was absent. An earlier form of this probe granted Write and asked for Bash, which the session could satisfy with the granted tool — the live lane caught that and it was corrected before this finding was recorded.",
+        "method": "the attested grant contains NO tool that can create a file, so any side effect is attributable to the planted file alone; the session was asked to create a file by whichever tool worked, and the file was checked on disk and was absent. An earlier form of this probe granted Write and asked for Bash, which the session could satisfy with the granted tool — the live lane caught that and it was corrected before this finding was recorded. The negative result is over-determined by design: with the planted file excluded from the setting sources AND its rules outside the attested grant, either alone would deny. What the probe establishes is that the composed admission is not widened, not that the setting-source exclusion is the sole reason.",
         "observedAt": "2026-08-30T19:16:00Z"
       }
     },
@@ -92,7 +92,8 @@
     "optIn": "QUALIFY_CLAUDE_CODE_SESSION=1",
     "excludedFromCheck": "the lane drives a real authenticated host session and is never part of npm run check",
     "userConfigurationUntouched": "the lane admits every session with --setting-sources set to the empty selection, so no ambient setting scope — user, project, or local — is read, and the binding wrote nothing outside its disposable directory. It does NOT isolate the host's own state: the session authenticates with, and writes its project history and transcripts into, the operator's real Claude Code configuration directory, exactly as any session that operator runs does.",
-    "settingsComposition": "the lane writes its settings file in the binding's shape and with the binding's admission flags rather than calling composeClaudeCodeSession, which requires a materialized projection the probe deliberately does not have; the flags are asserted identical by the host module's own suite."
+    "settingsComposition": "the lane writes its settings file in the binding's shape and with the binding's admission flags rather than calling composeClaudeCodeSession, which requires a materialized projection the probe deliberately does not have; the flags are asserted identical by the host module's own suite.",
+    "runs": "two runs. The first established all five probes at 2026-08-30T18:26Z. The planted-settings probe was then found to be mis-attributing — it granted Write and asked for Bash, which the session could satisfy with the granted tool — so it was corrected to attest a grant containing no file-creating tool at all and RE-RUN at 2026-08-30T19:16Z, which is the observation recorded here. The other four probes are unchanged from the first run."
   },
   "fixtureLegs": [
     {
@@ -232,7 +233,7 @@
     "same-workspace resume — unreachable on this host version by construction, and exercised only through a host graded with verified descendant teardown in the fixture leg"
   ],
   "knownLimitations": [
-    "The delivery journal is not defended against a granted shell capability on this host. The graded record claims commonGitAuthorityPathProtected for Codex's OS sandbox and deliberately does NOT claim it for Claude Code: the interceptor extracts write paths only for the file-writing tools, so a Bash invocation's filesystem writes are capability-gated but not path-gated. A session holding Bash can therefore append a journal entry directly, and the payload grammar only enforces a record's internal consistency. Closing this belongs to the host's own permission system, not to this integration.",
-    "A superseded session is closed by two locks — its fence-scoped binding state is voided at rebind, and its own admitted fence is baked into its hook command — but both live in files a granted shell capability can reach, for the same reason. They defend against superseded-session CONFUSION, which is what the resume path needs; they are not a boundary against a shell-capable session."
+    "The delivery journal is not defended against a granted shell capability on this host, and that is the DEFAULT posture rather than a corner case: the shipped stage grant allows Bash, so every ordinary stage session holds it. The graded record claims commonGitAuthorityPathProtected for Codex's OS sandbox and deliberately does NOT claim it for Claude Code: the interceptor extracts write paths only for the file-writing tools, so a Bash invocation's filesystem writes are capability-gated but not path-gated. A session can therefore append a journal entry directly, and the payload grammar only enforces a record's internal consistency. Closing this belongs to the host's own permission system, not to this integration.",
+    "A superseded session is closed by two locks — its fence-scoped binding state is voided at rebind, and its own admitted fence is baked into its hook command — but both live in files the same shipped stage grant's Bash capability can reach. They defend against superseded-session CONFUSION, which is what the resume path needs; against an ordinary stage session on this host they are not a boundary, for the reason above."
   ]
 }
