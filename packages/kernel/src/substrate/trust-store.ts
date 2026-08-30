@@ -2,7 +2,7 @@
  * The pure half of the installation-scoped product trust store.
  *
  * The store itself is one file inside the installation namespace, owned by
- * the product installation and covered by D16 owner-only protections; the
+ * the product installation and covered by owner-only protections; the
  * installer half (`installer.ts`) does the reading and writing. This module
  * makes the three decisions that must be exhaustively testable without a
  * filesystem:
@@ -24,7 +24,7 @@ import { validateProductTrustState, type ProductTrustState } from "../spine/comp
 /** Presence of one artifact class, as observed by the installer. */
 export type ArtifactPresence = "absent" | "corrupt" | "valid";
 
-/** The non-store, non-receipt installation artifacts D2 enumerates. */
+/** The other artifacts whose survival implies a prior trust store. */
 export const OTHER_INSTALLATION_ARTIFACTS = Object.freeze([
   "generation-root",
   "update-journal",
@@ -68,7 +68,7 @@ export type InstallDiscrimination =
   | { readonly kind: "fail_closed"; readonly code: "prior_installation_artifacts"; readonly message: string };
 
 /**
- * The discriminator, exactly as D2 words it. Adoption requires BOTH the store
+ * The discriminator. Adoption requires BOTH the store
  * and the receipt, valid; a genuinely first install requires ABSOLUTELY
  * nothing; everything in between fails closed.
  */

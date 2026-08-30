@@ -61,6 +61,7 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
   // The contract spine: pure, and independent of the evidence kernel. Its
   // fixture mirrors the real shape — a sibling import plus the canonicalizer.
   "packages/kernel/src/spine/grammar.ts": `export const SPINE_INSTANT = /^\\d{4}/;\n`,
+  "packages/kernel/src/spine/composition.ts": `export const PRODUCT_TRUST_LABEL = "local-digest / operator-pinned";\n`,
   "packages/kernel/src/spine/vocabulary.ts": `export const JOURNALS = ["intake", "delivery", "maintenance"] as const;\n`,
   "packages/kernel/src/spine/journal.ts":
     `import { canonicalize } from "../canonical.ts";\n` +
@@ -74,14 +75,18 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     `export const observedAtIsWellFormed = (v: string): boolean => SPINE_INSTANT.test(v);\n`,
 
   // The local composition substrate: two pure modules reaching the kernel
-  // only through their named allowlists, and the installer — the substrate's
-  // one filesystem module, registered for the time ban only.
+  // only through their named allowlists (the fixtures mirror the real import
+  // shapes), and the installer — the substrate's one filesystem module,
+  // registered for the time ban only.
   "packages/kernel/src/substrate/manifest.ts":
     `import { canonicalize } from "../canonical.ts";\n` +
     `import { sha256 } from "../digest.ts";\n` +
-    `export const manifestDigestOf = (v: unknown): string => sha256(canonicalize(v));\n`,
+    `import { PRODUCT_TRUST_LABEL } from "../spine/composition.ts";\n` +
+    `import { SPINE_INSTANT } from "../spine/grammar.ts";\n` +
+    `export const manifestDigestOf = (v: unknown): string => sha256(canonicalize(v)) + PRODUCT_TRUST_LABEL + String(SPINE_INSTANT);\n`,
   "packages/kernel/src/substrate/trust-store.ts":
-    `export const checkNoDowngrade = (sequence: number, mark: number): boolean => sequence >= mark;\n`,
+    `import { PRODUCT_TRUST_LABEL } from "../spine/composition.ts";\n` +
+    `export const checkNoDowngrade = (sequence: number, mark: number): string => (sequence >= mark ? PRODUCT_TRUST_LABEL : "downgrade");\n`,
   "packages/kernel/src/substrate/installer.ts":
     `import { readFileSync } from "node:fs";\n` +
     `import { manifestDigestOf } from "./manifest.ts";\n` +
@@ -518,6 +523,27 @@ describe("rule d1 — true purity", () => {
     expect(findings[0]?.message).toContain("validator/codes.ts");
   });
 
+  it("rejects the fs family in the substrate's trust-store module", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/substrate/trust-store.ts": `import { readFileSync } from "node:fs";\nexport const checkNoDowngrade = (p: string): string => readFileSync(p, "utf8");\n`,
+      },
+      "packages/kernel/src/substrate/trust-store.ts",
+    );
+  });
+
+  it("rejects a substrate-manifest import off its file-class allowlist — the evidence evaluator is not on it", () => {
+    const findings = expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/substrate/manifest.ts": `import { evaluate } from "../evaluator.ts";\nexport const manifestDigestOf = (): unknown => evaluate({ digest: "d" }, {});\n`,
+      },
+      "packages/kernel/src/substrate/manifest.ts",
+    );
+    expect(findings[0]?.message).toContain("evaluator.ts");
+  });
+
   it("rejects a relative import that resolves to nothing", () => {
     const findings = expectFalsified(
       "d1-kernel-purity",
@@ -638,6 +664,14 @@ describe("rule e — GEN-5 time ban", () => {
 
   it("rejects Date.now() in the action entry point", () => {
     expectFalsified("e-time-ban", { "packages/action/src/main.ts": `export const run = (): number => Date.now();\n` }, "packages/action/src/main.ts");
+  });
+
+  it("rejects Date.now() in the substrate installer — install decisions never consult a clock", () => {
+    expectFalsified(
+      "e-time-ban",
+      { "packages/kernel/src/substrate/installer.ts": `export const install = (): number => Date.now();\n` },
+      "packages/kernel/src/substrate/installer.ts",
+    );
   });
 
   it("rejects a `.recordedAt` member read in a decision path", () => {

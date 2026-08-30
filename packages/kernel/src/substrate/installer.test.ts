@@ -1,5 +1,5 @@
 /**
- * The local pack/install/activate path and the M0-era trust check sites,
+ * The local pack/install/activate path and the walking skeleton's trust check sites,
  * exercised end to end against real scratch installations — never against
  * the operator's live configuration. Every install target in this suite is
  * a fresh temp directory; the repository checkout is only ever a read-only
@@ -7,7 +7,7 @@
  *
  * These tests were written RED, before `installer.ts` existed.
  */
-import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -127,7 +127,7 @@ describe("packing", () => {
 
   it("leaves unrelated repository bytes unchanged", async () => {
     const status = () =>
-      execFileSync("git", ["-C", REPO_ROOT, "status", "--porcelain", "--", "packages", "qualifications", "LICENSE", "NOTICE"], {
+      execFileSync("git", ["-C", REPO_ROOT, "status", "--porcelain"], {
         encoding: "utf8",
       });
     const before = status();
@@ -155,7 +155,7 @@ describe("genuinely-first install", () => {
     expect(receipt["installationProfile"]).toBe(CONFIRMATION_FIXTURE_PROFILE);
     expect(statSync(receiptPath).mode & 0o777).toBe(0o600);
 
-    // The trust store carries D16 owner-only protections from the first
+    // The trust store carries owner-only protections from the first
     // install, initializes epoch zero, and pins the installed manifest.
     const storePath = trustStorePathFor(installationPath);
     expect(statSync(storePath).mode & 0o777).toBe(0o600);
@@ -218,6 +218,14 @@ describe("install rejections", () => {
     const target = await freshTarget();
     const installed = await installComposition({ packedDir: tampered, ...target });
     expect(codesOf(installed)).toContain("closure_digest_mismatch");
+  });
+
+  it("fails closed on a symlink — neither digest-bound nor silently dropped", async () => {
+    const linked = await mkdtemp(path.join(scratch, "linked-"));
+    cpSync(packedDir, linked, { recursive: true });
+    symlinkSync(path.join(linked, "harness", "NOTICE"), path.join(linked, "harness", "NOTICE.link"));
+    const target = await freshTarget();
+    await expect(installComposition({ packedDir: linked, ...target })).rejects.toThrow(/fail closed/);
   });
 
   it("rejects an unlisted hidden file — the closure walk skips nothing", async () => {

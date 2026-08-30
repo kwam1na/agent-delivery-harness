@@ -489,8 +489,8 @@ export {
 // The minimum composition manifest (nesting the frozen pin), the pure
 // trust-store decisions (fail-closed parsing, the first-install
 // discriminator, no-downgrade), and the local pack/install/activate path
-// with the M0-era canonical trust check sites behind the spine's
-// ProductTrustPort.
+// with the walking skeleton's canonical trust check sites behind the
+// spine's ProductTrustPort.
 export {
   COMPOSITION_MANIFEST_SPEC,
   COMPOSITION_PROFILES,

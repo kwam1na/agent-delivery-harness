@@ -1,6 +1,6 @@
 /**
- * The local pack/install/activate path and the M0-era canonical trust check
- * sites. This is deliberately a LOCAL composition substrate, not a product
+ * The local pack/install/activate path and the walking skeleton's canonical
+ * trust check sites. This is deliberately a LOCAL composition substrate, not a product
  * distribution system: it packs the current checkout plus the exact pinned
  * `agent-skills` release into one deterministic staged composition, installs
  * it into a read-only digest-addressed generation root inside one
@@ -18,7 +18,7 @@
  * no current-working-directory probing, no repository-local fallback, so a
  * planted repository-local trust file is ignored by construction and a fresh
  * clone or new worktree can never reset the high-water mark or revocation
- * epoch. The store and the install receipt are created with D16 owner-only
+ * epoch. The store and the install receipt are created with owner-only
  * permissions (0700 directories, 0600 files) from the first install.
  *
  * THE CHECK SITES all consume the spine's `ProductTrustPort` — the single
@@ -170,6 +170,13 @@ async function walkFiles(
       out.push(...(await walkFiles(root, mode, childRelative)));
     } else if (entry.isFile()) {
       out.push(childRelative);
+    } else {
+      // A symlink or special file can neither be digest-bound nor safely
+      // ignored — silently dropping one would falsify the closure's
+      // "no unlisted file" claim. Fail closed instead.
+      throw new Error(
+        `refusing to walk ${childRelative} under ${root}: not a regular file or directory (symlinks and special files fail closed)`,
+      );
     }
   }
   return out;
@@ -600,7 +607,7 @@ export async function installComposition(input: InstallCompositionInput): Promis
   return { ok: true, installationId, generationDigest, firstInstall, root };
 }
 
-// ── The M0-era check sites ─────────────────────────────────────────────────
+// ── The walking skeleton's check sites ─────────────────────────────────────
 
 export interface TrustCheckInput {
   readonly installationPath: string;
