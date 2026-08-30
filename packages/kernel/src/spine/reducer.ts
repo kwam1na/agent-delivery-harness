@@ -221,6 +221,21 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
         }
         break;
       }
+      case "approval.request.recorded": {
+        // A pending waiver or contract-amendment proposal is consumed within
+        // reviewing, remediating, or admitting without a dedicated wait
+        // state; outside those states there is no review context to propose
+        // against, and the delivery never leaves its current state for one.
+        if (state !== "reviewing" && state !== "remediating" && state !== "admitting") {
+          collector.emit(
+            "invalid_transition",
+            at,
+            `an approval proposal is journaled within reviewing, remediating, or admitting; the delivery is in ${state}`,
+          );
+          return;
+        }
+        break;
+      }
       case "policy.snapshot.bound": {
         policyDigest = payload["policyDigest"] as string;
         authorityEpoch = payload["repositoryAuthorityEpoch"] as number;
@@ -282,6 +297,75 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
     ...(generationDigest === undefined ? {} : { generationDigest }),
   };
   return { ok: true, state: base };
+}
+
+// ── Maintenance journal reducer ────────────────────────────────────────────
+
+/**
+ * The installation-scoped maintenance journal: an append log under the same
+ * envelope grammar and revision/idempotency discipline, with no state
+ * machine — maintenance records are facts about the installation, and the
+ * retention family's records deliberately outlive the deliveries they name.
+ * No maintenance kind is observation-only, so every entry advances the
+ * revision.
+ */
+export interface MaintenanceJournalState {
+  readonly subjectId: string;
+  readonly expectedRevision: number;
+}
+
+export type ReduceMaintenanceResult =
+  | { readonly ok: true; readonly state: MaintenanceJournalState }
+  | { readonly ok: false; readonly rejections: readonly SpineRejection[] };
+
+export function reduceMaintenanceJournal(entries: readonly unknown[]): ReduceMaintenanceResult {
+  const collector = createSpineCollector();
+
+  let subjectId: string | undefined;
+  let expectedRevision = 0;
+  const idempotencyKeys = new Set<string>();
+
+  entries.forEach((value, index) => {
+    const at = `/${index}`;
+    const shape = validateJournalEntry(value);
+    if (!shape.ok) {
+      for (const rejection of shape.rejections) collector.emit(rejection.code, `${at}${rejection.pointer}`, rejection.message);
+      return;
+    }
+    const entry = value as Record<string, unknown>;
+    if (entry["journal"] !== "maintenance") {
+      collector.emit("unsupported_combination", `${at}/journal`, "the maintenance reducer consumes only maintenance-journal entries");
+      return;
+    }
+    const subject = entry["subjectId"] as string;
+    const revision = entry["expectedRevision"] as number;
+    const idempotencyKey = entry["idempotencyKey"] as string;
+
+    if (subjectId === undefined) {
+      subjectId = subject;
+    } else if (subject !== subjectId) {
+      collector.emit("subject_mismatch", `${at}/subjectId`, `entry names ${subject}; this journal belongs to ${subjectId}`);
+      return;
+    }
+    if (idempotencyKeys.has(idempotencyKey)) {
+      collector.emit("duplicate_idempotency_key", `${at}/idempotencyKey`, `key ${idempotencyKey} was already consumed`);
+      return;
+    }
+    if (revision !== expectedRevision) {
+      collector.emit("revision_mismatch", `${at}/expectedRevision`, `entry expects revision ${revision}; the journal is at ${expectedRevision}`);
+      return;
+    }
+
+    idempotencyKeys.add(idempotencyKey);
+    expectedRevision += 1;
+  });
+
+  const verdict = collector.verdict();
+  if (!verdict.ok) return verdict;
+  if (subjectId === undefined) {
+    return { ok: false, rejections: [{ code: "registration_missing", pointer: "", message: "an empty maintenance journal names no installation" }] };
+  }
+  return { ok: true, state: { subjectId, expectedRevision } };
 }
 
 // ── Intake journal reducer ─────────────────────────────────────────────────

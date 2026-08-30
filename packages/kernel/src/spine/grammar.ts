@@ -35,7 +35,8 @@ export type SpineRejectionCode =
   | "invalid_transition"
   | "journal_terminal"
   | "subject_mismatch"
-  | "registration_missing";
+  | "registration_missing"
+  | "secret_rejected";
 
 export interface SpineRejection {
   readonly code: SpineRejectionCode;

@@ -136,13 +136,15 @@ describe("the frozen event-kind vocabulary", () => {
         "control.plane.mirror.recorded",
       ].sort(),
     );
-    expect(kindsIn("maintenance", "reserved")).toEqual(["retention.action.recorded"]);
-    expect(kindsIn("maintenance", "active")).toEqual(["maintenance.action.recorded"]);
+    expect(kindsIn("maintenance", "reserved")).toEqual([]);
+    // Both maintenance families are now defined by their owning units: the
+    // maintenance lane and the retention/export/deletion contract family.
+    expect(kindsIn("maintenance", "active")).toEqual(["maintenance.action.recorded", "retention.action.recorded"]);
   });
 
-  it("counts 22 active and 8 reserved (journal, kind) pairs", () => {
-    expect(activePairs.length).toBe(22);
-    expect(reservedPairs.length).toBe(8);
+  it("counts 23 active and 7 reserved (journal, kind) pairs", () => {
+    expect(activePairs.length).toBe(23);
+    expect(reservedPairs.length).toBe(7);
   });
 
   it("homes operator.confirmation.recorded in exactly two journals — the vocabulary is keyed by (journal, kind) pairs", () => {
@@ -191,8 +193,19 @@ describe("classifyEventKind", () => {
   });
 
   it("classifies an enumerated reserved pair as reserved — even the observation-only mirror kind", () => {
-    expect(classifyEventKind("maintenance", "retention.action.recorded")).toEqual({ status: "reserved" });
+    expect(classifyEventKind("intake", "intake.draft.recorded")).toEqual({ status: "reserved" });
     expect(classifyEventKind("delivery", "control.plane.mirror.recorded")).toEqual({ status: "reserved" });
+  });
+
+  it("classifies the retention kind as active in the maintenance journal only", () => {
+    expect(classifyEventKind("maintenance", "retention.action.recorded")).toEqual({
+      status: "active",
+      observationOnly: false,
+    });
+    expect(classifyEventKind("delivery", "retention.action.recorded")).toEqual({
+      status: "unknown",
+      knownIn: ["maintenance"],
+    });
   });
 
   it("classifies a kind outside the enumeration as unknown", () => {

@@ -212,4 +212,24 @@ describe("the journal-entry envelope", () => {
       ),
     ).toContain("unsupported_combination");
   });
+
+  it("freezes the retention/export/deletion payload in the maintenance journal", () => {
+    const retention = (payload: Record<string, unknown>): Record<string, unknown> =>
+      entry({ journal: "maintenance", subjectId: "install-1", kind: "retention.action.recorded", payload });
+    const wellFormed = {
+      action: "delete",
+      subjectDeliveryId: "dlv-1",
+      artifactDigest: DIGEST,
+      preservedAuditRecords: ["audit/dlv-1.json"],
+    };
+    expect(validateJournalEntry(retention(wellFormed))).toEqual({ ok: true });
+    expect(validateJournalEntry(retention({ ...wellFormed, action: "export", preservedAuditRecords: [] }))).toEqual({
+      ok: true,
+    });
+    // Closed: no other retention action exists, no stranger member lands.
+    expect(codesOf(retention({ ...wellFormed, action: "purge" }))).toContain("malformed_member");
+    expect(codesOf(retention({ ...wellFormed, transcript: "raw bytes" }))).toContain("unknown_member");
+    // The kind homes only in the maintenance journal.
+    expect(codesOf(entry({ kind: "retention.action.recorded", payload: wellFormed }))).toContain("unknown_kind");
+  });
 });

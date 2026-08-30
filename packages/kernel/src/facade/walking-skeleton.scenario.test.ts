@@ -221,11 +221,11 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Plan checkpoint ──
     const statusPlanning = await facade.status({ deliveryId, observedAt: LATER });
     expect(statusPlanning.ok && statusPlanning.state === "planning" && statusPlanning.activity === "active").toBe(true);
-    const planned = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "bounded plan: add src/greet.mjs returning the contracted greeting" });
+    const planned = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "bounded plan: add src/greet.mjs returning the contracted greeting", fence: bound.fence });
     expect(planned.ok && planned.state === "implementing").toBe(true);
 
     // ── Interruption after an intermediate checkpoint (Tier 2) ──
-    const endedEarly = await facade.sessionEnded({ deliveryId });
+    const endedEarly = await facade.sessionEnded({ deliveryId, fence: bound.fence });
     expect(endedEarly.ok).toBe(true);
     const statusPaused = await facade.status({ deliveryId, observedAt: LATER });
     expect(statusPaused.ok, JSON.stringify(statusPaused)).toBe(true);
@@ -256,7 +256,7 @@ describe("the thin one-handoff walking skeleton", () => {
     // A consumed takeover quarantines the prior workspace for real: no
     // checkpoint operation runs until the authorized fresh worktree is bound,
     // so a superseded-but-still-running task keeps no write path.
-    const quarantined = await facade.runSensor({ deliveryId });
+    const quarantined = await facade.runSensor({ deliveryId, fence: bound.fence });
     expect(quarantined.ok).toBe(false);
     if (!quarantined.ok) {
       expect(quarantined.blockers[0]?.code).toBe("takeover_pending");
@@ -295,11 +295,11 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Implement: PLANTED DEFECT first ──
     writeFileSync(path.join(worktreeB, "src", "greet.mjs"), GREET_WRONG);
     commitAll(worktreeB, "implement the greeting (planted defect)");
-    const checkpointed = await facade.checkpointCandidate({ deliveryId, resultBytes: "implemented src/greet.mjs" });
+    const checkpointed = await facade.checkpointCandidate({ deliveryId, resultBytes: "implemented src/greet.mjs", fence: rebound.fence });
     expect(checkpointed.ok && checkpointed.state === "validating").toBe(true);
 
     // The trusted sensor catches the planted defect: validation -> remediation.
-    const redSensor = await facade.runSensor({ deliveryId });
+    const redSensor = await facade.runSensor({ deliveryId, fence: rebound.fence });
     expect(redSensor.ok, JSON.stringify(redSensor)).toBe(true);
     if (!redSensor.ok) return;
     expect(redSensor.outcome).toBe("failed");
@@ -308,9 +308,9 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Candidate rewrites its sensor; the TRUSTED-BASE copy governs ──
     writeFileSync(path.join(worktreeB, "tools", "sensor.mjs"), "process.exit(0);\n");
     commitAll(worktreeB, "candidate rewrites its own sensor to always pass");
-    const rewritten = await facade.checkpointCandidate({ deliveryId, resultBytes: "sensor rewritten" });
+    const rewritten = await facade.checkpointCandidate({ deliveryId, resultBytes: "sensor rewritten", fence: rebound.fence });
     expect(rewritten.ok && rewritten.state === "validating").toBe(true);
-    const governed = await facade.runSensor({ deliveryId });
+    const governed = await facade.runSensor({ deliveryId, fence: rebound.fence });
     expect(governed.ok, JSON.stringify(governed)).toBe(true);
     if (!governed.ok) return;
     expect(governed.outcome).toBe("failed"); // the always-pass rewrite did not govern
@@ -320,9 +320,9 @@ describe("the thin one-handoff walking skeleton", () => {
     writeFileSync(path.join(worktreeB, "src", "greet.mjs"), GREET_RIGHT);
     git(worktreeB, "checkout", "main", "--", "tools/sensor.mjs");
     commitAll(worktreeB, "remediate: contracted greeting, sensor restored");
-    const remediated = await facade.checkpointCandidate({ deliveryId, resultBytes: "remediated" });
+    const remediated = await facade.checkpointCandidate({ deliveryId, resultBytes: "remediated", fence: rebound.fence });
     expect(remediated.ok && remediated.state === "validating").toBe(true);
-    const greenSensor = await facade.runSensor({ deliveryId });
+    const greenSensor = await facade.runSensor({ deliveryId, fence: rebound.fence });
     expect(greenSensor.ok, JSON.stringify(greenSensor)).toBe(true);
     if (!greenSensor.ok) return;
     expect(greenSensor.outcome).toBe("passed");
@@ -336,6 +336,7 @@ describe("the thin one-handoff walking skeleton", () => {
       verdict: "findings",
       contextBytes: "outcome lens context r1: contract, diff, sensor evidence",
       artifactBytes: "finding: greeting module lacks the contracted docstring",
+      fence: rebound.fence,
     });
     await facade.submitReviewAttempt({
       deliveryId,
@@ -344,15 +345,16 @@ describe("the thin one-handoff walking skeleton", () => {
       verdict: "approved",
       contextBytes: "testing lens context r1: sensor coverage over the contracted behavior",
       artifactBytes: "approved: acceptance sensor covers the criterion",
+      fence: rebound.fence,
     });
-    const round1 = await facade.reduceReview({ deliveryId });
+    const round1 = await facade.reduceReview({ deliveryId, fence: rebound.fence });
     expect(round1.ok && round1.state === "remediating").toBe(true);
 
     writeFileSync(path.join(worktreeB, "src", "greet.mjs"), `/** The contracted greeting. */\n${GREET_RIGHT}`);
     commitAll(worktreeB, "address the review finding");
-    const reReviewed = await facade.checkpointCandidate({ deliveryId, resultBytes: "review finding addressed" });
+    const reReviewed = await facade.checkpointCandidate({ deliveryId, resultBytes: "review finding addressed", fence: rebound.fence });
     expect(reReviewed.ok && reReviewed.state === "validating").toBe(true);
-    const green2 = await facade.runSensor({ deliveryId });
+    const green2 = await facade.runSensor({ deliveryId, fence: rebound.fence });
     expect(green2.ok, JSON.stringify(green2)).toBe(true);
     if (!green2.ok) return;
     expect(green2.state).toBe("reviewing");
@@ -365,6 +367,7 @@ describe("the thin one-handoff walking skeleton", () => {
       verdict: "approved",
       contextBytes: "outcome lens context r2: contract, diff, sensor evidence",
       artifactBytes: "approved: outcome verified against the contract",
+      fence: rebound.fence,
     });
     await facade.submitReviewAttempt({
       deliveryId,
@@ -373,8 +376,9 @@ describe("the thin one-handoff walking skeleton", () => {
       verdict: "approved",
       contextBytes: "outcome lens context r2: contract, diff, sensor evidence", // SAME context — a re-invocation
       artifactBytes: "approved (cloned context)",
+      fence: rebound.fence,
     });
-    const poisoned = await facade.reduceReview({ deliveryId });
+    const poisoned = await facade.reduceReview({ deliveryId, fence: rebound.fence });
     expect(poisoned.ok).toBe(false); // the floor is not met by a re-invocation
     if (!poisoned.ok) {
       expect(poisoned.blockers[0]?.summary).toContain("same context digest");
@@ -389,6 +393,7 @@ describe("the thin one-handoff walking skeleton", () => {
       verdict: "approved",
       contextBytes: "a different context under a reused identity",
       artifactBytes: "approved (laundered)",
+      fence: rebound.fence,
     });
     expect(laundered.ok).toBe(false);
     if (!laundered.ok) {
@@ -402,34 +407,35 @@ describe("the thin one-handoff walking skeleton", () => {
       verdict: "approved",
       contextBytes: "testing lens context r2: independently constructed coverage review",
       artifactBytes: "approved: coverage bound to the exact candidate",
+      fence: rebound.fence,
     });
-    const round2 = await facade.reduceReview({ deliveryId });
+    const round2 = await facade.reduceReview({ deliveryId, fence: rebound.fence });
     expect(round2.ok, JSON.stringify(round2)).toBe(true);
     if (!round2.ok) return;
     expect(round2.state).toBe("compounding");
 
     // ── Compound (no repository mutation) -> admission ──
-    const compounded = await facade.submitStageResult({ deliveryId, stageId: "compound", resultBytes: "no durable learning; fixtures already carry the scenario" });
+    const compounded = await facade.submitStageResult({ deliveryId, stageId: "compound", resultBytes: "no durable learning; fixtures already carry the scenario", fence: rebound.fence });
     expect(compounded.ok && compounded.state === "admitting").toBe(true);
 
     // ── Admission through the EXISTING harness boundary ──
-    const admitted = await facade.admit({ deliveryId, recordedAtInstant: LATER, env: { CLAUDECODE: "1" } });
+    const admitted = await facade.admit({ deliveryId, recordedAtInstant: LATER, env: { CLAUDECODE: "1" }, fence: rebound.fence });
     expect(admitted.ok, JSON.stringify(admitted)).toBe(true);
     if (!admitted.ok) return;
     expect(admitted.state).toBe("recording");
 
     // ── Tracked record: neutral commit plus the external verifier core ──
-    const prepared = await facade.prepareTrackedRecord({ deliveryId, env: { CLAUDECODE: "1" } });
+    const prepared = await facade.prepareTrackedRecord({ deliveryId, env: { CLAUDECODE: "1" }, fence: rebound.fence });
     expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
     if (!prepared.ok) return;
     commitAll(worktreeB, "tracked delivery record");
-    const recorded = await facade.confirmTrackedRecord({ deliveryId });
+    const recorded = await facade.confirmTrackedRecord({ deliveryId, fence: rebound.fence });
     expect(recorded.ok, JSON.stringify(recorded)).toBe(true);
     if (!recorded.ok) return;
     expect(recorded.state).toBe("ready");
 
     // ── Merge-ready ──
-    const finished = await facade.completeFinishLine({ deliveryId });
+    const finished = await facade.completeFinishLine({ deliveryId, fence: rebound.fence });
     expect(finished.ok, JSON.stringify(finished)).toBe(true);
     if (!finished.ok) return;
     expect(finished.state).toBe("completed");
@@ -487,7 +493,7 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(status.state).toBe("completed");
 
     // A mutation-capable operation refuses rather than reopening the journal.
-    const refused = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "late" });
+    const refused = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "late", fence: status.fence });
     expect(refused.ok).toBe(false);
     const still = await facade.status({ deliveryId, observedAt: LATER });
     expect(still.ok && still.state === "completed").toBe(true);
@@ -549,7 +555,8 @@ describe("the thin one-handoff walking skeleton", () => {
     execFileSync("chmod", ["u+w", marker]);
     writeFileSync(marker, "{\"tampered\":true}\n");
 
-    const refused = await facade.submitStageResult({ deliveryId: confirmed.deliveryId, stageId: "plan", resultBytes: "plan" });
+    if (!bound.ok) return;
+    const refused = await facade.submitStageResult({ deliveryId: confirmed.deliveryId, stageId: "plan", resultBytes: "plan", fence: bound.fence });
     expect(refused.ok).toBe(false);
 
     const status = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
