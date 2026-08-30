@@ -14,7 +14,7 @@
  * widen it.
  */
 import type { PolicySnapshot } from "../spine/policy.ts";
-import { PORTABLE_STAGE_GRANT, compileRepositoryPolicy } from "./compile.ts";
+import { PORTABLE_INTAKE_GRANT, PORTABLE_STAGE_GRANT, compileRepositoryPolicy } from "./compile.ts";
 import { REPOSITORY_POLICY_DOCUMENT_SPEC } from "./document.ts";
 
 export { MANDATORY_LENS_CATEGORIES } from "./compile.ts";
@@ -97,3 +97,6 @@ export function compileDisposablePolicy(input: CompileDisposablePolicyInput): Po
  * layout, and the delivery authority paths protected.
  */
 export const DISPOSABLE_STAGE_GRANT = PORTABLE_STAGE_GRANT;
+
+/** The read-only grant every product-owned intake turn runs under. */
+export const DISPOSABLE_INTAKE_GRANT = PORTABLE_INTAKE_GRANT;

@@ -41,10 +41,16 @@ import {
   evaluateHostAdmission,
   type CheckpointAdmissionExpectation,
   type ConfirmationEchoAttempt,
+  type IntakeAdmissionExpectation,
   type RenderedConfirmationChallenge,
 } from "../binding/host-admission.ts";
 import { createBlocker, type Blocker } from "../blockers.ts";
-import { createIntakeJournalStore, createJournalStore, type JournalStore } from "../checkpoint/journal-store.ts";
+import {
+  createIntakeJournalStore,
+  createJournalStore,
+  type IntakeJournalStore,
+  type JournalStore,
+} from "../checkpoint/journal-store.ts";
 import { evaluateCanonicalRecheck, type CompareCheck, type RecheckValues, type ValueCheck } from "../checkpoint/recheck.ts";
 import {
   deleteDelivery as runDeliveryDeletion,
@@ -64,6 +70,7 @@ import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
 import type { HarnessConfig } from "../config.ts";
 import type { CaptureCandidate, CapturedCandidate } from "../candidate.types.ts";
 import {
+  DISPOSABLE_INTAKE_GRANT,
   DISPOSABLE_REVIEW_LENSES,
   DISPOSABLE_SENSOR_CAPABILITY,
   DISPOSABLE_STAGE_GRANT,
@@ -101,7 +108,21 @@ import { loadAssertionProviderConfig, type AssertionSourcePort } from "../substr
 import { SECURITY_BLOCKED_MIGRATION_ACTION } from "../spine/assertion.ts";
 import { evaluateMigrationConsumption } from "./migration.ts";
 import { parseTrustState } from "../substrate/trust-store.ts";
-import { loadBundledWorkflowGraph, workflowStageBindingFor } from "../workflow/graph.ts";
+import {
+  loadBundledWorkflowGraph,
+  workflowStageBindingFor,
+  workflowStageOf,
+  type WorkflowGraph,
+} from "../workflow/graph.ts";
+import {
+  WORKFLOW_CANDIDATE_REF_SPEC,
+  WORKFLOW_STAGE_RESULT_SPEC,
+  WORKFLOW_SUBJECT_REF_SPEC,
+  evaluateStagePrerequisites,
+  validateWorkflowStageResult,
+  type AcceptedStageResult,
+  type CompletedStageSummary,
+} from "../workflow/result.ts";
 
 // ── Result and blocker plumbing ────────────────────────────────────────────
 
@@ -154,6 +175,34 @@ interface DeliveryMeta {
   readonly generationDigest: string;
   readonly intakeId: string;
 }
+
+/**
+ * The presentation-time binding of one intake draft: the presented contract,
+ * the policy and generation it validated against, and the single-use nonce of
+ * the pending confirmation. A draft mutation after presentation clears the
+ * nonce — the operator confirmed different bytes.
+ */
+interface IntakeMeta {
+  readonly contract: AcceptedContract;
+  readonly policy: PolicySnapshot;
+  readonly generationDigest: string;
+  readonly nonce?: string;
+}
+
+/** The four-member verified release projection every typed stage result binds. */
+const RELEASE_IDENTITY = Object.freeze({
+  releaseId: PINNED_AGENT_SKILLS.releaseId,
+  profile: PINNED_AGENT_SKILLS.profile,
+  archiveSha256: PINNED_AGENT_SKILLS.archiveSha256,
+  metadataSha256: PINNED_AGENT_SKILLS.metadataSha256,
+});
+
+/**
+ * Findings-driven review rounds allowed before the bounded-loop blocker
+ * records: review repeats until the selected lenses approve OR this bound is
+ * reached — the loop cannot spin unobserved forever.
+ */
+const REVIEW_ROUND_BOUND = 3;
 
 interface WorkspaceMeta {
   readonly worktreeDir: string;
@@ -287,6 +336,60 @@ function sensorResultsOf(views: readonly JournalEntryView[]): RecordedSensorResu
 export interface ManagedDeliveryFacade {
   readonly namespaceDir: () => Promise<string>;
 
+  /**
+   * The host-native intake entrypoint: opens an iterative intake for an
+   * outcome-only work request. The scope workflow the host runs against it
+   * executes under the READ-ONLY intake grant minted here — the admission is
+   * never mutation-capable, and every delivery-scoped identity is recorded
+   * explicitly absent-by-state.
+   */
+  openIntake(input: {
+    readonly workRequest: string;
+    readonly observedAt: string;
+    readonly attestationExpiry: string;
+  }): Promise<
+    { readonly ok: true; readonly intakeId: string; readonly grantDigest: string; readonly grantPath: string } | FacadeFailure
+  >;
+
+  /** Durably retains one clarification exchange of the scope workflow. */
+  recordClarification(input: {
+    readonly intakeId: string;
+    readonly question: string;
+    readonly answer: string;
+  }): Promise<{ readonly ok: true } | FacadeFailure>;
+
+  /**
+   * Durably retains the current draft contract. A draft recorded after
+   * presentation VOIDS the pending confirmation — the operator confirmed
+   * different bytes — and a draft recorded while acceptance is blocked
+   * returns intake to the confirmation handoff through the frozen chain.
+   */
+  recordDraft(input: {
+    readonly intakeId: string;
+    readonly draft: unknown;
+  }): Promise<{ readonly ok: true; readonly draftDigest: string } | FacadeFailure>;
+
+  /** Presents the retained draft for the ONE operator confirmation. */
+  presentDraft(input: {
+    readonly intakeId: string;
+    readonly expiry: string;
+  }): Promise<
+    | { readonly ok: true; readonly nonce: string; readonly normalizedContractDigest: string; readonly channelPath: string }
+    | FacadeFailure
+  >;
+
+  /**
+   * Re-runs acceptance validation after a preflight failure, WITHOUT a new
+   * operator confirmation: the journal guarantees the draft cannot have
+   * changed since the consumed confirmation, so the confirmation stands.
+   */
+  retryAcceptance(input: { readonly intakeId: string }): Promise<{ readonly ok: true; readonly deliveryId: string } | FacadeFailure>;
+
+  /**
+   * The already-scoped fallback lane: no product-owned intake turn runs, but
+   * the frozen chain is identical from the draft record on — contract
+   * validation and the operator confirmation are never bypassed.
+   */
   presentContract(input: {
     readonly contract: AcceptedContract;
     readonly expiry: string;
@@ -295,6 +398,13 @@ export interface ManagedDeliveryFacade {
     | FacadeFailure
   >;
 
+  /**
+   * Consumes the operator confirmation at the EXIT of awaiting_confirmation,
+   * runs acceptance validation in validating_acceptance, and — only when it
+   * passes — completes registration at accepted_contract, on the facade side,
+   * outside intake's capability set. A preflight failure blocks the intake
+   * with the consumed confirmation intact for `retryAcceptance`.
+   */
   confirmContract(input: {
     readonly intakeId: string;
     readonly echo: ConfirmationEchoAttempt;
@@ -1034,224 +1144,677 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     };
   };
 
+  // ── Intake plumbing ──────────────────────────────────────────────────────
+
+  const intakePath = async (intakeId: string, suffix: string): Promise<string> =>
+    path.join(await namespaceDir(), "intake", `${intakeId}${suffix}`);
+  const intakeStoreFor = async (intakeId: string): Promise<IntakeJournalStore> =>
+    createIntakeJournalStore(await intakePath(intakeId, ".jsonl"));
+
+  /** Appends one intake-journal entry under the frozen reducer's discipline. */
+  const appendIntake = async (
+    store: IntakeJournalStore,
+    intakeId: string,
+    kind: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ ok: true } | FacadeFailure> => {
+    const read = await store.read();
+    if (!read.ok) return refuse("intake_journal_unreadable", "The intake journal is unreadable.", "Inspect the durable intake journal file.");
+    let expectedRevision = 0;
+    if (read.entries.length > 0) {
+      const reduced = await store.state();
+      if (!reduced.ok) return refuse("intake_journal_rejected", "The durable intake journal does not reduce.", "Inspect the durable intake journal file.");
+      expectedRevision = reduced.state.expectedRevision;
+    }
+    const appended = await store.append({
+      spec: "journal-entry/1",
+      journal: "intake",
+      subjectId: intakeId,
+      expectedRevision,
+      idempotencyKey: `e${read.entries.length}-${kind}`,
+      kind,
+      payload,
+    });
+    if (!appended.ok) {
+      return refuse(
+        "intake_journal_rejected",
+        `The frozen intake reducer refused a ${kind} append: ${appended.rejections.map((rejection) => rejection.message).join("; ")}`,
+        "The refused entry is reported verbatim; correct the calling state.",
+      );
+    }
+    return { ok: true };
+  };
+
+  const intakeStateOf = async (
+    store: IntakeJournalStore,
+  ): Promise<{ readonly state: string; readonly lastDraftDigest?: string } | FacadeFailure> => {
+    const reduced = await store.state();
+    if (!reduced.ok) {
+      return refuse("intake_unknown", "No intake journal reduces under this identity.", "Open an intake or present a contract first.");
+    }
+    return { state: reduced.state.state, ...(reduced.state.lastDraftDigest === undefined ? {} : { lastDraftDigest: reduced.state.lastDraftDigest }) };
+  };
+
+  interface PresentValidated {
+    readonly contract: AcceptedContract;
+    readonly policy: PolicySnapshot;
+    readonly generationDigest: string;
+    readonly trust: ProductTrustState;
+  }
+
+  /**
+   * The presentation-time validation both lanes run before anything reaches
+   * the operator: frozen contract grammar, an execution-eligible active
+   * generation, readable trust state, the qualification profile's use-time
+   * binding, and the compiled policy's authority ceiling.
+   */
+  const presentValidation = async (contractValue: unknown): Promise<PresentValidated | FacadeFailure> => {
+    const contractVerdict = validateAcceptedContract(contractValue);
+    if (!contractVerdict.ok) {
+      return refuse(
+        "contract_rejected",
+        `The scoped contract is outside its frozen grammar: ${contractVerdict.rejections.map((rejection) => rejection.message).join("; ")}`,
+        "Fix the contract; material ambiguity remains in intake.",
+      );
+    }
+    const contract = contractValue as AcceptedContract;
+
+    const active = await resolveActiveGeneration(input.installation.installationPath);
+    if (!active.ok) {
+      return refuse("no_active_generation", "No active composition generation is installed.", "Install and activate a composition first.");
+    }
+    const generation = await loadPinnedGeneration({
+      installationPath: input.installation.installationPath,
+      generationDigest: active.generationDigest,
+    });
+    if (!generation.ok) {
+      return refuse(
+        "trust_ineligible",
+        `The active generation fails its trust checks: ${generation.blockers.map((blocker) => blocker.message).join("; ")}`,
+        "Restore local trust state through the operator maintenance lane.",
+      );
+    }
+    const trust = await readTrust();
+    if (trust === undefined) {
+      return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
+    }
+
+    // The qualification profile's use-time binding at registration: a fixture
+    // installation registers deliveries only in its receipt-listed disposable
+    // repositories, and only the receipt decides.
+    const registration = await registrationBinding({
+      installationPath: input.installation.installationPath,
+      receiptDir: input.installation.receiptDir,
+    });
+    if (!registration.ok) {
+      return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+    }
+    if (
+      registration.activeCompositionProfile === "confirmation-fixture" &&
+      !(registration.disposableRepositoryIds ?? []).includes(contract.repository.repositoryId)
+    ) {
+      return refuse(
+        "disposable_repository_refused",
+        "A qualification installation registers deliveries only in its receipt-listed disposable repositories; this repository is not listed.",
+        "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
+      );
+    }
+
+    const policy = compileDisposablePolicy({
+      repositoryId: contract.repository.repositoryId,
+      productTrustRevocationEpoch: trust.revocationEpoch,
+      repositoryAuthorityRevocationEpoch: 0,
+    });
+    const withinPolicy = checkContractWithinPolicy(contract, policy);
+    if (!withinPolicy.ok) {
+      return refuse(
+        "authority_not_granted",
+        `The contract requests authority the compiled policy does not grant: ${withinPolicy.rejections.map((rejection) => rejection.message).join("; ")}`,
+        "Absence of a grant is denial; narrow the contract or widen repository policy through its owners.",
+      );
+    }
+    return { contract, policy, generationDigest: active.generationDigest, trust };
+  };
+
+  /** Mints and renders one contract-confirmation for the presented draft. */
+  const presentForConfirmation = async (
+    intakeId: string,
+    contract: AcceptedContract,
+    validated: PresentValidated,
+    expiry: string,
+  ): Promise<{ readonly ok: true; readonly nonce: string; readonly normalizedContractDigest: string; readonly channelPath: string } | FacadeFailure> => {
+    const nonce = `nonce-${hex(8)}`;
+    const normalizedContractDigest = digestCanonical(contract);
+    const confirmation = {
+      spec: "operator-confirmation/1",
+      confirmationClass: "contract-confirmation",
+      origin: "managed-delivery.facade",
+      action: "confirm-contract",
+      expiry,
+      nonce,
+      productTrustRevocationEpoch: validated.trust.revocationEpoch,
+      repositoryAuthorityRevocationEpoch: "absent-by-state",
+      intakeDraftId: intakeId,
+      deliveryId: "absent-by-state",
+      normalizedContractDigest,
+      supersededInvocationFence: "absent-by-state",
+      expectedJournalRevision: "absent-by-state",
+      targetBaseCommit: "absent-by-state",
+      boundInvocationFence: "absent-by-state",
+      boundCandidateTreeSha: "absent-by-state",
+    };
+    const rendered = await renderChallenge(nonce, confirmation, intakeId, expiry);
+    if (!rendered.ok) return rendered;
+    await writeOwned(
+      await intakePath(intakeId, ".meta.json"),
+      `${JSON.stringify({ contract, policy: validated.policy, generationDigest: validated.generationDigest, nonce } satisfies IntakeMeta)}\n`,
+    );
+    return { ok: true, nonce, normalizedContractDigest, channelPath: rendered.channelPath };
+  };
+
+  interface AcceptancePreflight {
+    readonly binding: { readonly registeringInstallationId: string; readonly activeCompositionProfile: string };
+    readonly sensorBytes: string;
+    /** Read HERE, not after the terminal transition: see the preflight's contract below. */
+    readonly trust: ProductTrustState;
+  }
+
+  /**
+   * The validating_acceptance preflight, run AFTER the confirmation is
+   * consumed — the pinned intake ordering. Everything here may drift between
+   * presentation and consumption (trust state, installation resolution, the
+   * trusted-base sensor), so a failure blocks with the consumed confirmation
+   * intact and `retryAcceptance` re-runs it over the unchanged draft.
+   *
+   * EVERY value that can drift is read HERE, and the preflight carries them
+   * forward. Registration runs after the terminal `accepted_contract`
+   * transition, where the intake journal accepts no further entries — so a
+   * validation-class refusal raised there would be unrecoverable, spending
+   * the operator's single confirmation. Blocking is retryable; that is the
+   * whole point of the ordering.
+   */
+  const acceptancePreflight = async (meta: IntakeMeta): Promise<AcceptancePreflight | FacadeFailure> => {
+    const contractVerdict = validateAcceptedContract(meta.contract);
+    if (!contractVerdict.ok) {
+      return refuse(
+        "contract_rejected",
+        `The presented contract is outside its frozen grammar: ${contractVerdict.rejections.map((rejection) => rejection.message).join("; ")}`,
+        "Fix the contract; material ambiguity remains in intake.",
+      );
+    }
+    const binding = await registrationBinding({
+      installationPath: input.installation.installationPath,
+      receiptDir: input.installation.receiptDir,
+    });
+    if (!binding.ok) {
+      return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+    }
+    const trust = await readTrust();
+    if (trust === undefined) {
+      return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
+    }
+    const generation = await loadPinnedGeneration({
+      installationPath: input.installation.installationPath,
+      generationDigest: meta.generationDigest,
+    });
+    if (!generation.ok) {
+      return refuse(
+        "trust_ineligible",
+        "The generation bound at presentation is not execution-eligible under current local trust state.",
+        "Restore local trust state through the operator maintenance lane, then retry acceptance.",
+      );
+    }
+    const withinPolicy = checkContractWithinPolicy(meta.contract, meta.policy);
+    if (!withinPolicy.ok) {
+      return refuse(
+        "authority_not_granted",
+        `The contract requests authority the compiled policy does not grant: ${withinPolicy.rejections.map((rejection) => rejection.message).join("; ")}`,
+        "Absence of a grant is denial; narrow the contract or widen repository policy through its owners.",
+      );
+    }
+    // The trusted-base sensor: copied from the base commit NOW, executed only
+    // from that copy — the candidate's tracked rewrite never governs.
+    const shown = await exec.run({
+      command: "git",
+      args: ["show", `${meta.contract.repository.baseRef}:${DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath}`],
+      cwd: input.repoDir,
+    });
+    if (shown.code !== 0) {
+      return refuse(
+        "trusted_sensor_missing",
+        `The trusted pre-run base ${meta.contract.repository.baseRef} carries no ${DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath}.`,
+        "The repository's sensor must exist at the base; candidate-supplied sensors never govern.",
+      );
+    }
+    return { binding, sensorBytes: shown.stdout, trust };
+  };
+
+  /** Registration at accepted_contract: facade-side, outside intake's capability set. */
+  const registerDelivery = async (
+    intakeId: string,
+    meta: IntakeMeta,
+    preflight: AcceptancePreflight,
+  ): Promise<{ readonly ok: true; readonly deliveryId: string } | FacadeFailure> => {
+    // Trust state was read by the preflight, BEFORE the terminal transition —
+    // re-reading it here could only produce an unrecoverable refusal.
+    const trust = preflight.trust;
+    if (meta.nonce === undefined) {
+      return refuse("confirmation_void", "No consumed confirmation is bound to this intake draft.", "Present the draft and complete the operator confirmation first.");
+    }
+    const ns = await namespaceDir();
+    const deliveryId = `dlv-${hex(6)}`;
+    const dir = await deliveryDir(deliveryId);
+    const store = await journalStoreFor(deliveryId);
+
+    const registered = await appendEntry(store, deliveryId, "delivery.registered", {
+      contractDigest: digestCanonical(meta.contract),
+      intakeId,
+      confirmationNonce: meta.nonce,
+      activeCompositionProfile: preflight.binding.activeCompositionProfile,
+      registeringInstallationId: preflight.binding.registeringInstallationId,
+    });
+    if (!registered.ok) return registered;
+    await appendEntry(store, deliveryId, "generation.pinned", {
+      generationDigest: meta.generationDigest,
+      releaseId: PINNED_AGENT_SKILLS.releaseId,
+      profile: preflight.binding.activeCompositionProfile,
+    });
+    await appendEntry(store, deliveryId, "policy.snapshot.bound", {
+      policyDigest: meta.policy.policyDigest,
+      repositoryAuthorityEpoch: meta.policy.repositoryAuthorityRevocationEpoch,
+    });
+    await appendEntry(store, deliveryId, "trust.epoch.observed", {
+      productTrustEpoch: trust.revocationEpoch,
+      repositoryAuthorityEpoch: meta.policy.repositoryAuthorityRevocationEpoch,
+    });
+
+    await writeOwned(path.join(dir, "trusted-sensor.mjs"), preflight.sensorBytes);
+    await writeOwned(
+      path.join(dir, "delivery.json"),
+      `${JSON.stringify({ contract: meta.contract, policy: meta.policy, generationDigest: meta.generationDigest, intakeId } satisfies DeliveryMeta)}\n`,
+    );
+
+    // The namespace pointer the host-facing CLI resolves the facade from:
+    // installation paths and host version, in the product namespace, never
+    // in candidate-writable paths.
+    await writeOwned(
+      path.join(ns, "facade.json"),
+      `${JSON.stringify({
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+        hostVersion: input.hostVersion,
+      })}\n`,
+    );
+
+    const transitioned = await appendEntry(store, deliveryId, "transition.committed", { from: "accepted", to: "preparing" });
+    if (!transitioned.ok) return transitioned;
+    return { ok: true, deliveryId };
+  };
+
+  /**
+   * The validating_acceptance leg shared by confirmation and retry: preflight
+   * under the already-consumed confirmation, then either the accepted_contract
+   * transition plus registration, or the typed blocked transition.
+   */
+  const runAcceptance = async (
+    intakeId: string,
+    store: IntakeJournalStore,
+    meta: IntakeMeta,
+  ): Promise<{ readonly ok: true; readonly deliveryId: string } | FacadeFailure> => {
+    const preflight = await acceptancePreflight(meta);
+    if (!("binding" in preflight)) {
+      await appendIntake(store, intakeId, "intake.state.changed", { from: "validating_acceptance", to: "blocked" });
+      return preflight;
+    }
+    const accepted = await appendIntake(store, intakeId, "intake.state.changed", { from: "validating_acceptance", to: "accepted_contract" });
+    if (!accepted.ok) return accepted;
+    return registerDelivery(intakeId, meta, preflight);
+  };
+
+  // ── Typed workflow-checkpoint plumbing ───────────────────────────────────
+
+  const loadGraph = async (
+    generationRoot: string,
+  ): Promise<{ readonly graph: WorkflowGraph; readonly graphSha256: string } | FacadeFailure> => {
+    let archiveBytes: Uint8Array;
+    try {
+      archiveBytes = await readFile(path.join(generationRoot, ...GENERATION_SKILLS_ARCHIVE.split("/")));
+    } catch {
+      return refuse("workflow_graph_rejected", "The pinned generation's skills archive is unreadable.", "Restore the installation through the operator maintenance lane.");
+    }
+    const loaded = loadBundledWorkflowGraph(archiveBytes);
+    if (!loaded.ok) {
+      return refuse(
+        "workflow_graph_rejected",
+        `The bundled workflow graph failed its pin: ${loaded.blockers.map((blocker) => blocker.message).join("; ")}`,
+        "Only the exact pinned graph governs checkpoints.",
+      );
+    }
+    return { graph: loaded.graph, graphSha256: loaded.graphSha256 };
+  };
+
+  const persistedResultPath = (dir: string, digest: string): string => path.join(dir, "results", `${digest}.json`);
+
+  /** Reads one persisted typed result back, verifying its journal digest binding. */
+  const persistedResultOf = async (dir: string, digest: string): Promise<AcceptedStageResult | undefined> => {
+    try {
+      const bytes = await readFile(persistedResultPath(dir, digest), "utf8");
+      if (sha256Hex(bytes) !== digest) return undefined; // tampered persistence satisfies nothing
+      const parsed = JSON.parse(bytes) as { status?: unknown; stageId?: unknown; output?: { kind?: unknown } };
+      if (typeof parsed.status !== "string" || typeof parsed.stageId !== "string") return undefined;
+      return {
+        stageId: parsed.stageId,
+        status: parsed.status,
+        ...(typeof parsed.output?.kind === "string" ? { outputKind: parsed.output.kind } : {}),
+        evidenceRefs: [],
+        limitations: [],
+      };
+    } catch {
+      return undefined;
+    }
+  };
+
+  /**
+   * The harness-retained prerequisite summaries, rebuilt from the journal's
+   * digest-bound stage records and their persisted typed documents. The
+   * registration itself is the scoped-subject evidence — an accepted contract
+   * IS intake's success output.
+   */
+  const retainedSummaries = async (
+    deliveryId: string,
+    views: readonly JournalEntryView[],
+  ): Promise<Map<string, CompletedStageSummary>> => {
+    const map = new Map<string, CompletedStageSummary>();
+    if (views.some((view) => view.kind === "delivery.registered")) {
+      map.set("intake", { status: "succeeded", outputKind: "scoped-subject" });
+    }
+    const dir = await deliveryDir(deliveryId);
+    for (const view of views) {
+      if (view.kind !== "stage.result.recorded") continue;
+      const persisted = await persistedResultOf(dir, view.payload["resultDigest"] as string);
+      if (persisted === undefined) continue;
+      map.set(view.payload["stageId"] as string, {
+        status: persisted.status,
+        ...(persisted.outputKind === undefined ? {} : { outputKind: persisted.outputKind }),
+      });
+    }
+    return map;
+  };
+
+  interface ProcessedStageResult {
+    readonly bytes: string;
+    readonly digest: string;
+    readonly result: AcceptedStageResult;
+  }
+
+  /**
+   * The checkpoint reducer's admission of one typed result: parse, validate
+   * against the pinned graph and release under the stage's released
+   * candidate-binding policy, then evaluate the graph-declared prerequisites
+   * over harness-retained summaries. Prose, unknown members, self-nominated
+   * candidates, and unmet prerequisites all refuse — host-facing skill text
+   * guides execution but cannot advance the reducer.
+   */
+  const processStageResult = (processInput: {
+    readonly resultBytes: string;
+    readonly graph: WorkflowGraph;
+    readonly graphSha256: string;
+    readonly stageId: string;
+    readonly deliveryId: string;
+    readonly currentCandidate?: string;
+    readonly producedCandidate?: string;
+    readonly summaries: ReadonlyMap<string, CompletedStageSummary>;
+    readonly repairLoop?: boolean;
+    readonly productRealized?: readonly string[];
+  }): ProcessedStageResult | FacadeFailure => {
+    let parsed: unknown = processInput.resultBytes;
+    try {
+      parsed = JSON.parse(processInput.resultBytes);
+    } catch {
+      /* validation reports the typed refusal for non-JSON bytes */
+    }
+    const verdict = validateWorkflowStageResult(parsed, {
+      graph: processInput.graph,
+      graphSha256: processInput.graphSha256,
+      release: RELEASE_IDENTITY,
+      expectedStageId: processInput.stageId,
+      expectedSubject: processInput.deliveryId,
+      ...(processInput.currentCandidate === undefined ? {} : { currentCandidate: processInput.currentCandidate }),
+      ...(processInput.producedCandidate === undefined ? {} : { producedCandidate: processInput.producedCandidate }),
+    });
+    if (!verdict.ok) {
+      return refuse(
+        "stage_result_rejected",
+        `The ${processInput.stageId} result is outside the released workflow contract: ${verdict.rejections
+          .map((rejection) => rejection.message)
+          .join("; ")
+          .slice(0, 1500)}`,
+        "Submit a typed workflow-stage-result/1 document; host-facing skill text guides execution but cannot advance a checkpoint.",
+      );
+    }
+    const stage = workflowStageOf(processInput.graph, processInput.stageId);
+    if (stage === undefined) {
+      return refuse("stage_result_rejected", `The pinned graph declares no ${processInput.stageId} stage.`, "Read `next-checkpoint`.");
+    }
+    const prerequisites = evaluateStagePrerequisites(stage, processInput.summaries, {
+      ...(processInput.repairLoop === undefined ? {} : { repairLoop: processInput.repairLoop }),
+      ...(processInput.productRealized === undefined ? {} : { productRealized: processInput.productRealized }),
+    });
+    if (!prerequisites.ok) {
+      return refuse(
+        "stage_prerequisite_unmet",
+        `The ${processInput.stageId} stage's graph-declared prerequisites are not admitted: ${prerequisites.rejections
+          .map((rejection) => rejection.message)
+          .join("; ")
+          .slice(0, 1500)}`,
+        "Admit the prerequisite stage's typed result first; the frozen checkpoint order is not advisory.",
+      );
+    }
+    return { bytes: processInput.resultBytes, digest: sha256Hex(processInput.resultBytes), result: verdict.result };
+  };
+
   return {
     namespaceDir,
 
-    async presentContract({ contract, expiry }) {
-      const contractVerdict = validateAcceptedContract(contract);
-      if (!contractVerdict.ok) {
-        return refuse(
-          "contract_rejected",
-          `The scoped contract is outside its frozen grammar: ${contractVerdict.rejections.map((rejection) => rejection.message).join("; ")}`,
-          "Fix the contract; material ambiguity remains in intake.",
-        );
-      }
-
-      const active = await resolveActiveGeneration(input.installation.installationPath);
-      if (!active.ok) {
-        return refuse("no_active_generation", "No active composition generation is installed.", "Install and activate a composition first.");
-      }
-      const generation = await loadPinnedGeneration({
-        installationPath: input.installation.installationPath,
-        generationDigest: active.generationDigest,
-      });
-      if (!generation.ok) {
-        return refuse(
-          "trust_ineligible",
-          `The active generation fails its trust checks: ${generation.blockers.map((blocker) => blocker.message).join("; ")}`,
-          "Restore local trust state through the operator maintenance lane.",
-        );
+    async openIntake({ workRequest, observedAt, attestationExpiry }) {
+      if (workRequest.trim().length === 0) {
+        return refuse("work_request_empty", "An intake opens over a non-empty work request.", "State the intended outcome, then open the intake.");
       }
       const trust = await readTrust();
       if (trust === undefined) {
         return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
       }
-
-      // The qualification profile's use-time binding at registration: a
-      // fixture installation registers deliveries only in its receipt-listed
-      // disposable repositories, and only the receipt decides — a
-      // candidate-written marker makes nothing eligible.
-      const registration = await registrationBinding({
-        installationPath: input.installation.installationPath,
-        receiptDir: input.installation.receiptDir,
-      });
-      if (!registration.ok) {
-        return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
-      }
-      if (
-        registration.activeCompositionProfile === "confirmation-fixture" &&
-        !(registration.disposableRepositoryIds ?? []).includes(contract.repository.repositoryId)
-      ) {
-        return refuse(
-          "disposable_repository_refused",
-          "A qualification installation registers deliveries only in its receipt-listed disposable repositories; this repository is not listed.",
-          "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
-        );
-      }
-
-      const policy = compileDisposablePolicy({
-        repositoryId: contract.repository.repositoryId,
-        productTrustRevocationEpoch: trust.revocationEpoch,
-        repositoryAuthorityRevocationEpoch: 0,
-      });
-      const withinPolicy = checkContractWithinPolicy(contract, policy);
-      if (!withinPolicy.ok) {
-        return refuse(
-          "authority_not_granted",
-          `The contract requests authority the compiled policy does not grant: ${withinPolicy.rejections.map((rejection) => rejection.message).join("; ")}`,
-          "Absence of a grant is denial; narrow the contract or widen repository policy through its owners.",
-        );
-      }
-
       const intakeId = `intake-${hex(6)}`;
-      const nonce = `nonce-${hex(8)}`;
-      const normalizedContractDigest = digestCanonical(contract);
-      const confirmation = {
-        spec: "operator-confirmation/1",
-        confirmationClass: "contract-confirmation",
-        origin: "managed-delivery.facade",
-        action: "confirm-contract",
-        expiry,
-        nonce,
+
+      // The product-owned scope workflow executes only under the READ-ONLY
+      // intake grant: no writable paths, every delivery-scoped identity
+      // explicitly absent-by-state, and an admission that is never
+      // mutation-capable.
+      const expectation: IntakeAdmissionExpectation = {
+        profile: "intake",
+        hostVersion: input.hostVersion,
         productTrustRevocationEpoch: trust.revocationEpoch,
-        repositoryAuthorityRevocationEpoch: "absent-by-state",
+        observedAt,
         intakeDraftId: intakeId,
-        deliveryId: "absent-by-state",
-        normalizedContractDigest,
-        supersededInvocationFence: "absent-by-state",
-        expectedJournalRevision: "absent-by-state",
-        targetBaseCommit: "absent-by-state",
-        boundInvocationFence: "absent-by-state",
-        boundCandidateTreeSha: "absent-by-state",
       };
+      const attestation = mintGrantAttestation({ grant: DISPOSABLE_INTAKE_GRANT, expectation, expiry: attestationExpiry });
+      const admission = evaluateHostAdmission(expectation, DISPOSABLE_INTAKE_GRANT, attestation);
+      if (!admission.admitted) {
+        return refuse(
+          "host_admission_refused",
+          `The minted intake attestation does not admit against the binding's own expectation: ${admission.denials.map((denial) => denial.code).join(", ")}`,
+          "Missing or failed grant application yields no intake invocation token.",
+        );
+      }
 
-      const ns = await namespaceDir();
-      const intakeStore = createIntakeJournalStore(path.join(ns, "intake", `${intakeId}.jsonl`));
-      const appendIntake = async (kind: string, payload: Record<string, unknown>, index: number, revision: number) =>
-        intakeStore.append({
-          spec: "journal-entry/1",
-          journal: "intake",
-          subjectId: intakeId,
-          expectedRevision: revision,
-          idempotencyKey: `e${index}-${kind}`,
-          kind,
-          payload,
+      const store = await intakeStoreFor(intakeId);
+      const openedTransition = await appendIntake(store, intakeId, "intake.state.changed", {
+        from: "draft_scope",
+        to: "awaiting_clarification",
+      });
+      if (!openedTransition.ok) return openedTransition;
+      await writeOwned(await intakePath(intakeId, ".request.json"), `${JSON.stringify({ workRequest })}\n`);
+      const grantPath = await intakePath(intakeId, ".grant.json");
+      await writeOwned(grantPath, `${JSON.stringify({ grant: DISPOSABLE_INTAKE_GRANT, expectation, attestation, admission })}\n`);
+      return { ok: true, intakeId, grantDigest: admission.grantDigest, grantPath };
+    },
+
+    async recordClarification({ intakeId, question, answer }) {
+      const store = await intakeStoreFor(intakeId);
+      const state = await intakeStateOf(store);
+      if (!("state" in state)) return state;
+      return appendIntake(store, intakeId, "intake.clarification.recorded", { question, answer });
+    },
+
+    async recordDraft({ intakeId, draft }) {
+      const store = await intakeStoreFor(intakeId);
+      const state = await intakeStateOf(store);
+      if (!("state" in state)) return state;
+
+      if (state.state === "blocked") {
+        // A draft mutation after a blocked acceptance preflight: the frozen
+        // chain returns intake to the confirmation handoff — the consumed
+        // confirmation covered different bytes and cannot carry the retry.
+        const reopened = await appendIntake(store, intakeId, "intake.state.changed", { from: "blocked", to: "validating_acceptance" });
+        if (!reopened.ok) return reopened;
+        const returned = await appendIntake(store, intakeId, "intake.state.changed", {
+          from: "validating_acceptance",
+          to: "awaiting_confirmation",
         });
-      // The direct already-scoped handoff still walks the frozen intake chain
-      // to the confirmation handoff.
-      await appendIntake("intake.state.changed", { from: "draft_scope", to: "awaiting_clarification" }, 0, 0);
-      await appendIntake("intake.state.changed", { from: "awaiting_clarification", to: "awaiting_confirmation" }, 1, 1);
+        if (!returned.ok) return returned;
+      }
 
-      const rendered = await renderChallenge(nonce, confirmation, intakeId, expiry);
-      if (!rendered.ok) return rendered;
+      const draftDigest = digestCanonical(draft);
+      const recorded = await appendIntake(store, intakeId, "intake.draft.recorded", { draftDigest });
+      if (!recorded.ok) return recorded;
+      await writeOwned(await intakePath(intakeId, ".draft.json"), `${JSON.stringify(draft)}\n`);
 
-      await writeOwned(
-        path.join(ns, "intake", `${intakeId}.meta.json`),
-        `${JSON.stringify({ contract, policy, generationDigest: active.generationDigest, nonce })}\n`,
-      );
-      return { ok: true, intakeId, nonce, normalizedContractDigest, channelPath: rendered.channelPath };
+      // A draft recorded after presentation VOIDS the pending confirmation:
+      // the operator confirmed the previous digest, so the rendered channel
+      // is destroyed and a fresh presentation is required.
+      const metaPath = await intakePath(intakeId, ".meta.json");
+      const meta = await readJson<IntakeMeta>(metaPath);
+      if (meta?.nonce !== undefined) {
+        await rm(confirmationPath(meta.nonce), { force: true });
+        const { nonce: _voided, ...rest } = meta;
+        await writeOwned(metaPath, `${JSON.stringify(rest)}\n`);
+      }
+      return { ok: true, draftDigest };
+    },
+
+    async presentDraft({ intakeId, expiry }) {
+      const store = await intakeStoreFor(intakeId);
+      const state = await intakeStateOf(store);
+      if (!("state" in state)) return state;
+      if (state.state !== "awaiting_clarification" && state.state !== "awaiting_confirmation") {
+        return refuse(
+          "wrong_state",
+          `A draft is presented from awaiting_clarification or awaiting_confirmation; intake is in ${state.state}.`,
+          "Record the draft, then present it.",
+        );
+      }
+      const draft = await readJson<unknown>(await intakePath(intakeId, ".draft.json"));
+      if (draft === undefined || state.lastDraftDigest === undefined) {
+        return refuse("draft_missing", "No draft is retained for this intake.", "Record the completed draft contract first.");
+      }
+      const validated = await presentValidation(draft);
+      if (!("policy" in validated)) return validated;
+
+      if (state.state === "awaiting_clarification") {
+        const presentedTransition = await appendIntake(store, intakeId, "intake.state.changed", {
+          from: "awaiting_clarification",
+          to: "awaiting_confirmation",
+        });
+        if (!presentedTransition.ok) return presentedTransition;
+      }
+      return presentForConfirmation(intakeId, validated.contract, validated, expiry);
+    },
+
+    async presentContract({ contract, expiry }) {
+      const validated = await presentValidation(contract);
+      if (!("policy" in validated)) return validated;
+
+      // The direct already-scoped handoff still walks the frozen intake
+      // chain — it bypasses only clarification, never the draft retention,
+      // acceptance validation, or the operator confirmation.
+      const intakeId = `intake-${hex(6)}`;
+      const store = await intakeStoreFor(intakeId);
+      const opened = await appendIntake(store, intakeId, "intake.state.changed", { from: "draft_scope", to: "awaiting_clarification" });
+      if (!opened.ok) return opened;
+      const draftDigest = digestCanonical(contract);
+      const drafted = await appendIntake(store, intakeId, "intake.draft.recorded", { draftDigest });
+      if (!drafted.ok) return drafted;
+      await writeOwned(await intakePath(intakeId, ".draft.json"), `${JSON.stringify(contract)}\n`);
+      const presentedTransition = await appendIntake(store, intakeId, "intake.state.changed", {
+        from: "awaiting_clarification",
+        to: "awaiting_confirmation",
+      });
+      if (!presentedTransition.ok) return presentedTransition;
+
+      const presented = await presentForConfirmation(intakeId, validated.contract, validated, expiry);
+      if (!presented.ok) return presented;
+      return { ok: true, intakeId, nonce: presented.nonce, normalizedContractDigest: presented.normalizedContractDigest, channelPath: presented.channelPath };
     },
 
     async confirmContract({ intakeId, echo }) {
-      const ns = await namespaceDir();
-      const meta = await readJson<{ contract: AcceptedContract; policy: PolicySnapshot; generationDigest: string; nonce: string }>(
-        path.join(ns, "intake", `${intakeId}.meta.json`),
-      );
+      const meta = await readJson<IntakeMeta>(await intakePath(intakeId, ".meta.json"));
       if (meta === undefined) {
         return refuse("intake_unknown", `No presented intake draft ${intakeId}.`, "Present the contract first.");
+      }
+      if (meta.nonce === undefined) {
+        return refuse(
+          "confirmation_void",
+          "No confirmation is pending: the draft mutated after presentation, so the operator's confirmation covered different bytes.",
+          "Present the current draft for a fresh operator confirmation.",
+        );
+      }
+      const store = await intakeStoreFor(intakeId);
+      const state = await intakeStateOf(store);
+      if (!("state" in state)) return state;
+      if (state.state !== "awaiting_confirmation") {
+        return refuse(
+          "wrong_state",
+          `A contract confirmation is consumed in awaiting_confirmation; intake is in ${state.state}.`,
+          state.state === "blocked" ? "Retry acceptance; the consumed confirmation stands over the unchanged draft." : "Present the draft first.",
+        );
       }
       const consumed = await consumeChallenge(meta.nonce, echo);
       if (!("confirmation" in consumed)) return consumed;
 
-      const binding = await registrationBinding({
-        installationPath: input.installation.installationPath,
-        receiptDir: input.installation.receiptDir,
+      // The confirmation is consumed at the EXIT of awaiting_confirmation;
+      // acceptance validation runs AFTER it, and registration completes only
+      // at accepted_contract.
+      const recorded = await appendIntake(store, intakeId, "operator.confirmation.recorded", { confirmation: consumed.confirmation });
+      if (!recorded.ok) return recorded;
+      const validating = await appendIntake(store, intakeId, "intake.state.changed", {
+        from: "awaiting_confirmation",
+        to: "validating_acceptance",
       });
-      if (!binding.ok) {
-        return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+      if (!validating.ok) return validating;
+      return runAcceptance(intakeId, store, meta);
+    },
+
+    async retryAcceptance({ intakeId }) {
+      const meta = await readJson<IntakeMeta>(await intakePath(intakeId, ".meta.json"));
+      if (meta === undefined) {
+        return refuse("intake_unknown", `No presented intake draft ${intakeId}.`, "Present the contract first.");
       }
-      const trust = await readTrust();
-      if (trust === undefined) {
-        return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
-      }
-
-      const intakeStore = createIntakeJournalStore(path.join(ns, "intake", `${intakeId}.jsonl`));
-      const intakeAppend = async (kind: string, payload: Record<string, unknown>, index: number, revision: number) =>
-        intakeStore.append({
-          spec: "journal-entry/1",
-          journal: "intake",
-          subjectId: intakeId,
-          expectedRevision: revision,
-          idempotencyKey: `e${index}-${kind}`,
-          kind,
-          payload,
-        });
-      await intakeAppend("operator.confirmation.recorded", { confirmation: consumed.confirmation }, 2, 2);
-      await intakeAppend("intake.state.changed", { from: "awaiting_confirmation", to: "validating_acceptance" }, 3, 3);
-      await intakeAppend("intake.state.changed", { from: "validating_acceptance", to: "accepted_contract" }, 4, 4);
-
-      const deliveryId = `dlv-${hex(6)}`;
-      const dir = await deliveryDir(deliveryId);
-      const store = await journalStoreFor(deliveryId);
-
-      const registered = await appendEntry(store, deliveryId, "delivery.registered", {
-        contractDigest: digestCanonical(meta.contract),
-        intakeId,
-        confirmationNonce: meta.nonce,
-        activeCompositionProfile: binding.activeCompositionProfile,
-        registeringInstallationId: binding.registeringInstallationId,
-      });
-      if (!registered.ok) return registered;
-      await appendEntry(store, deliveryId, "generation.pinned", {
-        generationDigest: meta.generationDigest,
-        releaseId: PINNED_AGENT_SKILLS.releaseId,
-        profile: binding.activeCompositionProfile,
-      });
-      await appendEntry(store, deliveryId, "policy.snapshot.bound", {
-        policyDigest: meta.policy.policyDigest,
-        repositoryAuthorityEpoch: meta.policy.repositoryAuthorityRevocationEpoch,
-      });
-      await appendEntry(store, deliveryId, "trust.epoch.observed", {
-        productTrustEpoch: trust.revocationEpoch,
-        repositoryAuthorityEpoch: meta.policy.repositoryAuthorityRevocationEpoch,
-      });
-
-      // The trusted-base sensor: copied from the base commit NOW, executed
-      // only from this copy — the candidate's tracked rewrite never governs.
-      const baseRef = meta.contract.repository.baseRef;
-      const shown = await exec.run({
-        command: "git",
-        args: ["show", `${baseRef}:${DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath}`],
-        cwd: input.repoDir,
-      });
-      if (shown.code !== 0) {
+      const store = await intakeStoreFor(intakeId);
+      const state = await intakeStateOf(store);
+      if (!("state" in state)) return state;
+      if (state.state !== "blocked") {
         return refuse(
-          "trusted_sensor_missing",
-          `The trusted pre-run base ${baseRef} carries no ${DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath}.`,
-          "The repository's sensor must exist at the base; candidate-supplied sensors never govern.",
+          "wrong_state",
+          `retryAcceptance re-runs a blocked acceptance preflight; intake is in ${state.state}.`,
+          "Only a blocked validating_acceptance retries without a fresh confirmation.",
         );
       }
-      await writeOwned(path.join(dir, "trusted-sensor.mjs"), shown.stdout);
-      await writeOwned(
-        path.join(dir, "delivery.json"),
-        `${JSON.stringify({ contract: meta.contract, policy: meta.policy, generationDigest: meta.generationDigest, intakeId } satisfies DeliveryMeta)}\n`,
-      );
-
-      // The namespace pointer the host-facing CLI resolves the facade from:
-      // installation paths and host version, in the product namespace, never
-      // in candidate-writable paths.
-      await writeOwned(
-        path.join(ns, "facade.json"),
-        `${JSON.stringify({
-          installationPath: input.installation.installationPath,
-          receiptDir: input.installation.receiptDir,
-          hostVersion: input.hostVersion,
-        })}\n`,
-      );
-
-      const transitioned = await appendEntry(store, deliveryId, "transition.committed", { from: "accepted", to: "preparing" });
-      if (!transitioned.ok) return transitioned;
-      return { ok: true, deliveryId };
+      // The journal guarantees the draft cannot have changed since the
+      // consumed confirmation — a retry over the unchanged draft re-runs
+      // validation under that confirmation; no fresh confirmation is minted.
+      const retried = await appendIntake(store, intakeId, "intake.state.changed", { from: "blocked", to: "validating_acceptance" });
+      if (!retried.ok) return retried;
+      return runAcceptance(intakeId, store, meta);
     },
 
     async bindWorkspace({ deliveryId, worktreeDir, hostTaskId, observedAt, attestationExpiry, observationLifetimeSeconds }) {
@@ -1537,10 +2100,12 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (binding === undefined || binding.stageId !== stageId) {
         return refuse("wrong_stage", `Stage ${stageId} is not the bundled graph's checkpoint for ${guarded.state}.`, "Read `next-checkpoint`.");
       }
+      const loaded = await loadGraph(guarded.generationRoot);
+      if (!("graph" in loaded)) return loaded;
 
+      const current = currentCandidateOf(guarded.views);
       if (stageId === "compound") {
         // No repository mutation may ride the compounding checkpoint.
-        const current = currentCandidateOf(guarded.views);
         const treeSha = (await git(workspace.worktreeDir, "rev-parse", "HEAD^{tree}")).out;
         if (current !== undefined && treeSha !== current.treeSha) {
           const recorded = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "compounding", to: "validating" });
@@ -1549,12 +2114,41 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         }
       }
 
+      // The checkpoint reducer admits only a typed result validated against
+      // the pinned graph, then evaluates the graph-declared prerequisites.
+      const summaries = await retainedSummaries(deliveryId, guarded.views);
+      const processed = processStageResult({
+        resultBytes,
+        graph: loaded.graph,
+        graphSha256: loaded.graphSha256,
+        stageId,
+        deliveryId,
+        ...(current === undefined ? {} : { currentCandidate: current.treeSha }),
+        summaries,
+        productRealized: binding.productRealizedPrerequisites,
+      });
+      if (!("result" in processed)) return processed;
+
+      await writeOwned(persistedResultPath(await deliveryDir(deliveryId), processed.digest), processed.bytes);
       const stage = await appendEntry(guarded.store, deliveryId, "stage.result.recorded", {
         stageId,
         workflowGraphSha256: workspace.workflowGraphSha256,
-        resultDigest: sha256Hex(resultBytes),
+        resultDigest: processed.digest,
       });
       if (!stage.ok) return stage;
+
+      if (processed.result.status !== "succeeded") {
+        // A typed non-success result is persisted, then blocks with its own
+        // actionable next step — it never advances the happy edge.
+        await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+          code: `workflow.stage-${processed.result.status}`,
+          summary: (processed.result.nextStep ?? `the ${stageId} stage reported ${processed.result.status}`).slice(0, 1900),
+        });
+        const blocked = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: guarded.state, to: "blocked" });
+        if (!blocked.ok) return blocked;
+        return { ok: true, state: "blocked" };
+      }
+
       const to: DeliveryState = stageId === "plan" ? "implementing" : "admitting";
       const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: guarded.state, to });
       if (!transitioned.ok) return transitioned;
@@ -1579,6 +2173,31 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const branchRefValue = (await git(workspace.worktreeDir, "rev-parse", `refs/heads/${workspace.branchRef}`)).out;
       const previous = currentCandidateOf(guarded.views);
 
+      // A candidate checkpoints only under a typed `implement` success whose
+      // candidate reference is the INDEPENDENTLY captured tree above — the
+      // released produced-on-success rule; a result cannot nominate its own.
+      const loaded = await loadGraph(guarded.generationRoot);
+      if (!("graph" in loaded)) return loaded;
+      const summaries = await retainedSummaries(deliveryId, guarded.views);
+      const processed = processStageResult({
+        resultBytes,
+        graph: loaded.graph,
+        graphSha256: loaded.graphSha256,
+        stageId: "implement",
+        deliveryId,
+        ...(previous === undefined ? {} : { currentCandidate: previous.treeSha }),
+        producedCandidate: treeSha,
+        summaries,
+      });
+      if (!("result" in processed)) return processed;
+      if (processed.result.status !== "succeeded") {
+        return refuse(
+          "stage_result_rejected",
+          "checkpointCandidate records a PRODUCED candidate; a non-success implement result checkpoints nothing.",
+          "Checkpoint only a produced candidate; a blocked implementation is reported without a checkpoint.",
+        );
+      }
+
       const recaptured = await appendEntry(guarded.store, deliveryId, "candidate.recaptured", { treeSha, branchRefValue });
       if (!recaptured.ok) return recaptured;
       // A candidate change since a pending waiver/amendment proposal voids
@@ -1598,14 +2217,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           });
         }
       }
-      if (guarded.state === "implementing") {
-        const stage = await appendEntry(guarded.store, deliveryId, "stage.result.recorded", {
-          stageId: "implement",
-          workflowGraphSha256: workspace.workflowGraphSha256,
-          resultDigest: sha256Hex(resultBytes),
-        });
-        if (!stage.ok) return stage;
-      }
+      // Every checkpointed revision — first implementation AND each
+      // remediation — records its typed `implement` result: the graph's
+      // produce-or-revise-candidate stage covers both.
+      await writeOwned(persistedResultPath(await deliveryDir(deliveryId), processed.digest), processed.bytes);
+      const stage = await appendEntry(guarded.store, deliveryId, "stage.result.recorded", {
+        stageId: "implement",
+        workflowGraphSha256: workspace.workflowGraphSha256,
+        resultDigest: processed.digest,
+      });
+      if (!stage.ok) return stage;
       const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", {
         from: guarded.state,
         to: "validating",
@@ -1716,16 +2337,107 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         );
       }
 
-      const stage = await appendEntry(guarded.store, deliveryId, "stage.result.recorded", {
+      const loaded = await loadGraph(guarded.generationRoot);
+      if (!("graph" in loaded)) return loaded;
+      const summaries = await retainedSummaries(deliveryId, guarded.views);
+      const dir = await deliveryDir(deliveryId);
+
+      // A repair round follows recorded changes-requested evidence — the
+      // graph's own repair-loop prerequisite, satisfied by the retained
+      // review.reduce summary of the previous round.
+      const repairLoop = summaries.get("review.reduce")?.outputKind === "review-round-changes-requested";
+
+      // The product composes the review stage results itself, but they pass
+      // through the SAME released-contract validation as host-submitted
+      // results — the parity the qualification corpus freezes.
+      const composeReviewResult = (stageId: "review.acquire" | "review.reduce", outputKind: string, evidence: unknown, evidenceRefs: readonly string[]) =>
+        JSON.stringify({
+          schemaVersion: WORKFLOW_STAGE_RESULT_SPEC,
+          release: RELEASE_IDENTITY,
+          graphSha256: loaded.graphSha256,
+          stageId,
+          subjectRef: { schemaVersion: WORKFLOW_SUBJECT_REF_SPEC, opaque: deliveryId },
+          candidateRef: { schemaVersion: WORKFLOW_CANDIDATE_REF_SPEC, opaque: current.treeSha },
+          status: "succeeded",
+          output: { kind: outputKind, evidenceRef: digestCanonical(evidence) },
+          evidenceRefs,
+          limitations: [],
+        });
+
+      const acquisitionBytes = composeReviewResult(
+        "review.acquire",
+        "review-acquisition-envelope",
+        attempts,
+        attempts.map((attempt) => attempt.attemptId),
+      );
+      const processedAcquire = processStageResult({
+        resultBytes: acquisitionBytes,
+        graph: loaded.graph,
+        graphSha256: loaded.graphSha256,
+        stageId: "review.acquire",
+        deliveryId,
+        currentCandidate: current.treeSha,
+        summaries,
+        repairLoop,
+      });
+      if (!("result" in processedAcquire)) return processedAcquire;
+      await writeOwned(persistedResultPath(dir, processedAcquire.digest), processedAcquire.bytes);
+      const acquireStage = await appendEntry(guarded.store, deliveryId, "stage.result.recorded", {
         stageId: "review.acquire",
         workflowGraphSha256: workspace.workflowGraphSha256,
-        resultDigest: digestCanonical(attempts),
+        resultDigest: processedAcquire.digest,
       });
-      if (!stage.ok) return stage;
+      if (!acquireStage.ok) return acquireStage;
 
-      const anyFindings = qualifyReviewAttempts(attempts, current.treeSha).qualified.some(
-        (attempt) => attempt.verdict === "findings",
-      );
+      const qualified = qualifyReviewAttempts(attempts, current.treeSha).qualified;
+      const anyFindings = qualified.some((attempt) => attempt.verdict === "findings");
+      const roundKind = anyFindings ? "review-round-changes-requested" : "review-round-aligned";
+      const reductionBytes = composeReviewResult("review.reduce", roundKind, qualified, []);
+      const reduceSummaries = new Map(summaries);
+      reduceSummaries.set("review.acquire", { status: "succeeded", outputKind: "review-acquisition-envelope" });
+      const processedReduce = processStageResult({
+        resultBytes: reductionBytes,
+        graph: loaded.graph,
+        graphSha256: loaded.graphSha256,
+        stageId: "review.reduce",
+        deliveryId,
+        currentCandidate: current.treeSha,
+        summaries: reduceSummaries,
+      });
+      if (!("result" in processedReduce)) return processedReduce;
+      await writeOwned(persistedResultPath(dir, processedReduce.digest), processedReduce.bytes);
+      const reduceStage = await appendEntry(guarded.store, deliveryId, "stage.result.recorded", {
+        stageId: "review.reduce",
+        workflowGraphSha256: workspace.workflowGraphSha256,
+        resultDigest: processedReduce.digest,
+      });
+      if (!reduceStage.ok) return reduceStage;
+
+      if (anyFindings) {
+        // Review repeats until the selected lenses approve — but bounded: a
+        // findings round beyond the bound records a typed blocker instead of
+        // spinning the loop unobserved.
+        let changesRequestedRounds = 1; // this round
+        for (const view of guarded.views) {
+          if (view.kind !== "stage.result.recorded" || view.payload["stageId"] !== "review.reduce") continue;
+          const persisted = await persistedResultOf(dir, view.payload["resultDigest"] as string);
+          // The JOURNAL records that the round happened; the persisted document
+          // only says which way it went. An unresolvable record therefore
+          // counts — deleting or tampering the persistence must not reset the
+          // bound and reopen an unbounded loop.
+          if (persisted === undefined || persisted.outputKind === "review-round-changes-requested") changesRequestedRounds += 1;
+        }
+        if (changesRequestedRounds > REVIEW_ROUND_BOUND) {
+          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+            code: "review.loop-bound-reached",
+            summary: `review round ${changesRequestedRounds} still requests changes; after ${REVIEW_ROUND_BOUND} findings-driven rounds the loop records a bounded blocker instead of repeating`,
+          });
+          const blocked = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "reviewing", to: "blocked" });
+          if (!blocked.ok) return blocked;
+          return { ok: true, state: "blocked" };
+        }
+      }
+
       const to: DeliveryState = anyFindings ? "remediating" : "compounding";
       const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "reviewing", to });
       if (!transitioned.ok) return transitioned;

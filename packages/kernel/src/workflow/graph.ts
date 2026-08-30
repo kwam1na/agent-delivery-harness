@@ -1,18 +1,23 @@
 /**
- * The workflow module's V-slice: the BUNDLED `workflow-graph/1` document from
- * the exact pinned `agent-skills` release — loaded, digest-verified against
- * the frozen pin, and mapped onto the skeleton's model-driven checkpoints.
- * The graph is pinned, never re-authored: this module rejects bytes that do
- * not hash to the frozen `workflowGraphSha256`, and the checkpoint bindings
- * may name only stages the graph itself declares.
+ * The BUNDLED `workflow-graph/1` document from the exact pinned
+ * `agent-skills` release — loaded, digest-verified against the frozen pin,
+ * parsed into its FULL released shape, and mapped onto the skeleton's
+ * model-driven checkpoints. The graph is pinned, never re-authored: this
+ * module rejects bytes that do not hash to the frozen `workflowGraphSha256`,
+ * and the checkpoint bindings may name only stages the graph itself declares.
  *
- * The mapping is deliberately narrow. Only the delivery states whose next
- * checkpoint is a model-driven WORKFLOW stage carry a binding; sensor runs in
- * `validating` are repository operation results (`operation.result.recorded`),
- * not workflow stages, and the product-owned checkpoints (admission,
- * recording, finish line) have no stage either. Broad stage semantics,
- * retries, and evidence adapters are the workflow unit's hardening — the
- * binding table's shape stays.
+ * Parsing is strict and closed: every stage member the released schema
+ * declares is required, unknown members reject, and the parsed value carries
+ * the whole semantic matrix — prerequisites, statuses, success outputs,
+ * candidate binding, evidence-adapter slots, and edges — so the checkpoint
+ * adapter's result validation and prerequisite evaluation are DRIVEN BY the
+ * released graph rather than re-authoring its semantics in code.
+ *
+ * The checkpoint mapping stays deliberately narrow. Only the delivery states
+ * whose next checkpoint is a model-driven WORKFLOW stage carry a binding;
+ * sensor runs in `validating` are repository operation results
+ * (`operation.result.recorded`), not workflow stages, and the product-owned
+ * checkpoints (admission, recording, finish line) have no stage either.
  */
 import { sha256Hex } from "../digest.ts";
 import { PINNED_AGENT_SKILLS } from "../spine/composition.ts";
@@ -22,11 +27,36 @@ import { readArchiveEntry } from "./archive.ts";
 /** Where the bundled graph lives inside the pinned release archive. */
 export const WORKFLOW_GRAPH_ENTRY = "workflows/delivery-v1.json";
 
+export interface WorkflowPrerequisite {
+  readonly stageId: string;
+  readonly when: string;
+  readonly outputs: readonly string[];
+  readonly allowOmitted: boolean;
+}
+
+export interface WorkflowEdge {
+  readonly to: string;
+  readonly when: string;
+}
+
+export interface WorkflowEvidenceAdapter {
+  readonly requirement: string;
+  readonly ref?: string;
+}
+
 export interface WorkflowStage {
   readonly id: string;
   readonly semanticKind: string;
+  readonly prerequisites: readonly WorkflowPrerequisite[];
   readonly mutationClass: string;
   readonly requiredness: string;
+  readonly candidateBinding: string;
+  readonly requiredInputs: readonly string[];
+  readonly optionalInputs: readonly string[];
+  readonly successOutputs: readonly string[];
+  readonly statuses: readonly string[];
+  readonly evidenceAdapter: WorkflowEvidenceAdapter;
+  readonly edges: readonly WorkflowEdge[];
 }
 
 export interface WorkflowGraph {
@@ -97,25 +127,14 @@ export function loadBundledWorkflowGraph(
   }
   const parsedStages: WorkflowStage[] = [];
   for (const stage of stages) {
-    const entry = typeof stage === "object" && stage !== null ? (stage as Record<string, unknown>) : undefined;
-    if (
-      entry === undefined ||
-      typeof entry["id"] !== "string" ||
-      typeof entry["semanticKind"] !== "string" ||
-      typeof entry["mutationClass"] !== "string" ||
-      typeof entry["requiredness"] !== "string"
-    ) {
+    const parsedStage = parseStage(stage);
+    if (parsedStage === undefined) {
       return {
         ok: false,
         blockers: [{ code: "workflow_graph_malformed", message: "a bundled graph stage is outside its declared shape" }],
       };
     }
-    parsedStages.push({
-      id: entry["id"],
-      semanticKind: entry["semanticKind"],
-      mutationClass: entry["mutationClass"],
-      requiredness: entry["requiredness"],
-    });
+    parsedStages.push(parsedStage);
   }
   return {
     ok: true,
@@ -125,11 +144,122 @@ export function loadBundledWorkflowGraph(
   };
 }
 
+const STAGE_MEMBERS = new Set([
+  "id",
+  "semanticKind",
+  "prerequisites",
+  "mutationClass",
+  "requiredness",
+  "candidateBinding",
+  "requiredInputs",
+  "optionalInputs",
+  "successOutputs",
+  "statuses",
+  "evidenceAdapter",
+  "edges",
+]);
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+
+const stringArrayOf = (value: unknown): readonly string[] | undefined =>
+  Array.isArray(value) && value.every((item) => typeof item === "string") ? (value as string[]) : undefined;
+
+/** One stage, parsed strictly against the released shape; `undefined` on any surprise. */
+function parseStage(value: unknown): WorkflowStage | undefined {
+  const entry = asRecord(value);
+  if (entry === undefined) return undefined;
+  for (const member of Object.keys(entry)) {
+    if (!STAGE_MEMBERS.has(member)) return undefined; // an unknown stage member fails closed
+  }
+  if (
+    typeof entry["id"] !== "string" ||
+    typeof entry["semanticKind"] !== "string" ||
+    typeof entry["mutationClass"] !== "string" ||
+    typeof entry["requiredness"] !== "string" ||
+    typeof entry["candidateBinding"] !== "string"
+  ) {
+    return undefined;
+  }
+  const requiredInputs = stringArrayOf(entry["requiredInputs"]);
+  const optionalInputs = stringArrayOf(entry["optionalInputs"]);
+  const successOutputs = stringArrayOf(entry["successOutputs"]);
+  const statuses = stringArrayOf(entry["statuses"]);
+  if (requiredInputs === undefined || optionalInputs === undefined || successOutputs === undefined || statuses === undefined) {
+    return undefined;
+  }
+
+  const adapterRecord = asRecord(entry["evidenceAdapter"]);
+  if (adapterRecord === undefined || typeof adapterRecord["requirement"] !== "string") return undefined;
+  const adapterRef = adapterRecord["ref"];
+  if (adapterRef !== undefined && typeof adapterRef !== "string") return undefined;
+  const evidenceAdapter: WorkflowEvidenceAdapter = {
+    requirement: adapterRecord["requirement"],
+    ...(adapterRef === undefined ? {} : { ref: adapterRef }),
+  };
+
+  if (!Array.isArray(entry["prerequisites"]) || !Array.isArray(entry["edges"])) return undefined;
+  const prerequisites: WorkflowPrerequisite[] = [];
+  for (const raw of entry["prerequisites"]) {
+    const prerequisite = asRecord(raw);
+    const outputs = stringArrayOf(prerequisite?.["outputs"]);
+    if (
+      prerequisite === undefined ||
+      typeof prerequisite["stageId"] !== "string" ||
+      typeof prerequisite["when"] !== "string" ||
+      outputs === undefined ||
+      typeof prerequisite["allowOmitted"] !== "boolean"
+    ) {
+      return undefined;
+    }
+    prerequisites.push({
+      stageId: prerequisite["stageId"],
+      when: prerequisite["when"],
+      outputs,
+      allowOmitted: prerequisite["allowOmitted"],
+    });
+  }
+  const edges: WorkflowEdge[] = [];
+  for (const raw of entry["edges"]) {
+    const edge = asRecord(raw);
+    if (edge === undefined || typeof edge["to"] !== "string" || typeof edge["when"] !== "string") return undefined;
+    edges.push({ to: edge["to"], when: edge["when"] });
+  }
+
+  return {
+    id: entry["id"],
+    semanticKind: entry["semanticKind"],
+    prerequisites,
+    mutationClass: entry["mutationClass"],
+    requiredness: entry["requiredness"],
+    candidateBinding: entry["candidateBinding"],
+    requiredInputs,
+    optionalInputs,
+    successOutputs,
+    statuses,
+    evidenceAdapter,
+    edges,
+  };
+}
+
+/** The graph's declared stage with the given id, when it declares one. */
+export function workflowStageOf(graph: WorkflowGraph, stageId: string): WorkflowStage | undefined {
+  return graph.stages.find((stage) => stage.id === stageId);
+}
+
 export interface WorkflowCheckpointBinding {
   /** The delivery state whose next model-driven checkpoint this is. */
   readonly deliveryState: DeliveryState;
   /** A stage id the bundled graph declares. */
   readonly stageId: string;
+  /**
+   * Graph-declared `always` prerequisites of this stage that the frozen
+   * delivery matrix realizes through LATER product-owned checkpoints rather
+   * than through an earlier stage result. Prerequisite evaluation skips
+   * exactly these; the graph sensor pins each name to a prerequisite the
+   * graph actually declares, so a released graph change surfaces here.
+   */
+  readonly productRealizedPrerequisites: readonly string[];
 }
 
 /**
@@ -137,13 +267,20 @@ export interface WorkflowCheckpointBinding {
  * graph's own stage names. `remediating` deliberately re-enters `implement` —
  * the graph's produce-or-revise-candidate stage — and `reviewing` binds the
  * lens-evidence acquisition stage.
+ *
+ * `compound` declares `finish.verify` as a prerequisite, but the frozen
+ * delivery matrix orders compounding BEFORE admission/recording/finish-line
+ * (`compounding -> admitting -> recording -> ready -> completed`), and the
+ * finish-line evidence is enforced by those product-owned checkpoints — a
+ * delivery cannot complete without it. The binding records that realization
+ * explicitly instead of inventing a stage result the runtime never saw.
  */
 export const WORKFLOW_CHECKPOINT_BINDINGS: readonly WorkflowCheckpointBinding[] = Object.freeze([
-  { deliveryState: "planning", stageId: "plan" },
-  { deliveryState: "implementing", stageId: "implement" },
-  { deliveryState: "remediating", stageId: "implement" },
-  { deliveryState: "reviewing", stageId: "review.acquire" },
-  { deliveryState: "compounding", stageId: "compound" },
+  { deliveryState: "planning", stageId: "plan", productRealizedPrerequisites: [] },
+  { deliveryState: "implementing", stageId: "implement", productRealizedPrerequisites: [] },
+  { deliveryState: "remediating", stageId: "implement", productRealizedPrerequisites: [] },
+  { deliveryState: "reviewing", stageId: "review.acquire", productRealizedPrerequisites: [] },
+  { deliveryState: "compounding", stageId: "compound", productRealizedPrerequisites: ["finish.verify"] },
 ] as const);
 
 export function workflowStageBindingFor(state: DeliveryState): WorkflowCheckpointBinding | undefined {

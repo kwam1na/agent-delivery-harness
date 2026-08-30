@@ -50,6 +50,7 @@ import {
   GREET_WRONG,
   buildDisposableRepository,
   disposableHarnessConfig,
+  typedStageResultBytes,
 } from "./disposable-repository.fixture.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +87,8 @@ const commitAll = (cwd: string, message: string): void => {
   git(cwd, "add", "-A");
   git(cwd, "commit", "--quiet", "--no-gpg-sign", "-m", message);
 };
+
+const treeOf = (worktree: string): string => git(worktree, "rev-parse", "HEAD^{tree}");
 
 /** The operator side of the fixture confirmation channel. */
 const operatorEcho = (channelPath: string, observedAt = NOW): ConfirmationEchoAttempt => {
@@ -221,7 +224,12 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Plan checkpoint ──
     const statusPlanning = await facade.status({ deliveryId, observedAt: LATER });
     expect(statusPlanning.ok && statusPlanning.state === "planning" && statusPlanning.activity === "active").toBe(true);
-    const planned = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "bounded plan: add src/greet.mjs returning the contracted greeting", fence: bound.fence });
+    const planned = await facade.submitStageResult({
+      deliveryId,
+      stageId: "plan",
+      resultBytes: typedStageResultBytes({ stageId: "plan", deliveryId, outputKind: "bounded-plan", candidate: treeOf(worktreeA) }),
+      fence: bound.fence,
+    });
     expect(planned.ok && planned.state === "implementing").toBe(true);
 
     // ── Interruption after an intermediate checkpoint (Tier 2) ──
@@ -295,7 +303,11 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Implement: PLANTED DEFECT first ──
     writeFileSync(path.join(worktreeB, "src", "greet.mjs"), GREET_WRONG);
     commitAll(worktreeB, "implement the greeting (planted defect)");
-    const checkpointed = await facade.checkpointCandidate({ deliveryId, resultBytes: "implemented src/greet.mjs", fence: rebound.fence });
+    const checkpointed = await facade.checkpointCandidate({
+      deliveryId,
+      resultBytes: typedStageResultBytes({ stageId: "implement", deliveryId, outputKind: "delivery-candidate", candidate: treeOf(worktreeB) }),
+      fence: rebound.fence,
+    });
     expect(checkpointed.ok && checkpointed.state === "validating").toBe(true);
 
     // The trusted sensor catches the planted defect: validation -> remediation.
@@ -308,7 +320,11 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Candidate rewrites its sensor; the TRUSTED-BASE copy governs ──
     writeFileSync(path.join(worktreeB, "tools", "sensor.mjs"), "process.exit(0);\n");
     commitAll(worktreeB, "candidate rewrites its own sensor to always pass");
-    const rewritten = await facade.checkpointCandidate({ deliveryId, resultBytes: "sensor rewritten", fence: rebound.fence });
+    const rewritten = await facade.checkpointCandidate({
+      deliveryId,
+      resultBytes: typedStageResultBytes({ stageId: "implement", deliveryId, outputKind: "delivery-candidate", candidate: treeOf(worktreeB) }),
+      fence: rebound.fence,
+    });
     expect(rewritten.ok && rewritten.state === "validating").toBe(true);
     const governed = await facade.runSensor({ deliveryId, fence: rebound.fence });
     expect(governed.ok, JSON.stringify(governed)).toBe(true);
@@ -320,7 +336,11 @@ describe("the thin one-handoff walking skeleton", () => {
     writeFileSync(path.join(worktreeB, "src", "greet.mjs"), GREET_RIGHT);
     git(worktreeB, "checkout", "main", "--", "tools/sensor.mjs");
     commitAll(worktreeB, "remediate: contracted greeting, sensor restored");
-    const remediated = await facade.checkpointCandidate({ deliveryId, resultBytes: "remediated", fence: rebound.fence });
+    const remediated = await facade.checkpointCandidate({
+      deliveryId,
+      resultBytes: typedStageResultBytes({ stageId: "implement", deliveryId, outputKind: "delivery-candidate", candidate: treeOf(worktreeB) }),
+      fence: rebound.fence,
+    });
     expect(remediated.ok && remediated.state === "validating").toBe(true);
     const greenSensor = await facade.runSensor({ deliveryId, fence: rebound.fence });
     expect(greenSensor.ok, JSON.stringify(greenSensor)).toBe(true);
@@ -352,7 +372,11 @@ describe("the thin one-handoff walking skeleton", () => {
 
     writeFileSync(path.join(worktreeB, "src", "greet.mjs"), `/** The contracted greeting. */\n${GREET_RIGHT}`);
     commitAll(worktreeB, "address the review finding");
-    const reReviewed = await facade.checkpointCandidate({ deliveryId, resultBytes: "review finding addressed", fence: rebound.fence });
+    const reReviewed = await facade.checkpointCandidate({
+      deliveryId,
+      resultBytes: typedStageResultBytes({ stageId: "implement", deliveryId, outputKind: "delivery-candidate", candidate: treeOf(worktreeB) }),
+      fence: rebound.fence,
+    });
     expect(reReviewed.ok && reReviewed.state === "validating").toBe(true);
     const green2 = await facade.runSensor({ deliveryId, fence: rebound.fence });
     expect(green2.ok, JSON.stringify(green2)).toBe(true);
@@ -415,7 +439,12 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(round2.state).toBe("compounding");
 
     // ── Compound (no repository mutation) -> admission ──
-    const compounded = await facade.submitStageResult({ deliveryId, stageId: "compound", resultBytes: "no durable learning; fixtures already carry the scenario", fence: rebound.fence });
+    const compounded = await facade.submitStageResult({
+      deliveryId,
+      stageId: "compound",
+      resultBytes: typedStageResultBytes({ stageId: "compound", deliveryId, outputKind: "no-reusable-learning", candidate: treeOf(worktreeB) }),
+      fence: rebound.fence,
+    });
     expect(compounded.ok && compounded.state === "admitting").toBe(true);
 
     // ── Admission through the EXISTING harness boundary ──

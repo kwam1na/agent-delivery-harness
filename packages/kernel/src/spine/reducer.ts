@@ -375,6 +375,10 @@ export interface IntakeJournalState {
   readonly state: IntakeState;
   readonly expectedRevision: number;
   readonly contractConfirmed: boolean;
+  /** How many clarification exchanges the scope workflow has retained. */
+  readonly clarificationCount: number;
+  /** The digest of the most recently retained draft, when one is retained. */
+  readonly lastDraftDigest?: string;
 }
 
 export type ReduceIntakeResult =
@@ -388,6 +392,8 @@ export function reduceIntakeJournal(entries: readonly unknown[]): ReduceIntakeRe
   let state: IntakeState = "draft_scope";
   let expectedRevision = 0;
   let contractConfirmed = false;
+  let clarificationCount = 0;
+  let lastDraftDigest: string | undefined;
   const idempotencyKeys = new Set<string>();
 
   entries.forEach((value, index) => {
@@ -456,7 +462,46 @@ export function reduceIntakeJournal(entries: readonly unknown[]): ReduceIntakeRe
         collector.emit("subject_mismatch", `${at}/payload/confirmation/intakeDraftId`, "the confirmation binds a different intake draft");
         return;
       }
+      // The confirmation binds the EXACT digest presented to the operator; a
+      // draft retained since presentation carries a different digest, so the
+      // pending confirmation is void — the reducer half of "a draft mutated
+      // after presentation voids the pending confirmation".
+      if (
+        isSpineRecord(confirmation) &&
+        lastDraftDigest !== undefined &&
+        typeof confirmation["normalizedContractDigest"] === "string" &&
+        confirmation["normalizedContractDigest"] !== lastDraftDigest
+      ) {
+        collector.emit(
+          "digest_mismatch",
+          `${at}/payload/confirmation/normalizedContractDigest`,
+          "the confirmation binds a digest other than the retained draft's; a draft mutated after presentation voids the pending confirmation",
+        );
+        return;
+      }
       contractConfirmed = true;
+    }
+    if (kind === "intake.clarification.recorded") {
+      // Clarification exchanges belong to the scope workflow's iteration —
+      // the awaiting_clarification discriminator the spine froze.
+      if (state !== "awaiting_clarification") {
+        collector.emit("invalid_transition", at, `a clarification is retained in awaiting_clarification; intake is in ${state}`);
+        return;
+      }
+      clarificationCount += 1;
+    }
+    if (kind === "intake.draft.recorded") {
+      // A draft may be retained while scoping (draft_scope,
+      // awaiting_clarification) and after presentation (awaiting_confirmation
+      // — where it voids the pending confirmation via the digest rule above).
+      // After consumption the chain moves through validating_acceptance;
+      // mutating the draft there is a facade-mediated return to
+      // awaiting_confirmation, never a bare append.
+      if (state !== "draft_scope" && state !== "awaiting_clarification" && state !== "awaiting_confirmation") {
+        collector.emit("invalid_transition", at, `a draft is retained before acceptance validation begins; intake is in ${state}`);
+        return;
+      }
+      lastDraftDigest = payload["draftDigest"] as string;
     }
 
     idempotencyKeys.add(idempotencyKey);
@@ -468,5 +513,15 @@ export function reduceIntakeJournal(entries: readonly unknown[]): ReduceIntakeRe
   if (intakeId === undefined) {
     return { ok: false, rejections: [{ code: "registration_missing", pointer: "", message: "an empty intake journal names no draft" }] };
   }
-  return { ok: true, state: { intakeId, state, expectedRevision, contractConfirmed } };
+  return {
+    ok: true,
+    state: {
+      intakeId,
+      state,
+      expectedRevision,
+      contractConfirmed,
+      clarificationCount,
+      ...(lastDraftDigest === undefined ? {} : { lastDraftDigest }),
+    },
+  };
 }

@@ -295,6 +295,17 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
     { name: "to", check: oneOf(INTAKE_STATES) },
   ]),
   "intake/operator.confirmation.recorded": confirmationPayload("contract-confirmation"),
+  // The iterative-intake payload family, frozen by its owning unit. A
+  // clarification is one question-and-answer exchange of the product-owned
+  // scope workflow; a draft record retains the current draft contract by
+  // digest (the bytes live in the intake namespace; the journal is the audit
+  // rail and digest binding). The reducer gates both to the intake states the
+  // spine froze as discriminators.
+  "intake/intake.clarification.recorded": table([
+    { name: "question", check: boundedText },
+    { name: "answer", check: boundedText },
+  ]),
+  "intake/intake.draft.recorded": table([{ name: "draftDigest", check: sha256 }]),
   "delivery/delivery.registered": table([
     { name: "contractDigest", check: sha256 },
     { name: "intakeId", check: spineId },
