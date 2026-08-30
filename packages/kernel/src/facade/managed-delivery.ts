@@ -1315,6 +1315,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   interface AcceptancePreflight {
     readonly binding: { readonly registeringInstallationId: string; readonly activeCompositionProfile: string };
     readonly sensorBytes: string;
+    /** Read HERE, not after the terminal transition: see the preflight's contract below. */
+    readonly trust: ProductTrustState;
   }
 
   /**
@@ -1323,6 +1325,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
    * presentation and consumption (trust state, installation resolution, the
    * trusted-base sensor), so a failure blocks with the consumed confirmation
    * intact and `retryAcceptance` re-runs it over the unchanged draft.
+   *
+   * EVERY value that can drift is read HERE, and the preflight carries them
+   * forward. Registration runs after the terminal `accepted_contract`
+   * transition, where the intake journal accepts no further entries — so a
+   * validation-class refusal raised there would be unrecoverable, spending
+   * the operator's single confirmation. Blocking is retryable; that is the
+   * whole point of the ordering.
    */
   const acceptancePreflight = async (meta: IntakeMeta): Promise<AcceptancePreflight | FacadeFailure> => {
     const contractVerdict = validateAcceptedContract(meta.contract);
@@ -1339,6 +1348,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     });
     if (!binding.ok) {
       return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+    }
+    const trust = await readTrust();
+    if (trust === undefined) {
+      return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
     }
     const generation = await loadPinnedGeneration({
       installationPath: input.installation.installationPath,
@@ -1373,7 +1386,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         "The repository's sensor must exist at the base; candidate-supplied sensors never govern.",
       );
     }
-    return { binding, sensorBytes: shown.stdout };
+    return { binding, sensorBytes: shown.stdout, trust };
   };
 
   /** Registration at accepted_contract: facade-side, outside intake's capability set. */
@@ -1382,10 +1395,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     meta: IntakeMeta,
     preflight: AcceptancePreflight,
   ): Promise<{ readonly ok: true; readonly deliveryId: string } | FacadeFailure> => {
-    const trust = await readTrust();
-    if (trust === undefined) {
-      return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
-    }
+    // Trust state was read by the preflight, BEFORE the terminal transition —
+    // re-reading it here could only produce an unrecoverable refusal.
+    const trust = preflight.trust;
     if (meta.nonce === undefined) {
       return refuse("confirmation_void", "No consumed confirmation is bound to this intake draft.", "Present the draft and complete the operator confirmation first.");
     }
@@ -2409,7 +2421,11 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         for (const view of guarded.views) {
           if (view.kind !== "stage.result.recorded" || view.payload["stageId"] !== "review.reduce") continue;
           const persisted = await persistedResultOf(dir, view.payload["resultDigest"] as string);
-          if (persisted?.outputKind === "review-round-changes-requested") changesRequestedRounds += 1;
+          // The JOURNAL records that the round happened; the persisted document
+          // only says which way it went. An unresolvable record therefore
+          // counts — deleting or tampering the persistence must not reset the
+          // bound and reopen an unbounded loop.
+          if (persisted === undefined || persisted.outputKind === "review-round-changes-requested") changesRequestedRounds += 1;
         }
         if (changesRequestedRounds > REVIEW_ROUND_BOUND) {
           await appendEntry(guarded.store, deliveryId, "blocker.recorded", {

@@ -26,7 +26,7 @@
  * `proceed-without-tracker`, and no tracker transport exists to launch.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -544,6 +544,76 @@ describe("the typed checkpoint reducer", () => {
 
     const entries = await deliveryEntriesOf(loopDeliveryId);
     const blocker = entries.filter((entry) => entry.kind === "blocker.recorded").at(-1);
+    expect(blocker?.payload["code"]).toBe("review.loop-bound-reached");
+  });
+
+  it("counts a round whose persisted result was deleted — the journal, not the persistence, bounds the loop", { timeout: 300_000 }, async () => {
+    // The bound must not be resettable by removing persisted documents: the
+    // journal records THAT a round happened, so an unresolvable record counts.
+    const deletedDeliveryId = await registerViaFallback("contract-bounded-loop-deleted-1");
+    const bound = await bindFreshWorktree(deletedDeliveryId);
+    const planned = await facade.submitStageResult({
+      deliveryId: deletedDeliveryId,
+      stageId: "plan",
+      resultBytes: typedStageResultBytes({
+        stageId: "plan",
+        deliveryId: deletedDeliveryId,
+        outputKind: "bounded-plan",
+        candidate: treeOf(bound.worktree),
+      }),
+      fence: bound.fence,
+    });
+    expect(planned.ok, JSON.stringify(planned)).toBe(true);
+
+    const namespace = await facade.namespaceDir();
+    const runRound = async (round: number): Promise<string | undefined> => {
+      writeFileSync(path.join(bound.worktree, "src", "greet.mjs"), `// deleted-persistence round ${round}\n${GREET_RIGHT}`);
+      commitAll(bound.worktree, `deleted-persistence round ${round}`);
+      const checkpointed = await facade.checkpointCandidate({
+        deliveryId: deletedDeliveryId,
+        resultBytes: typedStageResultBytes({
+          stageId: "implement",
+          deliveryId: deletedDeliveryId,
+          outputKind: "delivery-candidate",
+          candidate: treeOf(bound.worktree),
+        }),
+        fence: bound.fence,
+      });
+      expect(checkpointed.ok, JSON.stringify(checkpointed)).toBe(true);
+      const sensed = await facade.runSensor({ deliveryId: deletedDeliveryId, fence: bound.fence });
+      expect(sensed.ok, JSON.stringify(sensed)).toBe(true);
+      for (const [lensId, tag, verdict] of [
+        ["lens.outcome-correctness", "outcome", "findings"],
+        ["lens.testing-policy", "testing", "approved"],
+      ] as const) {
+        await facade.submitReviewAttempt({
+          deliveryId: deletedDeliveryId,
+          attemptId: `deleted-r${round}-${tag}`,
+          lensId,
+          verdict,
+          contextBytes: `${tag} lens context, deleted-persistence round ${round}`,
+          artifactBytes: `${verdict} in round ${round}`,
+          fence: bound.fence,
+        });
+      }
+      const reduced = await facade.reduceReview({ deliveryId: deletedDeliveryId, fence: bound.fence });
+      expect(reduced.ok, JSON.stringify(reduced)).toBe(true);
+      return reduced.ok ? reduced.state : undefined;
+    };
+
+    for (let round = 1; round <= 3; round += 1) {
+      expect(await runRound(round), `round ${round}`).toBe("remediating");
+      // Delete every persisted review.reduce document before the next round.
+      for (const entry of await deliveryEntriesOf(deletedDeliveryId)) {
+        if (entry.kind !== "stage.result.recorded" || entry.payload["stageId"] !== "review.reduce") continue;
+        rmSync(path.join(namespace, "deliveries", deletedDeliveryId, "results", `${entry.payload["resultDigest"] as string}.json`), {
+          force: true,
+        });
+      }
+    }
+    // The bound still bites: the journal entries were never removable.
+    expect(await runRound(4)).toBe("blocked");
+    const blocker = (await deliveryEntriesOf(deletedDeliveryId)).filter((entry) => entry.kind === "blocker.recorded").at(-1);
     expect(blocker?.payload["code"]).toBe("review.loop-bound-reached");
   });
 });

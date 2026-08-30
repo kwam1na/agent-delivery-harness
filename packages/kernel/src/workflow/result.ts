@@ -148,7 +148,10 @@ export function validateWorkflowStageResult(value: unknown, context: StageResult
   } else {
     const expected: Record<string, string> = { ...context.release };
     for (const member of Object.keys(release)) {
-      if (!(member in expected)) reject("result_malformed", `/release/${member}`, "member is not part of the release projection");
+      // `hasOwn`, never `in`: prototype-named members ("constructor",
+      // "toString", "__proto__") are strangers to the release projection and
+      // must reject like any other unknown member.
+      if (!Object.hasOwn(expected, member)) reject("result_malformed", `/release/${member}`, "member is not part of the release projection");
     }
     for (const [member, expectation] of Object.entries(expected)) {
       if (release[member] !== expectation) {
