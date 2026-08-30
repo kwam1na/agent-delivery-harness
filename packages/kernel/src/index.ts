@@ -720,3 +720,9 @@ export {
   type ManagedDeliveryFacade,
   type ManagedInstallation,
 } from "./facade/managed-delivery.ts";
+export {
+  evaluateMigrationConsumption,
+  type MigrationConsumptionContext,
+  type MigrationConsumptionVerdict,
+  type MigrationRefusal,
+} from "./facade/migration.ts";

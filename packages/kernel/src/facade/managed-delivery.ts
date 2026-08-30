@@ -84,7 +84,16 @@ import { checkContractWithinPolicy, validateAcceptedContract, type AcceptedContr
 import { validateSensorResult } from "../spine/capability.ts";
 import type { PolicySnapshot } from "../spine/policy.ts";
 import type { DeliveryState } from "../spine/vocabulary.ts";
-import { loadPinnedGeneration, registrationBinding, resolveActiveGeneration, trustStorePathFor } from "../substrate/installer.ts";
+import {
+  assertionSourceForKind,
+  loadPinnedGeneration,
+  registrationBinding,
+  resolveActiveGeneration,
+  trustStorePathFor,
+} from "../substrate/installer.ts";
+import { loadAssertionProviderConfig, type AssertionSourcePort } from "../substrate/assertion-source.ts";
+import { SECURITY_BLOCKED_MIGRATION_ACTION } from "../spine/assertion.ts";
+import { evaluateMigrationConsumption } from "./migration.ts";
 import { parseTrustState } from "../substrate/trust-store.ts";
 import { loadBundledWorkflowGraph, workflowStageBindingFor } from "../workflow/graph.ts";
 
@@ -222,6 +231,45 @@ function currentCandidateOf(views: readonly JournalEntryView[]): CurrentCandidat
   return undefined;
 }
 
+interface RecordedRegistrationBinding {
+  readonly registeringInstallationId: string;
+  readonly activeCompositionProfile: string;
+}
+
+/**
+ * The delivery's registration binding as CURRENTLY recorded: the identity
+ * minted at registration, replaced by each consumed rebinding migration —
+ * the recheck resolves the latest recorded binding, never only the original.
+ */
+function recordedBindingOf(views: readonly JournalEntryView[]): RecordedRegistrationBinding | undefined {
+  const registered = views.find((view) => view.kind === "delivery.registered");
+  if (registered === undefined) return undefined;
+  let registeringInstallationId = registered.payload["registeringInstallationId"] as string;
+  const activeCompositionProfile = registered.payload["activeCompositionProfile"] as string;
+  for (const view of views) {
+    if (view.kind !== "approval.assertion.consumed") continue;
+    const rebound = view.payload["newRegisteringInstallationId"];
+    if (typeof rebound === "string" && rebound !== "absent-by-state") {
+      registeringInstallationId = rebound;
+    }
+  }
+  return { registeringInstallationId, activeCompositionProfile };
+}
+
+/** Every assertion nonce this delivery journal has consumed. */
+function consumedAssertionNoncesOf(views: readonly JournalEntryView[]): Set<string> {
+  const nonces = new Set<string>();
+  for (const view of views) {
+    if (view.kind !== "approval.assertion.consumed") continue;
+    const assertion = view.payload["assertion"];
+    if (typeof assertion === "object" && assertion !== null) {
+      const nonce = (assertion as Record<string, unknown>)["nonce"];
+      if (typeof nonce === "string") nonces.add(nonce);
+    }
+  }
+  return nonces;
+}
+
 function sensorResultsOf(views: readonly JournalEntryView[]): RecordedSensorResult[] {
   return views
     .filter((view) => view.kind === "operation.result.recorded")
@@ -354,6 +402,29 @@ export interface ManagedDeliveryFacade {
 
   explainBlocker(input: { readonly deliveryId: string }): Promise<
     { readonly ok: true; readonly blocker: { readonly code: string; readonly summary: string; readonly remediation: string } | undefined } | FacadeFailure
+  >;
+
+  /**
+   * The maintenance-lane exit from `security_blocked`. Always: current local
+   * trust state, full re-preparation, and invalidation of revoked-era
+   * candidate-bound evidence. When the generation changed or the delivery is
+   * being rebound to a different registering installation, additionally
+   * consumes the security-blocked migration assertion — without re-fencing.
+   */
+  recoverSecurityBlocked(input: {
+    readonly deliveryId: string;
+    /** Defaults to the delivery's recorded generation pin. */
+    readonly targetGenerationDigest?: string;
+    readonly assertionSource?: AssertionSourcePort;
+    /** The consumption instant; the facade never consults a clock itself. */
+    readonly now: string;
+  }): Promise<
+    | {
+        readonly ok: true;
+        readonly mode: "re-preparation" | "generation-change-migration" | "rebinding-migration";
+        readonly state: DeliveryState;
+      }
+    | FacadeFailure
   >;
 }
 
@@ -561,17 +632,19 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
 
       // Registering installation and active profile are canonical recheck
       // values: a different installation's trust state can never serve this
-      // delivery.
-      const registered = lastOf(views, "delivery.registered");
+      // delivery. The recheck resolves the LATEST recorded binding, so a
+      // consumed rebinding migration moves service to the new installation
+      // and away from the old one.
+      const recordedBinding = recordedBindingOf(views);
       const binding = await registrationBinding({
         installationPath: input.installation.installationPath,
         receiptDir: input.installation.receiptDir,
       });
       if (
         !binding.ok ||
-        registered === undefined ||
-        binding.registeringInstallationId !== registered.payload["registeringInstallationId"] ||
-        binding.activeCompositionProfile !== registered.payload["activeCompositionProfile"]
+        recordedBinding === undefined ||
+        binding.registeringInstallationId !== recordedBinding.registeringInstallationId ||
+        binding.activeCompositionProfile !== recordedBinding.activeCompositionProfile
       ) {
         if (reduced.state.state !== "security_blocked") {
           await recordBlockerAndTransition(
@@ -587,6 +660,21 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           "installation_mismatch",
           "This delivery is bound to a different registering installation or profile.",
           "Rebinding a delivery is an explicit migration, not an ambient adoption.",
+        );
+      }
+
+      // The qualification profile's use-time binding: a fixture installation
+      // advances deliveries only in its receipt-listed disposable
+      // repositories. The receipt is the ONLY source of eligibility;
+      // repository content can never make itself eligible.
+      if (
+        binding.activeCompositionProfile === "confirmation-fixture" &&
+        !(binding.disposableRepositoryIds ?? []).includes(meta.contract.repository.repositoryId)
+      ) {
+        return refuse(
+          "disposable_repository_refused",
+          "A qualification installation serves only its receipt-listed disposable repositories; this repository is not listed.",
+          "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
         );
       }
 
@@ -780,6 +868,28 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const trust = await readTrust();
       if (trust === undefined) {
         return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
+      }
+
+      // The qualification profile's use-time binding at registration: a
+      // fixture installation registers deliveries only in its receipt-listed
+      // disposable repositories, and only the receipt decides — a
+      // candidate-written marker makes nothing eligible.
+      const registration = await registrationBinding({
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+      });
+      if (!registration.ok) {
+        return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+      }
+      if (
+        registration.activeCompositionProfile === "confirmation-fixture" &&
+        !(registration.disposableRepositoryIds ?? []).includes(contract.repository.repositoryId)
+      ) {
+        return refuse(
+          "disposable_repository_refused",
+          "A qualification installation registers deliveries only in its receipt-listed disposable repositories; this repository is not listed.",
+          "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
+        );
       }
 
       const policy = compileDisposablePolicy({
@@ -1832,6 +1942,191 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
               ? "Complete both mandatory review lenses on the exact candidate, then re-admit."
               : "Read the summary; the journal carries the full typed record.";
       return { ok: true, blocker: { code, summary: blocker.payload["summary"] as string, remediation } };
+    },
+
+    async recoverSecurityBlocked({ deliveryId, targetGenerationDigest, assertionSource, now }) {
+      const dir = await deliveryDir(deliveryId);
+      const meta = await readJson<DeliveryMeta>(path.join(dir, "delivery.json"));
+      if (meta === undefined) {
+        return refuse("unknown_delivery", `No registered delivery ${deliveryId}.`, "Register a delivery through the contract handoff first.");
+      }
+      const store = await journalStoreFor(deliveryId);
+      const reduced = await store.state();
+      const read = await store.read();
+      if (!reduced.ok || !read.ok) {
+        return refuse("journal_rejected", "The durable journal does not reduce.", "Inspect the durable journal file.");
+      }
+      if (reduced.state.state !== "security_blocked") {
+        return refuse(
+          "wrong_state",
+          `Leaving security_blocked is a maintenance-lane operation; the delivery is in ${reduced.state.state}.`,
+          "Read `status` for the next valid checkpoint.",
+        );
+      }
+      const views = viewsOf(read.entries);
+      const recorded = recordedBindingOf(views);
+      const recordedPin = reduced.state.generationDigest;
+      if (recorded === undefined || recordedPin === undefined) {
+        return refuse("unregistered", "The delivery has no recorded registration binding or generation pin.", "Register the delivery first.");
+      }
+      const binding = await registrationBinding({
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+      });
+      if (!binding.ok) {
+        return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+      }
+      const trust = await readTrust();
+      if (trust === undefined) {
+        return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
+      }
+
+      const target = targetGenerationDigest ?? recordedPin;
+      const rebinding = binding.registeringInstallationId !== recorded.registeringInstallationId;
+      const generationChange = target !== recordedPin;
+      const mode = rebinding ? "rebinding-migration" : generationChange ? "generation-change-migration" : "re-preparation";
+
+      if (mode === "re-preparation") {
+        // Leaving security_blocked always requires CURRENT local trust
+        // state: the recorded pin must be execution-eligible again (for
+        // example after an explicit un-revocation).
+        const load = await loadPinnedGeneration({
+          installationPath: input.installation.installationPath,
+          generationDigest: recordedPin,
+        });
+        if (!load.ok) {
+          return refuse(
+            "trust_ineligible",
+            "The recorded generation pin is not execution-eligible under current local trust state.",
+            "Restore trust through the operator maintenance lane, or migrate to an accepted generation.",
+          );
+        }
+      } else {
+        // The migration lane: one fresh interactive evaluation from the
+        // installation's configured assertion source, consumed against the
+        // exact bindings — and never a new invocation fence.
+        const config = await loadAssertionProviderConfig(input.installation.installationPath);
+        if (!config.ok) {
+          return refuse(
+            "assertion_source_unavailable",
+            "The assertion provider configuration is absent or corrupt; sensitive operations fail closed.",
+            "An operator-performed installer repair re-establishes the assertion source.",
+          );
+        }
+        const source = assertionSource ?? assertionSourceForKind(config.config.sourceKind);
+        const availability = await source.probe();
+        if (!availability.available) {
+          return refuse(
+            "assertion_source_unavailable",
+            `The configured assertion source is unavailable: ${availability.detail}`,
+            "An operator-performed installer repair re-establishes the assertion source.",
+          );
+        }
+        const evaluation = await source.evaluate({
+          action: SECURITY_BLOCKED_MIGRATION_ACTION,
+          disclosure: `Approve security-blocked migration of delivery ${deliveryId} at journal revision ${reduced.state.expectedRevision} to generation ${target} on installation ${binding.registeringInstallationId}`,
+        });
+        if (!evaluation.ok) {
+          return refuse("assertion_refused", `The interactive evaluation was not granted: ${evaluation.reason}`, "The operator declined; the delivery remains security_blocked.");
+        }
+        const assertion: Record<string, unknown> = {
+          spec: "sensitive-approval-assertion/1",
+          assertionClass: "security-blocked-migration",
+          origin: "managed-delivery.facade",
+          action: SECURITY_BLOCKED_MIGRATION_ACTION,
+          expiry: evaluation.expiry,
+          nonce: evaluation.nonce,
+          assertionSource: evaluation.sourceKind,
+          productTrustRevocationEpoch: trust.revocationEpoch,
+          repositoryAuthorityRevocationEpoch: "absent-by-state",
+          deliveryId,
+          candidateTreeSha: "absent-by-state",
+          policyDigest: "absent-by-state",
+          invocationFence: "absent-by-state",
+          targetInstallationId: binding.registeringInstallationId,
+          targetGenerationDigest: target,
+          targetHighWaterMark: "absent-by-state",
+          expectedJournalRevision: reduced.state.expectedRevision,
+        };
+        const consumption = evaluateMigrationConsumption(assertion, {
+          deliveryId,
+          expectedJournalRevision: reduced.state.expectedRevision,
+          currentInstallationId: binding.registeringInstallationId,
+          currentProfile: binding.activeCompositionProfile,
+          recordedInstallationId: recorded.registeringInstallationId,
+          recordedProfile: recorded.activeCompositionProfile,
+          trustState: trust,
+          consumedNonces: consumedAssertionNoncesOf(views),
+          now,
+        });
+        if (!consumption.ok) {
+          return refuseWith(
+            consumption.blockers.map((blocker) =>
+              createBlocker({
+                code: blocker.code,
+                source: SOURCE,
+                summary: blocker.message,
+                remediations: [
+                  {
+                    id: `${blocker.code.replaceAll("_", "-")}-remediation`,
+                    kind: "manual_action",
+                    summary: "The migration assertion rejects on any binding mismatch; the delivery remains security_blocked.",
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+        // The target must also be a retained, closure-verified root on this
+        // installation.
+        const load = await loadPinnedGeneration({
+          installationPath: input.installation.installationPath,
+          generationDigest: target,
+        });
+        if (!load.ok) {
+          return refuse(
+            "trust_ineligible",
+            "The migration's target generation is not a retained, execution-eligible root on this installation.",
+            "Install or update to the target generation first.",
+          );
+        }
+
+        const consumed = await appendEntry(store, deliveryId, "approval.assertion.consumed", {
+          assertion,
+          newRegisteringInstallationId: rebinding ? binding.registeringInstallationId : "absent-by-state",
+        });
+        if (!consumed.ok) return consumed;
+        if (target !== recordedPin) {
+          const pinned = await appendEntry(store, deliveryId, "generation.pinned", {
+            generationDigest: target,
+            releaseId: PINNED_AGENT_SKILLS.releaseId,
+            profile: binding.activeCompositionProfile,
+          });
+          if (!pinned.ok) return pinned;
+        }
+      }
+
+      // Full re-preparation with invalidation of revoked-era candidate-bound
+      // evidence: prior review attempts are quarantined out of the reduction
+      // set (retained for audit under a dead name), and the workspace binding
+      // is dropped so the delivery re-prepares from scratch.
+      const attemptsDir = path.join(dir, "attempts");
+      try {
+        await readdir(attemptsDir);
+        const { rename } = await import("node:fs/promises");
+        await rename(attemptsDir, path.join(dir, `attempts-invalidated-r${reduced.state.expectedRevision}`));
+      } catch {
+        /* no attempts to invalidate */
+      }
+      await rm(path.join(dir, "workspace.json"), { force: true });
+      await rm(path.join(dir, "takeover.json"), { force: true });
+
+      const transitioned = await appendEntry(store, deliveryId, "transition.committed", {
+        from: "security_blocked",
+        to: "preparing",
+      });
+      if (!transitioned.ok) return transitioned;
+      return { ok: true, mode, state: "preparing" };
     },
   };
 }

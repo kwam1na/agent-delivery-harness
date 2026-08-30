@@ -38,6 +38,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
 import { CONFIRMATION_FIXTURE_PROFILE } from "../substrate/manifest.ts";
 import { installComposition, packComposition } from "../substrate/installer.ts";
+import { createQualificationFixtureAssertionSource } from "../substrate/assertion-source.ts";
+import { maintainTrustState } from "../substrate/lifecycle.ts";
 import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec-port.ts";
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
@@ -459,6 +461,47 @@ describe("the thin one-handoff walking skeleton", () => {
     if (!reduced.ok) return;
     expect(reduced.state.state).toBe("completed");
     expect(reduced.state.lastFence).toBe(2);
+  });
+
+  it("does not reopen a terminal success when the generation is revoked afterwards", async () => {
+    // The revocation race's terminal leg: revoking the pinned generation
+    // AFTER merge-ready completion neither reopens the terminal journal nor
+    // rewrites the delivery's history — revocation fences live work, it does
+    // not unwind finished work.
+    const installedGeneration = JSON.parse(
+      readFileSync(path.join(installationPath, "pointers", "active.json"), "utf8"),
+    ) as { generationDigest: string };
+    const revoked = await maintainTrustState({
+      installationPath,
+      receiptDir,
+      operation: "revoke",
+      generationDigest: installedGeneration.generationDigest,
+      assertionSource: createQualificationFixtureAssertionSource(),
+      now: NOW,
+    });
+    expect(revoked.ok, JSON.stringify(revoked)).toBe(true);
+
+    const status = await facade.status({ deliveryId, observedAt: LATER });
+    expect(status.ok, JSON.stringify(status)).toBe(true);
+    if (!status.ok) return;
+    expect(status.state).toBe("completed");
+
+    // A mutation-capable operation refuses rather than reopening the journal.
+    const refused = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "late" });
+    expect(refused.ok).toBe(false);
+    const still = await facade.status({ deliveryId, observedAt: LATER });
+    expect(still.ok && still.state === "completed").toBe(true);
+
+    // Restore trust for the fixture drives that follow.
+    const unrevoked = await maintainTrustState({
+      installationPath,
+      receiptDir,
+      operation: "unrevoke",
+      generationDigest: installedGeneration.generationDigest,
+      assertionSource: createQualificationFixtureAssertionSource(),
+      now: NOW,
+    });
+    expect(unrevoked.ok, JSON.stringify(unrevoked)).toBe(true);
   });
 
   it("launched no product-owned agent process or daemon — the exec inventory is git, node, and nothing else", () => {
