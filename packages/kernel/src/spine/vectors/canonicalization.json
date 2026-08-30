@@ -1,0 +1,93 @@
+{
+  "purpose": "Cross-language RFC 8785 canonicalization fixtures: each value's canonical form and the lowercase-hex SHA-256 over its UTF-8 bytes, as this kernel computes them. A second-language implementation conforms when it reproduces every canonical string and digest byte for byte.",
+  "vectors": [
+    {
+      "name": "rfc8785-sample",
+      "value": {
+        "numbers": [
+          333333333.3333333,
+          1e+30,
+          4.5,
+          0.002,
+          1e-27
+        ],
+        "string": "€$\u000f\nA'B\"\\\\\"/",
+        "literals": [
+          null,
+          true,
+          false
+        ]
+      },
+      "canonical": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}",
+      "sha256": "2d5e01a318d0f0879ab568c4be289c8b1f64ef8921a53c6277d5e069978baacb"
+    },
+    {
+      "name": "astral-key-ordering",
+      "value": {
+        "😀": "surrogate pair",
+        "דּ": "bmp high",
+        "Ａ": "fullwidth A",
+        "A": "ascii"
+      },
+      "canonical": "{\"A\":\"ascii\",\"😀\":\"surrogate pair\",\"דּ\":\"bmp high\",\"Ａ\":\"fullwidth A\"}",
+      "sha256": "f062438862b112a057f7edb6aebea65e100f3da23a0a2ddaf62ddb5819d749c9"
+    },
+    {
+      "name": "number-forms",
+      "value": {
+        "negativeZero": 0,
+        "largeExponent": 1e+21,
+        "smallDecimal": 0.000001,
+        "exponentThreshold": 1e-7,
+        "integer": 9007199254740991
+      },
+      "canonical": "{\"exponentThreshold\":1e-7,\"integer\":9007199254740991,\"largeExponent\":1e+21,\"negativeZero\":0,\"smallDecimal\":0.000001}",
+      "sha256": "d4dbdf3860c6f28575955fc623b1e2ffb3c87331bc137401ada13b026dbe9ad7"
+    },
+    {
+      "name": "empty-containers",
+      "value": {
+        "array": [],
+        "object": {},
+        "string": ""
+      },
+      "canonical": "{\"array\":[],\"object\":{},\"string\":\"\"}",
+      "sha256": "160df1cb7c08864a4d113733fe02cfbc06a3e39c4ce0e0273ca7f2bb42e0facc"
+    },
+    {
+      "name": "escapes-and-controls",
+      "value": {
+        "text": "line\nbreak\ttab \"quote\" back\\slash /solidus",
+        "controls": "\u0000\u001f"
+      },
+      "canonical": "{\"controls\":\"\\u0000\\u001f\",\"text\":\"line\\nbreak\\ttab \\\"quote\\\" back\\\\slash /solidus\"}",
+      "sha256": "3eb531f9765f2c1cdae1b92d92d6e31f35c2f5939b2aaaf0bf3a5b39163e9f1a"
+    },
+    {
+      "name": "product-trust-label",
+      "value": {
+        "productTrust": "local-digest / operator-pinned"
+      },
+      "canonical": "{\"productTrust\":\"local-digest / operator-pinned\"}",
+      "sha256": "52c4c0ab214af0cd77fbf3537299ccf2856e24bc084c672d61250b5c6bdb6e07"
+    },
+    {
+      "name": "nested-sorting",
+      "value": {
+        "b": {
+          "z": 1,
+          "a": [
+            {
+              "y": 2,
+              "x": 3
+            }
+          ]
+        },
+        "a": 0,
+        "": "empty key sorts first"
+      },
+      "canonical": "{\"\":\"empty key sorts first\",\"a\":0,\"b\":{\"a\":[{\"x\":3,\"y\":2}],\"z\":1}}",
+      "sha256": "135c4ee85f75fa3e1b1631002a58c86e5d0678969a74f6121707832d15ca3809"
+    }
+  ]
+}
