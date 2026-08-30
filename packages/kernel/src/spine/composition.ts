@@ -110,6 +110,7 @@ const TRUST_STATE_RULES: readonly MemberRule[] = [
   { name: "spec", check: specLiteral(PRODUCT_TRUST_STATE_SPEC) },
   { name: "installationId", check: spineId },
   { name: "pinnedManifestDigest", check: sha256 },
+  { name: "acceptedGenerationDigests", check: stringArray({ item: sha256 }) },
   { name: "revokedGenerationDigests", check: stringArray({ item: sha256 }) },
   { name: "revocationEpoch", check: nonNegativeInt },
   { name: "highWaterMark", check: nonNegativeInt },
@@ -125,6 +126,14 @@ export interface ProductTrustState {
   readonly spec: typeof PRODUCT_TRUST_STATE_SPEC;
   readonly installationId: string;
   readonly pinnedManifestDigest: string;
+  /**
+   * Every generation this installation ever accepted under its local trust
+   * policy — the only pool operator rollback and re-pinning may select from,
+   * and what keeps a delivery pinned to an older accepted generation
+   * execution-eligible after the active pin moves on. Membership never makes
+   * revoked bytes eligible: revocation always wins.
+   */
+  readonly acceptedGenerationDigests: readonly string[];
   readonly revokedGenerationDigests: readonly string[];
   readonly revocationEpoch: number;
   readonly highWaterMark: number;
@@ -143,16 +152,21 @@ export interface ProductTrustPort {
 
 /**
  * V1's digest predicate: a generation is execution-eligible exactly when it
- * is not revoked and matches the operator-pinned manifest digest. Revocation
- * wins over pinning — revoked bytes remain retained for audit but are never
- * eligible, whatever else claims otherwise.
+ * is not revoked and is either the operator-pinned manifest digest or a
+ * generation this installation previously accepted (which is what keeps a
+ * delivery pinned to an older accepted generation running after the active
+ * pin advances). Revocation wins over both — revoked bytes remain retained
+ * for audit but are never eligible, whatever else claims otherwise.
  */
 export const localDigestTrustPredicate: ProductTrustPort = {
   evaluate(generationDigest, state) {
     if (state.revokedGenerationDigests.includes(generationDigest)) {
       return { eligible: false, reason: "revoked" };
     }
-    if (generationDigest !== state.pinnedManifestDigest) {
+    if (
+      generationDigest !== state.pinnedManifestDigest &&
+      !state.acceptedGenerationDigests.includes(generationDigest)
+    ) {
       return { eligible: false, reason: "not_pinned" };
     }
     return { eligible: true };

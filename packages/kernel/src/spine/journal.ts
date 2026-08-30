@@ -14,6 +14,11 @@
  * kinds never advance it — but the member itself is part of every entry, so
  * fences, assertions, and confirmations have one number to bind.
  */
+import {
+  SENSITIVE_MAINTENANCE_ACTIONS,
+  assertionClassOf,
+  validateSensitiveApprovalAssertion,
+} from "./assertion.ts";
 import { validateSensorResult } from "./capability.ts";
 import { confirmationClassOf, validateOperatorConfirmation } from "./confirmation.ts";
 import { validateFinishLineResult } from "./finish-line.ts";
@@ -22,9 +27,11 @@ import {
   checkClosed,
   createSpineCollector,
   gitOid,
+  isAbsentByState,
   isSpineRecord,
   nonNegativeInt,
   oneOf,
+  orAbsentByState,
   positiveInt,
   sha256,
   specLiteral,
@@ -46,6 +53,32 @@ export const WORKSPACE_DISPOSITIONS = Object.freeze([
 ] as const);
 
 export const APPROVAL_REQUEST_KINDS = Object.freeze(["waiver", "amendment"] as const);
+
+/**
+ * The maintenance journal's frozen action vocabulary. The sensitive subset
+ * (update, rollback, pin, revoke, unrevoke, advance-high-water-mark) is
+ * consumable only under a maintenance-lane assertion; first install and
+ * installer repair are the operator's own interactive installer acts, and
+ * garbage collection removes only unreferenced generations, so none of those
+ * three carries one.
+ */
+export const MAINTENANCE_ACTIONS = Object.freeze([
+  "first-install",
+  "update",
+  "rollback",
+  "pin",
+  "revoke",
+  "unrevoke",
+  "advance-high-water-mark",
+  "installer-repair",
+  "garbage-collection",
+] as const);
+export type MaintenanceAction = (typeof MAINTENANCE_ACTIONS)[number];
+
+export const MAINTENANCE_PHASES = Object.freeze(["started", "completed", "recovered"] as const);
+
+/** The multi-phase maintenance actions; every other action records one `completed` entry. */
+export const PHASED_MAINTENANCE_ACTIONS = Object.freeze(["update", "rollback"] as const);
 
 type PayloadCheck = (payload: Record<string, unknown>, at: string, collector: SpineCollector) => void;
 
@@ -141,6 +174,116 @@ const transitionPayload: PayloadCheck = (payload, at, collector) => {
   }
 };
 
+/**
+ * `approval.assertion.consumed`: one consumed sensitive-approval assertion,
+ * embedded verbatim. The delivery journal homes the delivery-bound and
+ * security-blocked-migration classes; a maintenance-lane consumption homes in
+ * the maintenance journal and is a stranger here. Only a rebinding migration
+ * records a new registering-installation identity; every other consumption
+ * records it explicitly absent-by-state.
+ */
+const assertionConsumedPayload: PayloadCheck = (payload, at, collector) => {
+  checkClosed(
+    payload,
+    at,
+    [
+      { name: "assertion", check: embedded(validateSensitiveApprovalAssertion) },
+      { name: "newRegisteringInstallationId", check: orAbsentByState(spineId) },
+    ],
+    collector,
+  );
+  const declaredClass = assertionClassOf(payload["assertion"]);
+  if (declaredClass === "maintenance-lane") {
+    collector.emit(
+      "unsupported_combination",
+      `${at}/assertion/assertionClass`,
+      "a maintenance-lane consumption is recorded in the maintenance journal, never the delivery journal",
+    );
+  }
+  if (!isAbsentByState(payload["newRegisteringInstallationId"]) && declaredClass !== "security-blocked-migration") {
+    collector.emit(
+      "unsupported_combination",
+      `${at}/newRegisteringInstallationId`,
+      "only a rebinding security-blocked migration records a new registering-installation identity",
+    );
+  }
+};
+
+/**
+ * `maintenance.action.recorded`: one maintenance-lane operation against the
+ * installation, in its frozen action vocabulary. The sensitive actions embed
+ * the exact consumed assertion — on `started` for the phased actions, on
+ * their sole `completed` entry for the instant trust-state operations — and
+ * the embedded assertion must agree with the recorded action and target, so a
+ * journal entry can never claim an approval it does not carry.
+ */
+const maintenanceActionPayload: PayloadCheck = (payload, at, collector) => {
+  checkClosed(
+    payload,
+    at,
+    [
+      { name: "action", check: oneOf(MAINTENANCE_ACTIONS) },
+      { name: "phase", check: oneOf(MAINTENANCE_PHASES) },
+      { name: "generationDigest", check: orAbsentByState(sha256) },
+      { name: "highWaterMark", check: orAbsentByState(nonNegativeInt) },
+      { name: "assertion", check: orAbsentByState(embedded(validateSensitiveApprovalAssertion)) },
+    ],
+    collector,
+  );
+  const action = payload["action"];
+  const phase = payload["phase"];
+  if (typeof action !== "string" || typeof phase !== "string") return;
+
+  const phased = PHASED_MAINTENANCE_ACTIONS.includes(action as never);
+  if (!phased && phase === "started") {
+    collector.emit("unsupported_combination", `${at}/phase`, `${action} is an instant action; it records one completed entry`);
+  }
+
+  const sensitive = SENSITIVE_MAINTENANCE_ACTIONS.includes(action as never);
+  const assertionRequired = sensitive && (phased ? phase === "started" : phase === "completed");
+  const assertionValue = payload["assertion"];
+  const assertionAbsent = assertionValue === undefined || isAbsentByState(assertionValue);
+  if (assertionRequired && assertionAbsent) {
+    collector.emit(
+      "unsupported_combination",
+      `${at}/assertion`,
+      `the sensitive ${action} action is recorded only under its consumed maintenance-lane assertion`,
+    );
+  }
+  if (!sensitive && !assertionAbsent) {
+    collector.emit("unsupported_combination", `${at}/assertion`, `${action} is not in the sensitive set and consumes no assertion`);
+  }
+
+  if (!assertionAbsent && isSpineRecord(assertionValue)) {
+    if (assertionClassOf(assertionValue) !== "maintenance-lane") {
+      collector.emit(
+        "unsupported_combination",
+        `${at}/assertion/assertionClass`,
+        "the maintenance journal records only maintenance-lane consumptions",
+      );
+    }
+    if (assertionValue["action"] !== action) {
+      collector.emit("unsupported_combination", `${at}/assertion/action`, "the consumed assertion approves a different action");
+    }
+    const boundGeneration = assertionValue["targetGenerationDigest"];
+    if (typeof boundGeneration === "string" && !isAbsentByState(boundGeneration) && boundGeneration !== payload["generationDigest"]) {
+      collector.emit(
+        "unsupported_combination",
+        `${at}/generationDigest`,
+        "the consumed assertion approves a different target generation",
+      );
+    }
+    const boundMark = assertionValue["targetHighWaterMark"];
+    if (typeof boundMark === "number" && boundMark !== payload["highWaterMark"]) {
+      collector.emit(
+        "unsupported_combination",
+        `${at}/highWaterMark`,
+        "the consumed assertion approves a different high-water mark",
+      );
+    }
+  }
+};
+
 /** Payload tables for every ACTIVE (journal, kind) pair — frozen here. */
 const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "intake/intake.state.changed": table([
@@ -229,6 +372,8 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
     { name: "summary", check: boundedText },
   ]),
   "delivery/finish.line.recorded": table([{ name: "result", check: embedded(validateFinishLineResult) }]),
+  "delivery/approval.assertion.consumed": assertionConsumedPayload,
+  "maintenance/maintenance.action.recorded": maintenanceActionPayload,
 });
 
 const ENVELOPE_RULES: readonly MemberRule[] = [

@@ -208,6 +208,25 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     rules: ["e"],
     status: "present",
   },
+  // The maintenance lane: update/rollback/trust-state decisions and the
+  // assertion-freshness check consume a caller-observed instant, never a
+  // clock. (The assertion SOURCE mints evaluation expiries with a real
+  // clock — that is the provider observing when the operator authenticated,
+  // not an admissibility decision, and it stays outside this class.)
+  {
+    id: "substrate-lifecycle",
+    path: "packages/kernel/src/substrate/lifecycle.ts",
+    kind: "file",
+    rules: ["e"],
+    status: "present",
+  },
+  {
+    id: "substrate-maintenance-journal",
+    path: "packages/kernel/src/substrate/maintenance-journal.ts",
+    kind: "file",
+    rules: ["e"],
+    status: "present",
+  },
   // The walking skeleton's V-slice modules — the final module boundaries the
   // later policy/checkpoint/workflow/host/evidence/finish-line/facade units
   // harden. Pure modules carry d1 allowlists naming exactly the spine and

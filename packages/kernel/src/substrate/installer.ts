@@ -63,6 +63,22 @@ import {
   type InstallationPresence,
   type OtherInstallationArtifact,
 } from "./trust-store.ts";
+import { SPINE_ID } from "../spine/grammar.ts";
+import type { AssertionSource } from "../spine/assertion.ts";
+import {
+  createOsNativeAssertionSource,
+  createQualificationFixtureAssertionSource,
+  writeAssertionProviderConfig,
+  type AssertionSourcePort,
+} from "./assertion-source.ts";
+import { appendMaintenanceAction } from "./maintenance-journal.ts";
+import {
+  checkAssertionSourcePreflight,
+  checkLicenseProvenancePreflight,
+  checkRuntimePreflight,
+  livePreflightProbes,
+  type PreflightProbes,
+} from "./preflight.ts";
 
 // ── Vocabulary and layout ──────────────────────────────────────────────────
 
@@ -85,6 +101,23 @@ export const SUBSTRATE_BLOCKER_CODES = Object.freeze([
   "install_receipt_corrupt",
   "active_pointer_missing",
   "active_pointer_corrupt",
+  "unsupported_archive_entry",
+  "update_lane_required",
+  "qualification_flag_required",
+  "qualification_flag_refused",
+  "preflight_failed",
+  "assertion_source_unavailable",
+  "assertion_source_mismatch",
+  "assertion_refused",
+  "assertion_stale",
+  "assertion_replayed",
+  "maintenance_in_progress",
+  "maintenance_journal_corrupt",
+  "rollback_target_not_accepted",
+  "epoch_rollback_rejected",
+  "repair_not_needed",
+  "non_interactive_refused",
+  "disposable_repository_required",
 ] as const);
 export type SubstrateBlockerCode = (typeof SUBSTRATE_BLOCKER_CODES)[number];
 
@@ -125,11 +158,18 @@ export function receiptPathFor(receiptDir: string, installationPath: string): st
   return path.join(receiptDir, RECEIPTS_LEAF, `${sha256Hex(installationPath)}.json`);
 }
 
-const generationRootFor = (installationPath: string, generationDigest: string): string =>
+export const generationRootFor = (installationPath: string, generationDigest: string): string =>
   path.join(installationPath, GENERATIONS_LEAF, generationDigest);
 
-const activePointerPathFor = (installationPath: string): string =>
+export const generationsDirFor = (installationPath: string): string => path.join(installationPath, GENERATIONS_LEAF);
+
+export const activePointerPathFor = (installationPath: string): string =>
   path.join(installationPath, POINTERS_LEAF, "active.json");
+
+export const rollbackPointerPathFor = (installationPath: string): string =>
+  path.join(installationPath, POINTERS_LEAF, "rollback.json");
+
+export const ROLLBACK_POINTER_SPEC = "rollback-pointer/1";
 
 // ── Small filesystem helpers ───────────────────────────────────────────────
 
@@ -182,7 +222,7 @@ async function walkFiles(
   return out;
 }
 
-async function writeOwnerFile(target: string, contents: string): Promise<void> {
+export async function writeOwnerFile(target: string, contents: string): Promise<void> {
   await mkdir(path.dirname(target), { recursive: true, mode: OWNER_DIR });
   await writeFile(target, contents, { mode: OWNER_FILE });
   await chmod(target, OWNER_FILE);
@@ -294,14 +334,22 @@ interface VerifiedClosure {
  * every listed file is present with exactly its listed bytes, and no
  * unlisted file exists.
  */
-async function verifyGenerationClosure(
+export async function verifyGenerationClosure(
   root: string,
   expectedDigest?: string,
 ): Promise<VerifiedClosure | SubstrateFailure> {
   if (!(await exists(root))) {
     return fail("missing_generation", `generation root ${root} does not exist`);
   }
-  const present = await walkFiles(root, "raw");
+  let present: string[];
+  try {
+    present = await walkFiles(root, "raw");
+  } catch (error) {
+    // A hostile or malformed archive carrying a symlink or special file can
+    // neither be digest-bound nor safely ignored; the lifecycle surfaces get
+    // a typed blocker instead of an untyped throw.
+    return fail("unsupported_archive_entry", error instanceof Error ? error.message : String(error));
+  }
   if (present.length === 0) {
     return fail("missing_generation", `generation root ${root} is empty`);
   }
@@ -367,7 +415,7 @@ type TrustStateLoad =
   | { readonly ok: true; readonly state: ProductTrustState }
   | SubstrateFailure;
 
-async function loadTrustState(installationPath: string): Promise<TrustStateLoad> {
+export async function loadTrustState(installationPath: string): Promise<TrustStateLoad> {
   const storePath = trustStorePathFor(installationPath);
   let bytes: string;
   try {
@@ -388,14 +436,22 @@ export interface InstallReceipt {
   readonly installationPath: string;
   readonly installationId: string;
   readonly installationProfile: CompositionProfile;
+  /**
+   * The qualification flag's use-time half: present exactly when the profile
+   * is `confirmation-fixture`, listing the operator-supplied disposable
+   * repository identities this installation may serve. Recorded in the
+   * receipt — outside every execution grant's writable paths — so a
+   * candidate- or model-written marker can never make a repository eligible.
+   */
+  readonly disposableRepositoryIds?: readonly string[];
 }
 
-type ReceiptRead =
+export type ReceiptRead =
   | { readonly presence: "valid"; readonly receipt: InstallReceipt }
   | { readonly presence: "absent" }
   | { readonly presence: "corrupt"; readonly message: string };
 
-async function readReceipt(receiptDir: string, installationPath: string): Promise<ReceiptRead> {
+export async function readInstallReceipt(receiptDir: string, installationPath: string): Promise<ReceiptRead> {
   const receiptPath = receiptPathFor(receiptDir, installationPath);
   let bytes: string;
   try {
@@ -427,6 +483,24 @@ async function readReceipt(receiptDir: string, installationPath: string): Promis
       message: "the install receipt is outside its grammar or keyed to a different installation path",
     };
   }
+  const disposable = record["disposableRepositoryIds"];
+  if (profile === "confirmation-fixture") {
+    const wellFormed =
+      Array.isArray(disposable) &&
+      disposable.length > 0 &&
+      disposable.every((entry) => typeof entry === "string" && SPINE_ID.test(entry));
+    if (!wellFormed) {
+      return {
+        presence: "corrupt",
+        message: "a qualification receipt records its non-empty disposable-repository set; this one does not",
+      };
+    }
+  } else if (disposable !== undefined) {
+    return {
+      presence: "corrupt",
+      message: "a production receipt records no disposable-repository set",
+    };
+  }
   return { presence: "valid", receipt: record as unknown as InstallReceipt };
 }
 
@@ -438,6 +512,34 @@ export interface InstallCompositionInput {
   /** The platform user-configuration location holding install receipts. */
   readonly receiptDir: string;
   readonly trust?: ProductTrustPort;
+  /**
+   * The explicit operator-supplied qualification flag with its disposable
+   * repository identities. Required for any fixture-profile install or
+   * reinstall; refused for a production one. Recorded in the install receipt.
+   */
+  readonly qualification?: { readonly disposableRepositoryIds: readonly string[] };
+  /** Which assertion source the installation records; default OS-native. */
+  readonly assertionProvider?: { readonly sourceKind: AssertionSource };
+  /** Override the probed source (tests and host integrations). */
+  readonly assertionSource?: AssertionSourcePort;
+  /** Override individual preflight probes; unset members probe live. */
+  readonly preflight?: Partial<PreflightProbes>;
+}
+
+/** Resolve the assertion source port for a configured or requested kind. */
+export function assertionSourceForKind(sourceKind: AssertionSource): AssertionSourcePort {
+  if (sourceKind === "qualification-fixture") return createQualificationFixtureAssertionSource();
+  if (sourceKind === "os-native") return createOsNativeAssertionSource();
+  // Host-native sources are supplied by a qualified host integration; the
+  // installer cannot probe one, so resolving it here reports unavailability
+  // instead of pretending.
+  return {
+    probe: async () => ({
+      available: false,
+      detail: "host-native assertion sources are supplied by a qualified host integration, not the installer",
+    }),
+    evaluate: async () => ({ ok: false, reason: "no host-native assertion source is attached" }),
+  };
 }
 
 export type InstallCompositionResult =
@@ -450,7 +552,7 @@ export type InstallCompositionResult =
     }
   | SubstrateFailure;
 
-async function observePresence(input: InstallCompositionInput): Promise<{
+export async function observePresence(input: { readonly installationPath: string; readonly receiptDir: string }): Promise<{
   readonly presence: InstallationPresence;
   readonly state?: ProductTrustState;
   readonly receipt?: InstallReceipt;
@@ -467,7 +569,7 @@ async function observePresence(input: InstallCompositionInput): Promise<{
     }
   }
 
-  const receiptRead = await readReceipt(input.receiptDir, input.installationPath);
+  const receiptRead = await readInstallReceipt(input.receiptDir, input.installationPath);
   const receipt = receiptRead.presence === "valid" ? receiptRead.receipt : undefined;
 
   const otherArtifacts: OtherInstallationArtifact[] = [];
@@ -493,7 +595,7 @@ async function observePresence(input: InstallCompositionInput): Promise<{
 }
 
 /** Copies the verified packed composition into a read-only addressable root. */
-async function materializeRoot(packedDir: string, root: string): Promise<void> {
+export async function materializeRoot(packedDir: string, root: string): Promise<void> {
   const parent = path.dirname(root);
   await mkdir(parent, { recursive: true, mode: OWNER_DIR });
   const staging = `${root}.staging-${randomBytes(6).toString("hex")}`;
@@ -521,6 +623,69 @@ async function materializeRoot(packedDir: string, root: string): Promise<void> {
   await chmod(root, READONLY_DIR);
 }
 
+/**
+ * The qualification custody rule shared by install and update: an activation
+ * of a fixture-declaring manifest is a qualification activation only under
+ * the explicit operator-supplied flag with its disposable-repository set, and
+ * the flag on a production manifest is refused — flag and active profile can
+ * never disagree.
+ */
+export function checkQualificationFlag(
+  manifestProfile: CompositionProfile,
+  qualification: { readonly disposableRepositoryIds: readonly string[] } | undefined,
+): SubstrateFailure | undefined {
+  if (manifestProfile === "confirmation-fixture") {
+    if (qualification === undefined) {
+      return fail(
+        "qualification_flag_required",
+        "the manifest declares the confirmation-fixture profile; activating it requires the explicit operator-supplied qualification flag with its disposable repository identities",
+      );
+    }
+    const ids = qualification.disposableRepositoryIds;
+    if (ids.length === 0 || !ids.every((id) => SPINE_ID.test(id))) {
+      return fail(
+        "disposable_repository_required",
+        "the qualification flag names the disposable repository identities the installation may serve; an empty or malformed set is refused",
+      );
+    }
+    return undefined;
+  }
+  if (qualification !== undefined) {
+    return fail(
+      "qualification_flag_refused",
+      "the qualification flag is valid only for a fixture-declaring manifest; a flagged installation activates only fixture-declaring compositions",
+    );
+  }
+  return undefined;
+}
+
+/** The activation preflights, run before any mutation. */
+export async function runActivationPreflight(
+  manifest: Record<string, unknown>,
+  source: AssertionSourcePort,
+  overrides?: Partial<PreflightProbes>,
+): Promise<SubstrateFailure | undefined> {
+  const live = await livePreflightProbes();
+  const probes: PreflightProbes = {
+    nodeVersion: overrides?.nodeVersion ?? live.nodeVersion,
+    pythonVersion: overrides !== undefined && "pythonVersion" in overrides ? overrides.pythonVersion : live.pythonVersion,
+    platform: overrides?.platform ?? live.platform,
+  };
+  const failures = [
+    ...checkRuntimePreflight(probes),
+    ...checkLicenseProvenancePreflight(manifest),
+    ...(await checkAssertionSourcePreflight(source)),
+  ];
+  if (failures.length === 0) return undefined;
+  return {
+    ok: false,
+    blockers: failures.map((failure) => ({
+      code: "preflight_failed" as const,
+      message: `${failure.requirement}: ${failure.message}`,
+    })),
+  };
+}
+
 export async function installComposition(input: InstallCompositionInput): Promise<InstallCompositionResult> {
   const trust = input.trust ?? localDigestTrustPredicate;
 
@@ -529,6 +694,9 @@ export async function installComposition(input: InstallCompositionInput): Promis
   const generationDigest = closure.generationDigest;
   const manifestProfile = closure.manifest["compositionProfile"] as CompositionProfile;
   const compositionSequence = closure.manifest["compositionSequence"] as number;
+
+  const flagVerdict = checkQualificationFlag(manifestProfile, input.qualification);
+  if (flagVerdict !== undefined) return flagVerdict;
 
   const observed = await observePresence(input);
   const discrimination = discriminateInstall(observed.presence);
@@ -548,6 +716,7 @@ export async function installComposition(input: InstallCompositionInput): Promis
       spec: "product-trust-state/1",
       installationId,
       pinnedManifestDigest: generationDigest,
+      acceptedGenerationDigests: [generationDigest],
       revokedGenerationDigests: [],
       revocationEpoch: 0,
       highWaterMark: compositionSequence,
@@ -563,13 +732,20 @@ export async function installComposition(input: InstallCompositionInput): Promis
         `the manifest declares the ${manifestProfile} profile but this installation's receipt records ${receipt.installationProfile}; the confirmation-fixture profile is valid only in disposable-repository qualification runs and is production-rejected`,
       );
     }
-    const downgrade = checkNoDowngrade(compositionSequence, adopted.highWaterMark);
-    if (!downgrade.ok) return fail(downgrade.code, downgrade.message);
+    // The install lane adopts an existing installation only for a NO-OP
+    // reinstall of the exact pinned generation. Activating any other
+    // generation is a trust-store edit, and every trust-store edit after the
+    // genuinely-first install requires the maintenance-lane assertion — the
+    // update lane.
+    if (generationDigest !== adopted.pinnedManifestDigest) {
+      return fail(
+        "update_lane_required",
+        `this installation pins ${adopted.pinnedManifestDigest}; activating ${generationDigest} is an update or rollback — a maintenance-lane operation under the sensitive-approval assertion, not a reinstall`,
+      );
+    }
 
-    // The activation-site trust check: the pin is being set to this
-    // generation, so the predicate evaluates against the prospective pin —
-    // revocation still wins, and a revoked generation can never activate.
-    const decision = trust.evaluate(generationDigest, { ...adopted, pinnedManifestDigest: generationDigest });
+    // Revocation still wins: a revoked pin can never re-activate.
+    const decision = trust.evaluate(generationDigest, adopted);
     if (!decision.eligible) {
       return fail(
         "generation_revoked",
@@ -577,12 +753,13 @@ export async function installComposition(input: InstallCompositionInput): Promis
       );
     }
 
-    state = {
-      ...adopted,
-      pinnedManifestDigest: generationDigest,
-      highWaterMark: Math.max(adopted.highWaterMark, compositionSequence),
-    };
+    state = adopted;
   }
+
+  const requestedSourceKind = input.assertionProvider?.sourceKind ?? "os-native";
+  const source = input.assertionSource ?? assertionSourceForKind(requestedSourceKind);
+  const preflight = await runActivationPreflight(closure.manifest, source, input.preflight);
+  if (preflight !== undefined) return preflight;
 
   const root = generationRootFor(input.installationPath, generationDigest);
   if (!(await exists(root))) {
@@ -600,8 +777,20 @@ export async function installComposition(input: InstallCompositionInput): Promis
       installationPath: input.installationPath,
       installationId,
       installationProfile: manifestProfile,
+      ...(input.qualification === undefined
+        ? {}
+        : { disposableRepositoryIds: [...input.qualification.disposableRepositoryIds] }),
     };
     await writeOwnerFile(receiptPathFor(input.receiptDir, input.installationPath), JSON.stringify(receipt));
+    await writeAssertionProviderConfig(input.installationPath, requestedSourceKind);
+    const journaled = await appendMaintenanceAction(input.installationPath, installationId, {
+      action: "first-install",
+      phase: "completed",
+      generationDigest,
+      highWaterMark: "absent-by-state",
+      assertion: "absent-by-state",
+    });
+    if (!journaled.ok) return fail("maintenance_journal_corrupt", journaled.message);
   }
 
   return { ok: true, installationId, generationDigest, firstInstall, root };
@@ -703,6 +892,8 @@ export type RegistrationBindingResult =
       readonly ok: true;
       readonly registeringInstallationId: string;
       readonly activeCompositionProfile: CompositionProfile;
+      /** Present exactly when the profile is `confirmation-fixture`. */
+      readonly disposableRepositoryIds?: readonly string[];
     }
   | SubstrateFailure;
 
@@ -713,7 +904,7 @@ export type RegistrationBindingResult =
  * closed instead of defaulting to production.
  */
 export async function registrationBinding(input: RegistrationBindingInput): Promise<RegistrationBindingResult> {
-  const receiptRead = await readReceipt(input.receiptDir, input.installationPath);
+  const receiptRead = await readInstallReceipt(input.receiptDir, input.installationPath);
   if (receiptRead.presence === "absent") {
     return fail(
       "install_receipt_absent",
@@ -727,5 +918,8 @@ export async function registrationBinding(input: RegistrationBindingInput): Prom
     ok: true,
     registeringInstallationId: receiptRead.receipt.installationId,
     activeCompositionProfile: receiptRead.receipt.installationProfile,
+    ...(receiptRead.receipt.disposableRepositoryIds === undefined
+      ? {}
+      : { disposableRepositoryIds: receiptRead.receipt.disposableRepositoryIds }),
   };
 }

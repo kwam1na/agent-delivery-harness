@@ -47,14 +47,12 @@ describe("the journal-entry envelope", () => {
   });
 
   it("rejects a reserved kind WITH a payload", () => {
-    const codes = codesOf(
-      entry({ kind: "approval.assertion.consumed", payload: { anything: 1 } }),
-    );
+    const codes = codesOf(entry({ kind: "contract.amended", payload: { anything: 1 } }));
     expect(codes).toContain("reserved_kind");
   });
 
   it("rejects a reserved kind WITHOUT a payload", () => {
-    const value = entry({ kind: "approval.assertion.consumed" });
+    const value = entry({ kind: "contract.amended" });
     delete value["payload"];
     expect(codesOf(value)).toContain("reserved_kind");
   });

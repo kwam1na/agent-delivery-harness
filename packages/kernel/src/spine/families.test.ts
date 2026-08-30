@@ -57,6 +57,7 @@ const trustState = (): Record<string, unknown> => ({
   spec: "product-trust-state/1",
   installationId: "install-1",
   pinnedManifestDigest: DIGEST,
+  acceptedGenerationDigests: [DIGEST],
   revokedGenerationDigests: [],
   revocationEpoch: 0,
   highWaterMark: 1,
