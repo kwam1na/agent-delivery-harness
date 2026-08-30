@@ -424,6 +424,41 @@ export {
   validateCapabilityDescriptor,
   validateSensorResult,
 } from "./spine/capability.ts";
+// The trusted host-control binding's model-external admission decisions:
+// deny-until-attested grant admission, the per-invocation interceptor, the
+// isolated confirmation channel's echo challenge, and assertion-source
+// degradation. Consumes the spine's grant/attestation contracts; never
+// re-authors them.
+export {
+  ADMISSION_DENIAL_CODES,
+  CONFIRMATION_DENIAL_CODES,
+  CONFIRMATION_OPERATION_PREFIX,
+  TOOL_DENIAL_CODES,
+  assertionLaneAvailability,
+  evaluateConfirmationEcho,
+  evaluateHostAdmission,
+  evaluateToolInvocation,
+  type AdmissionDecision,
+  type AdmissionDenial,
+  type AdmissionDenialCode,
+  type AdmissionExpectation,
+  type AdmittedInvocation,
+  type AssertionSourceAvailability,
+  type CheckpointAdmissionExpectation,
+  type ConfirmationDenial,
+  type ConfirmationDenialCode,
+  type ConfirmationEchoAttempt,
+  type ConfirmationEchoDecision,
+  type DeniedInvocation,
+  type IntakeAdmissionExpectation,
+  type LaneAvailability,
+  type RenderedConfirmationChallenge,
+  type ToolDenial,
+  type ToolDenialCode,
+  type ToolInvocationDecision,
+  type ToolInvocationRequest,
+} from "./binding/host-admission.ts";
+
 export {
   FINISH_LINE_RESULT_SPEC,
   checkMergeReadyAgainstOutcome,

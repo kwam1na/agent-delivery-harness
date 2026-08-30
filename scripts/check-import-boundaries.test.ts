@@ -60,11 +60,18 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
 
   // The contract spine: pure, and independent of the evidence kernel. Its
   // fixture mirrors the real shape — a sibling import plus the canonicalizer.
+  "packages/kernel/src/spine/grammar.ts": `export const SPINE_INSTANT = /^\\d{4}/;\n`,
   "packages/kernel/src/spine/vocabulary.ts": `export const JOURNALS = ["intake", "delivery", "maintenance"] as const;\n`,
   "packages/kernel/src/spine/journal.ts":
     `import { canonicalize } from "../canonical.ts";\n` +
     `import { JOURNALS } from "./vocabulary.ts";\n` +
     `export const describeEntry = (v: unknown): string => canonicalize(v) + JOURNALS[0];\n`,
+
+  // The trusted host-control binding: pure, reaching the spine only through
+  // its named allowlist entries.
+  "packages/kernel/src/binding/host-admission.ts":
+    `import { SPINE_INSTANT } from "../spine/grammar.ts";\n` +
+    `export const observedAtIsWellFormed = (v: string): boolean => SPINE_INSTANT.test(v);\n`,
 
   // d2 — fs only through the artifacts port.
   "packages/kernel/src/recorder.ts": `import type { ArtifactsPort } from "./artifacts.types.ts";\nexport const submit = (port: ArtifactsPort, p: string): Promise<string> => port.read(p);\n`,
@@ -474,6 +481,27 @@ describe("rule d1 — true purity", () => {
       },
       "packages/kernel/src/spine/journal.ts",
     );
+  });
+
+  it("rejects the process-spawning module inside the binding — the binding can never launch an agent child", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/binding/host-admission.ts": `import { spawn } from "node:child_process";\nexport const launch = (): unknown => spawn("claude", ["--print"]);\n`,
+      },
+      "packages/kernel/src/binding/host-admission.ts",
+    );
+  });
+
+  it("rejects a binding import off its subdirectory-shaped allowlist — spine/grant.ts is in, the evidence validator is not", () => {
+    const findings = expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/binding/host-admission.ts": `import { CODES } from "../validator/codes.ts";\nexport const admissible = (): string => CODES[0];\n`,
+      },
+      "packages/kernel/src/binding/host-admission.ts",
+    );
+    expect(findings[0]?.message).toContain("validator/codes.ts");
   });
 
   it("rejects a relative import that resolves to nothing", () => {

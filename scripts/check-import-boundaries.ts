@@ -168,6 +168,19 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     d1Allowlist: ["canonical.ts", "digest.ts"],
     d1SiblingAllowance: true,
   },
+  // The trusted host-control binding's admission decisions: pure by contract —
+  // model-external means no I/O, no clock, and no process launch, and the fs
+  // family ban (which includes child_process) is where the last one starts
+  // being mechanical. Its allowlist names only the spine contracts it consumes.
+  {
+    id: "kernel-binding",
+    path: "packages/kernel/src/binding",
+    kind: "dir",
+    rules: ["d1", "e"],
+    status: "present",
+    d1Allowlist: ["spine/grant.ts", "spine/grammar.ts"],
+    d1SiblingAllowance: true,
+  },
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "present" },
   { id: "kernel-context", path: "packages/kernel/src/context.ts", kind: "file", rules: ["d1"], status: "present" },
   { id: "kernel-recorder", path: "packages/kernel/src/recorder.ts", kind: "file", rules: ["d2", "e"], status: "present" },

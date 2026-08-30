@@ -1,0 +1,1143 @@
+{
+  "schemaVersion": "host-admission-fixtures/1",
+  "description": "Frozen fixtures for the trusted host-control binding's model-external admission decisions. Grants and attestations use the contract spine's frozen shapes; every attestation digest is recomputed by the sensor test, so a fixture that stops matching its own bytes fails the suite.",
+  "grantBindings": {
+    "validCheckpoint": "checkpointGrant",
+    "confirmationListing": "confirmationListingGrant",
+    "forgedDigest": null,
+    "wrongHostVersion": "checkpointGrant",
+    "wrongInstallation": "checkpointGrant",
+    "wrongActiveProfile": "checkpointGrant",
+    "wrongIntakeDraft": "intakeGrant",
+    "staleFence": "checkpointGrant",
+    "siblingDelivery": "checkpointGrant",
+    "wrongProjection": "checkpointGrant",
+    "wrongDiscoveryConfiguration": "checkpointGrant",
+    "expired": "checkpointGrant",
+    "revokedEpoch": "checkpointGrant",
+    "wrongWorkspace": "checkpointGrant",
+    "malformedMissingWorkspace": "checkpointGrant",
+    "emptyGrantAttestation": "emptyGrant",
+    "validIntake": "intakeGrant"
+  },
+  "expectations": {
+    "checkpoint": {
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "productTrustRevocationEpoch": 3,
+      "observedAt": "2026-08-30T12:00:00Z",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "intake": {
+      "profile": "intake",
+      "hostVersion": "fixture-host/1.0.0",
+      "productTrustRevocationEpoch": 3,
+      "observedAt": "2026-08-30T12:00:00Z",
+      "intakeDraftId": "intake-fixture-01"
+    }
+  },
+  "grants": {
+    "checkpointGrant": {
+      "spec": "execution-grant/1",
+      "profile": "checkpoint",
+      "allowedCapabilities": [
+        "fs.read",
+        "fs.write",
+        "shell.exec",
+        "git.commit"
+      ],
+      "writablePaths": [
+        "src",
+        "tests"
+      ],
+      "protectedPaths": [
+        ".git",
+        ".delivery/projection",
+        ".delivery/journal",
+        ".delivery/trust-store"
+      ],
+      "forbiddenOperations": [
+        "network.outbound",
+        "credential.read"
+      ]
+    },
+    "intakeGrant": {
+      "spec": "execution-grant/1",
+      "profile": "intake",
+      "allowedCapabilities": [
+        "fs.read",
+        "status.read"
+      ],
+      "writablePaths": [],
+      "protectedPaths": [
+        ".delivery/trust-store",
+        ".delivery/journal",
+        ".delivery/namespaces"
+      ],
+      "forbiddenOperations": [
+        "fs.write",
+        "shell.exec"
+      ]
+    },
+    "emptyGrant": {
+      "spec": "execution-grant/1",
+      "profile": "checkpoint",
+      "allowedCapabilities": [],
+      "writablePaths": [],
+      "protectedPaths": [
+        ".git"
+      ],
+      "forbiddenOperations": []
+    },
+    "plantedWideGrant": {
+      "spec": "execution-grant/1",
+      "profile": "checkpoint",
+      "allowedCapabilities": [
+        "fs.read",
+        "fs.write",
+        "shell.exec",
+        "git.commit",
+        "credential.read",
+        "network.outbound"
+      ],
+      "writablePaths": [
+        "src",
+        "tests",
+        ".git",
+        ".delivery/projection"
+      ],
+      "protectedPaths": [],
+      "forbiddenOperations": []
+    },
+    "confirmationListingGrant": {
+      "spec": "execution-grant/1",
+      "profile": "checkpoint",
+      "allowedCapabilities": [
+        "fs.read",
+        "operator-confirmation.contract-confirmation"
+      ],
+      "writablePaths": [
+        "src"
+      ],
+      "protectedPaths": [
+        ".git"
+      ],
+      "forbiddenOperations": []
+    },
+    "malformedGrantMissingWritable": {
+      "spec": "execution-grant/1",
+      "profile": "checkpoint",
+      "allowedCapabilities": [
+        "fs.read"
+      ],
+      "protectedPaths": [
+        ".git"
+      ],
+      "forbiddenOperations": []
+    }
+  },
+  "attestations": {
+    "validCheckpoint": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "confirmationListing": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "9f1a0b1fb4e50775c153b075f927f427516e590fed31789dae98947df240df6d",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "forgedDigest": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "524b20180c2893e0db90cc7da77699abdbbaf3da88a429823d6bad8a45ae64b2",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "wrongHostVersion": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/9.9.9",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "wrongInstallation": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-99",
+      "activeProfile": "default"
+    },
+    "wrongActiveProfile": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "some-other-profile"
+    },
+    "wrongIntakeDraft": {
+      "spec": "grant-attestation/1",
+      "profile": "intake",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "52450683176c7543e18a4e516f02604272dc5d6d492e9ce2da37cb42d5f308a6",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "intake-fixture-99",
+      "deliveryId": "absent-by-state",
+      "invocationFence": "absent-by-state",
+      "workspaceId": "absent-by-state",
+      "projectionDigest": "absent-by-state",
+      "discoveryConfigurationDigest": "absent-by-state",
+      "registeringInstallationId": "absent-by-state",
+      "activeProfile": "absent-by-state"
+    },
+    "staleFence": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 6,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "siblingDelivery": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-02",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "wrongProjection": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "28b468fc0e9951d56eaab3bc583f3edbb489a71527c1fe135bc9eaa4946c2dc9",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "wrongDiscoveryConfiguration": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "dd92e5b7294772f6f2a741e877ae70f8bc975265c9949f22fa5aa25f15bc61c6",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "expired": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T11:59:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "revokedEpoch": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 2,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "wrongWorkspace": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-99",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "malformedMissingWorkspace": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "3a40cb0d09f88bf16db6c4d3117aef7ad80b863bd5b0e56d444c8db4306ba50f",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "emptyGrantAttestation": {
+      "spec": "grant-attestation/1",
+      "profile": "checkpoint",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "8c046e90b77828cc5079ad8a65c49bab527491fc48025542776a675cf9e86679",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "absent-by-state",
+      "deliveryId": "dlv-fixture-01",
+      "invocationFence": 7,
+      "workspaceId": "ws-fixture-01",
+      "projectionDigest": "a21785a34752e8bf5661ce9534551fae50315485f49eddb61c40c981bc22b274",
+      "discoveryConfigurationDigest": "807be7db9bc7b45e94bc8ffc4cf05f77526c2c96922eb86708692111b45dc76f",
+      "registeringInstallationId": "install-fixture-01",
+      "activeProfile": "default"
+    },
+    "validIntake": {
+      "spec": "grant-attestation/1",
+      "profile": "intake",
+      "hostVersion": "fixture-host/1.0.0",
+      "grantDigest": "52450683176c7543e18a4e516f02604272dc5d6d492e9ce2da37cb42d5f308a6",
+      "productTrustRevocationEpoch": 3,
+      "expiry": "2026-08-30T12:05:00Z",
+      "intakeDraftId": "intake-fixture-01",
+      "deliveryId": "absent-by-state",
+      "invocationFence": "absent-by-state",
+      "workspaceId": "absent-by-state",
+      "projectionDigest": "absent-by-state",
+      "discoveryConfigurationDigest": "absent-by-state",
+      "registeringInstallationId": "absent-by-state",
+      "activeProfile": "absent-by-state"
+    }
+  },
+  "admissionCases": [
+    {
+      "id": "admits-the-currently-attested-grant",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "expect": {
+        "admitted": true,
+        "mutationCapable": true
+      }
+    },
+    {
+      "id": "admits-the-read-only-intake-grant",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "expect": {
+        "admitted": true,
+        "mutationCapable": false
+      }
+    },
+    {
+      "id": "missing-grant-fails-closed",
+      "expectation": "checkpoint",
+      "grant": null,
+      "attestation": "validCheckpoint",
+      "expect": {
+        "denials": [
+          "missing_grant"
+        ]
+      }
+    },
+    {
+      "id": "missing-attestation-fails-closed",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": null,
+      "expect": {
+        "denials": [
+          "missing_attestation"
+        ]
+      }
+    },
+    {
+      "id": "forged-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "forgedDigest",
+      "expect": {
+        "denials": [
+          "grant_digest_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "candidate-planted-grant-cannot-widen",
+      "expectation": "checkpoint",
+      "grant": "plantedWideGrant",
+      "attestation": "validCheckpoint",
+      "expect": {
+        "denials": [
+          "grant_digest_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "stale-fence-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "staleFence",
+      "expect": {
+        "denials": [
+          "fence_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "sibling-delivery-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "siblingDelivery",
+      "expect": {
+        "denials": [
+          "delivery_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "wrong-projection-blocks",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongProjection",
+      "expect": {
+        "denials": [
+          "projection_digest_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "mutated-discovery-configuration-blocks",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongDiscoveryConfiguration",
+      "expect": {
+        "denials": [
+          "discovery_configuration_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "expired-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "expired",
+      "expect": {
+        "denials": [
+          "attestation_expired"
+        ]
+      }
+    },
+    {
+      "id": "revoked-trust-epoch-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "revokedEpoch",
+      "expect": {
+        "denials": [
+          "trust_epoch_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "foreign-workspace-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongWorkspace",
+      "expect": {
+        "denials": [
+          "workspace_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "malformed-attestation-fails-closed",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "malformedMissingWorkspace",
+      "expect": {
+        "denials": [
+          "malformed_attestation"
+        ]
+      }
+    },
+    {
+      "id": "empty-grant-yields-no-mutation-token",
+      "expectation": "checkpoint",
+      "grant": "emptyGrant",
+      "attestation": "emptyGrantAttestation",
+      "expect": {
+        "denials": [
+          "empty_grant"
+        ]
+      }
+    },
+    {
+      "id": "malformed-grant-fails-closed",
+      "expectation": "checkpoint",
+      "grant": "malformedGrantMissingWritable",
+      "attestation": "validCheckpoint",
+      "expect": {
+        "denials": [
+          "malformed_grant"
+        ]
+      }
+    },
+    {
+      "id": "foreign-host-version-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongHostVersion",
+      "expect": {
+        "denials": [
+          "host_version_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "foreign-installation-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongInstallation",
+      "expect": {
+        "denials": [
+          "installation_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "foreign-active-profile-attestation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "wrongActiveProfile",
+      "expect": {
+        "denials": [
+          "active_profile_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "intake-attestation-for-wrong-draft-rejected",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "wrongIntakeDraft",
+      "expect": {
+        "denials": [
+          "intake_draft_mismatch"
+        ]
+      }
+    },
+    {
+      "id": "checkpoint-attestation-on-intake-expectation-rejected",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validCheckpoint",
+      "expect": {
+        "denials": [
+          "profile_mismatch",
+          "grant_digest_mismatch"
+        ]
+      }
+    }
+  ],
+  "toolCases": [
+    {
+      "id": "tool-before-attestation-denied",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": null,
+      "request": {
+        "capability": "fs.read"
+      },
+      "expect": {
+        "denials": [
+          "not_admitted"
+        ]
+      }
+    },
+    {
+      "id": "granted-capability-with-writable-path-allowed",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "shell.exec",
+        "writes": [
+          "src/index.ts"
+        ]
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "id": "shell-mcp-provider-bypass-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "mcp.unpinned-server"
+      },
+      "expect": {
+        "denials": [
+          "capability_not_granted"
+        ]
+      }
+    },
+    {
+      "id": "forbidden-operation-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "shell.exec",
+        "operation": "network.outbound"
+      },
+      "expect": {
+        "denials": [
+          "operation_forbidden"
+        ]
+      }
+    },
+    {
+      "id": "common-git-authority-path-not-writable",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          ".git/refs/heads/main"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "receipted-projection-subtree-not-writable",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          ".delivery/projection/workflow.md"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "write-outside-grant-rejected",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          "docs/notes.md"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "write_outside_grant"
+        ]
+      }
+    },
+    {
+      "id": "unnormalized-path-fails-closed",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          "../escape.txt"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "unnormalized_path"
+        ]
+      }
+    },
+    {
+      "id": "backslash-traversal-fails-closed",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          "src/..\\..\\.git/config"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "unnormalized_path"
+        ]
+      }
+    },
+    {
+      "id": "case-aliased-protected-path-denied",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "fs.write",
+        "writes": [
+          ".Git/hooks/pre-commit"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "model-minted-confirmation-denied",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "operator-confirmation.contract-confirmation"
+      },
+      "expect": {
+        "denials": [
+          "confirmation_operation_excluded"
+        ]
+      }
+    },
+    {
+      "id": "model-authorized-takeover-denied",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "validCheckpoint",
+      "request": {
+        "capability": "shell.exec",
+        "operation": "operator-confirmation.takeover-authorization"
+      },
+      "expect": {
+        "denials": [
+          "confirmation_operation_excluded"
+        ]
+      }
+    },
+    {
+      "id": "confirmation-operation-denied-even-when-grant-lists-it",
+      "expectation": "checkpoint",
+      "grant": "confirmationListingGrant",
+      "attestation": "confirmationListing",
+      "request": {
+        "capability": "operator-confirmation.contract-confirmation"
+      },
+      "expect": {
+        "denials": [
+          "confirmation_operation_excluded"
+        ]
+      }
+    },
+    {
+      "id": "case-variant-confirmation-operation-denied",
+      "expectation": "checkpoint",
+      "grant": "confirmationListingGrant",
+      "attestation": "confirmationListing",
+      "request": {
+        "capability": "Operator-Confirmation.Contract-Confirmation"
+      },
+      "expect": {
+        "denials": [
+          "confirmation_operation_excluded"
+        ]
+      }
+    },
+    {
+      "id": "stale-attestation-opens-no-tools",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "staleFence",
+      "request": {
+        "capability": "fs.read"
+      },
+      "expect": {
+        "denials": [
+          "not_admitted"
+        ]
+      }
+    },
+    {
+      "id": "sibling-attestation-opens-no-tools",
+      "expectation": "checkpoint",
+      "grant": "checkpointGrant",
+      "attestation": "siblingDelivery",
+      "request": {
+        "capability": "fs.read"
+      },
+      "expect": {
+        "denials": [
+          "not_admitted"
+        ]
+      }
+    },
+    {
+      "id": "intake-turn-reads-but-cannot-write-trust-store",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "request": {
+        "capability": "fs.read",
+        "writes": [
+          ".delivery/trust-store/epoch"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "intake-turn-cannot-write-any-journal",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "request": {
+        "capability": "fs.read",
+        "writes": [
+          ".delivery/journal/entries.jsonl"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "intake-turn-cannot-write-product-namespaces",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "request": {
+        "capability": "fs.read",
+        "writes": [
+          ".delivery/namespaces/registration.json"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "protected_path"
+        ]
+      }
+    },
+    {
+      "id": "intake-turn-write-outside-any-grant-path-rejected",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "request": {
+        "capability": "fs.read",
+        "writes": [
+          "notes/scratch.md"
+        ]
+      },
+      "expect": {
+        "denials": [
+          "write_outside_grant"
+        ]
+      }
+    },
+    {
+      "id": "intake-read-only-status-remains-possible",
+      "expectation": "intake",
+      "grant": "intakeGrant",
+      "attestation": "validIntake",
+      "request": {
+        "capability": "status.read"
+      },
+      "expect": {
+        "allowed": true
+      }
+    }
+  ],
+  "confirmationChallenge": {
+    "channelId": "binding-channel-7f3a",
+    "channelOpen": true,
+    "interactive": true,
+    "challenge": "echo-9k2m",
+    "consumed": false,
+    "expiry": "2026-08-30T12:02:00Z"
+  },
+  "confirmationCases": [
+    {
+      "id": "interactive-echo-on-own-channel-completes",
+      "rendered": {},
+      "attempt": {
+        "presentedChallenge": "echo-9k2m",
+        "presentedOnChannelId": "binding-channel-7f3a",
+        "observedAt": "2026-08-30T12:00:30Z",
+        "viaModelVisibleSurface": false,
+        "interactive": true
+      },
+      "expect": {
+        "completed": true
+      }
+    },
+    {
+      "id": "detached-descendant-cannot-complete",
+      "rendered": {
+        "channelOpen": false
+      },
+      "attempt": {
+        "presentedChallenge": "echo-9k2m",
+        "presentedOnChannelId": "binding-channel-7f3a",
+        "observedAt": "2026-08-30T12:00:30Z",
+        "viaModelVisibleSurface": false,
+        "interactive": true
+      },
+      "expect": {
+        "denials": [
+          "channel_closed"
+        ]
+      }
+    },
+    {
+      "id": "model-visible-surface-refused",
+      "rendered": {},
+      "attempt": {
+        "presentedChallenge": "echo-9k2m",
+        "presentedOnChannelId": "binding-channel-7f3a",
+        "observedAt": "2026-08-30T12:00:30Z",
+        "viaModelVisibleSurface": true,
+        "interactive": true
+      },
+      "expect": {
+        "denials": [
+          "model_visible_surface_refused"
+        ]
+      }
+    },
+    {
+      "id": "piped-input-refused",
+      "rendered": {},
+      "attempt": {
+        "presentedChallenge": "echo-9k2m",
+        "presentedOnChannelId": "binding-channel-7f3a",
+        "observedAt": "2026-08-30T12:00:30Z",
+        "viaModelVisibleSurface": false,
+        "interactive": false
+      },
+      "expect": {
+        "denials": [
+          "non_interactive_refused"
+        ]
+      }
+    },
+    {
+      "id": "foreign-channel-refused",
+      "rendered": {},
+      "attempt": {
+        "presentedChallenge": "echo-9k2m",
+        "presentedOnChannelId": "some-other-channel",
+        "observedAt": "2026-08-30T12:00:30Z",
+        "viaModelVisibleSurface": false,
+        "interactive": true
+      },
+      "expect": {
+        "denials": [
+          "wrong_channel"
+        ]
+      }
+    },
+    {
+      "id": "consumed-challenge-refused",
+      "rendered": {
+        "consumed": true
+      },
+      "attempt": {
+        "presentedChallenge": "echo-9k2m",
+        "presentedOnChannelId": "binding-channel-7f3a",
+        "observedAt": "2026-08-30T12:00:30Z",
+        "viaModelVisibleSurface": false,
+        "interactive": true
+      },
+      "expect": {
+        "denials": [
+          "challenge_consumed"
+        ]
+      }
+    },
+    {
+      "id": "expired-challenge-refused",
+      "rendered": {},
+      "attempt": {
+        "presentedChallenge": "echo-9k2m",
+        "presentedOnChannelId": "binding-channel-7f3a",
+        "observedAt": "2026-08-30T12:03:00Z",
+        "viaModelVisibleSurface": false,
+        "interactive": true
+      },
+      "expect": {
+        "denials": [
+          "challenge_expired"
+        ]
+      }
+    },
+    {
+      "id": "wrong-echo-refused",
+      "rendered": {},
+      "attempt": {
+        "presentedChallenge": "echo-XXXX",
+        "presentedOnChannelId": "binding-channel-7f3a",
+        "observedAt": "2026-08-30T12:00:30Z",
+        "viaModelVisibleSurface": false,
+        "interactive": true
+      },
+      "expect": {
+        "denials": [
+          "challenge_mismatch"
+        ]
+      }
+    }
+  ],
+  "laneCases": [
+    {
+      "id": "no-assertion-source-disables-only-the-sensitive-set",
+      "sources": {
+        "hostNative": false,
+        "osNative": false
+      },
+      "expect": {
+        "sensitiveApprovals": "fail_closed_no_assertion_source",
+        "operatorConfirmations": "available",
+        "mergeReadyLane": "available"
+      }
+    },
+    {
+      "id": "os-native-source-serves-sensitive-approvals",
+      "sources": {
+        "hostNative": false,
+        "osNative": true
+      },
+      "expect": {
+        "sensitiveApprovals": "available",
+        "operatorConfirmations": "available",
+        "mergeReadyLane": "available"
+      }
+    }
+  ]
+}
