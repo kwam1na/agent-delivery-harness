@@ -673,6 +673,9 @@
             "spec": "product-trust-state/1",
             "installationId": "install-1",
             "pinnedManifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "acceptedGenerationDigests": [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
             "revokedGenerationDigests": [
               "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
             ],
@@ -690,6 +693,9 @@
             "spec": "product-trust-state/1",
             "installationId": "install-1",
             "pinnedManifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "acceptedGenerationDigests": [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
             "revokedGenerationDigests": [],
             "revocationEpoch": -1,
             "highWaterMark": 0
@@ -705,6 +711,9 @@
             "spec": "product-trust-state/1",
             "installationId": "install-1",
             "pinnedManifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "acceptedGenerationDigests": [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
             "revokedGenerationDigests": [
               "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
               "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

@@ -123,7 +123,15 @@ beforeAll(async () => {
 
   installationPath = path.join(scratch, "installation");
   receiptDir = path.join(scratch, "user-config");
-  const installed = await installComposition({ packedDir: packed.packedDir, installationPath, receiptDir });
+  const installed = await installComposition({
+    packedDir: packed.packedDir,
+    installationPath,
+    receiptDir,
+    // The explicit operator-supplied qualification flag with its disposable
+    // repository set — the fixture profile activates no other way.
+    qualification: { disposableRepositoryIds: [DISPOSABLE_CONTRACT.repository.repositoryId] },
+    assertionProvider: { sourceKind: "qualification-fixture" },
+  });
   expect(installed.ok, JSON.stringify(installed)).toBe(true);
 
   const repo = buildDisposableRepository(path.join(scratch, "repo"));

@@ -548,6 +548,56 @@ export {
   type SubstrateFailure,
   type TrustCheckInput,
 } from "./substrate/installer.ts";
+export {
+  ASSERTION_CLASSES,
+  ASSERTION_SOURCES,
+  SECURITY_BLOCKED_MIGRATION_ACTION,
+  SENSITIVE_APPROVAL_ASSERTION_SPEC,
+  SENSITIVE_MAINTENANCE_ACTIONS,
+  assertionClassOf,
+  validateSensitiveApprovalAssertion,
+  type AssertionClass,
+  type AssertionSource,
+  type SensitiveMaintenanceAction,
+} from "./spine/assertion.ts";
+export {
+  ASSERTION_PROVIDER_SPEC,
+  assertionProviderConfigPathFor,
+  createOsNativeAssertionSource,
+  createQualificationFixtureAssertionSource,
+  loadAssertionProviderConfig,
+  writeAssertionProviderConfig,
+  type AssertionEvaluation,
+  type AssertionEvaluationRequest,
+  type AssertionProviderConfig,
+  type AssertionAvailabilityProbe,
+  type AssertionSourcePort,
+} from "./substrate/assertion-source.ts";
+export {
+  garbageCollectGenerations,
+  inspectInstallation,
+  maintainTrustState,
+  recoverInterruptedMaintenance,
+  repairInstallation,
+  rollbackComposition,
+  updateComposition,
+  type GarbageCollectInput,
+  type InspectInstallationInput,
+  type InspectedGeneration,
+  type MaintainTrustStateInput,
+  type RepairInstallationInput,
+  type RollbackCompositionInput,
+  type SensitiveLaneInput,
+  type UpdateCompositionInput,
+  type UpdateCompositionResult,
+} from "./substrate/lifecycle.ts";
+export {
+  MINIMUM_NODE_MAJOR,
+  MINIMUM_PYTHON,
+  SUPPORTED_PLATFORMS,
+  livePreflightProbes,
+  type PreflightProbes,
+} from "./substrate/preflight.ts";
 
 // ── The walking skeleton's V-slice modules ──────────────────────────────────
 //

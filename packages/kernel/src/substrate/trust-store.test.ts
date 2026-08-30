@@ -22,6 +22,7 @@ const validStateText = (): string =>
     spec: PRODUCT_TRUST_STATE_SPEC,
     installationId: "install-1",
     pinnedManifestDigest: DIGEST,
+    acceptedGenerationDigests: [DIGEST],
     revokedGenerationDigests: [],
     revocationEpoch: 0,
     highWaterMark: 1,

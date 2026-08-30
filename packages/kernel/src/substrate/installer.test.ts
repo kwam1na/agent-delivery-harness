@@ -79,9 +79,15 @@ const freshTarget = async (): Promise<{ installationPath: string; receiptDir: st
   return { installationPath: path.join(base, "installation"), receiptDir: path.join(base, "user-config") };
 };
 
+const QUALIFICATION = { disposableRepositoryIds: ["disposable-skeleton"] } as const;
+const FIXTURE_INSTALL = {
+  qualification: QUALIFICATION,
+  assertionProvider: { sourceKind: "qualification-fixture" },
+} as const;
+
 const installFresh = async () => {
   const target = await freshTarget();
-  const installed = await installComposition({ packedDir, ...target });
+  const installed = await installComposition({ packedDir, ...target, ...FIXTURE_INSTALL });
   expect(installed.ok, JSON.stringify(installed)).toBe(true);
   if (!installed.ok) throw new Error("unreachable");
   return { ...target, installed };
@@ -163,6 +169,7 @@ describe("genuinely-first install", () => {
     const state = JSON.parse(readFileSync(storePath, "utf8")) as Record<string, unknown>;
     expect(state["installationId"]).toBe(installed.installationId);
     expect(state["pinnedManifestDigest"]).toBe(generationDigest);
+    expect(state["acceptedGenerationDigests"]).toEqual([generationDigest]);
     expect(state["revokedGenerationDigests"]).toEqual([]);
     expect(state["revocationEpoch"]).toBe(0);
     expect(state["highWaterMark"]).toBe(1);
@@ -216,7 +223,7 @@ describe("install rejections", () => {
     cpSync(packedDir, tampered, { recursive: true });
     writeFileSync(path.join(tampered, "harness", "NOTICE"), "tampered bytes\n");
     const target = await freshTarget();
-    const installed = await installComposition({ packedDir: tampered, ...target });
+    const installed = await installComposition({ packedDir: tampered, ...target, ...FIXTURE_INSTALL });
     expect(codesOf(installed)).toContain("closure_digest_mismatch");
   });
 
@@ -225,7 +232,8 @@ describe("install rejections", () => {
     cpSync(packedDir, linked, { recursive: true });
     symlinkSync(path.join(linked, "harness", "NOTICE"), path.join(linked, "harness", "NOTICE.link"));
     const target = await freshTarget();
-    await expect(installComposition({ packedDir: linked, ...target })).rejects.toThrow(/fail closed/);
+    const installed = await installComposition({ packedDir: linked, ...target, ...FIXTURE_INSTALL });
+    expect(codesOf(installed)).toContain("unsupported_archive_entry");
   });
 
   it("rejects an unlisted hidden file — the closure walk skips nothing", async () => {
@@ -233,7 +241,7 @@ describe("install rejections", () => {
     cpSync(packedDir, smuggled, { recursive: true });
     writeFileSync(path.join(smuggled, "harness", ".rider"), "unbound bytes\n");
     const target = await freshTarget();
-    const installed = await installComposition({ packedDir: smuggled, ...target });
+    const installed = await installComposition({ packedDir: smuggled, ...target, ...FIXTURE_INSTALL });
     expect(codesOf(installed)).toContain("closure_digest_mismatch");
   });
 
@@ -246,19 +254,47 @@ describe("install rejections", () => {
     expect(codesOf(installed)).toContain("composition_profile_mismatch");
   });
 
-  it("rejects a downgrade below the persisted high-water mark", async () => {
+  it("routes any different-generation adopt to the update lane — the install lane only reinstalls the exact pin", async () => {
     const advanced = await pack({ sequence: 5 });
     expect(advanced.ok).toBe(true);
     if (!advanced.ok) return;
     const target = await freshTarget();
-    const first = await installComposition({ packedDir: advanced.packedDir, ...target });
+    const first = await installComposition({ packedDir: advanced.packedDir, ...target, ...FIXTURE_INSTALL });
     expect(first.ok).toBe(true);
 
     const older = await pack({ sequence: 4 });
     expect(older.ok).toBe(true);
     if (!older.ok) return;
-    const downgrade = await installComposition({ packedDir: older.packedDir, ...target });
-    expect(codesOf(downgrade)).toContain("downgrade_rejected");
+    const sneak = await installComposition({ packedDir: older.packedDir, ...target, ...FIXTURE_INSTALL });
+    expect(codesOf(sneak)).toContain("update_lane_required");
+  });
+
+  it("refuses a fixture-declaring manifest without the explicit qualification flag — install and reinstall alike", async () => {
+    const fresh = await freshTarget();
+    const unflaggedFresh = await installComposition({ packedDir, ...fresh });
+    expect(codesOf(unflaggedFresh)).toContain("qualification_flag_required");
+
+    const { installationPath, receiptDir } = await installFresh();
+    const unflaggedReinstall = await installComposition({ packedDir, installationPath, receiptDir });
+    expect(codesOf(unflaggedReinstall)).toContain("qualification_flag_required");
+  });
+
+  it("refuses the qualification flag on a production manifest — flag and active profile can never disagree", async () => {
+    const production = await pack({ profile: "production", sequence: 1 });
+    expect(production.ok).toBe(true);
+    if (!production.ok) return;
+    const target = await freshTarget();
+    const flagged = await installComposition({ packedDir: production.packedDir, ...target, ...FIXTURE_INSTALL });
+    expect(codesOf(flagged)).toContain("qualification_flag_refused");
+  });
+
+  it("records the disposable-repository set in the receipt and resolves it through the registration binding", async () => {
+    const { installationPath, receiptDir } = await installFresh();
+    const receipt = JSON.parse(readFileSync(receiptPathFor(receiptDir, installationPath), "utf8")) as Record<string, unknown>;
+    expect(receipt["disposableRepositoryIds"]).toEqual(["disposable-skeleton"]);
+    const binding = await registrationBinding({ installationPath, receiptDir });
+    expect(binding.ok).toBe(true);
+    if (binding.ok) expect(binding.disposableRepositoryIds).toEqual(["disposable-skeleton"]);
   });
 
   it("fails closed on a reinstall over surviving artifacts with a missing or corrupt store or receipt", async () => {
@@ -269,6 +305,7 @@ describe("install rejections", () => {
       packedDir,
       installationPath: survivorsMissingStore.installationPath,
       receiptDir: survivorsMissingStore.receiptDir,
+      ...FIXTURE_INSTALL,
     });
     expect(codesOf(overMissingStore)).toContain("prior_installation_artifacts");
 
@@ -281,6 +318,7 @@ describe("install rejections", () => {
       packedDir,
       installationPath: survivorsMissingReceipt.installationPath,
       receiptDir: survivorsMissingReceipt.receiptDir,
+      ...FIXTURE_INSTALL,
     });
     expect(codesOf(overMissingReceipt)).toContain("prior_installation_artifacts");
 
@@ -291,6 +329,7 @@ describe("install rejections", () => {
       packedDir,
       installationPath: survivorsCorrupt.installationPath,
       receiptDir: survivorsCorrupt.receiptDir,
+      ...FIXTURE_INSTALL,
     });
     expect(codesOf(overCorrupt)).toContain("prior_installation_artifacts");
   });
@@ -390,6 +429,7 @@ describe("the mutation-lane trust predicate", () => {
         spec: "product-trust-state/1",
         installationId: "planted",
         pinnedManifestDigest: generationDigest,
+        acceptedGenerationDigests: [generationDigest],
         revokedGenerationDigests: [],
         revocationEpoch: 0,
         highWaterMark: 0,
