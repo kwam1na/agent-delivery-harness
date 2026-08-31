@@ -16,7 +16,10 @@
  *     delivery back through validation and a fresh aligned review;
  *   - the recording commit may carry only both-neutral bytes: a committed
  *     discovery-configuration path and a committed source change each return
- *     the delivery to validation with its own typed blocker;
+ *     the delivery to validation with its own typed blocker, and the return is
+ *     live — the reviewed candidate reaches merge-ready through it. (The
+ *     ordinary clean recording commit is the walking skeleton's scenario and is
+ *     not re-driven here.)
  *   - and the blocker/remediation inventory is a readable audit surface for
  *     the whole loop.
  *
@@ -492,22 +495,5 @@ describe("the recording discipline", () => {
     expect(recorded.ok && recorded.state === "ready", JSON.stringify(recorded)).toBe(true);
     const finished = await facade.completeFinishLine({ deliveryId, fence });
     expect(finished.ok && finished.state === "completed", JSON.stringify(finished)).toBe(true);
-  });
-
-  it("records a both-neutral commit and completes", { timeout: 240_000 }, async () => {
-    const { deliveryId, worktree, fence } = await openDelivery("record-clean");
-    await planAndImplement(deliveryId, worktree, fence, GREET_RIGHT, "implement the contracted greeting");
-    await driveToRecording(deliveryId, worktree, fence, "c1");
-
-    const prepared = await facade.prepareTrackedRecord({ deliveryId, env: { CLAUDECODE: "1" }, fence });
-    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
-    commitAll(worktree, "tracked delivery record");
-    const recorded = await facade.confirmTrackedRecord({ deliveryId, fence });
-    expect(recorded.ok && recorded.state === "ready", JSON.stringify(recorded)).toBe(true);
-    const finished = await facade.completeFinishLine({ deliveryId, fence });
-    expect(finished.ok && finished.state === "completed", JSON.stringify(finished)).toBe(true);
-
-    const inventory = await facade.blockerInventory({ deliveryId });
-    expect(inventory.ok && inventory.entries.length === 0, JSON.stringify(inventory)).toBe(true);
   });
 });
