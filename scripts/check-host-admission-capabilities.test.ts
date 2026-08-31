@@ -468,10 +468,10 @@ describe("host-admission capability record document", () => {
     // EXPENSIVE, NOT IMPOSSIBLE: a negation inserted immediately before any of
     // them keeps every word they match, and no longer literal fixes that —
     // each one falls to a correspondingly longer negation. The class is
-    // unclosable here by construction. What it rules out is the ordinary
-    // rewording that drifts a claim by accident; what is left needs an author
-    // writing a sentence they know to be false, which this file's header
-    // already assigns to review rather than to a regex.
+    // unclosable here by construction. What it rules out is the reword that
+    // drops the deciding words; a claim contradicted by a clause ADDED after
+    // them still matches, so accidental drift is narrowed, not excluded. What
+    // is left is review's, which this file's header already says.
     expect(claim.reverification.scope, "the scope states where this result stops applying").toMatch(
       /bounded to out-of-workspace paths OUTSIDE the system temporary directory/u,
     );
