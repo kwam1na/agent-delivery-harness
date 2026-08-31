@@ -97,6 +97,10 @@ const reachableBaseline = syntheticBaseline([
 
 describe("reduction arithmetic", () => {
   it("takes the middle value of an odd list and the mean of the two middle values of an even one", () => {
+    // Three DISTINCT values, so an off-by-one on the middle index is visible:
+    // [2, 0, 0] would pin nothing, because its lower-middle and middle are
+    // both 0 and either index answers correctly.
+    expect(median([5, 1, 3])).toBe(3);
     expect(median([2, 0, 0])).toBe(0);
     expect(median([4, 1, 3, 2])).toBe(2.5);
   });
@@ -196,6 +200,18 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     const verdict = scoreShadowMilestone(reachableBaseline, record);
     expect(verdict.incomplete.map((note) => note.code)).toContain("gate_record_unrecognized");
     expect(verdict.status).toBe("incomplete");
+  });
+
+  it("treats an undeclared required total as incomplete, not as a size every set clears", () => {
+    // The size check is written as a negated `>=` so an unparseable total
+    // falls to the incomplete side. Written the natural way round, a record
+    // that declares no required size at all would score a full verdict.
+    const record = fullSet([{}, {}, {}]);
+    delete (record["comparisonSetRequirement"] as Record<string, unknown>)["total"];
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+    expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_incomplete");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
   });
 
   it("requires the baseline's mix, not merely its total", () => {
@@ -312,6 +328,47 @@ describe("policy-required interruptions are reported, never counted as intervent
     const verdict = scoreShadowMilestone(reachableBaseline, record);
     expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
     expect(verdict.status).toBe("incomplete");
+  });
+});
+
+describe("a malformed measurement makes the set incomplete, never a scored zero", () => {
+  it("rejects a count that is not a non-negative integer rather than coercing it", () => {
+    // `reduceScores` coerces with bare `Number(...)`, so this check is what
+    // keeps a string or a negative out of the figures. Unpinned, a delivery
+    // measured as "0" or -5 would score a clean pass.
+    for (const bogus of ["0", -5, 1.5, null]) {
+      const malformed = entry("shadow-operations", "operations");
+      (malformed["score"] as Record<string, unknown>)["interventionCount"] = bogus;
+      const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), malformed]);
+      const verdict = scoreShadowMilestone(reachableBaseline, record);
+      expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+      expect(verdict.status).toBe("incomplete");
+    }
+  });
+
+  it("rejects a non-finite or negative wall-clock split", () => {
+    for (const bogus of ["500", -1, Number.NaN]) {
+      const malformed = entry("shadow-operations", "operations");
+      (malformed["score"] as Record<string, unknown>)["blockedSeconds"] = bogus;
+      const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), malformed]);
+      const verdict = scoreShadowMilestone(reachableBaseline, record);
+      expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+      expect(verdict.status).toBe("incomplete");
+    }
+  });
+
+  it("rejects a zero-length window instead of reading it as a perfect blocked share", () => {
+    const verdict = scoreShadowMilestone(
+      reachableBaseline,
+      fullSet([
+        { blockedSeconds: 0, progressingSeconds: 0 },
+        { blockedSeconds: 0, progressingSeconds: 0 },
+        { blockedSeconds: 0, progressingSeconds: 0 },
+      ]),
+    );
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+    expect(verdict.shadow).toBeNull();
   });
 });
 
