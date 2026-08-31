@@ -97,7 +97,21 @@ interface ResolvedManaged {
   readonly fence: number | undefined;
 }
 
-async function resolveManaged(context: CommandContext): Promise<ResolvedManaged | CommandResult> {
+/**
+ * Resolves the delivery this invocation addresses.
+ *
+ * `requested` exists for the retention operations alone. The skeleton's rule —
+ * one delivery in flight per repository — is right for every checkpoint
+ * operation, but it makes the retention lane unusable the moment a repository
+ * has finished more than one delivery: `active[0] ?? deliveries.at(-1)` then
+ * addresses only the newest, and every earlier terminal delivery's durable
+ * detail becomes unreachable from the CLI even though the facade can export and
+ * delete it. Naming one explicitly is the whole remedy, and it is deliberately
+ * NOT offered to the checkpoint operations: those bind an invocation fence
+ * derived from the worktree, and a delivery named by flag would not be the one
+ * that worktree is bound to.
+ */
+async function resolveManaged(context: CommandContext, requested?: string): Promise<ResolvedManaged | CommandResult> {
   const common = await gitCommonDir(context.rootDir);
   if (common === undefined) {
     return blocked("not_a_repository", "The working directory is not a git repository.", "Run from the delivery worktree.");
@@ -146,13 +160,25 @@ async function resolveManaged(context: CommandContext): Promise<ResolvedManaged 
       active.push(candidate);
     }
   }
-  const deliveryId = active[0] ?? deliveries[deliveries.length - 1];
-  if (deliveryId === undefined || active.length > 1) {
-    return blocked(
-      "delivery_unresolved",
-      active.length > 1 ? "Several deliveries are in flight; the skeleton drives one." : "No registered delivery exists.",
-      "Register exactly one delivery for this repository.",
-    );
+  let deliveryId: string | undefined;
+  if (requested !== undefined) {
+    if (!deliveries.includes(requested)) {
+      return blocked(
+        "delivery_unresolved",
+        `No delivery ${requested} is registered for this repository.`,
+        "Name a delivery this repository registered; `managed status` reports the current one.",
+      );
+    }
+    deliveryId = requested;
+  } else {
+    deliveryId = active[0] ?? deliveries[deliveries.length - 1];
+    if (deliveryId === undefined || active.length > 1) {
+      return blocked(
+        "delivery_unresolved",
+        active.length > 1 ? "Several deliveries are in flight; the skeleton drives one." : "No registered delivery exists.",
+        "Register exactly one delivery for this repository, or name one with --delivery for export and delete.",
+      );
+    }
   }
   const facade = createManagedDeliveryFacade({
     repoDir: context.rootDir,
@@ -208,7 +234,15 @@ export const managedCommand: CommandDescriptor = {
       return { kind: "ok", summary: `${FACADE_OPERATIONS.length} facade operations` };
     }
 
-    const resolved = await resolveManaged(context);
+    // Only the retention operations may name a delivery; everything else binds
+    // the fence of the worktree it runs in.
+    const RETENTION_OPERATIONS = ["export", "delete"];
+    const requestedDelivery = RETENTION_OPERATIONS.includes(operation) ? flag(rest, "--delivery") : undefined;
+    if (requestedDelivery === undefined && flag(rest, "--delivery") !== undefined) {
+      return { kind: "usage", message: `--delivery is accepted only by: ${RETENTION_OPERATIONS.join(", ")}.` };
+    }
+
+    const resolved = await resolveManaged(context, requestedDelivery);
     if (isCommandResult(resolved)) return resolved;
     const { facade, deliveryId, fence } = resolved;
     const requireFence = (): number | CommandResult =>

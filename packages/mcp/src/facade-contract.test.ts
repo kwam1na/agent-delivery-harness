@@ -42,7 +42,6 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const CLI_OPERATION_MAP: Readonly<Record<string, string>> = Object.freeze({
   status: "status",
   next: "nextCheckpoint",
-  operations: "status",
   blockers: "blockerInventory",
   "explain-blocker": "explainBlocker",
   "submit-plan": "submitStageResult",
@@ -62,6 +61,13 @@ const CLI_OPERATION_MAP: Readonly<Record<string, string>> = Object.freeze({
   export: "exportDelivery",
   delete: "deleteDelivery",
 });
+
+/**
+ * The one CLI operation that drives no facade operation at all: it prints the
+ * inventory itself. Named rather than mapped, so that if it ever grows a facade
+ * call the mapping check below starts demanding one.
+ */
+const INVENTORY_ONLY_OPERATION = "operations";
 
 const MAINTAIN_OPERATION_MAP: Readonly<Record<string, string>> = Object.freeze({
   update: "updateComposition",
@@ -108,10 +114,25 @@ describe("the facade's own inventory", () => {
 describe("the CLI surface", () => {
   it("advertises only operations the inventory declares", async () => {
     for (const name of advertisedOperations(await usageMessageOf("managed"))) {
+      if (name === INVENTORY_ONLY_OPERATION) continue;
       const mapped = CLI_OPERATION_MAP[name];
       expect(mapped, `managed ${name} has no mapped facade operation`).toBeDefined();
       expect(facadeOperation(mapped as string), `${mapped} is not in the inventory`).toBeDefined();
     }
+  });
+
+  it("drives no facade operation from the inventory-printing operation", async () => {
+    // `managed operations` answers from the compiled inventory and calls
+    // nothing on the facade, which is why it works before a delivery resolves.
+    // Asserting that here keeps the exemption above honest: if it ever grows a
+    // facade call, this row fails rather than the mapping silently going stale.
+    expect(CLI_OPERATION_MAP[INVENTORY_ONLY_OPERATION]).toBeUndefined();
+    const source = readFileSync(path.join(REPO_ROOT, "packages", "cli", "src", "commands", "managed.ts"), "utf8");
+    const before = source.indexOf(`if (operation === "${INVENTORY_ONLY_OPERATION}")`);
+    expect(before).toBeGreaterThan(-1);
+    const resolveAt = source.indexOf("await resolveManaged(context");
+    expect(resolveAt, "the delivery resolution call must be findable").toBeGreaterThan(-1);
+    expect(before).toBeLessThan(resolveAt);
   });
 
   it("advertises only maintenance-lane operations the inventory declares", async () => {
@@ -147,10 +168,15 @@ describe("the MCP surface", () => {
 
   it("offers read-class operations and nothing else", () => {
     for (const name of MANAGED_READ_OPERATIONS) {
+      // The inventory-printing operation reads the compiled inventory and no
+      // delivery at all, so it maps to no facade operation by construction.
+      if (name === INVENTORY_ONLY_OPERATION) continue;
       const mapped = CLI_OPERATION_MAP[name];
       expect(mapped, `${name} has no mapped facade operation`).toBeDefined();
       expect(facadeOperation(mapped as string)?.capability).toBe("read");
     }
+    // Anti-vacuity: the loop must actually have judged something.
+    expect(MANAGED_READ_OPERATIONS.filter((name) => name !== INVENTORY_ONLY_OPERATION).length).toBeGreaterThan(0);
   });
 
   it("declares the offered operations in the tool's own input schema", () => {
@@ -217,8 +243,16 @@ describe("the product launches no subordinate agent runtime", () => {
     // such a launch documents in prose that it never does, and a scan that
     // could not tell an argv from a sentence about one would fail on the very
     // file that states the rule.
+    //
+    // ONLY WHOLE-LINE COMMENTS ARE STRIPPED, and that restriction is the point.
+    // A block-comment regex does not know about string literals, so a file
+    // holding `const open = "/*"` and later `const close = "*/"` would have
+    // everything between them deleted — including a real launch — and the
+    // file-count guard below would not notice, because the file is hollowed
+    // rather than removed. Every prose seam this protects is line-leading
+    // JSDoc, and a string literal cannot open a line-leading `//` or `*`.
     const forbidden = [/["'`]claude["'`]\s*,/, /["'`]codex["'`]\s*,/, /--print/, /codex\s+exec/, /claude\s+-p\b/];
-    const stripComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+    const stripComments = (source: string): string => source.replace(/^\s*(\/\/|\/?\*).*$/gm, " ");
     const offenders: string[] = [];
     for (const file of sourceFiles(path.join(REPO_ROOT, "packages"))) {
       const source = stripComments(readFileSync(file, "utf8"));

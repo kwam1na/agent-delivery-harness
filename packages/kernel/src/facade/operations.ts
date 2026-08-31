@@ -64,11 +64,20 @@ export type FacadeSurface = (typeof FACADE_SURFACES)[number];
 export type FacadeFenceRule = "required" | "absent-by-state";
 
 /**
- * What the operation does to the delivery journal's expected revision — the
- * value fences, assertions, and confirmations bind. `observation-only` appends
- * without advancing it; `none` appends nothing to the delivery journal, which
- * includes the maintenance-lane operations that write the installation's own
- * maintenance journal instead.
+ * What the operation does to the DELIVERY journal's expected revision — the
+ * value fences, assertions, and confirmations bind, and the only journal
+ * revision any of them names.
+ *
+ * `observation-only` appends without advancing it. `none` means the operation
+ * does not move that value at all, which covers three cases and deliberately
+ * does not distinguish them, because none of them is bindable: an operation
+ * that writes nothing, a maintenance-lane operation that writes the
+ * installation's own maintenance journal, and an intake operation that writes
+ * the intake journal. Intake's own revision is real and its reducer enforces
+ * it, but no fence, assertion, or confirmation binds it — a contract
+ * confirmation binds the normalized-contract digest, not a revision — so
+ * reporting it here would tell a reader this value moved when the value this
+ * field names did not.
  */
 export type FacadeJournalRule = "advances" | "observation-only" | "none";
 
@@ -100,12 +109,14 @@ export const FACADE_OPERATIONS: readonly FacadeOperation[] = Object.freeze([
   entry("explainBlocker", "read", "absent-by-state", "none", ["cli", "mcp"], "The current blocker and its declared remediation."),
   entry("blockerInventory", "read", "absent-by-state", "none", ["cli", "mcp"], "Every blocker this delivery journaled and whether it was left."),
 
-  // Control — intake.
-  entry("openIntake", "control", "absent-by-state", "advances", ["facade"], "Opens an iterative intake under the read-only intake grant."),
-  entry("recordClarification", "control", "absent-by-state", "advances", ["facade"], "Retains one clarification exchange of the scope workflow."),
-  entry("recordDraft", "control", "absent-by-state", "advances", ["facade"], "Retains the current draft contract, voiding any pending confirmation."),
-  entry("presentDraft", "control", "absent-by-state", "advances", ["facade"], "Presents the retained draft for the one operator confirmation."),
-  entry("presentContract", "control", "absent-by-state", "advances", ["facade"], "The already-scoped fallback lane into the same confirmation chain."),
+  // Control — intake. These write the intake journal only; the delivery
+  // journal does not exist until registration, so none of them moves the
+  // revision this field names.
+  entry("openIntake", "control", "absent-by-state", "none", ["facade"], "Opens an iterative intake under the read-only intake grant."),
+  entry("recordClarification", "control", "absent-by-state", "none", ["facade"], "Retains one clarification exchange of the scope workflow."),
+  entry("recordDraft", "control", "absent-by-state", "none", ["facade"], "Retains the current draft contract, voiding any pending confirmation."),
+  entry("presentDraft", "control", "absent-by-state", "none", ["facade"], "Presents the retained draft for the one operator confirmation."),
+  entry("presentContract", "control", "absent-by-state", "none", ["facade"], "The already-scoped fallback lane into the same confirmation chain."),
   entry("retryAcceptance", "control", "absent-by-state", "advances", ["facade"], "Re-runs acceptance validation on the standing confirmation."),
 
   // Control — delivery progression.

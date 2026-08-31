@@ -168,6 +168,46 @@ describe("mutation verification and retry safety", () => {
   });
 });
 
+describe("an action is never named where the operation would refuse", () => {
+  it("withholds the approval proposal outside the states the operation accepts", () => {
+    // The proposal operation guards reviewing/remediating/admitting. Naming it
+    // in `implementing` sends a reader to a `wrong_state` refusal whose own
+    // remediation points back at this projection.
+    for (const state of ["planning", "implementing", "validating", "recording", "ready"] as const) {
+      const status = composeManagedStatus(baseInput({ delivery: { state, expectedRevision: 9, fence: 1 } }));
+      expect(status.authorizedNextActions, `${state} must not offer a proposal`).not.toContain("recordApprovalRequest");
+    }
+  });
+
+  it("names the approval proposal in exactly the states the operation accepts", () => {
+    for (const state of ["reviewing", "remediating", "admitting"] as const) {
+      const status = composeManagedStatus(baseInput({ delivery: { state, expectedRevision: 14, fence: 1 } }));
+      expect(status.authorizedNextActions, `${state} must offer a proposal`).toContain("recordApprovalRequest");
+    }
+  });
+
+  it("withholds every checkpoint operation while a takeover is required", () => {
+    // The bound task is gone and its fence is superseded, so every
+    // fence-carrying operation refuses; the takeover is the real next action.
+    const status = composeManagedStatus(baseInput({ hostActivity: "unknown", resume: "takeover-required" }));
+    expect(status.authorizedNextActions).not.toContain("submitStageResult");
+    expect(status.authorizedNextActions).toContain("presentTakeover");
+  });
+
+  it("withholds the takeover presentation for a delivery that never bound a workspace", () => {
+    // There is no superseded invocation and no trusted commit to target.
+    const status = composeManagedStatus(
+      baseInput({
+        workspaceBound: false,
+        hostActivity: "unknown",
+        resume: "takeover-required",
+        nextCheckpoint: { kind: "bind-workspace" },
+      }),
+    );
+    expect(status.authorizedNextActions).not.toContain("presentTakeover");
+  });
+});
+
 describe("pending decisions and interruption", () => {
   it("offers the sensitive approval while a proposal is pending", () => {
     const status = composeManagedStatus(

@@ -493,6 +493,21 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(status.status.policyRequiredInterruptions).toBe(2);
   });
 
+  it("reports the obligations admission actually completed, not an empty set", async () => {
+    // An enumerated status field that is only ever observed empty is satisfied
+    // vacuously. Admission rejects an empty activated-obligation set, so a
+    // completed delivery must report the ones it discharged — including the
+    // candidate-bound outcome verification.
+    const status = await facade.status({ deliveryId, observedAt: LATER });
+    expect(status.ok, JSON.stringify(status)).toBe(true);
+    if (!status.ok) return;
+    expect(status.status.delivery.state).toBe("completed");
+    expect(status.status.completedObligations.length).toBeGreaterThan(0);
+    expect(status.status.completedObligations).toContain("outcome.verification");
+    // Sorted and deduplicated, as the projection any future surface consumes.
+    expect([...status.status.completedObligations]).toEqual([...new Set(status.status.completedObligations)].sort());
+  });
+
   it("accepted no replayed work: each workflow checkpoint's stage result is durable exactly once per acceptance", async () => {
     const store = createJournalStore(path.join(await facade.namespaceDir(), "deliveries", deliveryId, "journal.jsonl"));
     const read = await store.read();

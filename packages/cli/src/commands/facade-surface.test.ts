@@ -113,6 +113,21 @@ describe("managed", () => {
   it("fails closed outside a repository", async () => {
     expect(codesOf((await run(managedCommand, ["status"], path.join(scratch, "nowhere"))).result)).toContain("not_a_repository");
   });
+
+  it("accepts --delivery only for the retention operations", async () => {
+    // A checkpoint operation derives its fence from the worktree it runs in, so
+    // a delivery named by flag would not be the one that worktree is bound to.
+    for (const operation of ["status", "checkpoint", "admit", "finish", "request-cancellation"]) {
+      const message = usageOf((await run(managedCommand, [operation, "--delivery", "delivery-x"])).result);
+      expect(message, `${operation} must reject --delivery`).toContain("--delivery is accepted only by");
+    }
+    // Retention operations take it, and get past argument handling to the
+    // repository check rather than a usage refusal.
+    for (const operation of ["export", "delete"]) {
+      const result = (await run(managedCommand, [operation, "--delivery", "delivery-x"])).result;
+      expect(result.kind, `${operation} must accept --delivery`).not.toBe("usage");
+    }
+  });
 });
 
 describe("maintain", () => {

@@ -139,6 +139,13 @@ export interface ManagedDeliveryStatus {
 
 const TERMINAL_STATES: readonly DeliveryState[] = ["completed", "cancelled", "failed"];
 
+/**
+ * The states in which a waiver or amendment proposal is accepted. The
+ * operation guards exactly these, so naming it anywhere else would promise a
+ * refusal.
+ */
+const APPROVAL_PROPOSAL_STATES: readonly DeliveryState[] = ["reviewing", "remediating", "admitting"];
+
 const READ_ACTIONS: readonly string[] = ["status", "nextCheckpoint", "explainBlocker", "blockerInventory"];
 const RETENTION_ACTIONS: readonly string[] = ["exportDelivery", "deleteDelivery"];
 
@@ -238,12 +245,29 @@ function deriveAuthorizedNextActions(
     add("consumeWaiver");
   }
 
-  if (input.delivery.state !== "blocked" && input.delivery.state !== "action_succeeded_verification_failed") {
+  // An action is named only where the operation ACCEPTS it. Naming one that is
+  // guaranteed to refuse is worse than naming nothing: the refusal's own
+  // remediation sends the reader back to this very projection, so the surface
+  // that told them to act is the surface that tells them to re-read it.
+  //
+  // A stale fence is the same trap by another route. While a takeover is
+  // required the bound task is gone, every fence-carrying checkpoint operation
+  // refuses on the superseded fence, and the real next action is the takeover.
+  const takeoverFirst = input.resume === "takeover-required" && input.hostActivity !== "active";
+  if (
+    !takeoverFirst &&
+    input.delivery.state !== "blocked" &&
+    input.delivery.state !== "action_succeeded_verification_failed"
+  ) {
     add(checkpointAction(input.nextCheckpoint));
-    add("recordApprovalRequest");
   }
+  // Proposing binds the review lane's own states; everywhere else the
+  // operation refuses on state.
+  if (APPROVAL_PROPOSAL_STATES.includes(input.delivery.state)) add("recordApprovalRequest");
 
-  if (input.resume === "takeover-required" && input.hostActivity !== "active") add("presentTakeover");
+  // Presenting a takeover reads the last trusted commit, so a delivery that
+  // never bound a workspace has nothing to supersede.
+  if (takeoverFirst && input.workspaceBound) add("presentTakeover");
   if (mutation === "unverified") add("exportDelivery");
 
   for (const action of READ_ACTIONS) add(action);

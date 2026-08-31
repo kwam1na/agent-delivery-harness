@@ -9,15 +9,26 @@
  * delivery is blocked on — the wrong order for exactly the case the lane
  * exists to serve.
  *
- * WHAT DEFENDS THIS SURFACE. Not its absence from the tool list: every
- * operation here consumes a maintenance-lane sensitive assertion bound to the
- * target installation and generation identities, evaluated by the
- * installation's configured assertion source in the model-external lane. A
- * session with no interactive context reaches an `assertion_source_unavailable`
- * refusal, not a prompt it could answer, so a model calling these gets a
- * closed door rather than a forged approval. Operator confirmations are the
- * class that must never be nameable on a shell surface, and none of them
- * appear here.
+ * WHAT DEFENDS THIS SURFACE, PRECISELY. Every operation here consumes a
+ * maintenance-lane sensitive assertion bound to the target installation and
+ * generation identities, evaluated by the installation's configured assertion
+ * source in the model-external lane, and consumed BEFORE any byte moves. The
+ * caller cannot mint that assertion and cannot answer the evaluation: the
+ * operating system evaluates it and the product never sees a credential. So a
+ * model that invokes one of these cannot complete it.
+ *
+ * WHAT IT DOES NOT DEFEND, STATED PLAINLY BECAUSE IT IS EASY TO ASSUME
+ * OTHERWISE. It does not stop the prompt from being raised. Probing an
+ * OS-native source checks that the platform's authentication surfaces exist,
+ * and existence is independent of whether the caller holds a terminal — so on a
+ * desktop platform a non-interactive session can still reach `evaluate`, which
+ * raises an interactive dialog in the operator's own session. Authorization
+ * holds, because nobody but the operator can answer it; what is not defended is
+ * the operator's attention. Prompt fatigue is the residual risk on this surface,
+ * and it is the reason to keep the lane narrow rather than to believe it closed.
+ *
+ * Operator confirmations are the class that must never be nameable on a shell
+ * surface, and none of them appear here.
  *
  * The installation is located the same way `managed` locates it: from the
  * product namespace's pointer under the common git directory, never a
