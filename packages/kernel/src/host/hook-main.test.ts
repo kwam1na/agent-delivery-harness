@@ -22,7 +22,7 @@ import {
 const grant = {
   spec: "execution-grant/1",
   profile: "checkpoint",
-  allowedCapabilities: ["Bash", "Write", "Read"],
+  allowedCapabilities: ["Bash", "Write", "Read", "Grep"],
   writablePaths: ["src", "tests", "tools"],
   protectedPaths: [".git", ".managed-projection"],
   forbiddenOperations: [],
@@ -77,6 +77,44 @@ describe("decideHookInvocation", () => {
       tool_input: { file_path: "/work/tree/src/greet.mjs" },
     }, "2026-08-30T12:01:00Z", SESSION_FENCE);
     expect(decision.allowed).toBe(true);
+  });
+
+  it("denies an empty Write file_path with unnormalized_path", () => {
+    const decision = decideHookInvocation(
+      state,
+      { tool_name: "Write", tool_input: { file_path: "" } },
+      "2026-08-30T12:01:00Z",
+      SESSION_FENCE,
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason.split(":", 1)).toEqual(["unnormalized_path"]);
+  });
+
+  it("denies a non-string Write file_path with unnormalized_path", () => {
+    const decision = decideHookInvocation(
+      state,
+      { tool_name: "Write", tool_input: { file_path: 7 } },
+      "2026-08-30T12:01:00Z",
+      SESSION_FENCE,
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason.split(":", 1)).toEqual(["unnormalized_path"]);
+  });
+
+  it("allows a Write invocation whose file_path member is absent", () => {
+    expect(
+      decideHookInvocation(state, { tool_name: "Write", tool_input: {} }, "2026-08-30T12:01:00Z", SESSION_FENCE).allowed,
+    ).toBe(true);
+  });
+
+  it("leaves granted no-write tools unchanged", () => {
+    for (const input of [
+      { tool_name: "Read", tool_input: { file_path: "" } },
+      { tool_name: "Grep", tool_input: { path: "" } },
+      { tool_name: "Bash", tool_input: { command: "true" } },
+    ]) {
+      expect(decideHookInvocation(state, input, "2026-08-30T12:01:00Z", SESSION_FENCE).allowed, input.tool_name).toBe(true);
+    }
   });
 
   it("denies a write under a protected authority path", () => {
