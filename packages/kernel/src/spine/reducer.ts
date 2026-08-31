@@ -151,8 +151,8 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
   let registered = false;
   let finishLineRecorded = false;
   const idempotencyKeys = new Set<string>();
-  /** Recorded action intents, and the verification each one's result observed. */
-  const actionIntents = new Map<string, { readonly action: string; verification?: string }>();
+  /** Recorded action intents, and what each one's result observed. */
+  const actionIntents = new Map<string, { readonly action: string; outcome?: string; verification?: string }>();
   /**
    * The verification of the MOST RECENT observed result. `acting -> acting` is
    * an enumerated row, so a delivery can carry several actions; the terminal
@@ -321,16 +321,23 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           collector.emit("unsupported_combination", `${at}/payload/intentId`, `intent ${intentId} was already recorded`);
           return;
         }
-        // The matrix takes the next acting step only once the previous action
-        // IS RECONCILED. An unreconciled predecessor — failed, indeterminate,
-        // or never observed — is the delivery's business before any further
-        // action begins, and letting one start would let its own verification
-        // stand in for the predecessor's.
-        if (lastActionVerification !== undefined && lastActionVerification !== "passed") {
+        // The matrix takes the next acting step only once EVERY prior action
+        // IS RECONCILED: observed, succeeded, and not left with a failed
+        // verification. An action that happened with no required post-action
+        // evidence (`succeeded` / `not-attempted`) is reconciled — creating a
+        // pull request has nothing to verify — and the next step may begin. An
+        // unobserved, failed, or indeterminate predecessor is the delivery's
+        // business first, and a succeeded-but-unverified one is the state that
+        // must never be repeated past. Otherwise a newcomer's own result
+        // stands in for its predecessor's at the terminal edge.
+        const unreconciled = [...actionIntents.entries()].find(
+          ([, each]) => each.verification === undefined || each.outcome !== "succeeded" || each.verification === "failed",
+        );
+        if (unreconciled !== undefined) {
           collector.emit(
             "invalid_transition",
             at,
-            `the previous action's verification is ${lastActionVerification}; the next acting step begins only once the previous action is reconciled`,
+            `intent ${unreconciled[0]} is ${unreconciled[1].verification === undefined ? "still unobserved" : `observed as ${String(unreconciled[1].outcome)}/${String(unreconciled[1].verification)}`}; the next acting step begins only once every prior action is reconciled`,
           );
           return;
         }
@@ -373,6 +380,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           );
           return;
         }
+        intent.outcome = payload["outcome"] as string;
         intent.verification = payload["verification"] as string;
         lastActionVerification = intent.verification;
         break;

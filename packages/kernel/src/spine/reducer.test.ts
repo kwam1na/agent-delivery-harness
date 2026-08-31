@@ -857,60 +857,102 @@ describe("the finish line and the post-action states", () => {
   });
 
   /**
-   * A multi-action delivery in BOTH orders. `acting -> acting` is an
-   * enumerated row, so several actions in one delivery is a designed shape,
-   * and no action's verification may ever stand in for another's.
+   * A multi-action delivery, journaled entry by entry after `ready -> acting`.
+   * `acting -> acting` is an enumerated row, so several actions in one
+   * delivery is a designed shape, and no action's result may ever stand in
+   * for another's — in any interleaving of intents and results.
    */
-  const twoActions = (
-    first: Record<string, unknown>,
-    second: readonly Record<string, unknown>[],
-    to: string,
-  ): Entry[] => [
+  const acting = (...appends: readonly (readonly [string, Record<string, unknown>])[]): Entry[] => [
     ...toReady(),
     deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
-    deliveryEntry(15, "action.intent.recorded", { ...intent, intentId: "intent-a", action: first["action"] }),
-    deliveryEntry(16, "action.result.recorded", { ...actionResult({ intentId: "intent-a" }), ...first }),
-    deliveryEntry(17, "transition.committed", { from: "acting", to: "acting" }),
-    ...second.map((payload, index) =>
-      index === 0
-        ? deliveryEntry(18, "action.intent.recorded", { ...intent, intentId: "intent-b", action: payload["action"] })
-        : deliveryEntry(19, "action.result.recorded", { ...actionResult({ intentId: "intent-b" }), ...payload }),
-    ),
-    deliveryEntry(18 + second.length, "transition.committed", { from: "acting", to: to }),
+    ...appends.map(([kind, payload], index) => deliveryEntry(15 + index, kind, payload)),
   ];
 
-  it("judges the terminal edge on the LAST result, never on an earlier action that passed", () => {
-    const passed = { action: "pr-creation", outcome: "succeeded", verification: "passed" };
-    const failedLast = [{ action: "merge" }, { action: "merge", outcome: "succeeded", verification: "failed" }];
-    expect(reduceCodes(twoActions(passed, failedLast, "completed"))).toContain("invalid_transition");
+  const intentFor = (intentId: string, action: string): Record<string, unknown> => ({ ...intent, intentId, action });
+  const resultFor = (
+    intentId: string,
+    action: string,
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({ ...actionResult({ intentId, action }), ...over });
 
-    const passedLast = [{ action: "merge" }, { action: "merge", outcome: "succeeded", verification: "passed" }];
-    const verified = reduceDeliveryJournal(twoActions(passed, passedLast, "completed"));
+  it("judges the terminal edge on the LAST result, never on an earlier action that passed", () => {
+    const twoStep = (last: Record<string, unknown>): Entry[] =>
+      acting(
+        ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+        ["action.result.recorded", resultFor("intent-pr", "pr-creation")],
+        ["transition.committed", { from: "acting", to: "acting" }],
+        ["action.intent.recorded", intentFor("intent-merge", "merge")],
+        ["action.result.recorded", resultFor("intent-merge", "merge", last)],
+        ["transition.committed", { from: "acting", to: "completed" }],
+      );
+    expect(reduceCodes(twoStep({ outcome: "succeeded", verification: "failed" }))).toContain("invalid_transition");
+    const verified = reduceDeliveryJournal(twoStep({ outcome: "succeeded", verification: "passed" }));
     expect(verified.ok, JSON.stringify(verified)).toBe(true);
   });
 
-  it("refuses to begin the next action while the previous one stands unreconciled", () => {
-    // The reverse ordering of the case above: a failed or indeterminate action
-    // followed by a trivially passing one must not complete on the newcomer.
-    for (const unreconciled of [
-      { action: "merge", outcome: "succeeded", verification: "failed" },
-      { action: "merge", outcome: "indeterminate", verification: "not-attempted" },
-    ]) {
-      const trivialPass = [
-        { action: "pr-creation" },
-        { action: "pr-creation", outcome: "succeeded", verification: "passed" },
-      ];
-      expect(reduceCodes(twoActions(unreconciled, trivialPass, "completed")), JSON.stringify(unreconciled)).toContain(
-        "invalid_transition",
-      );
+  it("refuses a second intent while any prior action is unobserved or unsuccessful", () => {
+    // Both orderings, and the interleaving that opens both intents first: no
+    // newcomer's result can carry the terminal edge for a predecessor.
+    const unreconciled: readonly Record<string, unknown>[] = [
+      { outcome: "succeeded", verification: "failed" },
+      { outcome: "failed", verification: "failed" },
+      { outcome: "indeterminate", verification: "not-attempted" },
+    ];
+    for (const observed of unreconciled) {
+      expect(
+        reduceCodes(
+          acting(
+            ["action.intent.recorded", intentFor("intent-merge", "merge")],
+            ["action.result.recorded", resultFor("intent-merge", "merge", observed)],
+            ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+          ),
+        ),
+        JSON.stringify(observed),
+      ).toContain("invalid_transition");
     }
+
+    // Two intents in flight at once — neither observed yet.
+    expect(
+      reduceCodes(
+        acting(
+          ["action.intent.recorded", intentFor("intent-merge", "merge")],
+          ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+        ),
+      ),
+    ).toContain("invalid_transition");
   });
 
   it("refuses terminal success for an in-flight action on the PREVIOUS action's pass", () => {
     // A durably recorded intent whose result was never observed — the
     // lost-response case — is not a delivery that succeeded.
-    const passed = { action: "pr-creation", outcome: "succeeded", verification: "passed" };
-    expect(reduceCodes(twoActions(passed, [{ action: "merge" }], "completed"))).toContain("invalid_transition");
+    expect(
+      reduceCodes(
+        acting(
+          ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+          ["action.result.recorded", resultFor("intent-pr", "pr-creation")],
+          ["action.intent.recorded", intentFor("intent-merge", "merge")],
+          ["transition.committed", { from: "acting", to: "completed" }],
+        ),
+      ),
+    ).toContain("invalid_transition");
+  });
+
+  it("lets a reconciled action with no required post-action evidence begin the next step", () => {
+    // Reconciliation is the OUTCOME axis: creating a pull request happened and
+    // has nothing to verify, so the merge that follows it is the matrix's
+    // "the next authorized acting step remains", not a refusal.
+    const journal = acting(
+      ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+      ["action.result.recorded", resultFor("intent-pr", "pr-creation", { outcome: "succeeded", verification: "not-attempted" })],
+      ["transition.committed", { from: "acting", to: "acting" }],
+      ["action.intent.recorded", intentFor("intent-merge", "merge")],
+      ["action.result.recorded", resultFor("intent-merge", "merge")],
+      ["transition.committed", { from: "acting", to: "completed" }],
+    );
+    const outcome = reduceDeliveryJournal(journal);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("completed");
   });
 
   it("refuses terminal success while the last authorized action has no observed result at all", () => {
