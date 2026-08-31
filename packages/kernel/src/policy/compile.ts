@@ -76,6 +76,18 @@ export const MANDATORY_LENS_CATEGORIES = Object.freeze(["outcome-correctness", "
  * and writable-path lists — those are the owner-approved document's to shape
  * — while protections and forbidden operations are union-only (`additional*`
  * members), so weakening either of those is unspellable, not just rejected.
+ *
+ * `Bash` is in this list by DECISION, not by default. It hands every ordinary
+ * stage session a shell whose filesystem writes the admission interceptor
+ * gates by capability and not by path, so on a host with no OS-level sandbox
+ * behind the session the protected paths above are not a boundary against it.
+ * The operator's position is to accept that and declare it: each graded host
+ * states its own `commonGitAuthorityPathProtected` position in
+ * `qualifications/host-admission-capabilities.json`, and closing the gap
+ * belongs to the host's permission system rather than to this envelope.
+ * Removing `Bash` here was considered and rejected — every gate loop runs its
+ * build, test, and version-control commands through it, so the capability
+ * would return per repository, which is the same exposure with more ceremony.
  */
 export const PORTABLE_STAGE_GRANT = Object.freeze({
   spec: EXECUTION_GRANT_SPEC,

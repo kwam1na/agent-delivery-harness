@@ -675,11 +675,14 @@ export interface ManagedDeliveryFacade {
    * state file, can widen it.
    *
    * What this does NOT defend is the delivery journal itself. On a host with no
-   * protected common-Git authority path — which the graded record reflects by
-   * claiming `commonGitAuthorityPathProtected` for Codex and not for Claude
-   * Code — a granted shell capability writes the journal directly, and the
-   * payload grammar only enforces a record's internal consistency. Closing that
-   * belongs to the host's own sandbox, not to this operation.
+   * protected common-Git authority path, a granted shell capability writes the
+   * journal directly, and the payload grammar only enforces a record's internal
+   * consistency. Closing that belongs to the host's own sandbox, not to this
+   * operation. Every graded host states its own position on that path rather
+   * than leaving it absent: the record carries
+   * `commonGitAuthorityPathProtected` as `supported` for Codex's OS sandbox and
+   * as `unsupported` for Claude Code, whose ordinary stage sessions hold the
+   * shell capability the shipped mutation-stage grant allows.
    *
    * Crash provenance has no entrypoint at all: no supported host supplies it,
    * no daemon exists to observe it, and the product never infers it.
