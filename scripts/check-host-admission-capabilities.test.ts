@@ -119,12 +119,16 @@ const REVERIFICATION_OUTCOMES = ["holds", "withdrawn", "unverified"] as const;
  * rests on, and that includes the RE-verifications beneath it, or the tier could
  * be re-taken before the very probes it summarizes and nothing would say so.
  *
- * What the rules below do NOT catch, stated so nobody credits them with it: an
- * `unverified` outcome is prose. They stop the dangerous direction — an unreached
- * claim relabelled as holding fails by name — and they require the reason and
- * refuse the live-probe kind. They cannot tell a genuinely unreached claim from a
- * reached one someone chose to call unreached, because that difference lives in
- * the method text and nothing mechanical reads it.
+ * What the rules below DO catch, and what they do not, stated so nobody credits
+ * them with the wrong thing. Every Claude Code outcome is pinned by name below,
+ * so changing one in either direction fails — an unreached claim cannot be
+ * promoted to a holding one, and a holding one cannot be quietly demoted. An
+ * `unverified` entry must also carry its reason and may not claim the live-probe
+ * kind. What no rule here reads is the METHOD TEXT: whether the observation a
+ * block describes was actually made, and whether the reason it gives for not
+ * making one is real, is a question about prose. That is the review's job, and
+ * pinning the outcome only guarantees that changing the answer is a deliberate,
+ * visible act rather than a quiet one.
  */
 type ReverifiedSlot = { context: string; host: any; entry: any; gradedInstant: string };
 
@@ -269,26 +273,27 @@ describe("host-admission capability record document", () => {
   it("re-observes each Claude Code claim the stale grading was carrying, or says it could not", () => {
     // The proving host's entry is keyed at a version four minor releases behind
     // the installed CLI, so these are the claims that were being asserted at a
-    // remove. Each one carries an outcome now. Enumerated as an exact set: a
-    // block quietly dropped from any of them fails here by name.
+    // remove. Each one carries an outcome now, and the SET IS PINNED WITH ITS
+    // OUTCOMES, not just its names: a block quietly dropped fails here, and so
+    // does an unreached claim promoted to a holding one. Names alone would leave
+    // the promotion silent, which is the direction that actually costs
+    // something — the tier verdict is not re-observed, because reaching it means
+    // launching an authenticated host, and quietly restating the old tier
+    // against the new version is precisely the defect this record exists to
+    // stop. Re-stating an outcome here is a deliberate act, which is the point.
     const cc = hostById.get("claude-code");
     const outcomes = new Map<string, string>(
       slotsOn(cc).map((slot) => [slot.context.replace(`${cc.hostId}.`, "").replace(" reverification", ""), slot.entry.reverification.outcome]),
     );
-    expect([...outcomes.keys()].sort()).toEqual([
-      "capabilities.commonGitAuthorityPathProtected",
-      "capabilities.gracefulLifecycleEvents",
-      "capabilities.grantIntegrityAgainstCandidatePlantedSettings",
-      "capabilities.terminationProvenanceWithDescendantTeardown",
-      "grade",
-      "probes.discoveryScopingExclusivity",
-      "probes.gracefulTeardown",
+    expect([...outcomes.entries()].sort()).toEqual([
+      ["capabilities.commonGitAuthorityPathProtected", "holds"],
+      ["capabilities.gracefulLifecycleEvents", "unverified"],
+      ["capabilities.grantIntegrityAgainstCandidatePlantedSettings", "holds"],
+      ["capabilities.terminationProvenanceWithDescendantTeardown", "unverified"],
+      ["grade", "unverified"],
+      ["probes.discoveryScopingExclusivity", "withdrawn"],
+      ["probes.gracefulTeardown", "unverified"],
     ]);
-    // The tier verdict is the load-bearing one, and it is NOT re-observed:
-    // reaching it means launching an authenticated host. Saying so is the
-    // requirement; quietly restating the old tier against the new version
-    // would be the defect.
-    expect(outcomes.get("grade")).toBe("unverified");
     expect(cc.grade.reverification.hostVersion).not.toBe(cc.hostVersion);
   });
 

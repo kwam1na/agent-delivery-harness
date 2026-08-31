@@ -181,6 +181,14 @@ describe("the record's legs", () => {
     expect(here.reason.length, "the integration record names why the tier went unreached").toBeGreaterThan(0);
     expect(here.observedAt, "an observation cannot postdate the record carrying it").toMatch(SPINE_INSTANT);
     expect(here.observedAt <= record.recordedAt).toBe(true);
+    // And it cannot PREDATE the legs it supersedes. The graded record anchors
+    // its tier block on the newest observation beneath it; without the same
+    // bound here, this block could be dated before the very live probes it
+    // says it could not re-drive — a supersession that happened first.
+    const legs = (record.liveProbes as any[]).map((probe) => probe.verification.observedAt);
+    expect(legs.length, "the record has dated legs to be bounded against").toBeGreaterThan(0);
+    const newest = legs.reduce((latest, instant) => (instant > latest ? instant : latest));
+    expect(here.observedAt > newest, "the re-verification predates the legs it supersedes").toBe(true);
   });
 
   it("meets every acceptance criterion with a named leg and evidence", () => {
