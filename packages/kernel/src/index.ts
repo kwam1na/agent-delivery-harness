@@ -824,3 +824,33 @@ export {
   type MigrationConsumptionVerdict,
   type MigrationRefusal,
 } from "./facade/migration.ts";
+export {
+  FACADE_CAPABILITY_CLASSES,
+  FACADE_OPERATIONS,
+  FACADE_SURFACES,
+  TERMINATION_PROVENANCE_OPERATION,
+  checkFacadeSurfaceInvariants,
+  facadeOperation,
+  operationsOnSurface,
+  type FacadeCapabilityClass,
+  type FacadeFenceRule,
+  type FacadeJournalRule,
+  type FacadeOperation,
+  type FacadeSurface,
+  type FacadeSurfaceFinding,
+  type FacadeSurfaceRule,
+} from "./facade/operations.ts";
+export {
+  composeManagedStatus,
+  type AssertionSourceView,
+  type ManagedDeliveryStatus,
+  type ManagedStatusInput,
+  type MigrationPath,
+  type MutationVerification,
+  type ProductTrustView,
+  type RecordedRegistrationBinding,
+  type RegistrationBindingView,
+  type RegistrationMismatch,
+  type RetrySafety,
+  type WorkspaceDisposition,
+} from "./facade/status.ts";

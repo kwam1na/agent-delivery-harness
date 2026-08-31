@@ -33,9 +33,10 @@
         "record",
         "verify",
         "check",
-        "managed"
+        "managed",
+        "maintain"
       ],
-      "cliCommandsNote": "The seven-command evidence loop was the recorded baseline surface; the walking skeleton added `managed` — the managed-delivery facade's host-facing checkpoint surface, whose delivery-run ownership lives in the checkpoint journal and facade modules, not in the evidence loop. The absent-command guard below still holds for top-level ordinary execution: none of those operations exists outside the facade surface.",
+      "cliCommandsNote": "The seven-command evidence loop was the recorded baseline surface; the walking skeleton added `managed` — the managed-delivery facade's host-facing checkpoint and status surface — and the facade unit added `maintain`, the installation-scoped maintenance lane whose every operation consumes a maintenance-lane sensitive assertion. Delivery-run ownership still lives in the checkpoint journal and facade modules, not in the evidence loop. The absent-command guard below still holds for top-level ordinary execution: none of those operations exists as a top-level command outside the facade surface.",
       "absentDeliveryRunCommands": [
         "start",
         "resume",

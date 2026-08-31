@@ -123,14 +123,22 @@ const stateOf = async (facade: ManagedDeliveryFacade, deliveryId: string): Promi
   const status = await facade.status({ deliveryId, observedAt: LATER });
   expect(status.ok, JSON.stringify(status)).toBe(true);
   if (!status.ok) throw new Error("unreachable");
-  return status.state;
+  return status.status.delivery.state;
+};
+
+/** The whole typed status model, for the projection assertions below. */
+const statusOf = async (facade: ManagedDeliveryFacade, deliveryId: string) => {
+  const status = await facade.status({ deliveryId, observedAt: LATER });
+  expect(status.ok, JSON.stringify(status)).toBe(true);
+  if (!status.ok) throw new Error("unreachable");
+  return status.status;
 };
 
 /** The current invocation fence as durable state reports it (0 before any bind). */
 const currentFenceOf = async (facade: ManagedDeliveryFacade, deliveryId: string): Promise<number> => {
   const status = await facade.status({ deliveryId, observedAt: LATER });
   if (!status.ok) throw new Error(JSON.stringify(status));
-  return status.fence;
+  return status.status.delivery.fence;
 };
 
 let worktreeCounter = 0;
@@ -443,6 +451,16 @@ describe("rebinding migration", () => {
     expect(fenced.ok).toBe(false);
     expect(await stateOf(facadeB, deliveryId)).toBe("security_blocked");
 
+    // The status model is what an operator reads here, and it must say what to
+    // do next: identity moved, profile did not, so the rebinding migration is
+    // an authorized next action rather than something to be discovered by
+    // attempting it.
+    const blockedStatus = await statusOf(facadeB, deliveryId);
+    expect(blockedStatus.registrationBinding.mismatch).toBe("identity");
+    expect(blockedStatus.migrationPath).toBe("rebinding-migration");
+    expect(blockedStatus.authorizedNextActions).toContain("recoverSecurityBlocked");
+    expect(blockedStatus.productTrust.label.length).toBeGreaterThan(0);
+
     // The rebinding migration consumes with the target installation's
     // profile equal to the delivery's recorded profile, and records the new
     // registering-installation identity.
@@ -499,6 +517,17 @@ describe("rebinding migration", () => {
     // installation…
     const fenced = await facadeProduction.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan", fence: await currentFenceOf(facadeProduction, deliveryId) });
     expect(fenced.ok).toBe(false);
+
+    // The profile-mismatched delivery reports a typed blocker and NO migration
+    // path: a rebinding requires the target installation's active profile to
+    // equal the delivery's recorded profile, so offering the operation here
+    // would only be offering a guaranteed refusal.
+    const mismatchedStatus = await statusOf(facadeProduction, deliveryId);
+    expect(mismatchedStatus.registrationBinding.mismatch).toBe("profile");
+    expect(mismatchedStatus.migrationPath).toBe("none");
+    expect(mismatchedStatus.authorizedNextActions).not.toContain("recoverSecurityBlocked");
+    expect(mismatchedStatus.blockers.length).toBeGreaterThan(0);
+
     // …and the rebinding migration is refused on the profile mismatch; the
     // delivery remains security_blocked.
     const migrated = await facadeProduction.recoverSecurityBlocked({

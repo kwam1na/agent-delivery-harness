@@ -287,10 +287,10 @@ describe("the lifecycle", () => {
 });
 
 describe("the tool list", () => {
-  it("advertises the two tools with their schemas", async () => {
+  it("advertises the three tools with their schemas", async () => {
     const response = await answer(request("tools/list"));
     const tools = (response?.result as { tools: readonly { name: string }[] }).tools;
-    expect(tools.map((tool) => tool.name)).toEqual(["review-context", "submit-evidence"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["review-context", "submit-evidence", "managed"]);
   });
 });
 

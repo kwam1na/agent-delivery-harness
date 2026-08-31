@@ -1,6 +1,6 @@
 /**
- * The MCP tool surface: `review-context` and `submit-evidence`, at strict
- * parity with the CLI.
+ * The MCP tool surface: `review-context`, `submit-evidence`, and the read-only
+ * `managed` projection, at strict parity with the CLI.
  *
  * THIS IS A WRAPPER, NOT A SECOND IMPLEMENTATION. Every tool call is turned
  * into the argv the CLI would have been invoked with and handed to
@@ -17,10 +17,18 @@
  * supply-chain reasons. The protocol layer lives in `stdio.ts`; this module is
  * transport-free so the parity suite drives the same code an agent reaches.
  *
- * A DELIBERATE SUBSET. Two of the CLI's seven commands are exposed. The rest
- * are not tools, and a call naming one is an unknown tool: what a tool call may
- * reach is the registry below, never the CLI's. Exposing less than the CLI is
- * within the contract; behaving differently about what is exposed is not.
+ * A DELIBERATE SUBSET, IN TWO DIMENSIONS. Three of the CLI's nine commands are
+ * exposed, and the third — `managed` — exposes only its read-only operations.
+ * The rest are not tools, and a call naming one is an unknown tool: what a tool
+ * call may reach is the registry below, never the CLI's. Exposing less than the
+ * CLI is within the contract; behaving differently about what is exposed is not.
+ *
+ * The second dimension is the one that matters most. A tool surface that could
+ * submit a stage result or run a sensor would be a second orchestrator sitting
+ * beside the host that already owns delegation and sequencing. So the operation
+ * enum below is read-class only, and the facade's contract-inventory sensor
+ * checks that against the product's own operation inventory rather than against
+ * this comment.
  *
  * WHAT AN AGENT NEVER GETS. No TTY, therefore no waiver prompt — an MCP session
  * has no human at the other end to answer one, and a prompt nobody can answer
@@ -32,6 +40,7 @@ import {
   EXIT_USAGE,
   commandBlocker,
   importHarnessConfig,
+  managedCommand,
   reviewContextCommand,
   runCliBoundary,
   submitEvidenceCommand,
@@ -258,6 +267,27 @@ function usageBlocker(code: string, summary: string, details: string, remediatio
 const TOOL_NAMES_SENTENCE = (): string => TOOLS.map((tool) => tool.name).join(", ");
 
 /**
+ * The managed-delivery operations this server will translate, and the whole
+ * set of them.
+ *
+ * WHY ONLY THESE. The facade's boundary is that a tool surface inspects a
+ * delivery rather than orchestrating it: the product owns whether a checkpoint
+ * is valid and what evidence suffices, and the host owns how it delegates and
+ * sequences the work. A tool that could submit a stage result or run a sensor
+ * would be a second orchestrator sitting beside the host — so the CLI's control
+ * operations are simply not reachable from here, and the contract-inventory
+ * sensor checks that every name below is a `read`-class operation in the
+ * facade's own inventory.
+ */
+export const MANAGED_READ_OPERATIONS: readonly string[] = Object.freeze([
+  "status",
+  "next",
+  "explain-blocker",
+  "blockers",
+  "operations",
+]);
+
+/**
  * Rejects members the tool does not define, for the same reason the manifest
  * validator rejects them: a tolerated stranger is how a caller comes to believe
  * it configured something. Unlike a manifest, the offending name is caller
@@ -328,6 +358,58 @@ const TOOLS: readonly ToolDefinition[] = [
         };
       }
       return { ok: true, argv: [submitEvidenceCommand.name, "--manifest", manifest] };
+    },
+  },
+  {
+    name: managedCommand.name,
+    description:
+      "Inspect the managed delivery: its typed status model, the next valid checkpoint, the current blocker and its remediation, the blocker inventory, and the facade's own operation contract. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: [...MANAGED_READ_OPERATIONS],
+          description: "Which read-only projection to return.",
+        },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+    command: managedCommand,
+    translate(args) {
+      const unknown = rejectUnknownMembers(this, args, ["operation"]);
+      if (unknown !== null) return { ok: false, blocker: unknown };
+      const operation = args["operation"];
+      if (operation === undefined) return { ok: true, argv: [managedCommand.name] };
+      if (typeof operation !== "string") {
+        return {
+          ok: false,
+          blocker: usageBlocker(
+            "invalid_tool_argument",
+            "The managed tool's operation argument must be a string.",
+            `operation was ${operation === null ? "null" : typeof operation}, not a string.`,
+            `Call managed with operation set to one of: ${MANAGED_READ_OPERATIONS.join(", ")}.`,
+          ),
+        };
+      }
+      // The enum is enforced here rather than delegated, because delegating it
+      // would hand a control operation straight to the command. What the CLI
+      // offers an operator at a terminal and what this server offers a model
+      // are deliberately different sets, and this is where that difference is
+      // mechanical rather than documentary.
+      if (!MANAGED_READ_OPERATIONS.includes(operation)) {
+        return {
+          ok: false,
+          blocker: usageBlocker(
+            "operation_not_offered",
+            "This server offers the managed delivery's read-only projections only.",
+            `Requested operation: ${operation}. Offered: ${MANAGED_READ_OPERATIONS.join(", ")}.`,
+            "Drive checkpoints from the bound worktree's CLI; this tool inspects the delivery, it does not orchestrate it.",
+          ),
+        };
+      }
+      return { ok: true, argv: [managedCommand.name, operation] };
     },
   },
 ];

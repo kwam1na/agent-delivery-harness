@@ -191,6 +191,21 @@ describe("the thin one-handoff walking skeleton", () => {
     if (!confirmed.ok) return;
     deliveryId = confirmed.deliveryId;
 
+    // A freshly registered delivery has no lifecycle events at all, so it
+    // reports activity `unknown` and resume `takeover-required` before any
+    // workspace exists. The status model must still name the way forward here:
+    // binding the workspace MINTS the first fence rather than carrying one, so
+    // the stale-fence suppression must not reach it. Read through the real
+    // facade rather than a composed fixture, because the fixture is what missed
+    // this the first time.
+    const beforeBinding = await facade.status({ deliveryId, observedAt: LATER });
+    expect(beforeBinding.ok, JSON.stringify(beforeBinding)).toBe(true);
+    if (!beforeBinding.ok) return;
+    expect(beforeBinding.status.hostActivity).toBe("unknown");
+    expect(beforeBinding.status.nextCheckpoint.kind).toBe("bind-workspace");
+    expect(beforeBinding.status.authorizedNextActions).toContain("bindWorkspace");
+    expect(beforeBinding.status.authorizedNextActions).not.toContain("presentTakeover");
+
     // ── The HOST creates the isolated worktree; the facade only binds it ──
     worktreeA = path.join(scratch, "worktree-a");
     git(repoDir, "worktree", "add", "--quiet", "-b", "delivery", worktreeA, "main");
@@ -223,7 +238,7 @@ describe("the thin one-handoff walking skeleton", () => {
 
     // ── Plan checkpoint ──
     const statusPlanning = await facade.status({ deliveryId, observedAt: LATER });
-    expect(statusPlanning.ok && statusPlanning.state === "planning" && statusPlanning.activity === "active").toBe(true);
+    expect(statusPlanning.ok && statusPlanning.status.delivery.state === "planning" && statusPlanning.status.hostActivity === "active").toBe(true);
     const planned = await facade.submitStageResult({
       deliveryId,
       stageId: "plan",
@@ -239,9 +254,9 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(statusPaused.ok, JSON.stringify(statusPaused)).toBe(true);
     if (!statusPaused.ok) return;
     // Honest paused; the underlying checkpoint did NOT move.
-    expect(statusPaused.activity).toBe("paused");
-    expect(statusPaused.state).toBe("implementing");
-    expect(statusPaused.resume).toBe("takeover-required");
+    expect(statusPaused.status.hostActivity).toBe("paused");
+    expect(statusPaused.status.delivery.state).toBe("implementing");
+    expect(statusPaused.status.resume).toBe("takeover-required");
 
     // ── Fresh task: operator-authorized takeover into a fresh worktree ──
     const takeover = await facade.presentTakeover({ deliveryId, expiry: EXPIRY });
@@ -288,9 +303,9 @@ describe("the thin one-handoff walking skeleton", () => {
     const resumed = await facade.status({ deliveryId, observedAt: LATER });
     expect(resumed.ok, JSON.stringify(resumed)).toBe(true);
     if (!resumed.ok) return;
-    expect(resumed.state).toBe("implementing");
-    expect(resumed.activity).toBe("active");
-    expect(resumed.nextCheckpoint).toMatchObject({ kind: "workflow-stage", stageId: "implement" });
+    expect(resumed.status.delivery.state).toBe("implementing");
+    expect(resumed.status.hostActivity).toBe("active");
+    expect(resumed.status.nextCheckpoint).toMatchObject({ kind: "workflow-stage", stageId: "implement" });
 
     // The superseded invocation opens no tools, twice over. Its binding state
     // is fence-scoped, so the rebind wrote a new file rather than overwriting
@@ -487,10 +502,25 @@ describe("the thin one-handoff walking skeleton", () => {
     const status = await facade.status({ deliveryId, observedAt: LATER });
     expect(status.ok, JSON.stringify(status)).toBe(true);
     if (!status.ok) return;
-    expect(status.state).toBe("completed");
-    expect(status.operatorInterventions).toBe(0);
+    expect(status.status.delivery.state).toBe("completed");
+    expect(status.status.operatorInterventions).toBe(0);
     // Exactly two: the contract confirmation and the takeover authorization.
-    expect(status.policyRequiredInterruptions).toBe(2);
+    expect(status.status.policyRequiredInterruptions).toBe(2);
+  });
+
+  it("reports the obligations admission actually completed, not an empty set", async () => {
+    // An enumerated status field that is only ever observed empty is satisfied
+    // vacuously. Admission rejects an empty activated-obligation set, so a
+    // completed delivery must report the ones it discharged — including the
+    // candidate-bound outcome verification.
+    const status = await facade.status({ deliveryId, observedAt: LATER });
+    expect(status.ok, JSON.stringify(status)).toBe(true);
+    if (!status.ok) return;
+    expect(status.status.delivery.state).toBe("completed");
+    expect(status.status.completedObligations.length).toBeGreaterThan(0);
+    expect(status.status.completedObligations).toContain("outcome.verification");
+    // Sorted and deduplicated, as the projection any future surface consumes.
+    expect([...status.status.completedObligations]).toEqual([...new Set(status.status.completedObligations)].sort());
   });
 
   it("accepted no replayed work: each workflow checkpoint's stage result is durable exactly once per acceptance", async () => {
@@ -532,13 +562,13 @@ describe("the thin one-handoff walking skeleton", () => {
     const status = await facade.status({ deliveryId, observedAt: LATER });
     expect(status.ok, JSON.stringify(status)).toBe(true);
     if (!status.ok) return;
-    expect(status.state).toBe("completed");
+    expect(status.status.delivery.state).toBe("completed");
 
     // A mutation-capable operation refuses rather than reopening the journal.
-    const refused = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "late", fence: status.fence });
+    const refused = await facade.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "late", fence: status.status.delivery.fence });
     expect(refused.ok).toBe(false);
     const still = await facade.status({ deliveryId, observedAt: LATER });
-    expect(still.ok && still.state === "completed").toBe(true);
+    expect(still.ok && still.status.delivery.state === "completed").toBe(true);
 
     // Restore trust for the fixture drives that follow.
     const unrevoked = await maintainTrustState({
@@ -604,7 +634,7 @@ describe("the thin one-handoff walking skeleton", () => {
     const status = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
     expect(status.ok, JSON.stringify(status)).toBe(true);
     if (!status.ok) return;
-    expect(status.state).toBe("blocked");
+    expect(status.status.delivery.state).toBe("blocked");
 
     const explained = await facade.explainBlocker({ deliveryId: confirmed.deliveryId });
     expect(explained.ok, JSON.stringify(explained)).toBe(true);
@@ -640,8 +670,8 @@ describe("the thin one-handoff walking skeleton", () => {
     const resumedStatus = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
     expect(resumedStatus.ok, JSON.stringify(resumedStatus)).toBe(true);
     if (!resumedStatus.ok) return;
-    expect(resumedStatus.state).toBe("planning"); // the last trustworthy checkpoint, not a dead end
-    expect(resumedStatus.nextCheckpoint).toMatchObject({ kind: "workflow-stage", stageId: "plan" });
+    expect(resumedStatus.status.delivery.state).toBe("planning"); // the last trustworthy checkpoint, not a dead end
+    expect(resumedStatus.status.nextCheckpoint).toMatchObject({ kind: "workflow-stage", stageId: "plan" });
 
     // Falsifiability of the intervention counter: a journaled operator-input
     // blocker moves it.
@@ -661,7 +691,7 @@ describe("the thin one-handoff walking skeleton", () => {
     });
     expect(appended.ok, JSON.stringify(appended)).toBe(true);
     const counted = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
-    expect(counted.ok && counted.operatorInterventions === 1).toBe(true);
+    expect(counted.ok && counted.status.operatorInterventions === 1).toBe(true);
   });
 });
 

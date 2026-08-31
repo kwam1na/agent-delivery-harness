@@ -503,10 +503,10 @@ describe("malformed and unknown tool arguments are the CLI's exit-2 class", () =
   });
 
   it("refuses a real CLI command that is not an exposed tool", { timeout: 60000 }, async () => {
-    // The MCP surface is a deliberate subset — `review-context` and
-    // `submit-evidence` and nothing else. Refusing `record` by name is what
-    // keeps the subset a subset: the tool registry, not the CLI registry, is
-    // what a tool call may reach.
+    // The MCP surface is a deliberate subset — `review-context`,
+    // `submit-evidence`, and the read-only `managed` projection, and nothing
+    // else. Refusing `record` by name is what keeps the subset a subset: the
+    // tool registry, not the CLI registry, is what a tool call may reach.
     const dir = await mkdtemp(path.join(os.tmpdir(), "dh-mcp-subset-"));
     cleanups.push(dir);
     const config = makeConfig();
@@ -514,7 +514,7 @@ describe("malformed and unknown tool arguments are the CLI's exit-2 class", () =
     const { outcome } = await throughMcp(dir, config, artifacts, "record", {});
     expect(outcome.outcome).toBe("usage");
     expect(outcome.exitCode).toBe(EXIT_USAGE);
-    expect(listTools().map((tool) => tool.name)).toEqual(["review-context", "submit-evidence"]);
+    expect(listTools().map((tool) => tool.name)).toEqual(["review-context", "submit-evidence", "managed"]);
   });
 });
 
@@ -604,9 +604,9 @@ describe("hostile text arrives neutralized in tool results", () => {
 // ── The advertised surface ───────────────────────────────────────────────────
 
 describe("the tool listing", () => {
-  it("advertises exactly the two commands, named as the CLI names them", () => {
+  it("advertises exactly the three commands, named as the CLI names them", () => {
     const tools = listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(["review-context", "submit-evidence"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["review-context", "submit-evidence", "managed"]);
     for (const tool of tools) {
       expect(tool.description.length).toBeGreaterThan(0);
       expect(tool.inputSchema["type"]).toBe("object");

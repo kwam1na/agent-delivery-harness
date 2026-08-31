@@ -1,5 +1,5 @@
 /**
- * Delivery harness CLI: the eight-command operator surface.
+ * Delivery harness CLI: the nine-command operator surface.
  *
  * THE COMMAND REGISTRY. `COMMANDS` is the single source of truth for which
  * commands exist. Every command module under `commands/` must appear here, and
@@ -13,6 +13,7 @@
  */
 import { checkCommand } from "./commands/check.ts";
 import { gateCommand } from "./commands/gate.ts";
+import { maintainCommand } from "./commands/maintain.ts";
 import { managedCommand } from "./commands/managed.ts";
 import { prepareCommand } from "./commands/prepare.ts";
 import { recordCommand } from "./commands/record.ts";
@@ -27,7 +28,8 @@ export const PACKAGE_NAME = "@agent-delivery-harness/cli";
  * The command registry. The order here is the order `--help` lists them, and it
  * follows the loop an operator walks: prepare, review, submit, gate, record,
  * verify — with `check` as the standalone preflight and `managed` as the
- * host-facing managed-delivery checkpoint surface.
+ * host-facing managed-delivery checkpoint surface and `maintain` as the
+ * installation-scoped maintenance lane.
  */
 export const COMMANDS: readonly CommandDescriptor[] = [
   prepareCommand,
@@ -38,6 +40,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   verifyCommand,
   checkCommand,
   managedCommand,
+  maintainCommand,
 ];
 
 export {
@@ -65,6 +68,7 @@ export { recordCommand } from "./commands/record.ts";
 export { verifyCommand } from "./commands/verify.ts";
 export { checkCommand } from "./commands/check.ts";
 export { managedCommand } from "./commands/managed.ts";
+export { maintainCommand } from "./commands/maintain.ts";
 
 /** Runs the CLI against a runtime and returns the process exit code. */
 export function runCli(argv: readonly string[], runtime: CliRuntime): Promise<number> {
