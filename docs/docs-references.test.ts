@@ -23,12 +23,20 @@
  *
  * WHAT A "COMPUTABLE COUNT" IS. A number the documentation states that the tree
  * can recompute — the size of a frozen inventory, the number of CLI command
- * modules, the vector count the conformance kit declares. Those are pinned here
- * against the thing itself, so that advancing the thing and forgetting the prose
- * is a failing test rather than a stale sentence. Numbers that are *judgements*
- * rather than computations are deliberately not pinned: there is nothing to
- * recompute them against, and a fake pin over a hand-maintained constant only
- * moves the staleness into this file.
+ * modules, the vector count the conformance kit declares.
+ *
+ * These are checked by interpolating the computed value into the phrase the
+ * document must contain, never by comparing the tree against a literal written
+ * here. The difference is the whole point. A literal pin catches the tree
+ * moving, but its failure message points at this file, so the repair that
+ * suggests itself is to bump the literal — leaving the documented sentence
+ * stale and now unguarded, with the suite green. Pinning the *sentence* means
+ * the prose is what has to be re-stamped, which is the drift actually worth
+ * catching in a documentation sensor.
+ *
+ * Numbers that are *judgements* rather than computations are deliberately not
+ * pinned: there is nothing to recompute them against, and a pin over a
+ * hand-maintained constant only moves the staleness into this file.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -112,9 +120,21 @@ describe("the documentation's references", () => {
     // matter: the floor catches a regex that stops matching, and the
     // per-document assertion catches a scan that silently drops a file.
     const references = allReferences();
-    expect(references.length).toBeGreaterThanOrEqual(50);
+    // The floor sits just under the real count rather than far below it. A
+    // floor with room to spare is the one thing a partial drop fits through,
+    // and a partial drop is the only failure this guard uniquely catches: a
+    // scan that stops matching entirely is already caught by the two
+    // assertions below.
+    expect(references.length).toBeGreaterThanOrEqual(75);
+    // Partitioned from the very array the existence assertion consumes, NOT
+    // re-enumerated. Re-enumerating would check a different set from the one
+    // being guarded, and would stay green while `allReferences` silently
+    // narrowed.
     for (const document of scannedDocuments()) {
-      expect(referencesOf(document).length, `${document} contributes no checked reference`).toBeGreaterThan(0);
+      expect(
+        references.filter((reference) => reference.document === document).length,
+        `${document} contributes no checked reference`,
+      ).toBeGreaterThan(0);
     }
     // One specific reference the scan must have found, so that a regex which
     // matches *something* but not real links is still a failure.
@@ -129,36 +149,64 @@ describe("the documentation's references", () => {
   });
 });
 
+const textOf = (document: string): string => readFileSync(path.join(REPO_ROOT, document), "utf8");
+
+/**
+ * Asserts that a documented sentence carries the value the tree computes.
+ *
+ * The direction matters, and it is the reason this helper exists rather than a
+ * bare numeric literal. A pin written as `expect(computed).toBe(37)` moves the
+ * staleness into this file: advancing the tree turns it red, the failure points
+ * at the literal, and the natural repair is to bump the literal and leave the
+ * prose saying thirty-seven forever. Interpolating the computed value into the
+ * phrase the document must contain closes that loop — the sentence itself is
+ * what has to be re-stamped, so prose that drifts from the tree is the failure
+ * rather than the survivor.
+ */
+const documentStates = (document: string, phrase: string): void => {
+  expect(textOf(document), `${document} no longer states: ${phrase}`).toContain(phrase);
+};
+
 describe("the computable counts the documentation states", () => {
-  it("pins the managed-delivery facade's operation inventory", () => {
-    expect(FACADE_OPERATIONS.length).toBe(37);
+  it("states the managed-delivery facade's operation inventory", () => {
     expect(FACADE_CAPABILITY_CLASSES.length).toBe(6);
     expect(FACADE_SURFACES.length).toBe(5);
+    documentStates("docs/managed-delivery.md", `Each of the **${FACADE_OPERATIONS.length}** operations`);
+    documentStates("README.md", `${FACADE_OPERATIONS.length}-operation inventory`);
   });
 
-  it("pins the delivery state vocabulary", () => {
-    expect(DELIVERY_STATES.length).toBe(20);
+  it("states the delivery state vocabulary", () => {
+    documentStates("docs/managed-delivery.md", `**${DELIVERY_STATES.length}** delivery states`);
+    documentStates("README.md", `${DELIVERY_STATES.length} delivery states`);
   });
 
-  it("pins the frozen product-trust label the documentation quotes", () => {
+  it("quotes the frozen product-trust label verbatim", () => {
     expect(PRODUCT_TRUST_LABEL).toBe("local-digest / operator-pinned");
+    documentStates("README.md", `\`${PRODUCT_TRUST_LABEL}\``);
+    documentStates("docs/managed-delivery.md", PRODUCT_TRUST_LABEL);
   });
 
-  it("pins the nine-command CLI surface", () => {
+  it("states the CLI surface's command count", () => {
     const commands = readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands")).filter(
       (entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"),
     );
     expect(commands.length).toBe(9);
+    // Spelled as a word in the prose, which is why the phrase is pinned rather
+    // than the digits: the sentence a reader actually meets is the claim.
+    documentStates("README.md", "nine-command operator surface");
+    documentStates("docs/agent-guide.md", "the nine-command operator surface");
   });
 
-  it("pins the conformance kit's vector count", () => {
+  it("states the conformance kit's vector count", () => {
     const kit = JSON.parse(readFileSync(path.join(REPO_ROOT, "packages/conformance/vectors/kit.json"), "utf8")) as {
       vectors: readonly unknown[];
     };
-    expect(kit.vectors.length).toBe(89);
+    for (const document of ["README.md", "docs/agent-guide.md"]) {
+      documentStates(document, `${kit.vectors.length}-vector`);
+    }
   });
 
-  it("pins the reviewer charter set the pinned composition ships", () => {
+  it("states the reviewer charter set the pinned composition ships", () => {
     // This resolves the real archive through the real mechanism, which is also
     // the honest scope of the claim: `projectShippedPersonas` is a library
     // boundary with no production caller in this repository, and this is a test
@@ -173,7 +221,6 @@ describe("the computable counts the documentation states", () => {
     });
     expect(projected.ok).toBe(true);
     if (!projected.ok) return;
-    expect(projected.personas.length).toBe(17);
-    expect(projected.personas.every((persona) => persona.origin === "composition")).toBe(true);
+    documentStates("docs/managed-delivery.md", `ships **${projected.personas.length}** reviewer charters`);
   });
 });

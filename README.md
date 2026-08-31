@@ -116,12 +116,20 @@ npm ci             # install (npm workspaces, ESM throughout)
 npm run typecheck  # tsc, strict
 npm run sensor     # import-boundary / env / Bun / purity / time sensor
 npm run sensor:cli # CLI-inventory sensor
+npm test           # vitest (DELIVERY_HARNESS_MAX_WORKERS caps concurrency)
+npm run check      # typecheck, then those three, in order
+```
+
+Three further sensors are **not** part of `npm run check` and are run on their
+own. Each has a test under `npm test` that falsifies its rules, but the script
+itself — which is what reports against this working tree — only runs when you
+invoke it:
+
+```
 npm run sensor:policy     # this repo's own policy projection vs its routing
 npm run sensor:shadow     # the shadow-window discovery and consumption guard
 npm run sensor:standalone # standalone-install sensor
-npm run qualify:provider # exact installed-provider interoperability replay
-npm test           # vitest (DELIVERY_HARNESS_MAX_WORKERS caps concurrency)
-npm run check      # all of the above, in order
+npm run qualify:provider  # exact installed-provider interoperability replay
 ```
 
 Normative inputs are vendored, not referenced: the spec lives at
@@ -153,13 +161,15 @@ The documentation has sensors of its own.
 getting-started walkthrough verbatim, and requires the flag tokens on that page
 and in the CLI's usage text to match in both directions.
 [`docs/docs-references.test.ts`](docs/docs-references.test.ts) resolves every
-relative link in this README and the top-level guides, and pins the computable
+relative link in this README and the top-level guides, and checks the computable
 counts those documents state — the facade's operation inventory, the delivery
 state vocabulary, the CLI command count, the conformance kit's vector count, the
 frozen trust label, and the reviewer charter set the pinned composition ships —
-against the tree rather than against a hand-maintained constant. Its enumeration
-is guarded from both ends, because an existence claim over a set that turned out
-empty would otherwise pass silently.
+by interpolating the value the tree computes into the sentence the document must
+contain. So advancing one of those and forgetting the prose is a failing test
+rather than a stale sentence, and the sentence is what has to be re-stamped. Its
+link enumeration is guarded from both ends, because an existence claim over a
+set that turned out empty would otherwise pass silently.
 
 ## This repository's own standing
 

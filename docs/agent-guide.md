@@ -56,8 +56,16 @@ plausible change breaks:
 
 ## Rules the repository will not let you break
 
-Every rule below is enforced by a sensor and falsified by a test. `npm run check`
-runs the first four in order.
+Every rule below is enforced by a sensor and falsified by a test.
+
+Mind the difference between the two. `npm run check` is `typecheck`, then the
+import-boundary sensor, then the CLI-inventory sensor, then the whole vitest
+suite — so it runs the first two sensor *scripts* below and every row's *test*.
+The policy-projection, shadow-window, and standalone-install scripts are not in
+`check`; their tests are, but a test proves the rules are falsifiable while the
+script is what reports against this working tree. Run those three yourself
+(`npm run sensor:policy`, `sensor:shadow`, `sensor:standalone`) before pushing a
+change that touches policy, the shadow window, or packaging.
 
 | Sensor | What it holds |
 |---|---|
@@ -67,7 +75,7 @@ runs the first four in order.
 | `scripts/policy-projection-check.ts` | This repository's own policy projection, its typed leaf adapters, the compiled snapshot, and a digest-pinned pre-cutover oracle, against the routing the repository actually performs. |
 | `scripts/shadow-discovery-guard.ts` | The five shadow-window positions: shadow posture, a pinned product commit that resolves, the empty ambient-discovery layout, projection scope, and binding-sourced consumption records only. |
 | `docs/docs-examples.test.ts` | Executes the getting-started guide verbatim. Its `sh` blocks are one shell session; its `ts` blocks become files. Flag tokens must match the CLI's usage text in **both** directions. |
-| `docs/docs-references.test.ts` | Every relative link in the README and the top-level guides resolves, and the computable counts those documents state match the tree. |
+| `docs/docs-references.test.ts` | Every relative link in the README and the top-level guides resolves, and each computable count those documents state is checked by interpolating the tree's own value into the sentence the document must contain. |
 
 ### Sensors that bite on a documentation-only change
 
