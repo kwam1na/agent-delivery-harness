@@ -336,25 +336,31 @@ describe("a malformed measurement makes the set incomplete, never a scored zero"
     // `reduceScores` coerces with bare `Number(...)`, so this check is what
     // keeps a string or a negative out of the figures. Unpinned, a delivery
     // measured as "0" or -5 would score a clean pass.
-    for (const bogus of ["0", -5, 1.5, null]) {
-      const malformed = entry("shadow-operations", "operations");
-      (malformed["score"] as Record<string, unknown>)["interventionCount"] = bogus;
-      const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), malformed]);
-      const verdict = scoreShadowMilestone(reachableBaseline, record);
-      expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
-      expect(verdict.status).toBe("incomplete");
-    }
+    for (const field of ["interventionCount", "policyRequiredInterruptionCount"])
+      for (const bogus of ["0", -5, 1.5, null]) {
+        const malformed = entry("shadow-operations", "operations");
+        (malformed["score"] as Record<string, unknown>)[field] = bogus;
+        const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), malformed]);
+        const verdict = scoreShadowMilestone(reachableBaseline, record);
+        expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+        expect(verdict.status).toBe("incomplete");
+      }
   });
 
-  it("rejects a non-finite or negative wall-clock split", () => {
-    for (const bogus of ["500", -1, Number.NaN]) {
-      const malformed = entry("shadow-operations", "operations");
-      (malformed["score"] as Record<string, unknown>)["blockedSeconds"] = bogus;
-      const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), malformed]);
-      const verdict = scoreShadowMilestone(reachableBaseline, record);
-      expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
-      expect(verdict.status).toBe("incomplete");
-    }
+  it("rejects a non-finite or negative wall-clock split on either half", () => {
+    // Both halves, because a NaN on the unpinned one survives the shape check
+    // and the zero-window check, reduces to a NaN blocked share, and loses the
+    // no-regression comparison — turning an unmeasured delivery into a scored
+    // loss, which is the one thing this scorer must never do.
+    for (const field of ["blockedSeconds", "progressingSeconds"])
+      for (const bogus of ["500", -1, Number.NaN]) {
+        const malformed = entry("shadow-operations", "operations");
+        (malformed["score"] as Record<string, unknown>)[field] = bogus;
+        const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), malformed]);
+        const verdict = scoreShadowMilestone(reachableBaseline, record);
+        expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+        expect(verdict.status).toBe("incomplete");
+      }
   });
 
   it("rejects a zero-length window instead of reading it as a perfect blocked share", () => {
