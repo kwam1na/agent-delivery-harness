@@ -334,6 +334,12 @@ describe("admission: only an affirmative binding-sourced record counts", () => {
     expect(verdict.status).toBe("pass");
     expect(verdict.shadow?.interventionCounts).toEqual([1, 1, 1]);
     expect(verdict.shadow?.totalOperatorInterventions).toBe(3);
+    // An honest negative is still an exclusion, and it must reach the ledger:
+    // a delivery that vanishes silently cannot be told from one nobody ever
+    // submitted.
+    const row = verdict.inputs.gateRecord.excludedDeliveries.find((entry) => entry.id === "shadow-operations");
+    expect(row).toBeDefined();
+    expect(row!.reason).toContain("does not affirm consumption");
   });
 
   it("honours an explicit gate exclusion even on an affirmative record", () => {
@@ -376,6 +382,9 @@ describe("admission: only an affirmative binding-sourced record counts", () => {
       "shadow-operations",
     ]);
     expect(verdict.status).toBe("pass");
+    const row = verdict.inputs.gateRecord.excludedDeliveries.find((entry) => entry.id === "shadow-docs");
+    expect(row).toBeDefined();
+    expect(row!.reason).toContain("appears more than once");
   });
 });
 
@@ -415,6 +424,22 @@ describe("policy-required interruptions are reported, never counted as intervent
 });
 
 describe("a malformed measurement makes the set incomplete, never a scored zero", () => {
+  it("rejects an entry carrying no score block at all", () => {
+    // The ordinary shape the moment the binding writes an entry: consumption
+    // observed, nothing scored yet. Unpinned, a weaker guard here reads the
+    // members off `undefined` and the scorer throws instead of reporting an
+    // unfinished measurement.
+    const unscored = entry("shadow-operations", "operations");
+    delete unscored["score"];
+    const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), unscored]);
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+    expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+    const note = verdict.incomplete.find((row) => row.code === "measurement_missing")!;
+    expect(note.message).toContain("carries no score block");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
   it("rejects a count that is not a non-negative integer rather than coercing it", () => {
     // `reduceScores` coerces with bare `Number(...)`, so this check is what
     // keeps a string or a negative out of the figures. Unpinned, a delivery
