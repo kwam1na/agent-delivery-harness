@@ -14,14 +14,20 @@
  * code the HOST invokes, and it launches nothing.
  *
  * This file is a process boundary (like the CLI main): it reads the ambient
- * clock and stdin inside `main`, while every decision it takes is the pure
- * `decideHookInvocation` below.
+ * clock and stdin inside `main`, while every decision it takes is taken by
+ * `decideHookInvocation` below. That function is pure in the clock and in the
+ * binding state, both of which are arguments — but it is NOT filesystem-pure:
+ * an invocation naming a write member resolves that path against the real
+ * filesystem, because a grant boundary that compares path strings lexically
+ * cannot tell two spellings of one directory apart, nor see a symlink. It
+ * reads only path metadata, never file contents, and only on the write path.
  */
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   evaluateToolInvocation,
+  underAnyFolded,
   type CheckpointAdmissionExpectation,
 } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
@@ -63,17 +69,182 @@ const WRITE_PATH_MEMBERS: Readonly<Record<string, readonly string[]>> = Object.f
   NotebookEdit: ["notebook_path"],
 });
 
+/** POSIX's own ceiling on how many links one resolution may follow before it is a loop. */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * The ceiling on positions one walk may visit. `file_path` is UNBOUNDED MODEL
+ * INPUT, and each step re-processes the accumulated path once, so the walk
+ * costs O(n^2) in the segment count: ~16k segments, about 100KB of argument,
+ * blocks this hook for eighteen seconds, and more blocks it for minutes. A
+ * model that can stall its own permission check decides what the host does on
+ * hook timeout, which is not this file's choice to make. Bounding the walk
+ * keeps that decision here, and refusing to judge is the closed direction.
+ *
+ * Counted per step rather than on the incoming string, so that segments
+ * re-entering the walk from link targets are bounded by the same ceiling. It
+ * is far above any real path — a legitimate one is tens of segments, and even
+ * a long legal link chain stays well inside it.
+ */
+const MAX_PATH_STEPS = 1024;
+
+/** '/'-separated, dropping the no-op segments; `..` is preserved, being real. */
+const segmentsOf = (value: string): string[] => value.split(path.sep).filter((segment) => segment.length > 0 && segment !== ".");
+
+/**
+ * Walk an absolute path the way the KERNEL walks it — one segment at a time,
+ * following one link hop at a time — reporting every position it passes
+ * through to `note`, and returning where it lands. `undefined` means the walk
+ * exceeded the link ceiling, i.e. a loop, and the caller must fail closed.
+ *
+ * WHY NOT `realpathSync`, which is shorter: it answers only where a path ENDS.
+ * Three things a grant boundary has to know are invisible in that answer.
+ *
+ *   - It resolves an entire chain atomically, so the positions BETWEEN the
+ *     links never surface. With `src/alias -> .git` the endpoints are
+ *     `src/alias` and the git directory's own resolved target; the protected
+ *     name the walk went through is in neither.
+ *   - It throws on a DANGLING link — one whose target does not exist — which
+ *     is indistinguishable from a plain not-yet-created file. Keeping the
+ *     literal name there is what let `src/evil -> .git/hooks/pre-push` read as
+ *     an ordinary write to `src/evil`, while the host's own `open()` followed
+ *     the link and created the hook. `readlinkSync` reads the target of a
+ *     dangling link perfectly well; only `realpathSync` needs it to exist.
+ *   - `..` must apply AFTER the link it follows, because that is what the
+ *     kernel does. Collapsing `a/link/..` to `a` lexically, before the
+ *     filesystem is consulted, names a different file than the write reaches.
+ *
+ * Resolution order is otherwise ordinary: A RELATIVE LINK TARGET RESOLVES
+ * AGAINST THE LINK'S OWN DIRECTORY, not against the workspace root — so a
+ * link at `src/x` whose target reads `.git/config` reaches `src/.git/config`,
+ * and reaching the workspace's own `.git` from there takes `../.git/config`.
+ * That is ordinary POSIX and it is stated here because a fixture written the
+ * other way tests nothing while looking exactly like an attack. An absolute
+ * target restarts at the filesystem root, and either way the target's
+ * segments re-enter the same walk, so a link to a link, or a target carrying
+ * `..`, is followed the same way.
+ *
+ * A segment that is not a link contributes its literal name and the walk
+ * continues, so a path that simply does not exist keeps its lexical form and
+ * is rejected by containment downstream — the fail-closed direction.
+ *
+ * WHAT THIS DOES NOT GUARANTEE, stated plainly because this is a grant
+ * boundary: it is a PREDICTION about a filesystem that can change underneath
+ * it. The hook walks, returns a decision, and the host then performs its own
+ * `open()` — anything that swaps a link in that window (TOCTOU) writes
+ * somewhere this never saw. Symlinks under the workspace are ordinary tracked
+ * content, so a committed one is attacker-supplied input, not operator intent.
+ * Closing that needs an fd-based host write surface, which does not exist.
+ *
+ * A HARDLINK DEFEATS THIS STATICALLY, not merely by race, and the sentence
+ * above about tracked content must not be read as bounding the whole static
+ * surface. A hardlink is a second name for the same inode, indistinguishable
+ * from an ordinary file by `readlink` or by any other path inspection, so a
+ * name inside the workspace hardlinked to a protected file is walked as the
+ * ordinary write it appears to be. What bounds it is not this check: git
+ * cannot store a hardlink, so unlike a symlink it cannot arrive as committed
+ * content, and creating one requires an exec capability that can already
+ * write outside the grant.
+ */
+const walkPath = (value: string, note: (position: string) => void): string | undefined => {
+  const base = path.parse(value).root;
+  let current = base;
+  const pending = segmentsOf(value.slice(base.length));
+  let hops = 0;
+  let steps = 0;
+  while (pending.length > 0) {
+    if (++steps > MAX_PATH_STEPS) return undefined;
+    const segment = pending.shift() as string;
+    if (segment === "..") {
+      current = path.dirname(current);
+      continue;
+    }
+    const next = path.join(current, segment);
+    note(next);
+    let target: string;
+    try {
+      target = readlinkSync(next);
+    } catch {
+      // Not a link (or unreadable): this position is where the walk stands.
+      current = next;
+      continue;
+    }
+    if (++hops > MAX_LINK_HOPS) return undefined;
+    const targetBase = path.parse(target).root;
+    if (targetBase.length > 0) current = targetBase;
+    pending.unshift(...segmentsOf(target.slice(targetBase.length)));
+  }
+  return current;
+};
+
+const workspaceRelative = (root: string, absolute: string): string => path.relative(root, absolute).split(path.sep).join("/");
+
+/** A form that would be admitted on its own — i.e. one that does not escape. */
+const staysInside = (relative: string): boolean =>
+  relative.length > 0 && !relative.startsWith("../") && relative !== ".." && !path.isAbsolute(relative);
+
+/** The grant's protected paths, read defensively — an unreadable grant protects nothing here and is judged downstream. */
+const protectedPathsOf = (grant: unknown): readonly string[] => {
+  if (typeof grant !== "object" || grant === null) return [];
+  const declared = (grant as { readonly protectedPaths?: unknown }).protectedPaths;
+  return Array.isArray(declared) ? declared.filter((entry): entry is string => typeof entry === "string") : [];
+};
+
+/**
+ * A write path that cannot be admitted under any grant, used where containment
+ * cannot be judged at all. It is spelled as a traversal because the frozen
+ * normalization check already refuses those; nothing here can widen a grant.
+ */
+const UNJUDGEABLE = "..";
+
 function writesOf(state: HookBindingState, toolName: string, toolInput: Record<string, unknown>): string[] {
   const members = WRITE_PATH_MEMBERS[toolName] ?? [];
+  // Nothing below touches the filesystem for an invocation that names no write
+  // member, which is most of them — a Read or a Bash reads no path metadata.
+  if (members.length === 0) return [];
+  // BOTH OPERANDS, never one. The host reports paths in resolved form while
+  // the workspace root arrives as the operator wrote it, so a lexical
+  // `path.relative` turns a legitimate write under a symlinked-ancestor root
+  // into an apparent traversal and denies it. Resolving only the incoming
+  // value would not merely fix less — it INVERTS the failure, letting a value
+  // that resolves outside an unresolved root compare as inside. Both operands
+  // are walked the same way before `path.relative` is taken.
+  //
+  // A root that is not absolute cannot anchor containment at all: resolving it
+  // would silently re-anchor the whole grant on whatever directory the hook
+  // happens to run in. That fails closed rather than guessing.
+  const rootWalk = path.isAbsolute(state.workspaceRoot) ? walkPath(state.workspaceRoot, () => {}) : undefined;
+  const protectedPaths = protectedPathsOf(state.grant);
   const writes: string[] = [];
   for (const member of members) {
     const value = toolInput[member];
     if (typeof value !== "string" || value.length === 0) continue;
+    if (rootWalk === undefined) {
+      writes.push(UNJUDGEABLE);
+      continue;
+    }
+    const root = rootWalk;
+    // PROTECTION IS A PROPERTY OF THE PATH WALKED, not of where it ends up.
+    // Where the walk ends is what says whether the write is inside the
+    // workspace; but a write that PASSES THROUGH `.git` or
+    // `.managed-projection` on its way somewhere writable has still reached
+    // into a protected subtree, and no pair of endpoint spellings can see
+    // that. Symlinks are tracked content, so a committed one is enough to
+    // arm it. The protected position is listed alongside the destination, and
+    // since a denial on any listed write denies the invocation, naming it can
+    // only ever tighten — it never widens the grant.
+    let reached: string | undefined;
+    const note = (position: string): void => {
+      if (reached !== undefined) return;
+      const relative = workspaceRelative(root, position);
+      if (staysInside(relative) && underAnyFolded(relative, protectedPaths)) reached = relative;
+    };
     // Workspace-relative, '/'-separated. A path outside the workspace stays
     // absolute or dot-segmented and fails the frozen normalization check —
     // fail closed, never silently in-scope.
-    const relative = path.isAbsolute(value) ? path.relative(state.workspaceRoot, value) : value;
-    writes.push(relative.split(path.sep).join("/"));
+    const landed = walkPath(path.isAbsolute(value) ? value : `${root}${path.sep}${value}`, note);
+    writes.push(landed === undefined ? UNJUDGEABLE : workspaceRelative(root, landed));
+    if (reached !== undefined) writes.push(reached);
   }
   return writes;
 }

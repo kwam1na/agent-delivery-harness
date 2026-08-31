@@ -323,7 +323,7 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * side (writable paths) stays byte-exact — asymmetric, in the closed
  * direction.
  */
-const underAnyFolded = (p: string, prefixes: readonly string[]): boolean =>
+export const underAnyFolded = (p: string, prefixes: readonly string[]): boolean =>
   underAny(
     p.toLowerCase(),
     prefixes.map((prefix) => prefix.toLowerCase()),
