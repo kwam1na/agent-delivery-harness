@@ -390,9 +390,9 @@ describe("host-admission capability record document", () => {
     // an entry named anywhere in the scope prose satisfies it — including in a
     // roster of entries that WERE re-observed. BOTH GAPS ARE ACCEPTED, NOT
     // COVERED. Nothing in this suite cross-checks the scope prose against the
-    // reverified set, and nothing reads the scope at all beyond containment,
-    // so no other rule closes either one. They are recorded here so the rule
-    // is not credited with more than it does.
+    // reverified set, and nothing reads the GRADE scope at all beyond
+    // containment, so no other rule closes either one. They are recorded here
+    // so the rule is not credited with more than it does.
     expect(unnamedFloor, "the record has entries it did not re-observe, which is what makes naming them meaningful").toBeGreaterThan(0);
   });
 
@@ -463,6 +463,15 @@ describe("host-admission capability record document", () => {
     // the control applies everywhere. Pinning vocabulary is not pinning a
     // verdict, and the caveat these guard is the one operational consequence
     // an operator has to act on.
+    //
+    // WHAT THIS BUYS AND WHAT IT CANNOT. These literals make a silent reword
+    // EXPENSIVE, NOT IMPOSSIBLE: a negation inserted immediately before any of
+    // them keeps every word they match, and no longer literal fixes that —
+    // each one falls to a correspondingly longer negation. The class is
+    // unclosable here by construction. What it rules out is the ordinary
+    // rewording that drifts a claim by accident; what is left needs an author
+    // writing a sentence they know to be false, which this file's header
+    // already assigns to review rather than to a regex.
     expect(claim.reverification.scope, "the scope states where this result stops applying").toMatch(
       /bounded to out-of-workspace paths OUTSIDE the system temporary directory/u,
     );
