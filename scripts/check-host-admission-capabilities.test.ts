@@ -430,8 +430,15 @@ describe("host-admission capability record document", () => {
     // entry beneath it. The verdict is the slot a consumer reads to decide
     // whether the mutation floor holds; a caveat one level down is a caveat
     // that will not be read by whoever acts on the tier.
+    // Matched on the phrase that STATES the boundary, not on a bare mention of
+    // the directory: the method names it more than once, so a loose match here
+    // survives the boundary clause itself being rewritten away.
     const grade = hostById.get("codex-cli").grade.reverification;
-    expect(grade.method, "the tier verdict carries the boundary its floor was re-established under").toMatch(/temporary directory/iu);
+    expect(grade.method, "the tier verdict carries the boundary its floor was re-established under").toMatch(
+      /OUTSIDE the system temporary directory/u,
+    );
+    // And the consequence an operator has to act on, not just the caveat.
+    expect(grade.method, "the tier verdict states what the boundary costs").toMatch(/no scoping/iu);
   });
 
   it("cannot grade Tier 3 over a surviving background child", () => {
