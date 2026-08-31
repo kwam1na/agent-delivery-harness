@@ -17,6 +17,7 @@ import { FINISH_LINES } from "../spine/contract.ts";
 import {
   oneOf,
   positiveInt,
+  sha256,
   specLiteral,
   spineId,
   spinePointer,
@@ -59,7 +60,19 @@ export interface RepositoryPolicyDocument {
   readonly grantedFinishLines: readonly (typeof FINISH_LINES)[number][];
   readonly grantedAuthority: readonly string[];
   readonly forbiddenAuthority: readonly string[];
-  readonly reviewLenses: readonly { readonly lensId: string; readonly category: (typeof REVIEW_LENS_CATEGORIES)[number] }[];
+  readonly reviewLenses: readonly {
+    readonly lensId: string;
+    readonly category: (typeof REVIEW_LENS_CATEGORIES)[number];
+    /** The reviewer charter this lens hands its reviewer, referenced by identity. */
+    readonly personaId: string;
+    /**
+     * Present only for a repository-owned charter: those bytes belong to the
+     * repository, so the document pins them. A charter shipped in the
+     * authenticated composition is referenced by identity alone, so advancing
+     * the shipped set never edits this document.
+     */
+    readonly personaDigest?: string;
+  }[];
   readonly obligations: readonly { readonly obligationId: string }[];
   readonly requiredCapabilities: readonly { readonly capabilityId: string; readonly kind: string; readonly version: string }[];
   readonly approvals: readonly { readonly action: string; readonly approval: (typeof APPROVAL_REQUIREMENTS)[number] }[];
@@ -72,7 +85,11 @@ export interface RepositoryPolicyDocument {
 const LENS_RULES: readonly MemberRule[] = [
   { name: "lensId", check: spineId },
   { name: "category", check: oneOf(REVIEW_LENS_CATEGORIES) },
+  { name: "personaId", check: spineId },
 ];
+
+/** Identity plus digest is the repository-owned reference form; identity alone is the shipped one. */
+const LENS_OPTIONAL_RULES: readonly MemberRule[] = [{ name: "personaDigest", check: sha256 }];
 
 const OBLIGATION_RULES: readonly MemberRule[] = [{ name: "obligationId", check: spineId }];
 
@@ -108,14 +125,14 @@ const CHECKPOINT_REQUIRED: readonly MemberRule[] = [
 ];
 
 const closedArrayWithOptionals =
-  (required: readonly MemberRule[], collectorRef: PolicyCollector) =>
+  (required: readonly MemberRule[], collectorRef: PolicyCollector, optional: readonly MemberRule[] = []) =>
   (value: unknown, at: string): void => {
     if (!Array.isArray(value)) {
       collectorRef.emit("malformed_member", at, "expected an array");
       return;
     }
     value.forEach((entry, index) => {
-      checkClosedWithOptionals(entry, spinePointer(at, index), required, [], collectorRef);
+      checkClosedWithOptionals(entry, spinePointer(at, index), required, optional, collectorRef);
     });
   };
 
@@ -123,9 +140,9 @@ export function validateRepositoryPolicyDocument(value: unknown): PolicyVerdict 
   const collector = createPolicyCollector();
   const view = spineView(collector);
   const nestedClosed =
-    (rules: readonly MemberRule[]) =>
+    (rules: readonly MemberRule[], optional: readonly MemberRule[] = []) =>
     (nested: unknown, at: string): void =>
-      closedArrayWithOptionals(rules, collector)(nested, at);
+      closedArrayWithOptionals(rules, collector, optional)(nested, at);
 
   const REQUIRED: readonly MemberRule[] = [
     { name: "spec", check: specLiteral(REPOSITORY_POLICY_DOCUMENT_SPEC) },
@@ -134,7 +151,7 @@ export function validateRepositoryPolicyDocument(value: unknown): PolicyVerdict 
     { name: "grantedFinishLines", check: stringArray({ minItems: 1, item: oneOf(FINISH_LINES) }) },
     { name: "grantedAuthority", check: stringArray({ item: oneOf(PRIVILEGED_ACTIONS) }) },
     { name: "forbiddenAuthority", check: stringArray({ item: oneOf(PRIVILEGED_ACTIONS) }) },
-    { name: "reviewLenses", check: (nested, at) => nestedClosed(LENS_RULES)(nested, at) },
+    { name: "reviewLenses", check: (nested, at) => nestedClosed(LENS_RULES, LENS_OPTIONAL_RULES)(nested, at) },
     { name: "obligations", check: (nested, at) => nestedClosed(OBLIGATION_RULES)(nested, at) },
     { name: "requiredCapabilities", check: (nested, at) => nestedClosed(REQUIRED_CAPABILITY_RULES)(nested, at) },
     { name: "approvals", check: (nested, at) => nestedClosed(APPROVAL_RULES)(nested, at) },

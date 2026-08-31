@@ -13,6 +13,7 @@
  * authority — absence of a grant is denial, and nothing model-written can
  * widen it.
  */
+import { sha256Hex } from "../digest.ts";
 import type { PolicySnapshot } from "../spine/policy.ts";
 import { PORTABLE_INTAKE_GRANT, PORTABLE_STAGE_GRANT, compileRepositoryPolicy } from "./compile.ts";
 import { REPOSITORY_POLICY_DOCUMENT_SPEC } from "./document.ts";
@@ -32,11 +33,23 @@ export { MANDATORY_LENS_CATEGORIES } from "./compile.ts";
  */
 export const DISPOSABLE_OUTCOME_AUTHORITIES: readonly string[] = Object.freeze(["operator"]);
 
-/** The two lenses the fixed policy activates, one per mandatory category. */
+/**
+ * The two lenses the fixed policy activates, one per mandatory category, each
+ * naming the reviewer charter its reviewer is handed. The disposable
+ * repository owns its charters, so the compiled declaration pins their digests
+ * and the bytes are read from the trusted pre-run base — a candidate rewriting
+ * a tracked charter changes a future owner-approved run, never this one.
+ */
 export const DISPOSABLE_REVIEW_LENSES = Object.freeze([
-  { lensId: "lens.outcome-correctness", category: "outcome-correctness" },
-  { lensId: "lens.testing-policy", category: "testing-policy" },
+  { lensId: "lens.outcome-correctness", category: "outcome-correctness", personaId: "persona.outcome-correctness" },
+  { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
 ] as const);
+
+/** Where each of those charters lives in the repository tree, resolved from the base commit. */
+export const DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS: Readonly<Record<string, string>> = Object.freeze({
+  "persona.outcome-correctness": "delivery/personas/outcome-correctness.md",
+  "persona.testing-policy": "delivery/personas/testing-policy.md",
+});
 
 /**
  * The one trusted sensor: the disposable repository's acceptance sensor. Its
@@ -60,10 +73,21 @@ export interface CompileDisposablePolicyInput {
   readonly repositoryId: string;
   readonly productTrustRevocationEpoch: number;
   readonly repositoryAuthorityRevocationEpoch: number;
+  /** The reviewer-charter bytes read from the trusted pre-run base, per identity. */
+  readonly personaBytes: Readonly<Record<string, string>>;
 }
 
 /** Compiles the fixed policy for one disposable repository. Digest self-binds. */
 export function compileDisposablePolicy(input: CompileDisposablePolicyInput): PolicySnapshot {
+  // A charter the trusted base did not supply is absent, not empty: it stays
+  // out of the resolvable set so the compiler rejects the reference rather
+  // than binding the digest of nothing.
+  const personas = DISPOSABLE_REVIEW_LENSES.flatMap((lens) => {
+    const bytes = input.personaBytes[lens.personaId];
+    return bytes === undefined ? [] : [{ personaId: lens.personaId, digest: sha256Hex(bytes), origin: "adopter" as const }];
+  });
+  const digestOf = (personaId: string): string | undefined =>
+    personas.find((persona) => persona.personaId === personaId)?.digest;
   const result = compileRepositoryPolicy({
     document: {
       spec: REPOSITORY_POLICY_DOCUMENT_SPEC,
@@ -72,7 +96,10 @@ export function compileDisposablePolicy(input: CompileDisposablePolicyInput): Po
       grantedFinishLines: ["merge-ready"],
       grantedAuthority: [],
       forbiddenAuthority: [],
-      reviewLenses: DISPOSABLE_REVIEW_LENSES.map((lens) => ({ ...lens })),
+      reviewLenses: DISPOSABLE_REVIEW_LENSES.map((lens) => {
+        const personaDigest = digestOf(lens.personaId);
+        return { ...lens, ...(personaDigest === undefined ? {} : { personaDigest }) };
+      }),
       obligations: [{ obligationId: "outcome.verification" }, { obligationId: "review.green" }],
       requiredCapabilities: [
         {
@@ -93,6 +120,7 @@ export function compileDisposablePolicy(input: CompileDisposablePolicyInput): Po
         resultSpec: DISPOSABLE_SENSOR_CAPABILITY.descriptor.resultSpec,
       },
     ],
+    personas,
     productTrustRevocationEpoch: input.productTrustRevocationEpoch,
     repositoryAuthorityRevocationEpoch: input.repositoryAuthorityRevocationEpoch,
   });

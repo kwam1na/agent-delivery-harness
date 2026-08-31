@@ -483,6 +483,7 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
     { name: "attemptId", check: spineId },
     { name: "lensId", check: spineId },
     { name: "contextDigest", check: sha256 },
+    { name: "personaDigest", check: sha256 },
     { name: "artifactDigest", check: sha256 },
   ]),
   "delivery/evidence.reference.recorded": table([

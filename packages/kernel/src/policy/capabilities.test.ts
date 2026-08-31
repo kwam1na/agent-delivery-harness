@@ -23,6 +23,7 @@ import {
 } from "./capabilities.ts";
 import { compileRepositoryPolicy } from "./compile.ts";
 import {
+  compositionPersonaSetFixture,
   mergeAdapterFixture,
   mergeAuthorityDocumentFixture,
   policyDocumentFixture,
@@ -89,6 +90,7 @@ describe("operation claims against the compiled policy", () => {
     const result = compileRepositoryPolicy({
       document,
       adapters,
+      personas: compositionPersonaSetFixture(),
       productTrustRevocationEpoch: 0,
       repositoryAuthorityRevocationEpoch: 0,
     });

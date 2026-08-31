@@ -148,8 +148,8 @@ const outcome = (): Record<string, unknown> => ({
     { criterionId: "crit-2", disposition: "amended-waived", evidence: { kind: "review", reference: "waiver-1" } },
   ],
   reviewAttempts: [
-    { attemptId: "attempt-1", lensId: "outcome-correctness", contextDigest: DIGEST, verdict: "approved" },
-    { attemptId: "attempt-2", lensId: "testing-policy", contextDigest: "d".repeat(64), verdict: "approved" },
+    { attemptId: "attempt-1", lensId: "outcome-correctness", contextDigest: DIGEST, personaDigest: "a".repeat(64), verdict: "approved" },
+    { attemptId: "attempt-2", lensId: "testing-policy", contextDigest: "d".repeat(64), personaDigest: "b".repeat(64), verdict: "approved" },
   ],
 });
 
@@ -162,8 +162,8 @@ const snapshot = (): Record<string, unknown> => {
     grantedFinishLines: ["merge-ready"],
     grantedAuthority: ["candidate-mutation"],
     reviewLenses: [
-      { lensId: "outcome-correctness", category: "outcome-correctness" },
-      { lensId: "testing-policy", category: "testing-policy" },
+      { lensId: "outcome-correctness", category: "outcome-correctness", personaId: "persona.outcome-correctness", personaDigest: "a".repeat(64) },
+      { lensId: "testing-policy", category: "testing-policy", personaId: "persona.testing-policy", personaDigest: "b".repeat(64) },
     ],
     obligations: [{ obligationId: "review.green" }],
   };

@@ -19,8 +19,8 @@ export const policyDocumentFixture = (overrides: Record<string, unknown> = {}): 
   grantedAuthority: [],
   forbiddenAuthority: [],
   reviewLenses: [
-    { lensId: "lens.outcome-correctness", category: "outcome-correctness" },
-    { lensId: "lens.testing-policy", category: "testing-policy" },
+    { lensId: "lens.outcome-correctness", category: "outcome-correctness", personaId: "persona.outcome-correctness" },
+    { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
   ],
   obligations: [{ obligationId: "outcome.verification" }, { obligationId: "review.green" }],
   requiredCapabilities: [{ capabilityId: "sensor.acceptance", kind: "sensor", version: "1" }],
@@ -37,6 +37,16 @@ export const mergeAuthorityDocumentFixture = (overrides: Record<string, unknown>
     approvals: [{ action: "merge", approval: "operator-required" }],
     ...overrides,
   });
+
+/**
+ * The reviewer charters the base document's lenses reference by identity, as
+ * the authenticated composition would ship them. Stub prose: this fixture set
+ * proves the binding, not the charters themselves.
+ */
+export const compositionPersonaSetFixture = (): readonly { readonly personaId: string; readonly digest: string; readonly origin: "composition" }[] => [
+  { personaId: "persona.outcome-correctness", digest: "a".repeat(64), origin: "composition" },
+  { personaId: "persona.testing-policy", digest: "b".repeat(64), origin: "composition" },
+];
 
 export const sensorAdapterFixture = (): Record<string, unknown> => ({
   spec: "adapter-capability/1",

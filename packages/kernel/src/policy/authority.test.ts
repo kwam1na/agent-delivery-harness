@@ -24,6 +24,7 @@ import {
   type AuthorityRevocation,
 } from "./authority.ts";
 import {
+  compositionPersonaSetFixture,
   mergeAdapterFixture,
   mergeAuthorityDocumentFixture,
   policyDocumentFixture,
@@ -35,6 +36,7 @@ const snapshotOf = (document: Record<string, unknown>, adapters = repositoryAdap
   const result = compileRepositoryPolicy({
     document,
     adapters,
+    personas: compositionPersonaSetFixture(),
     productTrustRevocationEpoch: 0,
     repositoryAuthorityRevocationEpoch: 0,
   });

@@ -79,6 +79,7 @@ import type { CaptureCandidate, CapturedCandidate } from "../candidate.types.ts"
 import {
   DISPOSABLE_INTAKE_GRANT,
   DISPOSABLE_OUTCOME_AUTHORITIES,
+  DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS,
   DISPOSABLE_REVIEW_LENSES,
   DISPOSABLE_SENSOR_CAPABILITY,
   DISPOSABLE_STAGE_GRANT,
@@ -1457,6 +1458,30 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   }
 
   /**
+   * Reads every reviewer charter the fixed policy's lenses reference out of
+   * the trusted pre-run base. A charter the base does not carry is absent,
+   * and the compiler then rejects its lens reference before any mutation
+   * rather than at first review.
+   */
+  const trustedBaseCharters = async (
+    baseRef: string,
+  ): Promise<{ readonly personaBytes: Record<string, string> } | FacadeFailure> => {
+    const personaBytes: Record<string, string> = {};
+    for (const [personaId, relativePath] of Object.entries(DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS)) {
+      const shown = await exec.run({ command: "git", args: ["show", `${baseRef}:${relativePath}`], cwd: input.repoDir });
+      if (shown.code !== 0) {
+        return refuse(
+          "reviewer_charter_missing",
+          `The trusted pre-run base ${baseRef} carries no ${relativePath} for reviewer charter ${personaId}.`,
+          "Every lens the policy activates must resolve to a charter at the base; candidate-supplied charters never govern.",
+        );
+      }
+      personaBytes[personaId] = shown.stdout;
+    }
+    return { personaBytes };
+  };
+
+  /**
    * The presentation-time validation both lanes run before anything reaches
    * the operator: frozen contract grammar, an execution-eligible active
    * generation, readable trust state, the qualification profile's use-time
@@ -1514,10 +1539,17 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       );
     }
 
+    // The repository's reviewer charters, read from the TRUSTED PRE-RUN BASE:
+    // the compiled lens declaration pins these bytes, so a candidate edit to a
+    // tracked charter is a proposal for a future delivery and cannot rewrite
+    // the charter that judges this one.
+    const charters = await trustedBaseCharters(contract.repository.baseRef);
+    if (!("personaBytes" in charters)) return charters;
     const policy = compileDisposablePolicy({
       repositoryId: contract.repository.repositoryId,
       productTrustRevocationEpoch: trust.revocationEpoch,
       repositoryAuthorityRevocationEpoch: 0,
+      personaBytes: charters.personaBytes,
     });
     const withinPolicy = checkContractWithinPolicy(contract, policy);
     if (!withinPolicy.ok) {
@@ -1569,6 +1601,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   interface AcceptancePreflight {
     readonly binding: { readonly registeringInstallationId: string; readonly activeCompositionProfile: string };
     readonly sensorBytes: string;
+    /** The repository-owned reviewer charters, by identity, read from the base. */
+    readonly personaBytes: Readonly<Record<string, string>>;
     /** Read HERE, not after the terminal transition: see the preflight's contract below. */
     readonly trust: ProductTrustState;
   }
@@ -1640,7 +1674,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         "The repository's sensor must exist at the base; candidate-supplied sensors never govern.",
       );
     }
-    return { binding, sensorBytes: shown.stdout, trust };
+    const charters = await trustedBaseCharters(meta.contract.repository.baseRef);
+    if (!("personaBytes" in charters)) return charters;
+    return { binding, sensorBytes: shown.stdout, personaBytes: charters.personaBytes, trust };
   };
 
   /** Registration at accepted_contract: facade-side, outside intake's capability set. */
@@ -1683,6 +1719,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     });
 
     await writeOwned(path.join(dir, "trusted-sensor.mjs"), preflight.sensorBytes);
+    for (const [personaId, bytes] of Object.entries(preflight.personaBytes)) {
+      await writeOwned(path.join(dir, "personas", `${personaId}.md`), bytes);
+    }
     await writeOwned(
       path.join(dir, "delivery.json"),
       `${JSON.stringify({ contract: meta.contract, policy: meta.policy, generationDigest: meta.generationDigest, intakeId } satisfies DeliveryMeta)}\n`,
@@ -2571,8 +2610,34 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     async submitReviewAttempt({ deliveryId, attemptId, lensId, verdict, contextBytes, artifactBytes, fence }) {
       const guarded = await guard(deliveryId, { requireState: ["reviewing"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
-      if (!DISPOSABLE_REVIEW_LENSES.some((lens) => lens.lensId === lensId)) {
+      const lens = guarded.meta.policy.reviewLenses.find((entry) => entry.lensId === lensId);
+      if (lens === undefined) {
         return refuse("unknown_lens", `Lens ${lensId} is not selected by the compiled policy.`, "Use a policy-selected lens.");
+      }
+
+      // THE CHARTER IS RESOLVED, NEVER ECHOED. The product reads the lens's
+      // charter from the compiled declaration and confirms the trusted pre-run
+      // copy still carries exactly those bytes, then writes that digest into
+      // the record itself. Nothing a submission says about a charter is read:
+      // every charter is readable, so an echoed digest would prove read access
+      // rather than that the charter reached the reviewer.
+      const charterPath = path.join(await deliveryDir(deliveryId), "personas", `${lens.personaId}.md`);
+      let charterBytes: string;
+      try {
+        charterBytes = await readFile(charterPath, "utf8");
+      } catch {
+        return refuse(
+          "reviewer_charter_unavailable",
+          `The trusted pre-run copy of reviewer charter ${lens.personaId} is missing; no attempt can be bound to it.`,
+          "Re-prepare the delivery so the charter is copied from the trusted base.",
+        );
+      }
+      if (sha256Hex(charterBytes) !== lens.personaDigest) {
+        return refuse(
+          "reviewer_charter_unavailable",
+          `The trusted pre-run copy of reviewer charter ${lens.personaId} no longer hashes to the digest the compiled policy bound.`,
+          "Quarantine the delivery: the read-only charter copy was altered after policy bind.",
+        );
       }
       const current = currentCandidateOf(guarded.views);
       if (current === undefined) return refuse("no_candidate", "No candidate is checkpointed.", "Checkpoint a candidate first.");
@@ -2599,11 +2664,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         artifactDigest: sha256Hex(artifactBytes),
         verdict,
         candidateTreeSha: current.treeSha,
+        personaDigest: lens.personaDigest,
       };
       const recorded = await appendEntry(guarded.store, deliveryId, "attempt.artifact.recorded", {
         attemptId,
         lensId,
         contextDigest,
+        personaDigest: attempt.personaDigest,
         artifactDigest: attempt.artifactDigest,
       });
       if (!recorded.ok) return recorded;
@@ -2625,7 +2692,11 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
 
       const floor = checkReviewFloor({
         attempts,
-        lenses: DISPOSABLE_REVIEW_LENSES.map((lens) => ({ ...lens })),
+        lenses: guarded.meta.policy.reviewLenses.map((selected) => ({
+          lensId: selected.lensId,
+          category: selected.category,
+          personaDigest: selected.personaDigest,
+        })),
         candidateTreeSha: current.treeSha,
       });
       if (!floor.ok) {
@@ -2756,7 +2827,11 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const attempts = (await attemptsOf(deliveryId)).filter((attempt) => attempt.candidateTreeSha === current.treeSha);
       const floor = checkReviewFloor({
         attempts,
-        lenses: DISPOSABLE_REVIEW_LENSES.map((lens) => ({ ...lens })),
+        lenses: guarded.meta.policy.reviewLenses.map((selected) => ({
+          lensId: selected.lensId,
+          category: selected.category,
+          personaDigest: selected.personaDigest,
+        })),
         candidateTreeSha: current.treeSha,
       });
       if (!floor.ok) {

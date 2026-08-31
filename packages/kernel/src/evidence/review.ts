@@ -3,6 +3,15 @@
  * attempts, and the criterion-by-criterion outcome composition that keeps a
  * green-but-unrelated change from passing.
  *
+ * REVIEW QUALITY IS QUALIFIED, NOT ASSERTED. Every attempt also binds the
+ * digest of the reviewer charter its reviewer was handed, written by the
+ * product from the compiled lens declaration and that charter's trusted
+ * pre-run materialization. An attempt bound to any other charter does not
+ * satisfy that lens, so two attempts sharing a category label are no longer
+ * interchangeable. The digest is never read back from a submission: every
+ * charter is readable, so an echoed digest would prove read access rather
+ * than that the charter reached the reviewer.
+ *
  * INDEPENDENCE IS FALSIFIABLE. Every attempt binds a context digest; two
  * attempts carrying the same digest are the same review invoked twice, and
  * re-invoking the same agent, prompt, and context under a fresh attempt
@@ -22,7 +31,7 @@ import { spinePointer, type SpineRejectionCode } from "../spine/grammar.ts";
 import type { AcceptedContract, OutcomeVerification } from "../spine/contract.ts";
 
 /** The evidence module's rejection vocabulary widens the spine's, never edits it. */
-export type ReviewRejectionCode = SpineRejectionCode | "duplicate_review_context";
+export type ReviewRejectionCode = SpineRejectionCode | "duplicate_review_context" | "persona_digest_mismatch";
 
 export interface ReviewRejection {
   readonly code: ReviewRejectionCode;
@@ -40,6 +49,12 @@ export interface RecordedReviewAttempt {
   readonly verdict: "approved" | "findings";
   /** The candidate the attempt reviewed — independence is per candidate. */
   readonly candidateTreeSha: string;
+  /**
+   * The reviewer charter this attempt's reviewer was handed. The PRODUCT
+   * writes it, resolved from the compiled lens declaration and that charter's
+   * trusted pre-run materialization; it is never sourced from a submission.
+   */
+  readonly personaDigest: string;
 }
 
 export interface RecordedSensorResult {
@@ -52,6 +67,8 @@ export interface RecordedSensorResult {
 export interface ReviewLensSelection {
   readonly lensId: string;
   readonly category: string;
+  /** The charter the compiled policy references for this lens. */
+  readonly personaDigest: string;
 }
 
 export interface QualifiedAttempts {
@@ -128,7 +145,20 @@ export function checkReviewFloor(input: {
 
   const { qualified, disqualified } = qualifyReviewAttempts(input.attempts, input.candidateTreeSha);
   for (const lens of input.lenses) {
-    if (qualified.some((attempt) => attempt.lensId === lens.lensId)) continue;
+    if (qualified.some((attempt) => attempt.lensId === lens.lensId && attempt.personaDigest === lens.personaDigest)) continue;
+    // A lens covered only by attempts carrying some OTHER charter is
+    // uncovered: the label matched, the charter did not. This is also what a
+    // charter-generation change does to attempts made under the old one —
+    // they strand, and the reviews are redone rather than admitted.
+    const misbound = qualified.find((attempt) => attempt.lensId === lens.lensId);
+    if (misbound !== undefined) {
+      emit(
+        "persona_digest_mismatch",
+        "/attempts",
+        `attempt ${misbound.attemptId} is bound to reviewer charter ${misbound.personaDigest}, which is not the charter lens ${lens.lensId} references (${lens.personaDigest}); the lens is unsatisfied whatever the attempt claims`,
+      );
+      continue;
+    }
     const collision = disqualified.find((entry) => entry.attempt.lensId === lens.lensId);
     if (collision !== undefined) {
       emit(
@@ -220,6 +250,7 @@ export function composeOutcomeVerification(input: {
         attemptId: attempt.attemptId,
         lensId: attempt.lensId,
         contextDigest: attempt.contextDigest,
+        personaDigest: attempt.personaDigest,
         verdict: attempt.verdict,
       })),
   };

@@ -6,7 +6,7 @@
  * Written RED before `disposable.ts` existed.
  */
 import { describe, expect, it } from "vitest";
-import { digestCanonical } from "../digest.ts";
+import { digestCanonical, sha256Hex } from "../digest.ts";
 import { validateCapabilityDescriptor } from "../spine/capability.ts";
 import { checkContractWithinPolicy, validateAcceptedContract, type AcceptedContract } from "../spine/contract.ts";
 import { validateExecutionGrant } from "../spine/grant.ts";
@@ -18,10 +18,16 @@ import {
   compileDisposablePolicy,
 } from "./disposable.ts";
 
+const PERSONA_BYTES = {
+  "persona.outcome-correctness": "# Outcome correctness\n\nJudge the contracted outcome.\n",
+  "persona.testing-policy": "# Testing and policy\n\nJudge the delivered sensors.\n",
+};
+
 const compiled = compileDisposablePolicy({
   repositoryId: "disposable-skeleton",
   productTrustRevocationEpoch: 0,
   repositoryAuthorityRevocationEpoch: 0,
+  personaBytes: PERSONA_BYTES,
 });
 
 describe("the fixed disposable policy", () => {
@@ -37,6 +43,25 @@ describe("the fixed disposable policy", () => {
     for (const category of MANDATORY_LENS_CATEGORIES) {
       expect(categories).toContain(category);
     }
+  });
+
+  it("binds every lens to the digest of the charter bytes the trusted base supplied", () => {
+    for (const lens of compiled.reviewLenses) {
+      const bytes = PERSONA_BYTES[lens.personaId as keyof typeof PERSONA_BYTES];
+      expect(bytes, `${lens.lensId} names an unknown charter`).toBeDefined();
+      expect(lens.personaDigest).toBe(sha256Hex(bytes));
+    }
+  });
+
+  it("refuses to compile when the trusted base carries no charter for an activated lens", () => {
+    expect(() =>
+      compileDisposablePolicy({
+        repositoryId: "disposable-skeleton",
+        productTrustRevocationEpoch: 0,
+        repositoryAuthorityRevocationEpoch: 0,
+        personaBytes: { "persona.outcome-correctness": PERSONA_BYTES["persona.outcome-correctness"] },
+      }),
+    ).toThrow(/persona_unresolvable/);
   });
 
   it("activates a non-empty obligation set — admission cannot be passed by absence", () => {

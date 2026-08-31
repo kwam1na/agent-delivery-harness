@@ -10,6 +10,11 @@
  *
  * Vacuous satisfaction is excluded at compilation: a policy activating zero
  * review lenses rejects here, so `reviewing` can never be passed by absence.
+ *
+ * Each lens carries the identity AND the digest of the reviewer charter it
+ * hands its reviewer. The digest lands here at compilation and the snapshot is
+ * immutable, so one identity cannot resolve to different bytes across a
+ * delivery's life — including across a pause, which keeps this same snapshot.
  */
 import { digestCanonical } from "../digest.ts";
 import {
@@ -34,6 +39,8 @@ export const REVIEW_LENS_CATEGORIES = Object.freeze(["outcome-correctness", "tes
 const LENS_RULES: readonly MemberRule[] = [
   { name: "lensId", check: spineId },
   { name: "category", check: oneOf(REVIEW_LENS_CATEGORIES) },
+  { name: "personaId", check: spineId },
+  { name: "personaDigest", check: sha256 },
 ];
 
 const OBLIGATION_RULES: readonly MemberRule[] = [{ name: "obligationId", check: spineId }];
@@ -58,7 +65,13 @@ export interface PolicySnapshot {
   readonly repositoryAuthorityRevocationEpoch: number;
   readonly grantedFinishLines: readonly (typeof FINISH_LINES)[number][];
   readonly grantedAuthority: readonly string[];
-  readonly reviewLenses: readonly { readonly lensId: string; readonly category: (typeof REVIEW_LENS_CATEGORIES)[number] }[];
+  readonly reviewLenses: readonly {
+    readonly lensId: string;
+    readonly category: (typeof REVIEW_LENS_CATEGORIES)[number];
+    /** The reviewer charter this lens hands its reviewer, and the exact bytes it resolved to. */
+    readonly personaId: string;
+    readonly personaDigest: string;
+  }[];
   readonly obligations: readonly { readonly obligationId: string }[];
 }
 
