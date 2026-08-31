@@ -12,9 +12,21 @@
  * binding-sourced record" holds vacuously over an empty set, so each such rule
  * is paired with a case where the set is populated and the rule bites.
  */
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BASELINE_PATH,
@@ -32,6 +44,7 @@ import {
 
 const repoRoot = repoRootFromHere();
 const readJson = (relative: string): any => JSON.parse(readFileSync(path.join(repoRoot, relative), "utf8"));
+const scorerPath = path.join(repoRoot, "scripts/score-shadow-milestone.ts");
 
 const DIGEST = "a".repeat(64);
 
@@ -94,6 +107,18 @@ const reachableBaseline = syntheticBaseline([
   { interventionCount: 2, blockedSeconds: 500, progressingSeconds: 500 },
   { interventionCount: 4, blockedSeconds: 500, progressingSeconds: 500 },
 ]);
+
+const athenaGateRecord = (deliveries: readonly Record<string, unknown>[]): Record<string, unknown> => ({
+  ...gateRecord(deliveries),
+  spec: "athena-shadow-milestone-gate-record/1",
+  repositoryId: "athena",
+});
+
+const runScorer = (args: readonly string[]) =>
+  spawnSync(process.execPath, ["--import", "tsx", scorerPath, ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
 
 describe("reduction arithmetic", () => {
   it("takes the middle value of an odd list and the mean of the two middle values of an even one", () => {
@@ -746,5 +771,242 @@ describe("the committed verdict artifact matches the tree it was computed from",
     expect(committed.status).toBe("incomplete");
     expect(committed.incomplete.map((note: any) => note.code)).toContain("no_observed_consumption");
     expect(committed.shadow).toBeNull();
+  });
+});
+
+describe("the CLI supports one explicit adopter scoring seam", () => {
+  const scratchDirectories: string[] = [];
+  const makeScratch = (): string => {
+    const directory = mkdtempSync(path.join(tmpdir(), "delivery-harness-m1-scorer-"));
+    scratchDirectories.push(directory);
+    return directory;
+  };
+  const writeJson = (file: string, value: unknown): void =>
+    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  const explicitArgs = (baseline: string, gateRecord: string, verdict: string): string[] => [
+    "--baseline",
+    baseline,
+    "--gate-record",
+    gateRecord,
+    "--verdict",
+    verdict,
+    "--write",
+  ];
+  const makeInputs = (scratch: string): { baseline: string; record: string } => {
+    const baseline = path.join(scratch, "manual-choreography-baseline.json");
+    const record = path.join(scratch, "athena-gate-record.json");
+    copyFileSync(path.join(repoRoot, BASELINE_PATH), baseline);
+    writeJson(record, athenaGateRecord([]));
+    return { baseline, record };
+  };
+
+  afterEach(() => {
+    for (const directory of scratchDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("preserves the repository-local --write verdict byte for byte", () => {
+    const localVerdict = path.join(repoRoot, VERDICT_PATH);
+    const before = readFileSync(localVerdict, "utf8");
+    const legacyOutput =
+      "score-shadow-milestone: incomplete — the M1 shadow gate is not scorable: no_observed_consumption\n" +
+      "  incomplete no_observed_consumption\n" +
+      "      no delivery has been observed consuming a projection, so there is no comparison set to score; this is the absence of a measurement, not a measured absence\n";
+
+    const readOnlyResult = runScorer([]);
+    const writeResult = runScorer(["--write"]);
+
+    expect(readOnlyResult.status).toBe(0);
+    expect(readOnlyResult.stdout).toBe(legacyOutput);
+    expect(writeResult.status).toBe(0);
+    expect(writeResult.stdout).toBe(`${legacyOutput}  wrote ${VERDICT_PATH}\n`);
+    expect(readFileSync(localVerdict, "utf8")).toBe(before);
+  });
+
+  it("scores an Athena-shaped 0/3 record as incomplete and records the exact explicit inputs", () => {
+    const scratch = makeScratch();
+    const baseline = path.join(repoRoot, BASELINE_PATH);
+    const record = path.join(scratch, "athena-gate-record.json");
+    const output = path.join(scratch, "athena-verdict.json");
+    const localVerdict = path.join(repoRoot, VERDICT_PATH);
+    const localBefore = readFileSync(localVerdict, "utf8");
+    writeJson(record, athenaGateRecord([]));
+
+    const result = runScorer(explicitArgs(baseline, record, output));
+    const verdict = JSON.parse(readFileSync(output, "utf8"));
+
+    expect(result.status).toBe(0);
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.incomplete.map((note: any) => note.code)).toContain("no_observed_consumption");
+    expect(verdict.inputs.baseline.path).toBe(baseline);
+    expect(verdict.inputs.gateRecord.path).toBe(record);
+    expect(readFileSync(localVerdict, "utf8")).toBe(localBefore);
+  });
+
+  it("uses the explicit gate-record flag and writes a complete code/docs/operations verdict only to its explicit output", () => {
+    const scratch = makeScratch();
+    const baseline = path.join(repoRoot, BASELINE_PATH);
+    const athenaRecord = path.join(scratch, "athena-gate-record.json");
+    const athenaOutput = path.join(scratch, "athena-verdict.json");
+    const harnessOutput = path.join(scratch, "harness-verdict.json");
+    const localVerdict = path.join(repoRoot, VERDICT_PATH);
+    const localBefore = readFileSync(localVerdict, "utf8");
+    writeJson(
+      athenaRecord,
+      athenaGateRecord([
+        entry("athena-code", "code"),
+        entry("athena-docs", "docs"),
+        entry("athena-operations", "operations"),
+      ]),
+    );
+
+    const athenaResult = runScorer(explicitArgs(baseline, athenaRecord, athenaOutput));
+    const harnessResult = runScorer(
+      explicitArgs(baseline, path.join(repoRoot, GATE_RECORD_PATH), harnessOutput),
+    );
+    const athenaVerdict = JSON.parse(readFileSync(athenaOutput, "utf8"));
+    const harnessVerdict = JSON.parse(readFileSync(harnessOutput, "utf8"));
+
+    expect(athenaResult.status).toBe(0);
+    expect(harnessResult.status).toBe(0);
+    expect(athenaVerdict.status).toBe("pass");
+    expect(athenaVerdict.inputs.gateRecord.countedDeliveryIds).toEqual([
+      "athena-code",
+      "athena-docs",
+      "athena-operations",
+    ]);
+    expect(harnessVerdict.status).toBe("incomplete");
+    expect(harnessVerdict.inputs.gateRecord.countedDeliveryIds).toEqual([]);
+    expect(readFileSync(localVerdict, "utf8")).toBe(localBefore);
+  });
+
+  it("refuses every partial explicit-input invocation instead of mixing it with repository-local paths", () => {
+    const scratch = makeScratch();
+    const values = {
+      "--baseline": path.join(repoRoot, BASELINE_PATH),
+      "--gate-record": path.join(scratch, "athena-gate-record.json"),
+      "--verdict": path.join(scratch, "athena-verdict.json"),
+    } as const;
+    writeJson(values["--gate-record"], athenaGateRecord([]));
+
+    for (const omitted of Object.keys(values) as Array<keyof typeof values>) {
+      const args = (Object.entries(values) as Array<[keyof typeof values, string]>).flatMap(([flag, value]) =>
+        flag === omitted ? [] : [flag, value],
+      );
+      const result = runScorer([...args, "--write"]);
+      expect(result.status, omitted).toBe(2);
+      expect(result.stderr, omitted).toContain(
+        "Usage: score-shadow-milestone [--write] [--baseline <path> --gate-record <path> --verdict <path>]",
+      );
+    }
+  });
+
+  it("fails unreadable explicit inputs instead of falling back to repository-local files", () => {
+    const scratch = makeScratch();
+    const missingBaseline = path.join(scratch, "missing-baseline.json");
+    const malformedRecord = path.join(scratch, "malformed-gate-record.json");
+    const validRecord = path.join(scratch, "athena-gate-record.json");
+    const output = path.join(scratch, "athena-verdict.json");
+    writeJson(validRecord, athenaGateRecord([]));
+    writeFileSync(malformedRecord, "not JSON\n");
+
+    const missing = runScorer(explicitArgs(missingBaseline, validRecord, output));
+    const malformed = runScorer(explicitArgs(path.join(repoRoot, BASELINE_PATH), malformedRecord, output));
+
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("ENOENT");
+    expect(malformed.status).toBe(1);
+    expect(malformed.stderr).toContain("SyntaxError");
+  });
+
+  it("rejects every token outside the closed CLI grammar", () => {
+    const scratch = makeScratch();
+    const { baseline, record } = makeInputs(scratch);
+    const output = path.join(scratch, "athena-verdict.json");
+    const valid = explicitArgs(baseline, record, output);
+    const cases: Array<readonly [string, readonly string[]]> = [
+      ["unknown option", [...valid, "--unknown"]],
+      ["trailing token", [...valid, "trailing"]],
+      [
+        "equals form",
+        [`--baseline=${baseline}`, "--gate-record", record, "--verdict", output, "--write"],
+      ],
+      ["duplicate baseline", [...valid, "--baseline", baseline]],
+      ["duplicate gate record", [...valid, "--gate-record", record]],
+      ["duplicate verdict", [...valid, "--verdict", output]],
+      ["duplicate write", [...valid, "--write"]],
+      ["missing value", ["--baseline"]],
+      ["flag-looking value", ["--baseline", "--write"]],
+    ];
+
+    for (const [label, args] of cases) {
+      const result = runScorer(args);
+      expect(result.status, label).toBe(2);
+      expect(result.stderr, label).toContain(
+        "Usage: score-shadow-milestone [--write] [--baseline <path> --gate-record <path> --verdict <path>]",
+      );
+    }
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it("refuses a verdict path that is directly the baseline input without changing either input", () => {
+    const scratch = makeScratch();
+    const { baseline, record } = makeInputs(scratch);
+    const baselineBefore = readFileSync(baseline, "utf8");
+    const recordBefore = readFileSync(record, "utf8");
+
+    const result = runScorer(explicitArgs(baseline, record, baseline));
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--verdict path aliases the --baseline input");
+    expect(readFileSync(baseline, "utf8")).toBe(baselineBefore);
+    expect(readFileSync(record, "utf8")).toBe(recordBefore);
+  });
+
+  it("refuses a verdict symlink to the gate-record input without changing either input", () => {
+    const scratch = makeScratch();
+    const { baseline, record } = makeInputs(scratch);
+    const output = path.join(scratch, "verdict-link.json");
+    const baselineBefore = readFileSync(baseline, "utf8");
+    const recordBefore = readFileSync(record, "utf8");
+    symlinkSync(record, output);
+
+    const result = runScorer(explicitArgs(baseline, record, output));
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--verdict path aliases the --gate-record input");
+    expect(readFileSync(baseline, "utf8")).toBe(baselineBefore);
+    expect(readFileSync(record, "utf8")).toBe(recordBefore);
+  });
+
+  it("refuses an existing verdict hardlink to an input without changing either input", () => {
+    const scratch = makeScratch();
+    const { baseline, record } = makeInputs(scratch);
+    const output = path.join(scratch, "verdict-hardlink.json");
+    const baselineBefore = readFileSync(baseline, "utf8");
+    const recordBefore = readFileSync(record, "utf8");
+    linkSync(record, output);
+
+    const result = runScorer(explicitArgs(baseline, record, output));
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--verdict path aliases the --gate-record input");
+    expect(readFileSync(baseline, "utf8")).toBe(baselineBefore);
+    expect(readFileSync(record, "utf8")).toBe(recordBefore);
+  });
+
+  it("accepts a non-existing verdict through a symlinked parent and writes its canonical target", () => {
+    const scratch = makeScratch();
+    const realDirectory = path.join(scratch, "real");
+    const linkedDirectory = path.join(scratch, "linked");
+    mkdirSync(realDirectory);
+    symlinkSync(realDirectory, linkedDirectory, "dir");
+    const { baseline, record } = makeInputs(scratch);
+    const output = path.join(linkedDirectory, "athena-verdict.json");
+
+    const result = runScorer(explicitArgs(baseline, record, output));
+
+    expect(result.status).toBe(0);
+    expect(existsSync(output)).toBe(true);
+    expect(existsSync(path.join(realDirectory, "athena-verdict.json"))).toBe(true);
   });
 });

@@ -363,6 +363,23 @@ the comparison set; an absent or non-affirmative record excludes it silently.
 An empty measurement list therefore means *no shadow delivery has been observed
 consuming a projection* — never *no producer exists*.
 
+`npm run score:milestone` reads this repository's frozen baseline and gate
+record; adding `--write` refreshes its repository-local verdict exactly as
+before. To score an adopter-owned record without copying either input, provide
+all three paths explicitly:
+
+```sh
+npm run score:milestone -- --baseline /path/to/manual-choreography-baseline.json --gate-record /path/to/adopter/shadow-milestone-gate-record.json --verdict /path/to/adopter/shadow-milestone-gate-verdict.json --write
+```
+
+The scorer resolves and records the two input paths in the verdict, writes only
+the explicit verdict path, and uses the same `scoreShadowMilestone` reduction as
+self-dogfood. The three path flags are all-or-none, and `--write` plus those
+three value-taking flags are the entire grammar: partial sets, unknown or
+trailing tokens, equals forms, and duplicates are refused rather than mixed
+with repository-local defaults. The verdict path may not name either input,
+including through a symlink or hardlink.
+
 ## Where to next
 
 - [The agent guide](agent-guide.md) — module boundaries and sensors, for an
