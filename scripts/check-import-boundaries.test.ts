@@ -120,6 +120,8 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     `import { appendFile } from "node:fs/promises";\nexport const append = (p: string, line: string): Promise<void> => appendFile(p, line);\n`,
   "packages/kernel/src/host/claude-code.ts":
     `import { readFile } from "node:fs/promises";\nexport const projectionBytes = (p: string): Promise<Uint8Array> => readFile(p);\n`,
+  "packages/kernel/src/host/consumption-gate-record.ts":
+    `import { writeFile } from "node:fs/promises";\nexport const emit = (p: string, v: string): Promise<void> => writeFile(p, v);\n`,
   "packages/kernel/src/host/exec-port.ts":
     `import { execFile } from "node:child_process";\nexport const run = (cmd: string): void => void execFile(cmd, []);\n`,
   "packages/kernel/src/facade/managed-delivery.ts":

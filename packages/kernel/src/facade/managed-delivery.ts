@@ -104,6 +104,7 @@ import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence
 import { decideFinishLine, type ExternalVerification } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
+  PROJECTION_RECEIPT_FILE,
   bindingStateFile,
   composeClaudeCodeSession,
   discoveryConfigurationDigestOf,
@@ -115,6 +116,11 @@ import {
   tearDownProjection,
   verifyProjection,
 } from "../host/claude-code.ts";
+import {
+  emitProjectionConsumptionRecord,
+  projectionConsumptionObservationFile,
+  type ProjectionConsumptionUnobserved,
+} from "../host/consumption-gate-record.ts";
 import { createExecPort, type ExecPort } from "../host/exec-port.ts";
 import {
   PINNED_AGENT_SKILLS,
@@ -810,6 +816,37 @@ export interface ManagedDeliveryFacade {
     readonly echo: ConfirmationEchoAttempt;
   }): Promise<
     { readonly ok: true; readonly targetBaseCommit: string; readonly takeoverBranchRef: string } | FacadeFailure
+  >;
+
+  /**
+   * Turns the binding's own observation into a durable entry in the shadow
+   * milestone's gate-record artifact.
+   *
+   * The caller names the delivery, the artifact, and the baseline category the
+   * delivery is measured under — never the observation itself. The delivery
+   * and fence the record binds come from the binding's own workspace record,
+   * and the record's contents are re-derived from the materialization receipt,
+   * the marker in the worktree, and the model-external interceptor's record of
+   * this run's invocations, so no caller can assert what the binding did not
+   * observe. When it did not, nothing is written and the delivery stays out of
+   * the comparison set.
+   *
+   * WHAT AN EMITTED ENTRY CERTIFIES: that an allowed invocation of this run
+   * NAMED, in a member that names files, a receipted path under the run-pinned
+   * projection subtree. Not that the run read that file, and not that it
+   * resolved its workflow from the projection. A read the host performs
+   * internally, without routing a path through its tool surface, is not
+   * observed at all — such a delivery is excluded rather than affirmed.
+   */
+  recordProjectionConsumption(input: {
+    readonly deliveryId: string;
+    /** The milestone gate-record artifact in the consuming repository. */
+    readonly gateRecordPath: string;
+    readonly category: string;
+  }): Promise<
+    | { readonly ok: true; readonly emitted: true; readonly projectionDigest: string }
+    | { readonly ok: true; readonly emitted: false; readonly reason: ProjectionConsumptionUnobserved }
+    | FacadeFailure
   >;
 
   explainBlocker(input: { readonly deliveryId: string }): Promise<
@@ -2368,6 +2405,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           attestation,
           workspaceRoot: worktreeDir,
           observationPath,
+          projectionConsumptionPath: path.join(bindingDir, projectionConsumptionObservationFile(fence)),
+          projectionReceiptPath: path.join(bindingDir, PROJECTION_RECEIPT_FILE),
           journalPath: guarded.store.journalPath,
           deliveryId,
         })}\n`,
@@ -3588,6 +3627,53 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       });
       if (!appended.ok) return appended;
       return { ok: true, descendantTeardown, resumeEligibility };
+    },
+
+    async recordProjectionConsumption({ deliveryId, gateRecordPath, category }) {
+      // The canonical recheck first: an entry must never be written about a
+      // delivery whose trust, installation, or projection binding no longer
+      // holds. `verifyWorkspace` re-verifies the projection here for the same
+      // reason every other workspace operation does.
+      //
+      // This operation deliberately does NOT bind the invocation fence. It
+      // writes no delivery-journal entry, and the facade's own surface
+      // invariant refuses a fence on an operation with nothing the fence could
+      // be checked against. The protection a fence would add is already
+      // structural: the consumption observation the writer requires is
+      // fence-scoped and written only by the model-external interceptor of the
+      // live session, and the fence it is looked up under is the binding's own
+      // workspace record — so a superseded caller reaches no observation of
+      // its own and can affirm nothing.
+      const guarded = await guard(deliveryId, { verifyWorkspace: true });
+      if (!("store" in guarded)) return guarded;
+      if (guarded.workspace === undefined) {
+        return refuse(
+          "workspace_unbound",
+          "No workspace is bound.",
+          "Bind the host-supplied worktree first; a consumption record describes a materialized projection.",
+        );
+      }
+      const emitted = await emitProjectionConsumptionRecord({
+        gateRecordPath,
+        worktreeDir: guarded.workspace.worktreeDir,
+        bindingDir: path.join(await deliveryDir(deliveryId), "binding"),
+        // The run the record binds is the BINDING's, read from the workspace
+        // record — the caller's fence has already been checked against the
+        // journal, and this is the value the binding itself materialized under.
+        deliveryId,
+        fence: guarded.workspace.fence,
+        category,
+      });
+      if (!emitted.ok) {
+        return refuse(
+          "consumption_record_write_failed",
+          `Recording the projection-consumption entry failed: ${emitted.blockers.map((blocker) => blocker.message).join("; ")}`,
+          "Point the writer at the consuming repository's milestone gate-record artifact.",
+        );
+      }
+      return emitted.emitted
+        ? { ok: true, emitted: true, projectionDigest: emitted.record.projectionDigest }
+        : { ok: true, emitted: false, reason: emitted.reason };
     },
 
     async tearDownWorkspaceProjection({ deliveryId }) {

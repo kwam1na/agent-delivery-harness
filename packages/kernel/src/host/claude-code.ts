@@ -228,7 +228,14 @@ export async function materializeProjection(input: MaterializeProjectionInput): 
   return { ok: true, projectionDigest: receipt.projectionDigest, excludesPath };
 }
 
-export type VerifyProjectionResult = { readonly ok: true; readonly projectionDigest: string } | HostBindingFailure;
+export type VerifyProjectionResult =
+  | {
+      readonly ok: true;
+      readonly projectionDigest: string;
+      /** The receipted entry paths, in the receipt's own order. */
+      readonly entries: readonly string[];
+    }
+  | HostBindingFailure;
 
 /**
  * The canonical-recheck half: recompute the projection digest from the
@@ -273,7 +280,11 @@ export async function verifyProjection(input: {
       );
     }
   }
-  return { ok: true, projectionDigest: receipt.projectionDigest };
+  return {
+    ok: true,
+    projectionDigest: receipt.projectionDigest,
+    entries: receipt.entries.map((entry) => entry.path),
+  };
 }
 
 // ── The consumption marker's read-back half ─────────────────────────────────
