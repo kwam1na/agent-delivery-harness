@@ -261,6 +261,8 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
       "spine/contract.ts",
       "spine/grant.ts",
       "spine/capability.ts",
+      // The frozen external-action vocabulary the grant model names.
+      "spine/finish-line.ts",
     ],
     d1SiblingAllowance: true,
   },
@@ -282,7 +284,10 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     kind: "dir",
     rules: ["d1", "e"],
     status: "present",
-    d1Allowlist: ["digest.ts", "spine/finish-line.ts"],
+    // The finish-line reducer consumes the frozen result grammar and the
+    // spine's own "a contract cannot request beyond policy" rule; it authors
+    // no authority model of its own.
+    d1Allowlist: ["digest.ts", "spine/finish-line.ts", "spine/contract.ts"],
     d1SiblingAllowance: true,
   },
   { id: "kernel-checkpoint", path: "packages/kernel/src/checkpoint", kind: "dir", rules: ["e"], status: "present" },

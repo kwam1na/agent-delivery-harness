@@ -21,10 +21,11 @@ import {
 } from "./assertion.ts";
 import { validateSensorResult } from "./capability.ts";
 import { confirmationClassOf, validateOperatorConfirmation } from "./confirmation.ts";
-import { validateFinishLineResult } from "./finish-line.ts";
+import { EXTERNAL_ACTIONS, validateFinishLineResult } from "./finish-line.ts";
 import {
   boundedText,
   checkClosed,
+  closed,
   createSpineCollector,
   gitOid,
   isAbsentByState,
@@ -98,6 +99,20 @@ export const DESCENDANT_TEARDOWN_STATUSES = Object.freeze(["verified", "unverifi
 
 /** The two resume positions the capability ladder defines. */
 export const RESUME_ELIGIBILITIES = Object.freeze(["same-workspace", "fresh-worktree-only"] as const);
+
+/** Whether the policy required an approval for the action the intent names. */
+export const ACTION_APPROVALS = Object.freeze(["required", "not-required"] as const);
+
+/**
+ * What the host observed of the external action. `indeterminate` is a first-
+ * class outcome, not an error: a lost response leaves an action that may well
+ * have happened, and recording that honestly is what keeps it from being
+ * repeated.
+ */
+export const EXTERNAL_ACTION_OUTCOMES = Object.freeze(["succeeded", "failed", "indeterminate"] as const);
+
+/** How the required post-action verification resolved. */
+export const ACTION_VERIFICATIONS = Object.freeze(["passed", "failed", "not-attempted"] as const);
 
 type PayloadCheck = (payload: Record<string, unknown>, at: string, collector: SpineCollector) => void;
 
@@ -361,6 +376,35 @@ const contractAmendedPayload: PayloadCheck = (payload, at, collector) => {
   }
 };
 
+/**
+ * `action.result.recorded`: what the host observed after invoking the action
+ * its intent named. PASSING VERIFICATION BELONGS TO A SUCCEEDED ACTION ALONE —
+ * a failed or indeterminate action that claimed passing post-action evidence
+ * would be a record of success the delivery never had, and the pairing is
+ * exactly what separates `completed` from `action_succeeded_verification_failed`.
+ */
+const actionResultPayload: PayloadCheck = (payload, at, collector) => {
+  checkClosed(
+    payload,
+    at,
+    [
+      { name: "intentId", check: spineId },
+      { name: "action", check: oneOf(EXTERNAL_ACTIONS) },
+      { name: "outcome", check: oneOf(EXTERNAL_ACTION_OUTCOMES) },
+      { name: "verification", check: oneOf(ACTION_VERIFICATIONS) },
+      { name: "externalReference", check: orAbsentByState(boundedText) },
+    ],
+    collector,
+  );
+  if (payload["verification"] === "passed" && payload["outcome"] !== "succeeded") {
+    collector.emit(
+      "unsupported_combination",
+      `${at}/verification`,
+      "post-action verification passes only over a succeeded action; a failed or indeterminate action carries no passing evidence",
+    );
+  }
+};
+
 /** Payload tables for every ACTIVE (journal, kind) pair — frozen here. */
 const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "intake/intake.state.changed": table([
@@ -460,6 +504,25 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
     { name: "summary", check: boundedText },
   ]),
   "delivery/finish.line.recorded": table([{ name: "result", check: embedded(validateFinishLineResult) }]),
+  // The post-action family. The intent is the durable record the host writes
+  // BEFORE invoking an authorized external action — it binds the action, the
+  // candidate it is taken against, the policy that authorized it, and whether
+  // an approval was required — so an action can never be observed without a
+  // prior statement of what was about to happen.
+  "delivery/action.intent.recorded": table([
+    { name: "intentId", check: spineId },
+    { name: "action", check: oneOf(EXTERNAL_ACTIONS) },
+    {
+      name: "candidate",
+      check: closed([
+        { name: "treeSha", check: gitOid },
+        { name: "deliverableDigest", check: sha256 },
+      ]),
+    },
+    { name: "policyDigest", check: sha256 },
+    { name: "approval", check: oneOf(ACTION_APPROVALS) },
+  ]),
+  "delivery/action.result.recorded": actionResultPayload,
   "delivery/termination.provenance.recorded": terminationProvenancePayload,
   "delivery/approval.assertion.consumed": assertionConsumedPayload,
   "delivery/contract.amended": contractAmendedPayload,

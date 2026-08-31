@@ -149,7 +149,10 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
   let contractId: string | undefined;
   let lastActiveState: DeliveryState = "accepted";
   let registered = false;
+  let finishLineRecorded = false;
   const idempotencyKeys = new Set<string>();
+  /** Recorded action intents, and the verification each one's result observed. */
+  const actionIntents = new Map<string, string | undefined>();
 
   entries.forEach((value, index) => {
     const at = `/${index}`;
@@ -274,12 +277,93 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
         generationDigest = payload["generationDigest"] as string;
         break;
       }
+      case "finish.line.recorded": {
+        // The finish-line result is composed at the terminal-success edge and
+        // nowhere else; an approving review earlier in the loop composes
+        // nothing on its own.
+        if (state !== "ready") {
+          collector.emit(
+            "invalid_transition",
+            at,
+            `a finish-line result is recorded in ready; the delivery is in ${state}`,
+          );
+          return;
+        }
+        finishLineRecorded = true;
+        break;
+      }
+      case "action.intent.recorded": {
+        // The intent precedes the invocation, and the invocation only ever
+        // happens while acting.
+        if (state !== "acting") {
+          collector.emit("invalid_transition", at, `an action intent is recorded while acting; the delivery is in ${state}`);
+          return;
+        }
+        const intentId = payload["intentId"] as string;
+        if (actionIntents.has(intentId)) {
+          collector.emit("unsupported_combination", `${at}/payload/intentId`, `intent ${intentId} was already recorded`);
+          return;
+        }
+        actionIntents.set(intentId, undefined);
+        break;
+      }
+      case "action.result.recorded": {
+        const intentId = payload["intentId"] as string;
+        if (state !== "acting") {
+          collector.emit("invalid_transition", at, `an action result is recorded while acting; the delivery is in ${state}`);
+          return;
+        }
+        if (!actionIntents.has(intentId)) {
+          collector.emit(
+            "invalid_transition",
+            `${at}/payload/intentId`,
+            `no intent ${intentId} was recorded; an external action is never observed without its prior intent`,
+          );
+          return;
+        }
+        if (actionIntents.get(intentId) !== undefined) {
+          // The irreversible action must never be repeated, so its observed
+          // result is written exactly once.
+          collector.emit(
+            "unsupported_combination",
+            `${at}/payload/intentId`,
+            `intent ${intentId} already carries an observed result; an irreversible action is never repeated`,
+          );
+          return;
+        }
+        actionIntents.set(intentId, payload["verification"] as string);
+        break;
+      }
       case "transition.committed": {
         const from = payload["from"] as DeliveryState;
         const to = payload["to"] as DeliveryState;
         if (from !== state) {
           collector.emit("invalid_transition", `${at}/payload/from`, `transition leaves ${from}; the delivery is in ${state}`);
           return;
+        }
+        // Terminal success is never a bare edge. Out of `ready` it stands on a
+        // recorded merge-ready result; out of `acting` it stands on an
+        // observed action result whose verification passed — and the
+        // verification-failed variant stands on exactly the opposite.
+        if (from === "ready" && to === "completed" && !finishLineRecorded) {
+          collector.emit(
+            "invalid_transition",
+            `${at}/payload/to`,
+            "terminal success requires a recorded merge-ready finish-line result; a green review alone completes nothing",
+          );
+          return;
+        }
+        if (from === "acting" && (to === "completed" || to === "action_succeeded_verification_failed")) {
+          const verifications = [...actionIntents.values()];
+          const wanted = to === "completed" ? "passed" : "failed";
+          if (!verifications.includes(wanted)) {
+            collector.emit(
+              "invalid_transition",
+              `${at}/payload/to`,
+              `acting -> ${to} requires an observed action result whose verification is ${wanted}`,
+            );
+            return;
+          }
         }
         const blockedResume = from === "blocked" && to === lastActiveState;
         if (!blockedResume && !isDeliveryTransitionValid(from, to)) {

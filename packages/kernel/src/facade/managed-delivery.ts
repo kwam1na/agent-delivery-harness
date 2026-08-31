@@ -99,7 +99,7 @@ import {
   type WaiverProposal,
 } from "../evidence/waiver.ts";
 import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence/blocker-inventory.ts";
-import { composeMergeReadyResult } from "../finish-line/merge-ready.ts";
+import { decideFinishLine, type ExternalVerification } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
   bindingStateFile,
@@ -2952,6 +2952,26 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!referenced.ok) return referenced;
 
       await writeOwned(path.join(await deliveryDir(deliveryId), "outcome.json"), `${JSON.stringify(outcome)}\n`);
+
+      // WHICH OBLIGATIONS ACTUALLY COMPLETED. The finish line binds them, so
+      // they are retained here rather than re-derived later from a policy that
+      // only says which obligations were ACTIVATED. The facade completes
+      // `outcome.verification` itself — criterion mapping plus the
+      // positive-criterion rule above — and the admission gate completes the
+      // rest; a blocked or never-activated obligation completed nothing.
+      const completedObligations = [
+        ...new Set([
+          "outcome.verification",
+          ...(admission.decision?.resolutions ?? [])
+            .filter((resolution) => resolution.kind !== "blocked" && resolution.kind !== "not_applicable")
+            .map((resolution) => resolution.obligationId),
+        ]),
+      ].sort();
+      await writeOwned(
+        path.join(await deliveryDir(deliveryId), "admission.json"),
+        `${JSON.stringify({ completedObligations })}\n`,
+      );
+
       const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "admitting", to: "recording" });
       if (!transitioned.ok) return transitioned;
       return { ok: true, state: "recording" };
@@ -3127,23 +3147,105 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     async completeFinishLine({ deliveryId, fence }) {
       const guarded = await guard(deliveryId, { requireState: ["ready"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
-      const outcome = await readJson<OutcomeVerification>(path.join(await deliveryDir(deliveryId), "outcome.json"));
+      const workspace = guarded.workspace;
+      if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
+      const dir = await deliveryDir(deliveryId);
+      const outcome = await readJson<OutcomeVerification>(path.join(dir, "outcome.json"));
       if (outcome === undefined) {
         return refuse("outcome_missing", "No outcome verification is on file for this delivery.", "Admit the delivery first.");
       }
-      const composed = composeMergeReadyResult({ deliveryId, outcome });
-      if (!composed.ok) {
+      const completed = await readJson<{ completedObligations: readonly string[] }>(path.join(dir, "admission.json"));
+      if (completed === undefined) {
+        return refuse("admission_missing", "No admission result is on file for this delivery.", "Admit the delivery first.");
+      }
+
+      // What the `recording` transition bound: the tracked record's digest and
+      // the candidate recaptured at that edge, plus the base this delivery is
+      // being made mergeable onto.
+      const recordingTransition = [...guarded.views]
+        .reverse()
+        .find((view) => view.kind === "transition.committed" && view.payload["trackedRecord"] !== undefined);
+      const trackedRecord = recordingTransition?.payload["trackedRecord"] as { path: string; sha256: string } | undefined;
+      const recordedCandidate = currentCandidateOf(guarded.views);
+      const bound = lastOf(guarded.views, "workspace.bound");
+      if (trackedRecord === undefined || recordedCandidate === undefined || bound === undefined) {
+        return refuse("record_missing", "No tracked-record transition is journaled for this delivery.", "Record the delivery first.");
+      }
+
+      // TERMINAL SUCCESS IS A RECHECK SITE. The candidate and its base are
+      // re-observed here, and the external verifier — the same pure core the
+      // repository's pull-request Action runs — is re-run over the committed
+      // record, so hosted and local merge-ready evidence are both current.
+      const rootDir = workspace.worktreeDir;
+      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
+      if (!capture.ok) return capture.failure;
+      const captured = capture.candidate;
+
+      let externalVerification: ExternalVerification = "unavailable";
+      const relativePath = deliveryRecordPathFor(input.config, captured.deliverable.digest);
+      let recordText: string | undefined;
+      try {
+        recordText = await readFile(path.join(rootDir, relativePath), "utf8");
+      } catch {
+        recordText = undefined;
+      }
+      if (recordText !== undefined) {
+        const parsed = parseDeliveryRecord(recordText);
+        if (parsed.ok) {
+          const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
+          const check = verifyDeliveryRecord(
+            input.config,
+            parsed.record,
+            { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
+            { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
+            { candidateTreePaths: listed.out.split("\u0000").filter((entry) => entry.length > 0) },
+          );
+          externalVerification = check.ok ? "passed" : "failed";
+        } else {
+          externalVerification = "failed";
+        }
+      }
+
+      // The declared product-trust level, read verbatim from the pinned
+      // generation's own manifest — never from anything the candidate carries.
+      const generation = await loadPinnedGeneration({
+        installationPath: input.installation.installationPath,
+        generationDigest: guarded.meta.generationDigest,
+      });
+      const declaredProductTrustLabel = generation.ok
+        ? String((generation.manifest["pin"] as Record<string, unknown> | undefined)?.["productTrustLabel"] ?? "")
+        : "";
+
+      const decision = decideFinishLine({
+        deliveryId,
+        contract: guarded.meta.contract,
+        policy: guarded.meta.policy,
+        outcome,
+        record: { treeSha: recordedCandidate.treeSha, baseTipSha: bound.payload["baseTipSha"] as string, digest: trackedRecord.sha256 },
+        observed: { treeSha: captured.treeSha, baseTipSha: captured.base.tipSha },
+        admission: { admitted: true, completedObligations: completed.completedObligations },
+        externalVerification,
+        declaredProductTrustLabel,
+      });
+      if (decision.kind !== "completed") {
+        // Merge-ready never falls through to an action here: an authorized
+        // merge or deploy is the external-actions unit's, and this slice
+        // invokes none, so anything but terminal success is a refusal.
+        const detail =
+          decision.kind === "blocked"
+            ? decision.refusals.map((refusal) => refusal.message).join("; ")
+            : `the contract requests a ${guarded.meta.contract.requestedFinishLine} finish line, whose ${decision.action} action no bound adapter can invoke`;
         return refuse(
           "finish_line_refused",
-          `The merge-ready result failed the spine's cross-checks: ${composed.rejections.map((rejection) => rejection.message).join("; ")}`,
-          "Resolve every criterion, then complete the finish line.",
+          `The merge-ready finish line was refused: ${detail}`.slice(0, 1900),
+          "Resolve every criterion and obligation on the recorded candidate, then complete the finish line.",
         );
       }
-      const recorded = await appendEntry(guarded.store, deliveryId, "finish.line.recorded", { result: composed.result });
+      const recorded = await appendEntry(guarded.store, deliveryId, "finish.line.recorded", { result: decision.result });
       if (!recorded.ok) return recorded;
       const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "ready", to: "completed" });
       if (!transitioned.ok) return transitioned;
-      return { ok: true, state: "completed", resultDigest: digestCanonical(composed.result) };
+      return { ok: true, state: "completed", resultDigest: digestCanonical(decision.result) };
     },
 
     async sessionEnded({ deliveryId, fence }) {

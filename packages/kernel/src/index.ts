@@ -483,14 +483,19 @@ export {
 export { createFakeHostConformancePort } from "./host/fake-host.ts";
 
 export {
+  EXTERNAL_ACTIONS,
   FINISH_LINE_RESULT_SPEC,
   checkMergeReadyAgainstOutcome,
   validateFinishLineResult,
+  type ExternalAction,
   type FinishLineResult,
 } from "./spine/finish-line.ts";
 export {
+  ACTION_APPROVALS,
+  ACTION_VERIFICATIONS,
   APPROVAL_REQUEST_KINDS,
   DESCENDANT_TEARDOWN_STATUSES,
+  EXTERNAL_ACTION_OUTCOMES,
   JOURNAL_ENTRY_SPEC,
   RESUME_ELIGIBILITIES,
   TERMINATION_PROVENANCE_KINDS,
@@ -790,7 +795,21 @@ export {
   remediationFor,
   type BlockerInventoryEntry,
 } from "./evidence/blocker-inventory.ts";
-export { composeMergeReadyResult, type ComposeMergeReadyResult } from "./finish-line/merge-ready.ts";
+// The finish-line reducer and the operation port merge/deploy would bind to.
+export {
+  EXTERNAL_VERIFICATIONS,
+  FINISH_LINE_ACTIONS,
+  UNBOUND_EXTERNAL_ACTION_PORT,
+  authorizeFinishLineAction,
+  decideFinishLine,
+  type ExternalActionIntent,
+  type ExternalActionInvocation,
+  type ExternalActionPort,
+  type ExternalVerification,
+  type FinishLineDecision,
+  type FinishLineInput,
+  type FinishLineRefusal,
+} from "./finish-line/merge-ready.ts";
 export {
   createManagedDeliveryFacade,
   type CreateFacadeInput,
