@@ -146,6 +146,23 @@ describe("the record's legs", () => {
     expect(record.knownLimitations.length).toBeGreaterThan(0);
   });
 
+  it("does not leave the granted-shell exposure to be inferred from a claim the graded record omits", () => {
+    // The two records have to say the same thing. This one describes the
+    // exposure in prose; the graded one carries it as a stated position. If
+    // the position disappears from the graded record, the prose here becomes
+    // a description of something no sensor can find, so this fails with it.
+    const graded = (admissionRecord.hosts as any[]).find((host) => host.hostId === record.host.hostId);
+    const position = graded.capabilities.commonGitAuthorityPathProtected;
+    expect(position, "the graded record takes a position instead of omitting the claim").toBeDefined();
+    expect(position.status).toBe("unsupported");
+
+    const stated = (record.knownLimitations as string[]).filter((limitation) =>
+      limitation.includes("commonGitAuthorityPathProtected"),
+    );
+    expect(stated.length, "a limitation names the graded claim it corresponds to").toBeGreaterThan(0);
+    expect(stated.join(" ")).toMatch(/unsupported/u);
+  });
+
   it("meets every acceptance criterion with a named leg and evidence", () => {
     expect(record.acceptanceCriteria.length).toBe(3);
     for (const criterion of record.acceptanceCriteria as any[]) {

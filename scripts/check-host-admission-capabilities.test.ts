@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   HOST_ACTIVITY_STATES,
+  PORTABLE_STAGE_GRANT,
   SPINE_INSTANT,
   evaluateConfirmationEcho,
   evaluateHostAdmission,
@@ -143,8 +144,56 @@ describe("host-admission capability record document", () => {
         expect(capability.status.length, `${host.hostId}.${name} status`).toBeGreaterThan(0);
         expect(capability.mechanism.length, `${host.hostId}.${name} mechanism`).toBeGreaterThan(0);
         expectVerification(capability.verification, `${host.hostId}.${name}`);
+        // A grading cannot rest on an observation from after it was written.
+        // Fixture verification carries no instant at all — it names fixture
+        // cases instead — so only the dated kinds are bounded here.
+        if (capability.verification.kind !== "fixture") {
+          expect(
+            capability.verification.observedAt <= record.gradedAt,
+            `${host.hostId}.${name} postdates the grading`,
+          ).toBe(true);
+        }
       }
     }
+  });
+
+  it("re-verifies a capability claim rather than carrying a stale grading forward", () => {
+    // A `reverification` exists precisely because the entry's own key names a
+    // version the claim was NOT re-observed on. It therefore has to name the
+    // version it WAS observed on, that version has to differ from the entry's,
+    // and the observation has to postdate the grading it is standing in for.
+    // Anything less is the original grading wearing a newer label.
+    let seen = 0;
+    for (const host of hosts) {
+      for (const [name, capability] of Object.entries<any>(host.capabilities)) {
+        const reverification = capability.reverification;
+        if (reverification === undefined) continue;
+        seen += 1;
+        const context = `${host.hostId}.${name} reverification`;
+        expectVerification(reverification, context);
+        expect(typeof reverification.hostVersion, `${context} names the version probed`).toBe("string");
+        expect(reverification.hostVersion, `${context} must not restate the entry's own version`).not.toBe(host.hostVersion);
+        expect(["holds", "withdrawn"], `${context} outcome`).toContain(reverification.outcome);
+        expect(reverification.observedAt > capability.verification.observedAt, `${context} postdates the grading`).toBe(true);
+        expect(reverification.observedAt <= record.gradedAt, `${context} postdates the record`).toBe(true);
+        if (reverification.outcome === "withdrawn") {
+          expect(capability.status, `${context} withdrew the claim, so it cannot still be supported`).not.toBe("supported");
+        }
+      }
+    }
+    expect(seen, "at least one capability carries a re-verification").toBeGreaterThan(0);
+  });
+
+  it("does not stand the Codex common-Git authority claim on its superseded grading", () => {
+    const claim = hostById.get("codex-cli").capabilities.commonGitAuthorityPathProtected;
+    expect(claim.status).toBe("supported");
+    expect(claim.reverification, "the claim is re-observed, not carried forward").toBeDefined();
+    expect(claim.reverification.kind).toBe("live-probe");
+    expect(claim.reverification.outcome).toBe("holds");
+    // The denial only means something next to a control that proves the
+    // sandbox ran at all — an absent file is equally consistent with a
+    // command that never executed.
+    expect(claim.reverification.method).toMatch(/succeeded/iu);
   });
 
   it("cannot grade Tier 3 over a surviving background child", () => {
@@ -207,6 +256,66 @@ describe("host-admission capability record document", () => {
       });
       expect(citesLive, `scenario ${scenario.id} claims live proof without a live-probed source`).toBe(true);
     }
+  });
+});
+
+/**
+ * THE GRANTED-SHELL POSTURE, EXECUTABLE. The shipped mutation-stage grant hands
+ * every ordinary stage session a shell capability, whose filesystem writes the
+ * admission interceptor gates by capability and not by path. Whether the
+ * common-Git authority path survives that is a HOST property, so the record has
+ * to carry a position for each host it grades — and an absent entry is the one
+ * outcome that must not be reachable, because it reads to a sensor exactly like
+ * a host that was checked and found safe.
+ *
+ * The enumeration below is therefore driven off the record's own host list, not
+ * off a list of host ids written here: a host added to the record without a
+ * position fails, and a position removed from a host in the record fails.
+ */
+describe("the granted-shell journal-defense posture", () => {
+  const SHELL_CAPABILITY = "Bash";
+  const CLAIM = "commonGitAuthorityPathProtected";
+
+  it("keeps the shell capability in the shipped mutation-stage grant, which is what makes the posture load-bearing", () => {
+    // Removing it would not be a tidy-up: it would retire the exposure the
+    // per-host positions below exist to declare, and this record would then be
+    // describing a grant the product no longer ships.
+    expect(PORTABLE_STAGE_GRANT.allowedCapabilities).toContain(SHELL_CAPABILITY);
+  });
+
+  it("carries a stated position for each host the record grades, with none left absent", () => {
+    expect(hosts.length, "the record grades at least one host").toBeGreaterThan(0);
+    const withPosition = hosts.filter((host) => host.capabilities[CLAIM] !== undefined).map((host) => host.hostId);
+    expect(withPosition, `every graded host states ${CLAIM}`).toEqual(hosts.map((host) => host.hostId));
+
+    for (const host of hosts) {
+      const position = host.capabilities[CLAIM];
+      const context = `${host.hostId}.${CLAIM}`;
+      // A position is a verdict either way; "not mentioned" is not one of them.
+      expect(["supported", "unsupported"], context).toContain(position.status);
+      expect(position.mechanism.length, `${context} mechanism`).toBeGreaterThan(0);
+      expectVerification(position.verification, context);
+    }
+  });
+
+  it("declares the shell exposure on the host that grants it rather than implying protection by silence", () => {
+    const declared = hostById.get("claude-code").capabilities[CLAIM];
+    expect(declared.status).toBe("unsupported");
+    // The declaration has to say WHY, in terms of the shipped configuration
+    // that produces it, or it is a bare label an operator cannot act on.
+    expect(declared.mechanism).toMatch(/hook-main\.ts/u);
+    expect(declared.mechanism).toMatch(/mutation-stage grant/u);
+    expect(declared.verification.surface, "the position names the shipped grant it follows from").toMatch(/compile\.ts/u);
+  });
+
+  it("keeps the common-Git scenario row a per-host position rather than a product-wide claim", () => {
+    const scenario = record.scenarios.find((s: any) => s.id === "common-git-authority-not-writable");
+    expect(scenario, "the record carries the common-Git authority scenario").toBeDefined();
+    // Cite every graded host's position, so the row cannot rest on the one
+    // host that denies the write while another declares it reachable.
+    expect(scenario.refs).toEqual(expect.arrayContaining(hosts.map((host) => `${host.hostId}.${CLAIM}`)));
+    // And say so in the statement, which is what an operator actually reads.
+    expect(scenario.statement).toMatch(/per-host/u);
   });
 });
 

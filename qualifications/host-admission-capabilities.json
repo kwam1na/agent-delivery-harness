@@ -1,7 +1,7 @@
 {
   "schemaVersion": "host-admission-capabilities/1",
   "description": "Graded capability record for trusted host-control admission, per exact host version, against the capability ladder: Tier 0 read-only inspection only; Tier 1 mutation floor (deny-until-attested grant enforcement, worktree-materialized digest-receipted projection, binding attestation, isolated operator-confirmation channel, fence-revocation cancellation, fresh-worktree-only resume); Tier 2 trusted graceful lifecycle events; Tier 3 graceful termination provenance with verified descendant teardown, enabling same-worktree resume. Facts probed on a real host carry live-probe or recorded-observation provenance; properties the product binding owns on any host are proven by the frozen fixtures in fixtures/host-admission-fixtures.json against the model-external admission validator.",
-  "gradedAt": "2026-08-30T12:13:55Z",
+  "gradedAt": "2026-08-31T06:56:00Z",
   "platform": "macOS 15.6.1 arm64",
   "verificationKinds": [
     "live-probe",
@@ -107,6 +107,16 @@
             ]
           }
         },
+        "commonGitAuthorityPathProtected": {
+          "status": "unsupported",
+          "mechanism": "DECLARED, not absent: this host offers no OS-level filesystem sandbox behind an admitted session, so the only path boundary is the binding's own PreToolUse interceptor, and that interceptor extracts write paths from tool input only for the file-writing tools (Write, Edit, MultiEdit, NotebookEdit — packages/kernel/src/host/hook-main.ts). A shell invocation carries no such member, so its filesystem writes are capability-gated and not path-gated: an admitted session holding the shell capability reaches the common-Git authority path and the delivery journal directly, and the payload grammar only enforces a record's internal consistency. This is the DEFAULT posture rather than a corner case, because the shipped mutation-stage grant allows the shell capability to every ordinary stage session. The operator's position is to accept and declare it: closing it belongs to the host's own permission/sandbox system, not to this integration. Dropping the shell capability from the mutation-stage default was rejected because every gate loop runs its build, test, and version-control commands through it, so the grant would return per repository — the same exposure with more ceremony; requiring a host sandbox capability before the mutation lane qualifies was rejected because no such capability exists on this host, and the requirement would disqualify the proving host outright.",
+          "verification": {
+            "kind": "recorded-observation",
+            "surface": "the shipped interceptor's write-path member map (packages/kernel/src/host/hook-main.ts) and the shipped mutation-stage grant's allowed capabilities (packages/kernel/src/policy/compile.ts); claude --help and settings/permissions documentation (v2.1.97) for the absence of an OS-level session sandbox",
+            "method": "source and CLI surface enumeration: the write-path map names only the file-writing tools, the shipped stage grant lists the shell capability, and the host exposes no admission parameter placing an admitted session under an OS filesystem sandbox. No probe is claimed — the exposure follows from the shipped configuration, not from an observation of a host defence failing.",
+            "observedAt": "2026-08-31T06:56:00Z"
+          }
+        },
         "gracefulLifecycleEvents": {
           "status": "supported",
           "mechanism": "SessionEnd hook fired on clean non-interactive session end (live); Stop and per-session lifecycle hooks documented",
@@ -209,12 +219,21 @@
         },
         "commonGitAuthorityPathProtected": {
           "status": "supported",
-          "mechanism": "workspace-write seatbelt policy denies writes to .git inside the writable workspace root",
+          "mechanism": "the workspace-write seatbelt policy denies writes to .git inside the writable workspace root",
           "verification": {
             "kind": "live-probe",
             "surface": "codex sandbox -c sandbox_mode=workspace-write in a disposable git repository",
             "method": "write to .git/probe.txt failed with operation-not-permitted while a sibling workspace write succeeded",
             "observedAt": "2026-08-30T12:06:00Z"
+          },
+          "reverification": {
+            "kind": "live-probe",
+            "hostVersion": "0.151.0",
+            "outcome": "holds",
+            "surface": "codex sandbox --permission-profile :workspace in a disposable git repository, with CODEX_HOME pointed at a disposable directory so no operator configuration was read or written",
+            "method": "model-free command execution under the host sandbox, re-run because the grading above was taken on 0.147.0 and must not be carried forward on it. Writing .git/probe.txt and appending to .git/config both failed with operation-not-permitted and left no trace; a sibling write in the same workspace root SUCCEEDED, and a :read-only control denied that same sibling write. The controls are what make the denial mean anything: an absent file on its own is equally consistent with a command that never ran, which is the failure mode a re-verification is most likely to mistake for a pass. On 0.151.0 both the named permission profiles used here (:workspace, :read-only) and the sandbox_mode configuration key the 0.147.0 grading used are honored; this observation makes no claim about which of the two the earlier version offered.",
+            "observedAt": "2026-08-31T06:52:00Z",
+            "scope": "this one capability only. The rest of this host entry remains graded at the version its own key names; re-grading the entry against 0.151.0 belongs to the Codex integration unit, which inherits this observation as its baseline."
           }
         },
         "worktreeMaterializedProjection": {
@@ -369,10 +388,11 @@
     },
     {
       "id": "common-git-authority-not-writable",
-      "statement": "the common-Git authority path is not writable from an admitted invocation",
+      "statement": "the common-Git authority path is not writable from an admitted invocation ON A HOST THAT SANDBOXES IT — which is a per-host position, not a product property, and every host in this record states its own: Codex denies the write through its OS sandbox, and Claude Code declares the write reachable from the shell capability its ordinary stage sessions hold",
       "proof": "live-probe",
       "refs": [
         "codex-cli.commonGitAuthorityPathProtected",
+        "claude-code.commonGitAuthorityPathProtected",
         "common-git-authority-path-not-writable"
       ]
     },
