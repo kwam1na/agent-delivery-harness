@@ -20,8 +20,10 @@
     "total": 3
   },
   "gateMetrics": {
-    "medianOperatorInterventionsAfterAcceptance": "must be strictly lower than the baseline's",
-    "blockedVersusProgressingShare": "must not regress against the baseline's",
+    "gatingCriterion": "blockedVersusProgressingShare",
+    "appliedCriteriaRecordedIn": "qualifications/shadow-milestone-gate-verdict.json — the scorer's verdict artifact, whose interventionReporting block records which criteria are applied and why; a reader of these declarations reaches the scorer's actual behaviour there rather than having to know it",
+    "medianOperatorInterventionsAfterAcceptance": "reported in full and gates nothing. The baseline's own intervention counts are [2, 0, 0] — a median of 0, which is the floor of the metric. No non-negative count can be strictly lower, so a baseline sitting at the floor cannot demonstrate improvement in either direction. The baseline's limitations block concedes the counts are lower bounds: transcripts do not record silently granted host permission prompts, so the figure it reports is admittedly incomplete. Ceasing to gate on the figure is not licence to stop measuring it; it becomes gating again only once the baseline is re-recorded under a rubric wide enough to have headroom.",
+    "blockedVersusProgressingShare": "must not regress against the baseline's; the sole gating criterion",
     "policyRequiredInterruptions": "recorded and reported alongside interventions, never counted as interventions"
   },
   "consumptionRecordContract": {

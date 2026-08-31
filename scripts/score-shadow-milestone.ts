@@ -190,7 +190,7 @@ export const INTERVENTION_REPORTING = Object.freeze({
   howItBecomesGatingAgain:
     "Re-record the baseline under a rubric wide enough to have headroom — which is what its own reRecordTriggers anticipate — and restore the comparison against the re-recorded figure.",
   supersedes:
-    "The gate record's gateMetrics still reads 'medianOperatorInterventionsAfterAcceptance: must be strictly lower than the baseline's'. That line is superseded by this block and is applied by nothing: the scorer's only gating criterion is blockedVersusProgressingShare. The record lives under .agents, a protected path in every checkpoint grant, so no session may edit it; correcting the line is an operator act.",
+    "The gate record's gateMetrics declares medianOperatorInterventionsAfterAcceptance reported in full and gating nothing, and names blockedVersusProgressingShare its sole gating criterion — the position this block states, in the same words. The record's earlier 'must be strictly lower than the baseline's' was superseded here and applied by nothing, and was corrected in a reviewed delivery's diff: the protection over .agents is that no execution grant may write the record at runtime, which stops a running session authoring its own entry and never barred a reviewed edit to the file.",
 });
 
 /**
