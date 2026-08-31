@@ -781,21 +781,20 @@ describe("the binding-sourced projection-consumption gate record", () => {
    * in the session writes the observation, and no test fixture stands in for
    * it — the point of the record is that this fact was observed, not assumed.
    */
-  const consumeProjection = async (session: Session): Promise<void> => {
+  const intercept = async (session: Session, invocation: unknown): Promise<void> => {
     const statePath = await bindingStatePath(session.deliveryId);
     execFileSync(
       path.join(REPO_ROOT, "node_modules", ".bin", "tsx"),
       [path.join(REPO_ROOT, "packages", "kernel", "src", "host", "hook-main.ts"), "pre-tool-use", statePath, String(session.fence)],
-      {
-        input: JSON.stringify({
-          tool_name: "Read",
-          tool_input: { file_path: path.join(session.worktree, PROJECTION_DIR, "workflows", "delivery-v1.json") },
-        }),
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-      },
+      { input: JSON.stringify(invocation), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
     );
   };
+
+  const consumeProjection = (session: Session): Promise<void> =>
+    intercept(session, {
+      tool_name: "Read",
+      tool_input: { file_path: path.join(session.worktree, PROJECTION_DIR, "workflows", "delivery-v1.json") },
+    });
 
   it("gives a shadow delivery an entry the guard admits, and two deliveries two distinct entries", async () => {
     const gateRecordPath = gateRecord("two-deliveries");
@@ -840,6 +839,46 @@ describe("the binding-sourced projection-consumption gate record", () => {
     expect(entries[0].projectionConsumption.marker.deliveryId).not.toBe(
       entries[1].projectionConsumption.marker.deliveryId,
     );
+  });
+
+  it("keeps the one-shot observation slot open until an admissible name arrives", async () => {
+    // THE LOCKOUT, end to end through the real interceptor: the observation
+    // is recorded once per fence, so a name that could never be admitted must
+    // not burn the slot. Searching a directory and then reading a file in it
+    // is ordinary agent behavior, and the predicate's unit test cannot prove
+    // the slot survives — only the binary's write path can.
+    const gateRecordPath = gateRecord("lockout");
+    const session = await openSession();
+
+    // A grep over the skills directory: names a DIRECTORY, which the receipt
+    // never lists, plus a free-text pattern naming a real receipted entry.
+    await intercept(session, {
+      tool_name: "Grep",
+      tool_input: {
+        pattern: ".managed-projection/consumption.json",
+        path: path.join(session.worktree, PROJECTION_DIR, "skills"),
+      },
+    });
+    const afterSearch = await facade.recordProjectionConsumption({
+      deliveryId: session.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    must(afterSearch, "recordProjectionConsumption (after the search)");
+    expect(afterSearch.emitted).toBe(false);
+
+    // The honest read that follows is still recorded, and the delivery counts.
+    await consumeProjection(session);
+    const afterRead = await facade.recordProjectionConsumption({
+      deliveryId: session.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    must(afterRead, "recordProjectionConsumption (after the read)");
+    expect(afterRead.emitted).toBe(true);
+    const entries = entriesIn(gateRecordPath);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].projectionConsumption.marker.deliveryId).toBe(session.deliveryId);
   });
 
   it("writes no entry for a delivery whose run never reached into the projection", async () => {

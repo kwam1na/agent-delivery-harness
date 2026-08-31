@@ -20,7 +20,8 @@
  *     own directory, re-verified against the worktree bytes;
  *   - the marker, read back out of the receipted projection subtree; and
  *   - the model-external interceptor's observation that an allowed invocation
- *     of THIS run named a receipted path under the projection subtree.
+ *     of THIS run named, in a member that names files, a receipted path under
+ *     the projection subtree.
  *
  * THE THIRD FACT IS THE ONLY ONE ABOUT THE RUN. The first two are both true
  * the instant materialization returns: the receipt matches the bytes the
@@ -30,17 +31,22 @@
  * everything from ambient discovery and never opened the run-pinned subtree.
  *
  * WHAT THE RECORD THEREFORE CERTIFIES, IN PLAIN WORDS: that an allowed
- * invocation of this run named a path under the run-pinned subtree which the
+ * invocation of this run named, in a member that names files, a path the
  * materialization receipt lists. NOT that the run read that file, and NOT
- * that the run resolved its workflow from the projection. Two gaps are open
+ * that the run resolved its workflow from the projection. Two gaps stay open
  * and neither is closable from inside this module: a read the host performs
  * internally, without routing a path through its tool surface, is invisible —
  * a genuinely consuming delivery can go unobserved and is then excluded; and
- * a single deliberate mention of a receipted path, by a run that resolved
- * everything from the ambient discovery the shadow window permits to coexist,
- * is indistinguishable from an honest one. The first fails safe. The second is
- * why this comment, the operation's own documentation, and anything reporting
- * on the milestone must say "named" and not "consumed".
+ * a run that names a receipted file in a path member without reading it is
+ * indistinguishable from one that reads it. The first fails safe. The second
+ * is why this comment, the operation's own documentation, and anything
+ * reporting on the milestone must say "named" and not "consumed".
+ *
+ * A THIRD GAP WAS CLOSED rather than documented: naming a receipted path in
+ * FREE TEXT — a shell description, an edit's replaced text — used to mint an
+ * observation, because receipted paths are not secret and are enumerable from
+ * the pinned generation. The binding now considers only the members that name
+ * files, which is where a host's tool vocabulary belongs.
  *
  * A caller supplies only WHICH run it is asking about (delivery and fence) and
  * which baseline category the delivery is measured under. If the binding's own
@@ -209,12 +215,13 @@ export async function emitProjectionConsumptionRecord(
     observation.fence !== input.fence ||
     typeof observation.entry !== "string" ||
     observation.entry.length === 0 ||
-    // CONTAINMENT. The named entry must be one the materialization receipt
-    // lists — the receipt whose every byte was just re-verified above. The
-    // interceptor reports what an invocation named, without judging whether
-    // the bytes exist; this is where an invented or nonexistent path stops,
-    // because a path the binding never materialized names nothing that could
-    // have been read.
+    // CONTAINMENT, as defense in depth. The binding checks this before it
+    // records anything — it must, because the observation is one-shot per
+    // fence and an unadmissible name would lock out the honest read that
+    // follows. Checking again here costs nothing and keeps the writer's own
+    // admissibility rule stated in the writer: an entry the materialization
+    // receipt does not list, in the receipt whose every byte was just
+    // re-verified above, names nothing that could have been read.
     !projection.entries.includes(observation.entry)
   ) {
     return unobserved("projection-not-consumed");

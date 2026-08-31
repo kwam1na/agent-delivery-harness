@@ -104,6 +104,7 @@ import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence
 import { decideFinishLine, type ExternalVerification } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
+  PROJECTION_RECEIPT_FILE,
   bindingStateFile,
   composeClaudeCodeSession,
   discoveryConfigurationDigestOf,
@@ -831,11 +832,11 @@ export interface ManagedDeliveryFacade {
    * the comparison set.
    *
    * WHAT AN EMITTED ENTRY CERTIFIES: that an allowed invocation of this run
-   * NAMED a receipted path under the run-pinned projection subtree. Not that
-   * the run read that file, and not that it resolved its workflow from the
-   * projection. A read the host performs internally, without routing a path
-   * through its tool surface, is not observed at all — such a delivery is
-   * excluded rather than affirmed.
+   * NAMED, in a member that names files, a receipted path under the run-pinned
+   * projection subtree. Not that the run read that file, and not that it
+   * resolved its workflow from the projection. A read the host performs
+   * internally, without routing a path through its tool surface, is not
+   * observed at all — such a delivery is excluded rather than affirmed.
    */
   recordProjectionConsumption(input: {
     readonly deliveryId: string;
@@ -2405,6 +2406,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           workspaceRoot: worktreeDir,
           observationPath,
           projectionConsumptionPath: path.join(bindingDir, projectionConsumptionObservationFile(fence)),
+          projectionReceiptPath: path.join(bindingDir, PROJECTION_RECEIPT_FILE),
           journalPath: guarded.store.journalPath,
           deliveryId,
         })}\n`,

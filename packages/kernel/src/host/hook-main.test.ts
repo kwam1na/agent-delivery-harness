@@ -142,54 +142,80 @@ describe("renderHookDecision", () => {
 
 describe("projectionEntryTouched", () => {
   const root = "/work/tree";
+  // What the materialization receipt lists: FILES only. No directory and no
+  // glob is ever a receipted entry, which is the fact the lockout case below
+  // turns on.
+  const receipted = ["consumption.json", "workflows/delivery-v1.json", "skills/deliver-work/SKILL.md"];
+  const touched = (toolInput: Record<string, unknown>) => projectionEntryTouched(root, toolInput, receipted);
 
-  it("names the projection path an invocation names, in whichever argument carries it", () => {
-    // No member allowlist: the member carrying a path differs per tool, and
-    // trusting a fixed set would drop the next tool that reads a file while
-    // buying nothing — a session willing to steer the observation would just
-    // use a trusted member. What a NAMED path is worth is settled downstream,
-    // where the writer requires it to be a receipted entry.
-    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection/skills/core/SKILL.md" })).toBe(
-      "skills/core/SKILL.md",
+  it("names the receipted entry a file-naming member resolves to", () => {
+    expect(touched({ file_path: "/work/tree/.managed-projection/skills/deliver-work/SKILL.md" })).toBe(
+      "skills/deliver-work/SKILL.md",
     );
-    expect(projectionEntryTouched(root, { path: ".managed-projection/workflows/delivery-v1.json" })).toBe(
-      "workflows/delivery-v1.json",
-    );
-    expect(projectionEntryTouched(root, { pattern: "**/*.ts", path: ".managed-projection/consumption.json" })).toBe(
-      "consumption.json",
+    expect(touched({ path: ".managed-projection/workflows/delivery-v1.json" })).toBe("workflows/delivery-v1.json");
+    expect(touched({ notebook_path: ".managed-projection/consumption.json" })).toBe("consumption.json");
+  });
+
+  it("names nothing for a RECEIPTED path a session merely mentions", () => {
+    // The case that stayed open until the member restriction landed, and the
+    // one worth asserting most: receipted paths are NOT secret —
+    // consumption.json is constant and every skills/ and workflows/ entry is
+    // enumerable from the pinned generation — so containment alone cannot
+    // stop a session from naming a real one in free text. Only the member
+    // restriction can, and each payload here names a genuinely receipted
+    // entry, so the assertion fails the moment that restriction is dropped.
+    const real = ".managed-projection/skills/deliver-work/SKILL.md";
+    expect(touched({ command: "echo hi", description: real })).toBeUndefined();
+    expect(touched({ command: `cat ${real}` })).toBeUndefined();
+    expect(touched({ pattern: ".managed-projection/workflows/delivery-v1.json", path: "src" })).toBeUndefined();
+    expect(touched({ file_path: "/work/tree/src/greet.mjs", old_string: real })).toBeUndefined();
+    expect(touched({ prompt: `read ${real}` })).toBeUndefined();
+  });
+
+  it("names nothing the receipt does not list, so no unadmissible name burns the one-shot slot", () => {
+    // THE LOCKOUT. The observation is recorded once per fence, so a name that
+    // could never be admitted must not consume that slot. A Grep over the
+    // skills directory names a DIRECTORY; the receipt lists files only.
+    // Recording it would leave the honest Read that follows locked out and
+    // the delivery excluded — and searching a directory before reading a file
+    // in it is ordinary agent behavior.
+    expect(touched({ pattern: "finish line", path: ".managed-projection/skills" })).toBeUndefined();
+    expect(touched({ path: ".managed-projection/workflows" })).toBeUndefined();
+    expect(touched({ file_path: ".managed-projection/skills/invented.md" })).toBeUndefined();
+    expect(touched({ file_path: ".managed-projection" })).toBeUndefined();
+    // ...and the honest read that follows still names its entry.
+    expect(touched({ file_path: ".managed-projection/skills/deliver-work/SKILL.md" })).toBe(
+      "skills/deliver-work/SKILL.md",
     );
   });
 
   it("names nothing for anything outside the projection subtree", () => {
-    // The negative half, asserted as specifically as the positive: a sibling
-    // whose name merely starts with the subtree's, a traversal back out, the
-    // ambient vendored generation, another tree's projection, the subtree root
-    // itself, and non-string arguments all name no entry — otherwise ordinary
-    // work would read as a projection touch.
-    expect(projectionEntryTouched(root, { file_path: "/work/tree/src/greet.mjs" })).toBeUndefined();
-    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection-notes/x.md" })).toBeUndefined();
-    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection/../src/a.ts" })).toBeUndefined();
-    expect(projectionEntryTouched(root, { file_path: "/work/tree/.agent-skills/skills/core/SKILL.md" })).toBeUndefined();
-    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection" })).toBeUndefined();
-    expect(projectionEntryTouched(root, { file_path: "/elsewhere/.managed-projection/a.md" })).toBeUndefined();
-    expect(projectionEntryTouched(root, { count: 3, enabled: true, empty: "" })).toBeUndefined();
+    // A sibling whose name merely starts with the subtree's, a traversal back
+    // out, the ambient vendored generation, another tree's projection, and
+    // non-string arguments all name no entry — otherwise ordinary work, or a
+    // delivery that never opened the subtree, would read as a projection touch.
+    expect(touched({ file_path: "/work/tree/src/greet.mjs" })).toBeUndefined();
+    expect(touched({ file_path: "/work/tree/.managed-projection-notes/consumption.json" })).toBeUndefined();
+    expect(touched({ file_path: "/work/tree/.managed-projection/../src/a.ts" })).toBeUndefined();
+    expect(touched({ file_path: "/work/tree/.agent-skills/workflows/delivery-v1.json" })).toBeUndefined();
+    expect(touched({ file_path: "/elsewhere/.managed-projection/consumption.json" })).toBeUndefined();
+    expect(touched({ count: 3, enabled: true, file_path: "" })).toBeUndefined();
   });
 
   it("sees nothing when the run reaches its workflow without naming a path", () => {
     // THE KNOWN UNDER-OBSERVATION, pinned so it cannot be forgotten or
     // quietly claimed away. A skill invocation names a skill, not a file, and
     // a shell command carrying arguments does not resolve as a path — so a
-    // run that reaches its workflow source either way is invisible to this
-    // predicate and its delivery is EXCLUDED from the comparison set rather
-    // than affirmed. That is the safe direction, and it is also why the
-    // milestone may stay unscoreable until the binding can observe the host's
-    // own skill resolution.
-    expect(projectionEntryTouched(root, { skill: "deliver-work", args: "execute" })).toBeUndefined();
-    expect(projectionEntryTouched(root, { command: "cat .managed-projection/workflows/delivery-v1.json" })).toBeUndefined();
+    // run that reaches its workflow source either way is invisible here and
+    // its delivery is EXCLUDED rather than affirmed. That is the safe
+    // direction, and it is why the milestone may stay unscoreable until the
+    // binding can observe the host's own skill resolution.
+    expect(touched({ skill: "deliver-work", args: "execute" })).toBeUndefined();
+    expect(touched({ command: "cat .managed-projection/workflows/delivery-v1.json" })).toBeUndefined();
+  });
 
-    // And the converse boundary: this function reports NAMING, not reading or
-    // admissibility. A bare mention resolves, and the writer's receipt
-    // containment is what separates a receipted entry from anything else.
-    expect(projectionEntryTouched(root, { description: ".managed-projection/invented.md" })).toBe("invented.md");
+  it("names nothing when the receipt is unavailable", () => {
+    // Fail-safe: no receipt, no admissible name, no observation.
+    expect(projectionEntryTouched(root, { file_path: ".managed-projection/consumption.json" }, [])).toBeUndefined();
   });
 });

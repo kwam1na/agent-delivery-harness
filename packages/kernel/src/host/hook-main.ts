@@ -39,6 +39,11 @@ export interface HookBindingState {
    * observation existed, which records nothing rather than failing.
    */
   readonly projectionConsumptionPath?: string;
+  /**
+   * The binding's materialization receipt, whose entries bound which paths an
+   * observation may name. Absent records nothing rather than failing.
+   */
+  readonly projectionReceiptPath?: string;
   readonly journalPath?: string;
   readonly deliveryId?: string;
 }
@@ -74,47 +79,93 @@ function writesOf(state: HookBindingState, toolName: string, toolInput: Record<s
 }
 
 /**
- * The projection path an invocation names, if it names one.
+ * The tool-input members that NAME a file an invocation reads. The write
+ * members above have their own list for the same reason: the member is what
+ * makes a string a path, and a string that merely mentions one is not.
  *
- * WHAT THIS CERTIFIES, EXACTLY: that an allowed invocation of this run named a
- * path under the run-pinned projection subtree. Not that the run read the
- * file, and not that the run resolved its workflow from the projection. The
- * interceptor is model-external code the HOST invokes with the invocation's
- * own arguments, so what it reports is a fact about the run rather than a
- * claim the session made about itself — but the fact is the naming, and the
- * record built on it must say so in those words.
+ * Naming Claude Code's members here is not a coupling problem, because this
+ * file IS the Claude Code binding — its whole job is that host's tool surface.
+ * The host-neutral writer stays free of them.
+ */
+const READ_PATH_MEMBERS = Object.freeze(["file_path", "path", "notebook_path"] as const);
+
+/**
+ * The projection entry an invocation names, if it names a receipted one.
  *
- * Every string argument is considered, and no member allowlist is applied: the
- * member that carries a path differs per tool, and guessing at tool semantics
- * would silently drop the next tool that reads a file while buying nothing
- * against a session that wants to steer the observation — a session can put a
- * path in whichever member the allowlist happens to trust. What keeps a
- * FABRICATED path out is containment: the writer admits an observation only
- * when the named entry is one the materialization receipt lists, so an
- * invented or nonexistent path names nothing that can be affirmed.
+ * WHAT THIS CERTIFIES, EXACTLY: that an allowed invocation of this run named,
+ * in a member that names files, a path the materialization receipt lists. Not
+ * that the run read the file, and not that the run resolved its workflow from
+ * the projection. The interceptor is model-external code the HOST invokes with
+ * the invocation's own arguments, so what it reports is a fact about the run
+ * rather than a claim the session made about itself — but the fact is the
+ * naming, and the record built on it must say so in those words.
+ *
+ * TWO CHECKS, CLOSING DIFFERENT THINGS, NEITHER SUFFICIENT ALONE:
+ *
+ *   - The MEMBER restriction closes free-text steering. Receipted paths are
+ *     not secret — `consumption.json` is constant and every skills/ and
+ *     workflows/ entry is enumerable from the pinned generation — so without
+ *     it a session mints an observation by naming a real entry in a Bash
+ *     description or an edit's replaced text.
+ *   - RECEIPT CONTAINMENT closes invented paths, which the member restriction
+ *     does not: a path member may still name bytes that were never
+ *     materialized.
+ *
+ * CONTAINMENT IS CHECKED HERE, NOT ONLY IN THE WRITER, because the observation
+ * is recorded once per fence. A name that could never be admitted must not
+ * burn that one slot: a Grep over `.managed-projection/skills` names a
+ * DIRECTORY, the receipt lists files only, and if that were recorded the
+ * honest Read of a receipted file that follows would find the slot taken and
+ * the delivery would be excluded. Searching a directory and then reading a
+ * file in it is ordinary agent behavior, so the check belongs on the write
+ * path. The writer checks containment again as defense in depth.
  *
  * WHAT IT DELIBERATELY DOES NOT SEE, and what it cannot rule out: a read the
  * host performs internally without routing a path through its tool surface is
  * invisible here, so a genuinely consuming delivery can go unobserved; and a
- * single deliberate mention of a receipted path by a run that resolved
- * everything from ambient discovery is indistinguishable from an honest one.
- * The first fails safe — no observation, no entry, never an unobserved
- * affirmation. The second is why the claim is worded as naming rather than
- * consumption. Closing either needs a binding capability that does not exist.
+ * run that names a receipted file in a path member without reading it is
+ * indistinguishable from one that reads it. The first fails safe — no
+ * observation, no entry, never an unobserved affirmation. The second is why
+ * the claim is worded as naming rather than consumption. Closing either needs
+ * a binding capability that does not exist.
  */
 export function projectionEntryTouched(
   workspaceRoot: string,
   toolInput: Record<string, unknown>,
+  receiptedEntries: readonly string[],
 ): string | undefined {
   const root = path.resolve(workspaceRoot, PROJECTION_DIR);
-  for (const value of Object.values(toolInput)) {
+  for (const member of READ_PATH_MEMBERS) {
+    const value = toolInput[member];
     if (typeof value !== "string" || value.length === 0) continue;
     const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceRoot, value);
     const relative = path.relative(root, absolute);
     if (relative.length === 0 || relative.startsWith("..") || path.isAbsolute(relative)) continue;
-    return relative.split(path.sep).join("/");
+    const entry = relative.split(path.sep).join("/");
+    if (!receiptedEntries.includes(entry)) continue;
+    return entry;
   }
   return undefined;
+}
+
+/**
+ * The receipted entry paths, read from the binding's own materialization
+ * receipt. Unreadable or malformed yields none, so the observation is simply
+ * not recorded — the fail-safe direction.
+ */
+function receiptedEntriesOf(receiptPath: string | undefined): readonly string[] {
+  if (receiptPath === undefined) return [];
+  try {
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as {
+      entries?: readonly { path?: unknown }[];
+    };
+    if (!Array.isArray(receipt.entries)) return [];
+    return receipt.entries
+      .map((entry) => entry?.path)
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+  } catch {
+    return [];
+  }
 }
 
 export function decideHookInvocation(
@@ -226,6 +277,7 @@ async function main(argv: readonly string[]): Promise<number> {
       const entry = projectionEntryTouched(
         state.workspaceRoot,
         typeof input.tool_input === "object" && input.tool_input !== null ? input.tool_input : {},
+        receiptedEntriesOf(state.projectionReceiptPath),
       );
       if (entry !== undefined && state.projectionConsumptionPath !== undefined) {
         try {
