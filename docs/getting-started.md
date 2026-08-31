@@ -437,6 +437,9 @@ mechanics.
 
 ## Where to next
 
+- [The managed delivery product](managed-delivery.md) — the product this gate is
+  the finish line of: the facade, the durable journal, the policy compiler, the
+  graded host ladder, and the trust posture.
 - [Provider guide](provider-guide.md) — building a real provider: the manifest
   contract, field by field, with the conformance vectors as the test bed.
 - [The delivery record](delivery-record.md) — what the tracked record is, what
