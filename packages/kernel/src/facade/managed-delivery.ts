@@ -115,6 +115,10 @@ import {
   tearDownProjection,
   verifyProjection,
 } from "../host/claude-code.ts";
+import {
+  emitProjectionConsumptionRecord,
+  type ProjectionConsumptionUnobserved,
+} from "../host/consumption-gate-record.ts";
 import { createExecPort, type ExecPort } from "../host/exec-port.ts";
 import {
   PINNED_AGENT_SKILLS,
@@ -810,6 +814,29 @@ export interface ManagedDeliveryFacade {
     readonly echo: ConfirmationEchoAttempt;
   }): Promise<
     { readonly ok: true; readonly targetBaseCommit: string; readonly takeoverBranchRef: string } | FacadeFailure
+  >;
+
+  /**
+   * Turns the binding's observed projection consumption into a durable entry
+   * in the shadow milestone's gate-record artifact.
+   *
+   * The caller names the delivery, the artifact, and the baseline category the
+   * delivery is measured under — never the consumption itself. The delivery
+   * and fence the record binds come from the binding's own workspace record,
+   * and the record's contents are re-derived from the materialization receipt
+   * and the marker in the worktree, so no caller can claim a consumption the
+   * binding did not observe. When it did not, nothing is written and the
+   * delivery stays out of the comparison set.
+   */
+  recordProjectionConsumption(input: {
+    readonly deliveryId: string;
+    /** The milestone gate-record artifact in the consuming repository. */
+    readonly gateRecordPath: string;
+    readonly category: string;
+  }): Promise<
+    | { readonly ok: true; readonly emitted: true; readonly projectionDigest: string }
+    | { readonly ok: true; readonly emitted: false; readonly reason: ProjectionConsumptionUnobserved }
+    | FacadeFailure
   >;
 
   explainBlocker(input: { readonly deliveryId: string }): Promise<
@@ -3588,6 +3615,42 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       });
       if (!appended.ok) return appended;
       return { ok: true, descendantTeardown, resumeEligibility };
+    },
+
+    async recordProjectionConsumption({ deliveryId, gateRecordPath, category }) {
+      // The canonical recheck first: an entry must never be written about a
+      // delivery whose trust, installation, or projection binding no longer
+      // holds. `verifyWorkspace` re-verifies the projection here for the same
+      // reason every other workspace operation does.
+      const guarded = await guard(deliveryId, { verifyWorkspace: true });
+      if (!("store" in guarded)) return guarded;
+      if (guarded.workspace === undefined) {
+        return refuse(
+          "workspace_unbound",
+          "No workspace is bound.",
+          "Bind the host-supplied worktree first; a consumption record describes a materialized projection.",
+        );
+      }
+      const emitted = await emitProjectionConsumptionRecord({
+        gateRecordPath,
+        worktreeDir: guarded.workspace.worktreeDir,
+        bindingDir: path.join(await deliveryDir(deliveryId), "binding"),
+        // The run the record binds is the BINDING's, read from the workspace
+        // record — never a delivery or fence the caller names.
+        deliveryId,
+        fence: guarded.workspace.fence,
+        category,
+      });
+      if (!emitted.ok) {
+        return refuse(
+          "consumption_record_write_failed",
+          `Recording the projection-consumption entry failed: ${emitted.blockers.map((blocker) => blocker.message).join("; ")}`,
+          "Point the writer at the consuming repository's milestone gate-record artifact.",
+        );
+      }
+      return emitted.emitted
+        ? { ok: true, emitted: true, projectionDigest: emitted.record.projectionDigest }
+        : { ok: true, emitted: false, reason: emitted.reason };
     },
 
     async tearDownWorkspaceProjection({ deliveryId }) {

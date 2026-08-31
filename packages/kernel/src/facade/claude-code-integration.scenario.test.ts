@@ -32,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
 import { PROJECTION_DIR } from "../host/claude-code.ts";
+import { SHADOW_MILESTONE_GATE_RECORD_SPEC } from "../host/consumption-gate-record.ts";
 import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec-port.ts";
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
 import { installComposition, packComposition } from "../substrate/installer.ts";
@@ -745,5 +746,116 @@ describe("the in-session projection's immutable context", () => {
         state.expectation.invocationFence,
       ).allowed,
     ).toBe(true);
+  });
+});
+
+describe("the binding-sourced projection-consumption gate record", () => {
+  /** The consuming repository's gate-record artifact, in the shape its guard reads. */
+  const gateRecord = (name: string): string => {
+    const dir = path.join(scratch, `gate-record-${name}`);
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "shadow-milestone-gate-record.json");
+    writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          spec: SHADOW_MILESTONE_GATE_RECORD_SPEC,
+          repositoryId: "athena",
+          comparisonSetRequirement: { mix: { code: 1, docs: 1, operations: 1 }, total: 3 },
+          deliveries: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return file;
+  };
+
+  const entriesIn = (file: string): any[] =>
+    (JSON.parse(readFileSync(file, "utf8")) as { deliveries: any[] }).deliveries;
+
+  it("gives a shadow delivery an entry the guard admits, and two deliveries two distinct entries", async () => {
+    const gateRecordPath = gateRecord("two-deliveries");
+    const first = await openSession();
+    const recorded = await facade.recordProjectionConsumption({
+      deliveryId: first.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    must(recorded, "recordProjectionConsumption");
+    expect(recorded.emitted).toBe(true);
+
+    const second = await openSession();
+    must(
+      await facade.recordProjectionConsumption({
+        deliveryId: second.deliveryId,
+        gateRecordPath,
+        category: "docs",
+      }),
+      "recordProjectionConsumption (second)",
+    );
+
+    const entries = entriesIn(gateRecordPath);
+    expect(entries.map((entry) => entry.id)).toEqual([first.deliveryId, second.deliveryId]);
+    for (const [entry, session] of [
+      [entries[0], first],
+      [entries[1], second],
+    ] as const) {
+      // Every field the consuming guard requires of an admissible record, from
+      // the binding's own receipt and marker.
+      expect(entry.countedInComparisonSet).toBe(true);
+      expect(entry.projectionConsumption.source).toBe("binding");
+      expect(entry.projectionConsumption.affirmative).toBe(true);
+      expect(entry.projectionConsumption.projectionDigest).toMatch(/^[0-9a-f]{64}$/);
+      expect(entry.projectionConsumption.marker.deliveryId).toBe(session.deliveryId);
+      expect(entry.projectionConsumption.marker.fence).toBe(session.fence);
+      expect(typeof entry.projectionConsumption.marker.consumed).toBe("string");
+      expect(entry.projectionConsumption.marker.consumed.length).toBeGreaterThan(0);
+    }
+    expect(entries[0].projectionConsumption.marker.deliveryId).not.toBe(
+      entries[1].projectionConsumption.marker.deliveryId,
+    );
+  });
+
+  it("writes no entry for a delivery that never materialized a projection", async () => {
+    const gateRecordPath = gateRecord("unbound");
+    sequence += 1;
+    const presented = await facade.presentContract({
+      contract: { ...DISPOSABLE_CONTRACT, contractId: `contract-cc-${sequence}` },
+      expiry: EXPIRY,
+    });
+    must(presented, "presentContract");
+    const confirmed = await facade.confirmContract({
+      intakeId: presented.intakeId,
+      echo: operatorEcho(presented.channelPath),
+    });
+    must(confirmed, "confirmContract");
+
+    // No workspace, so no projection and nothing for the binding to observe.
+    // The delivery carries no affirmative record and stays out of the
+    // comparison set — the writer never invents one from the call itself.
+    const recorded = await facade.recordProjectionConsumption({
+      deliveryId: confirmed.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    expect(recorded.ok).toBe(false);
+    expect(entriesIn(gateRecordPath)).toEqual([]);
+  });
+
+  it("writes no entry when the projection the binding materialized is gone", async () => {
+    const gateRecordPath = gateRecord("torn-down");
+    const session = await openSession();
+    must(await facade.tearDownWorkspaceProjection({ deliveryId: session.deliveryId }), "tearDownWorkspaceProjection");
+
+    // The canonical recheck refuses the torn-down workspace outright — a
+    // consumption record is never written past a workspace-integrity refusal.
+    const recorded = await facade.recordProjectionConsumption({
+      deliveryId: session.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    expect(recorded.ok).toBe(false);
+    expect(entriesIn(gateRecordPath)).toEqual([]);
   });
 });

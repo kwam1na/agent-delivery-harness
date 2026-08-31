@@ -762,6 +762,18 @@ export {
   type HostBindingBlocker,
   type HostBindingBlockerCode,
 } from "./host/claude-code.ts";
+// The binding's writer: an observed projection consumption becomes a durable
+// gate-record entry, or nothing at all.
+export {
+  CONSUMPTION_GATE_RECORD_BLOCKER_CODES,
+  SHADOW_MILESTONE_GATE_RECORD_SPEC,
+  emitProjectionConsumptionRecord,
+  type ConsumptionGateRecordBlockerCode,
+  type EmitProjectionConsumptionInput,
+  type EmitProjectionConsumptionResult,
+  type ProjectionConsumptionRecord,
+  type ProjectionConsumptionUnobserved,
+} from "./host/consumption-gate-record.ts";
 export { createExecPort, type ExecInvocation, type ExecOutcome, type ExecPort } from "./host/exec-port.ts";
 export {
   checkReviewFloor,

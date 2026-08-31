@@ -292,6 +292,13 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
   },
   { id: "kernel-checkpoint", path: "packages/kernel/src/checkpoint", kind: "dir", rules: ["e"], status: "present" },
   { id: "host-claude-code", path: "packages/kernel/src/host/claude-code.ts", kind: "file", rules: ["e"], status: "present" },
+  {
+    id: "host-consumption-gate-record",
+    path: "packages/kernel/src/host/consumption-gate-record.ts",
+    kind: "file",
+    rules: ["e"],
+    status: "present",
+  },
   { id: "host-exec-port", path: "packages/kernel/src/host/exec-port.ts", kind: "file", rules: ["e"], status: "present" },
   { id: "kernel-facade", path: "packages/kernel/src/facade", kind: "dir", rules: ["e"], status: "present" },
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "present" },
