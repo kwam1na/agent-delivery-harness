@@ -217,8 +217,14 @@ function writesOf(state: HookBindingState, toolName: string, toolInput: Record<s
   const protectedPaths = protectedPathsOf(state.grant);
   const writes: string[] = [];
   for (const member of members) {
+    // Absence names no write; a present value that cannot name a path must not
+    // collapse to that same empty set and inherit its allow decision.
+    if (!Object.prototype.hasOwnProperty.call(toolInput, member)) continue;
     const value = toolInput[member];
-    if (typeof value !== "string" || value.length === 0) continue;
+    if (typeof value !== "string" || value.length === 0) {
+      writes.push(UNJUDGEABLE);
+      continue;
+    }
     if (rootWalk === undefined) {
       writes.push(UNJUDGEABLE);
       continue;
