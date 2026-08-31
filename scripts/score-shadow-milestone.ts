@@ -72,7 +72,7 @@
  * `fail` and the unmet criterion is named. A gate that cannot fail is not a
  * gate.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -84,6 +84,22 @@ export const MANUAL_CHOREOGRAPHY_BASELINE_SPEC = "manual-choreography-baseline/1
 export const BASELINE_PATH = "qualifications/manual-choreography-baseline.json";
 export const GATE_RECORD_PATH = ".agents/policy/shadow-milestone-gate-record.json";
 export const VERDICT_PATH = "qualifications/shadow-milestone-gate-verdict.json";
+export const SCORER_USAGE =
+  "Usage: score-shadow-milestone [--write] [--baseline <path> --gate-record <path> --verdict <path>]";
+
+export type ShadowMilestoneInputPaths = {
+  readonly baseline: string;
+  readonly gateRecord: string;
+};
+
+export type ShadowMilestoneFilePaths = ShadowMilestoneInputPaths & {
+  readonly verdict: string;
+};
+
+const REPOSITORY_LOCAL_INPUT_PATHS: ShadowMilestoneInputPaths = Object.freeze({
+  baseline: BASELINE_PATH,
+  gateRecord: GATE_RECORD_PATH,
+});
 
 /**
  * Why a set could not be scored. Distinct from a criterion the set was scored
@@ -311,7 +327,11 @@ function scoreDefect(id: string, score: unknown): string | undefined {
 
 // ── Scoring ──────────────────────────────────────────────────────────────────
 
-export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMilestoneVerdict {
+export function scoreShadowMilestone(
+  baseline: any,
+  gateRecord: any,
+  inputPaths: ShadowMilestoneInputPaths = REPOSITORY_LOCAL_INPUT_PATHS,
+): ShadowMilestoneVerdict {
   const incomplete: ShadowScoreNote<ShadowScoreIncompleteCode>[] = [];
   const failures: ShadowScoreNote<ShadowScoreFailureCode>[] = [];
   const observations: ShadowScoreNote<ShadowScoreObservationCode>[] = [];
@@ -518,7 +538,7 @@ export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMile
     observations,
     inputs: {
       baseline: {
-        path: BASELINE_PATH,
+        path: inputPaths.baseline,
         schemaVersion: baseline?.schemaVersion,
         capturedAt: baseline?.capturedAt,
         provingHost: baseline?.provingHost,
@@ -526,7 +546,7 @@ export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMile
         deliveryIds: baselineDeliveries.map((delivery) => String(delivery?.id ?? "<unnamed>")),
       },
       gateRecord: {
-        path: GATE_RECORD_PATH,
+        path: inputPaths.gateRecord,
         countedDeliveryIds,
         excludedDeliveries,
         // The per-delivery blocks the figures were reduced from, copied into
@@ -553,23 +573,130 @@ export function renderVerdict(verdict: ShadowMilestoneVerdict): string {
   return `${JSON.stringify(verdict, null, 2)}\n`;
 }
 
-export function readVerdictInputs(repoRoot: string): { baseline: any; gateRecord: any } {
-  const read = (relative: string): any => JSON.parse(readFileSync(path.join(repoRoot, relative), "utf8"));
-  return { baseline: read(BASELINE_PATH), gateRecord: read(GATE_RECORD_PATH) };
+export function readVerdictInputs(
+  repoRoot: string,
+  inputPaths?: ShadowMilestoneInputPaths,
+): { baseline: any; gateRecord: any } {
+  const paths =
+    inputPaths ??
+    ({
+      baseline: path.join(repoRoot, BASELINE_PATH),
+      gateRecord: path.join(repoRoot, GATE_RECORD_PATH),
+    } satisfies ShadowMilestoneInputPaths);
+  const read = (file: string): any => JSON.parse(readFileSync(file, "utf8"));
+  return { baseline: read(paths.baseline), gateRecord: read(paths.gateRecord) };
+}
+
+type ScorerArguments = {
+  readonly explicitPaths: ShadowMilestoneFilePaths | null;
+  readonly write: boolean;
+};
+
+function parseScorerArguments(args: readonly string[], cwd: string): ScorerArguments | undefined {
+  const flags = ["--baseline", "--gate-record", "--verdict"] as const;
+  const values = new Map<(typeof flags)[number], string>();
+  let write = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === "--write") {
+      if (write) return undefined;
+      write = true;
+      continue;
+    }
+    if (!flags.includes(argument as (typeof flags)[number])) return undefined;
+    const flag = argument as (typeof flags)[number];
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith("-") || values.has(flag)) return undefined;
+    values.set(flag, path.resolve(cwd, value));
+    index += 1;
+  }
+
+  if (values.size === 0) return { explicitPaths: null, write };
+  if (values.size !== flags.length) return undefined;
+  return {
+    explicitPaths: {
+      baseline: values.get("--baseline")!,
+      gateRecord: values.get("--gate-record")!,
+      verdict: values.get("--verdict")!,
+    },
+    write,
+  };
+}
+
+const isMissingPath = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+
+function canonicalPath(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch (error) {
+    if (!isMissingPath(error)) throw error;
+    return path.join(realpathSync(path.dirname(file)), path.basename(file));
+  }
+}
+
+function existingFileIdentity(file: string): { readonly device: number; readonly inode: number } | undefined {
+  try {
+    const stats = statSync(file);
+    return { device: stats.dev, inode: stats.ino };
+  } catch (error) {
+    if (!isMissingPath(error)) throw error;
+    return undefined;
+  }
+}
+
+function verdictInputAlias(paths: ShadowMilestoneFilePaths): "--baseline" | "--gate-record" | undefined {
+  const verdictCanonical = canonicalPath(paths.verdict);
+  const verdictIdentity = existingFileIdentity(paths.verdict);
+  for (const [flag, input] of [
+    ["--baseline", paths.baseline],
+    ["--gate-record", paths.gateRecord],
+  ] as const) {
+    const sameCanonicalPath = verdictCanonical === canonicalPath(input);
+    const inputIdentity = existingFileIdentity(input);
+    const sameExistingFile =
+      verdictIdentity !== undefined &&
+      inputIdentity !== undefined &&
+      verdictIdentity.device === inputIdentity.device &&
+      verdictIdentity.inode === inputIdentity.inode;
+    if (sameCanonicalPath || sameExistingFile) return flag;
+  }
+  return undefined;
 }
 
 function main(): void {
   const repoRoot = repoRootFromHere();
-  const { baseline, gateRecord } = readVerdictInputs(repoRoot);
-  const verdict = scoreShadowMilestone(baseline, gateRecord);
-  const write = process.argv.includes("--write");
-  if (write) writeFileSync(path.join(repoRoot, VERDICT_PATH), renderVerdict(verdict));
+  const parsed = parseScorerArguments(process.argv.slice(2), process.cwd());
+  if (parsed === undefined) {
+    process.stderr.write(`${SCORER_USAGE}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const { explicitPaths, write } = parsed;
+  if (explicitPaths !== null) {
+    const alias = verdictInputAlias(explicitPaths);
+    if (alias !== undefined) {
+      process.stderr.write(`score-shadow-milestone: --verdict path aliases the ${alias} input\n${SCORER_USAGE}\n`);
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  const { baseline, gateRecord } = readVerdictInputs(repoRoot, explicitPaths ?? undefined);
+  const verdict = scoreShadowMilestone(
+    baseline,
+    gateRecord,
+    explicitPaths ?? REPOSITORY_LOCAL_INPUT_PATHS,
+  );
+  const verdictPath = explicitPaths?.verdict ?? path.join(repoRoot, VERDICT_PATH);
+  if (write) writeFileSync(verdictPath, renderVerdict(verdict));
 
   process.stdout.write(`score-shadow-milestone: ${verdict.status} — ${verdict.summary}\n`);
   for (const note of verdict.incomplete) process.stdout.write(`  incomplete ${note.code}\n      ${note.message}\n`);
   for (const note of verdict.failures) process.stdout.write(`  unmet ${note.code}\n      ${note.message}\n`);
   for (const note of verdict.observations) process.stdout.write(`  observation ${note.code}\n      ${note.message}\n`);
-  if (write) process.stdout.write(`  wrote ${VERDICT_PATH}\n`);
+  if (write) process.stdout.write(`  wrote ${explicitPaths?.verdict ?? VERDICT_PATH}\n`);
   // An incomplete set is not a failed run: the operator has not finished
   // measuring, and exiting non-zero would make an unfinished milestone
   // indistinguishable from a lost one in CI.
