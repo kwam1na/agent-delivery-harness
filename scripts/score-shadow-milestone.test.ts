@@ -153,15 +153,15 @@ describe("the frozen baseline is characterized before anything is scored against
     expect(verdict.interventionReporting.howItBecomesGatingAgain).toContain("Re-record the baseline");
   });
 
-  it("names the gate record's stale gating declaration as superseded", () => {
-    // The gate record still declares the intervention criterion as gating. It
-    // lives under .agents, which no session may write, so the verdict says the
-    // line is applied by nothing rather than leaving a reader to find two
-    // artifacts that disagree and no statement of which one is in force.
+  it("names the declaration it superseded and the record's corrected position", () => {
+    // The record once declared the intervention criterion as gating. The
+    // verdict names that superseded line and states the position the record
+    // now carries, rather than leaving a reader to find two artifacts that
+    // disagree and no statement of which one is in force.
     const verdict = scoreShadowMilestone(baseline, gateRecord([]));
     expect(verdict.interventionReporting.supersedes).toContain("medianOperatorInterventionsAfterAcceptance");
+    expect(verdict.interventionReporting.supersedes).toContain("sole gating criterion");
     expect(verdict.interventionReporting.supersedes).toContain("applied by nothing");
-    expect(verdict.interventionReporting.supersedes).toContain("operator act");
   });
 
   it("pins the baseline figure the decision rests on: a median already at the floor", () => {
