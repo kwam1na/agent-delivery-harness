@@ -237,9 +237,17 @@ export const managedCommand: CommandDescriptor = {
     // Only the retention operations may name a delivery; everything else binds
     // the fence of the worktree it runs in.
     const RETENTION_OPERATIONS = ["export", "delete"];
-    const requestedDelivery = RETENTION_OPERATIONS.includes(operation) ? flag(rest, "--delivery") : undefined;
-    if (requestedDelivery === undefined && flag(rest, "--delivery") !== undefined) {
+    const namesDelivery = rest.includes("--delivery");
+    if (namesDelivery && !RETENTION_OPERATIONS.includes(operation)) {
       return { kind: "usage", message: `--delivery is accepted only by: ${RETENTION_OPERATIONS.join(", ")}.` };
+    }
+    const requestedDelivery = RETENTION_OPERATIONS.includes(operation) ? flag(rest, "--delivery") : undefined;
+    // A trailing `--delivery` with no value reads as absent, and absent falls
+    // back to the implicitly resolved delivery. On `delete` that is a typo
+    // silently retargeting a destructive operation at a different delivery, so
+    // the flag's presence without a value is a refusal rather than a default.
+    if (namesDelivery && requestedDelivery === undefined) {
+      return { kind: "usage", message: "--delivery requires a delivery id." };
     }
 
     const resolved = await resolveManaged(context, requestedDelivery);

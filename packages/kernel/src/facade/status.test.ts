@@ -186,25 +186,75 @@ describe("an action is never named where the operation would refuse", () => {
     }
   });
 
-  it("withholds every checkpoint operation while a takeover is required", () => {
-    // The bound task is gone and its fence is superseded, so every
-    // fence-carrying operation refuses; the takeover is the real next action.
+  it("withholds every FENCE-CARRYING operation while a takeover is required", () => {
+    // The bound task is gone and its fence is superseded, so every operation
+    // that carries one refuses; the takeover is the real next action.
     const status = composeManagedStatus(baseInput({ hostActivity: "unknown", resume: "takeover-required" }));
     expect(status.authorizedNextActions).not.toContain("submitStageResult");
     expect(status.authorizedNextActions).toContain("presentTakeover");
+    // Nothing named here may be an operation that carries a fence.
+    for (const contract of status.operationContracts) {
+      expect(contract.fence, `${contract.operation} carries a fence and must be withheld`).toBe("absent-by-state");
+    }
   });
 
-  it("withholds the takeover presentation for a delivery that never bound a workspace", () => {
-    // There is no superseded invocation and no trusted commit to target.
+  it("still names the fence-MINTING checkpoint on a never-bound delivery", () => {
+    // The happy path: a freshly confirmed delivery has no lifecycle events, so
+    // it reports `takeover-required` before any workspace exists. bindWorkspace
+    // mints the fence rather than carrying one, and it is the only way forward
+    // — suppressing it here would leave the delivery with nothing named at all.
     const status = composeManagedStatus(
       baseInput({
+        delivery: { state: "preparing", expectedRevision: 2, fence: 0 },
         workspaceBound: false,
         hostActivity: "unknown",
         resume: "takeover-required",
         nextCheckpoint: { kind: "bind-workspace" },
       }),
     );
+    expect(status.authorizedNextActions).toContain("bindWorkspace");
+    // And the takeover itself is withheld: there is no superseded invocation
+    // and no trusted commit to target.
     expect(status.authorizedNextActions).not.toContain("presentTakeover");
+  });
+
+  it("never leaves a live delivery with no way forward named", () => {
+    // The regression this row exists for named only read operations. Every
+    // non-terminal, non-suspended state must offer at least one operation that
+    // is not purely a read.
+    const cases: readonly ManagedStatusInput[] = [
+      baseInput({
+        delivery: { state: "preparing", expectedRevision: 2, fence: 0 },
+        workspaceBound: false,
+        hostActivity: "unknown",
+        resume: "takeover-required",
+        nextCheckpoint: { kind: "bind-workspace" },
+      }),
+      baseInput(),
+      baseInput({ hostActivity: "paused", resume: "takeover-required" }),
+      baseInput({ hostActivity: "unknown", resume: "same-workspace" }),
+    ];
+    for (const input of cases) {
+      const status = composeManagedStatus(input);
+      const forward = status.operationContracts.filter((contract) => contract.capability !== "read");
+      expect(forward.length, `${input.delivery.state} named no way forward`).toBeGreaterThan(0);
+    }
+  });
+
+  it("withholds the fence-carrying approval operations while a takeover is required", () => {
+    // Same rule, applied to the review lane rather than the checkpoint.
+    const status = composeManagedStatus(
+      baseInput({
+        delivery: { state: "reviewing", expectedRevision: 14, fence: 1 },
+        nextCheckpoint: { kind: "review", stageId: "review", lenses: ["a"] },
+        hostActivity: "unknown",
+        resume: "takeover-required",
+        pendingDecision: { requestKind: "waiver", criterionId: "c1", actorId: "actor-a", candidateTreeSha: "b".repeat(40) },
+      }),
+    );
+    expect(status.authorizedNextActions).not.toContain("recordApprovalRequest");
+    expect(status.authorizedNextActions).not.toContain("consumeWaiver");
+    expect(status.authorizedNextActions).toContain("presentTakeover");
   });
 });
 

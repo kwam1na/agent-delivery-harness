@@ -128,6 +128,16 @@ describe("managed", () => {
       expect(result.kind, `${operation} must accept --delivery`).not.toBe("usage");
     }
   });
+
+  it("refuses --delivery with no value instead of silently retargeting", async () => {
+    // A trailing flag reads as absent, and absent falls back to the implicitly
+    // resolved delivery — on `delete` that is a typo quietly pointing a
+    // destructive operation at a different delivery.
+    for (const operation of ["export", "delete"]) {
+      const message = usageOf((await run(managedCommand, [operation, "--delivery"])).result);
+      expect(message, `${operation} must refuse a valueless --delivery`).toContain("--delivery requires a delivery id");
+    }
+  });
 });
 
 describe("maintain", () => {

@@ -191,6 +191,25 @@ describe("the thin one-handoff walking skeleton", () => {
     if (!confirmed.ok) return;
     deliveryId = confirmed.deliveryId;
 
+    // A freshly registered delivery has no lifecycle events at all, so it
+    // reports activity `unknown` and resume `takeover-required` before any
+    // workspace exists. The status model must still name the way forward here:
+    // binding the workspace MINTS the first fence rather than carrying one, so
+    // the stale-fence suppression must not reach it. Read through the real
+    // facade rather than a composed fixture, because the fixture is what missed
+    // this the first time.
+    const beforeBinding = await facade.status({ deliveryId, observedAt: LATER });
+    expect(beforeBinding.ok, JSON.stringify(beforeBinding)).toBe(true);
+    if (!beforeBinding.ok) return;
+    expect(beforeBinding.status.hostActivity).toBe("unknown");
+    expect(beforeBinding.status.nextCheckpoint.kind).toBe("bind-workspace");
+    expect(beforeBinding.status.authorizedNextActions).toContain("bindWorkspace");
+    expect(beforeBinding.status.authorizedNextActions).not.toContain("presentTakeover");
+    expect(
+      beforeBinding.status.operationContracts.some((contract) => contract.capability !== "read"),
+      "a registered delivery must be told how to proceed",
+    ).toBe(true);
+
     // ── The HOST creates the isolated worktree; the facade only binds it ──
     worktreeA = path.join(scratch, "worktree-a");
     git(repoDir, "worktree", "add", "--quiet", "-b", "delivery", worktreeA, "main");

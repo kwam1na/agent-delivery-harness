@@ -216,8 +216,26 @@ function deriveAuthorizedNextActions(
   migration: MigrationPath,
 ): readonly string[] {
   const actions: string[] = [];
+
+  // While a takeover is required the bound task is gone and its invocation
+  // fence is superseded, so every operation that CARRIES a fence refuses on it
+  // and the takeover is the real next action.
+  //
+  // "Carries" is the whole distinction, and getting it wrong is how this rule
+  // suppressed the happy path once already. `bindWorkspace` MINTS the fence
+  // rather than carrying one — a freshly confirmed delivery has no lifecycle
+  // events, so it reports `takeover-required` before any workspace exists, and
+  // suppressing its checkpoint action there leaves a delivery with no way
+  // forward named at all. The inventory already records which operations carry
+  // a fence, so this reads that rather than keeping a second list to drift.
+  const takeoverFirst = input.resume === "takeover-required" && input.hostActivity !== "active";
+  const carriesFence = (action: string): boolean =>
+    FACADE_OPERATIONS.find((operation) => operation.operation === action)?.fence === "required";
+
   const add = (action: string | undefined): void => {
-    if (action !== undefined && !actions.includes(action)) actions.push(action);
+    if (action === undefined || actions.includes(action)) return;
+    if (takeoverFirst && carriesFence(action)) return;
+    actions.push(action);
   };
 
   if (TERMINAL_STATES.includes(input.delivery.state)) {
@@ -248,17 +266,10 @@ function deriveAuthorizedNextActions(
   // An action is named only where the operation ACCEPTS it. Naming one that is
   // guaranteed to refuse is worse than naming nothing: the refusal's own
   // remediation sends the reader back to this very projection, so the surface
-  // that told them to act is the surface that tells them to re-read it.
-  //
-  // A stale fence is the same trap by another route. While a takeover is
-  // required the bound task is gone, every fence-carrying checkpoint operation
-  // refuses on the superseded fence, and the real next action is the takeover.
-  const takeoverFirst = input.resume === "takeover-required" && input.hostActivity !== "active";
-  if (
-    !takeoverFirst &&
-    input.delivery.state !== "blocked" &&
-    input.delivery.state !== "action_succeeded_verification_failed"
-  ) {
+  // that told them to act is the surface that tells them to re-read it. The
+  // stale-fence half of that rule lives in `add` above, so it applies to every
+  // operation named here rather than to whichever site remembered it.
+  if (input.delivery.state !== "blocked" && input.delivery.state !== "action_succeeded_verification_failed") {
     add(checkpointAction(input.nextCheckpoint));
   }
   // Proposing binds the review lane's own states; everywhere else the
