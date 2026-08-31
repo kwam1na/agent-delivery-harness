@@ -388,9 +388,11 @@ describe("host-admission capability record document", () => {
     // genuinely re-observed everything SHOULD pass, and a per-host floor would
     // fail it for being thorough. And the match is on the bare entry name, so
     // an entry named anywhere in the scope prose satisfies it — including in a
-    // roster of entries that WERE re-observed. Both gaps are covered in a full
-    // run by the per-host outcome maps, which pin the re-observed set exactly;
-    // neither is load-bearing on its own.
+    // roster of entries that WERE re-observed. BOTH GAPS ARE ACCEPTED, NOT
+    // COVERED. Nothing in this suite cross-checks the scope prose against the
+    // reverified set, and nothing reads the scope at all beyond containment,
+    // so no other rule closes either one. They are recorded here so the rule
+    // is not credited with more than it does.
     expect(unnamedFloor, "the record has entries it did not re-observe, which is what makes naming them meaningful").toBeGreaterThan(0);
   });
 
@@ -432,9 +434,10 @@ describe("host-admission capability record document", () => {
     expect(probe.reverification.method).toMatch(/selectedCapabilityRoots/u);
     // The arm count is pinned because it was CORRECTED once already: an eighth
     // invocation was rejected by the CLI before it ran, and a rejected
-    // invocation is not an arm. Pinning it makes the next change to that
-    // number a deliberate act instead of a silent one.
-    expect(probe.reverification.surface).toMatch(/seven arms/u);
+    // invocation is not an arm. The verb is included so the count cannot be
+    // contradicted rather than changed — a bare "seven arms" survives a
+    // sentence that goes on to name a different, authoritative number.
+    expect(probe.reverification.surface).toMatch(/driven across seven arms/u);
   });
 
   it("records the ambient-grant confound that nearly produced a false workspace-scoping result", () => {
@@ -448,26 +451,35 @@ describe("host-admission capability record document", () => {
     expect(claim.reverification.method).toMatch(/temporary directory/iu);
     // The control that makes the out-of-workspace denial mean anything.
     expect(claim.reverification.method).toMatch(/unsandboxed control/iu);
-    // The BOUNDARY, on the field that bounds the entry. The scope rule below
-    // is shape-only by design — it holds every block in the record to having
-    // one — so without this the clause that says where the denial stops
+    // The BOUNDARY, on the field that bounds the entry. The scope rule defined
+    // above is shape-only by design — it holds every block in the record to
+    // having one — so without this the clause that says where the denial stops
     // applying could be gutted while a non-empty scope kept the rule green.
+    //
+    // EACH LITERAL BELOW INCLUDES THE WORDS THAT CARRY THE POLARITY, not just
+    // the directory's name. A match on the name alone survives inside a
+    // sentence asserting the opposite — "was NOT re-established for paths
+    // OUTSIDE the temporary directory" contains it, and so does a claim that
+    // the control applies everywhere. Pinning vocabulary is not pinning a
+    // verdict, and the caveat these guard is the one operational consequence
+    // an operator has to act on.
     expect(claim.reverification.scope, "the scope states where this result stops applying").toMatch(
-      /OUTSIDE the system temporary directory/u,
+      /bounded to out-of-workspace paths OUTSIDE the system temporary directory/u,
     );
     // And the boundary has to reach the TIER VERDICT, not sit only in the
     // entry beneath it. The verdict is the slot a consumer reads to decide
     // whether the mutation floor holds; a caveat one level down is a caveat
     // that will not be read by whoever acts on the tier.
-    // Matched on the phrase that STATES the boundary, not on a bare mention of
-    // the directory: the method names it more than once, so a loose match here
-    // survives the boundary clause itself being rewritten away.
+    // Matched on the clause that STATES the boundary, polarity included: the
+    // method names the directory more than once, so a loose match survives
+    // both the clause being rewritten away and its verdict being negated in
+    // place.
     const grade = hostById.get("codex-cli").grade.reverification;
     expect(grade.method, "the tier verdict carries the boundary its floor was re-established under").toMatch(
-      /OUTSIDE the system temporary directory/u,
+      /re-established for out-of-workspace paths OUTSIDE the system temporary directory only/u,
     );
     // And the consequence an operator has to act on, not just the caveat.
-    expect(grade.method, "the tier verdict states what the boundary costs").toMatch(/no scoping/iu);
+    expect(grade.method, "the tier verdict states what the boundary costs").toMatch(/gets no scoping/iu);
   });
 
   it("cannot grade Tier 3 over a surviving background child", () => {
@@ -642,8 +654,10 @@ describe("the delivery-lane binding position", () => {
     expect(cx.deliveryLaneBinding.status).toBe("absent");
     expect(cx.grade.tier, "the capabilities are graded even though the lane is not").toBeGreaterThanOrEqual(1);
     // The carve-out that a sub-Tier-1 second host runs as capability
-    // verification only must not be read as manufacturing a lane.
-    expect(cx.deliveryLaneBinding.detail).toMatch(/does not create a lane/iu);
+    // verification only must not be read as manufacturing a lane. Matched with
+    // the qualifying clause, because "does not create a lane" alone survives
+    // inside a sentence declaring the graded capabilities ARE the lane.
+    expect(cx.deliveryLaneBinding.detail).toMatch(/does not create a lane where no binding exists/iu);
   });
 
   it("backs the Claude Code lane with a module that exists", () => {
