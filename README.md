@@ -7,6 +7,17 @@ gated agent-delivered merges in a live monorepo since mid-2026. It defines what
 counts as admissible evidence that an autonomous agent's change was reviewed and
 validated against an exact repository candidate — and refuses everything else.
 
+**The gate is now the finish line of a larger product.** Around the admission
+kernel there is a managed delivery product: a facade an agent host drives a whole
+delivery through, an append-only journal it can be resumed from, a compiled
+policy that says what each stage may do, host bindings that enforce that policy
+from outside the model's reach, and an installation lifecycle with a
+digest-pinned trust posture. It runs the same kernel, produces the same evidence,
+and stops at the same tracked record — **merge-ready is where it stops, and a
+human merges.** It never launches a coding agent, schedules a subagent, creates a
+worktree, or spawns a subordinate runtime; those are the host's acts. See
+**[docs/managed-delivery.md](docs/managed-delivery.md)**.
+
 **This repository gates its own pull requests with its own harness, and every
 pull request carries a delivery record the Action verifies against the head
 commit.** The gate is [`harness.config.ts`](harness.config.ts) at the root and
@@ -47,6 +58,8 @@ cannot drift from the tool.
 | Document | What it covers |
 |---|---|
 | [Getting started](docs/getting-started.md) | Config → CLI loop → delivery record → local verify → the PR check. |
+| [The managed delivery product](docs/managed-delivery.md) | The facade and its operation contract, the durable journal and its reducers, the policy compiler and reviewer lenses, the graded host ladder and the granted-shell posture, the two authorization classes, the trust label, and the shadow window. |
+| [Agent guide](docs/agent-guide.md) | Module boundaries, which sensor owns which rule, and what bites on a documentation-only change. |
 | [Provider guide](docs/provider-guide.md) | Taking a review context to an accepted manifest: run roots, the final-pass discipline, reviewer approvals, deferral rules, resubmission semantics. |
 | [Provider rails contract](docs/contracts/delivery-provider-rails-v1.md) | The vendored neutral negotiation, lifecycle, cancellation, and terminal-state contract used by opt-in command providers. |
 | [The delivery record](docs/delivery-record.md) | The `delivery-record/1` note: extra-spec status, the both-neutral-sets requirement, what L0 attestation honestly claims, the `baseMovement` policy. |
@@ -56,12 +69,19 @@ cannot drift from the tool.
 
 ## The packages
 
-- **`@agent-delivery-harness/kernel`** — pure validator for the
-  `delivery-evidence/1` envelope and `review.green/1` payload, candidate
+- **`@agent-delivery-harness/kernel`** — the whole decision surface, in one
+  package with hard internal boundaries. The admission half: pure validator for
+  the `delivery-evidence/1` envelope and `review.green/1` payload, candidate
   capture, `deliverable-tree/v1` identity, content-addressed evidence records,
   preparation receipts, gate evaluator with six resolution kinds,
   execution-context trust asymmetry (agents can never waive), and the
-  `delivery-record/1` verify core.
+  `delivery-record/1` verify core. The managed half: the frozen contract spine
+  (closed grammars, 20 delivery states, and pure reducers with no I/O or clock),
+  the three-layer policy compiler and its reviewer lenses, the managed-delivery
+  facade and its 37-operation inventory, the append-only checkpoint journal,
+  host bindings and the model-external write-path interceptor, the merge-ready
+  reducer with its deliberately unbound action port, and the installation
+  substrate carrying the `local-digest / operator-pinned` trust label.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
@@ -96,6 +116,9 @@ npm ci             # install (npm workspaces, ESM throughout)
 npm run typecheck  # tsc, strict
 npm run sensor     # import-boundary / env / Bun / purity / time sensor
 npm run sensor:cli # CLI-inventory sensor
+npm run sensor:policy     # this repo's own policy projection vs its routing
+npm run sensor:shadow     # the shadow-window discovery and consumption guard
+npm run sensor:standalone # standalone-install sensor
 npm run qualify:provider # exact installed-provider interoperability replay
 npm test           # vitest (DELIVERY_HARNESS_MAX_WORKERS caps concurrency)
 npm run check      # all of the above, in order
@@ -124,6 +147,35 @@ the actual
 manifest private. Every rule is falsified by a test, and
 [`.github/workflows/release.yml`](.github/workflows/release.yml) re-runs the
 sensor alongside a per-package `npm publish --dry-run`.
+
+The documentation has sensors of its own.
+[`docs/docs-examples.test.ts`](docs/docs-examples.test.ts) executes the
+getting-started walkthrough verbatim, and requires the flag tokens on that page
+and in the CLI's usage text to match in both directions.
+[`docs/docs-references.test.ts`](docs/docs-references.test.ts) resolves every
+relative link in this README and the top-level guides, and pins the computable
+counts those documents state — the facade's operation inventory, the delivery
+state vocabulary, the CLI command count, the conformance kit's vector count, the
+frozen trust label, and the reviewer charter set the pinned composition ships —
+against the tree rather than against a hand-maintained constant. Its enumeration
+is guarded from both ends, because an existence claim over a set that turned out
+empty would otherwise pass silently.
+
+## This repository's own standing
+
+This repository is governed by its own product, in **shadow mode**: the composed
+product is installed read-only from a digest-pinned generation and projects into
+managed delivery worktrees, while `npm run check`, the `delivery-harness` gate
+loop, and the hosted checks remain the only delivery authority. The two are
+compared, not merged.
+
+It carries **no ambient agent-discovery layout** — no `.claude`, no `.codex`, no
+vendored skills root — and
+[`scripts/shadow-discovery-guard.ts`](scripts/shadow-discovery-guard.ts) pins the
+digest of that emptiness, so introducing one is drift rather than configuration.
+Guidance for agents working here lives in
+[docs/agent-guide.md](docs/agent-guide.md), which is a document rather than a
+discovery root.
 
 ## License
 
