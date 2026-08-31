@@ -24,7 +24,7 @@
  *     sensor's protected class for the binding enforces the same property
  *     statically.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -323,6 +323,174 @@ describe("host-admission capability record document", () => {
     expect(claim.reverification.method).toMatch(/succeeded/iu);
   });
 
+  it("re-observes each Codex claim the stale grading was carrying, or says it could not", () => {
+    // The counterpart to the Claude Code pinning above, and it exists for the
+    // same reason: this host entry is keyed at 0.147.0 while the installed CLI
+    // is 0.151.0, so every claim under it was being asserted at a remove. THE
+    // SET IS PINNED WITH ITS OUTCOMES, not just its names — dropping a block
+    // fails, and so does promoting an unreached claim to a holding one or
+    // demoting a holding one. The asymmetry with the other host is the finding
+    // worth protecting: this host's grade re-verifies as `holds` where the
+    // other's could not be re-observed at all, because `codex sandbox` runs a
+    // command under the same seatbelt policy with no model and no session,
+    // and the Tier 1 floor is exactly what that surface decides. The two
+    // entries that stay `unverified` are the two that need a real turn.
+    const cx = hostById.get("codex-cli");
+    const outcomes = new Map<string, string>(
+      slotsOn(cx).map((slot) => [slot.context.replace(`${cx.hostId}.`, "").replace(" reverification", ""), slot.entry.reverification.outcome]),
+    );
+    expect([...outcomes.entries()].sort()).toEqual([
+      ["capabilities.commonGitAuthorityPathProtected", "holds"],
+      ["capabilities.denyUntilAttestedGrant", "holds"],
+      ["capabilities.gracefulLifecycleEvents", "holds"],
+      ["capabilities.readOnlyInspection", "holds"],
+      ["capabilities.terminationProvenanceWithDescendantTeardown", "unverified"],
+      ["grade", "holds"],
+      ["probes.approvalAssertionSource", "holds"],
+      ["probes.discoveryScopingExclusivity", "holds"],
+      ["probes.gracefulTeardown", "unverified"],
+    ]);
+    expect(cx.grade.reverification.hostVersion).not.toBe(cx.hostVersion);
+    // A re-taken tier must have been driven, not re-read.
+    expect(cx.grade.reverification.kind).toBe("live-probe");
+  });
+
+  it("names the entries it did not re-observe instead of letting silence cover them", () => {
+    // An unexamined entry and a checked one read identically to a sensor, so
+    // the grade's scope has to name the ones nobody looked at. BOTH ENTRY
+    // KINDS ARE WALKED. Capabilities alone would leave a probe free to carry
+    // no re-verification and go unnamed, and the slot enumeration cannot cover
+    // that gap either, because it only ever visits entries that HAVE one — an
+    // entry with none is invisible to it by construction.
+    let unnamedFloor = 0;
+    for (const host of hosts) {
+      if (host.grade.reverification === undefined) continue;
+      const scope = host.grade.reverification.scope;
+      expect(typeof scope, `${host.hostId} grade scope`).toBe("string");
+      const unreobserved = [
+        ...Object.entries<any>(host.capabilities),
+        ...Object.entries<any>(host.probes),
+      ]
+        .filter(([, entry]) => entry.reverification === undefined)
+        .map(([name]) => name);
+      unnamedFloor += unreobserved.length;
+      for (const name of unreobserved) {
+        expect(scope, `${host.hostId} grade scope must name un-re-observed ${name}`).toContain(name);
+      }
+    }
+    // Without a floor the whole rule evaporates the moment the enumeration
+    // stops finding anything, and a record that re-observed nothing would pass
+    // it exactly as cleanly as one that named everything honestly.
+    //
+    // TWO LIMITS OF THIS RULE, STATED SO NOBODY CREDITS IT WITH MORE THAN IT
+    // HAS. The floor is record-wide, not per-host, so one host with unnamed
+    // entries satisfies it for both; that is deliberate, because a host that
+    // genuinely re-observed everything SHOULD pass, and a per-host floor would
+    // fail it for being thorough. And the match is on the bare entry name, so
+    // an entry named anywhere in the scope prose satisfies it — including in a
+    // roster of entries that WERE re-observed. BOTH GAPS ARE ACCEPTED, NOT
+    // COVERED. Nothing in this suite cross-checks the scope prose against the
+    // reverified set, and nothing reads the GRADE scope at all beyond
+    // containment, so no other rule closes either one. They are recorded here
+    // so the rule is not credited with more than it does.
+    expect(unnamedFloor, "the record has entries it did not re-observe, which is what makes naming them meaningful").toBeGreaterThan(0);
+  });
+
+  it("bounds every re-verification with the scope its own convention requires", () => {
+    // Every block in this record says how far its re-observation reaches; a
+    // block without one silently invites its outcome to be read across the
+    // whole entry.
+    //
+    // THIS RULE IS SHAPE-ONLY AND THAT IS THE WHOLE OF IT: it holds every
+    // block to HAVING a scope, and reads none of them. It cannot tell a bound
+    // that says something from one gutted to a placeholder. Where the content
+    // of a scope actually carries a consequence — the Codex workspace-scoping
+    // boundary — the clause is asserted by the test that owns that result,
+    // not here, because a shape rule that claimed to check content would be
+    // the more dangerous of the two failures.
+    const slots = reverifiedSlots();
+    expect(slots.length, "there are re-verifications to bound").toBeGreaterThan(0);
+    for (const { context, entry } of slots) {
+      expect(typeof entry.reverification.scope, `${context} states its scope`).toBe("string");
+      expect(entry.reverification.scope.length, `${context} scope`).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps the Codex exclusivity answer where it was graded while recording that its supporting reason moved", () => {
+    const probe = hostById.get("codex-cli").probes.discoveryScopingExclusivity;
+    // The verdict is unchanged — unlike the other host, where it moved — and
+    // this time it was DRIVEN rather than read off the schema.
+    expect(probe.result).toBe("exclusivity-ungraded");
+    expect(probe.reverification.outcome).toBe("holds");
+    expect(probe.reverification.kind).toBe("live-probe");
+    // Both controls have to be on the record, because the verdict is a
+    // NEGATIVE result and a negative result from an inert probe is worthless.
+    // One: the ambient scopes were non-empty, so absence would have meant
+    // something. Two: the probe was shown able to see a scope disappear.
+    expect(probe.reverification.method).toMatch(/non-empty/iu);
+    expect(probe.reverification.method).toMatch(/baseline/iu);
+    // And the reason that moved is named, not quietly rephrased.
+    expect(probe.reverification.method).toMatch(/runtimeWorkspaceRoots/u);
+    expect(probe.reverification.method).toMatch(/selectedCapabilityRoots/u);
+    // The arm count is pinned because it was CORRECTED once already: an eighth
+    // invocation was rejected by the CLI before it ran, and a rejected
+    // invocation is not an arm. The verb is included so the count cannot be
+    // contradicted rather than changed — a bare "seven arms" survives a
+    // sentence that goes on to name a different, authoritative number.
+    expect(probe.reverification.surface).toMatch(/driven across seven arms/u);
+  });
+
+  it("records the ambient-grant confound that nearly produced a false workspace-scoping result", () => {
+    // The near-miss is load-bearing evidence, not an anecdote: it says the
+    // denial depends on where the workspace lives. An operator materializing a
+    // delivery workspace under the temporary directory gets no scoping from
+    // this control, and that only reaches them if the record carries it.
+    const claim = hostById.get("codex-cli").capabilities.denyUntilAttestedGrant;
+    expect(claim.reverification.outcome).toBe("holds");
+    expect(claim.reverification.kind).toBe("live-probe");
+    expect(claim.reverification.method).toMatch(/temporary directory/iu);
+    // The control that makes the out-of-workspace denial mean anything.
+    expect(claim.reverification.method).toMatch(/unsandboxed control/iu);
+    // The BOUNDARY, on the field that bounds the entry. The scope rule defined
+    // above is shape-only by design — it holds every block in the record to
+    // having one — so without this the clause that says where the denial stops
+    // applying could be gutted while a non-empty scope kept the rule green.
+    //
+    // EACH LITERAL BELOW INCLUDES THE WORDS THAT CARRY THE POLARITY, not just
+    // the directory's name. A match on the name alone survives inside a
+    // sentence asserting the opposite — "was NOT re-established for paths
+    // OUTSIDE the temporary directory" contains it, and so does a claim that
+    // the control applies everywhere. Pinning vocabulary is not pinning a
+    // verdict, and the caveat these guard is the one operational consequence
+    // an operator has to act on.
+    //
+    // WHAT THIS BUYS AND WHAT IT CANNOT. These literals make a silent reword
+    // EXPENSIVE, NOT IMPOSSIBLE: a negation inserted immediately before any of
+    // them keeps every word they match, and no longer literal fixes that —
+    // each one falls to a correspondingly longer negation. The class is
+    // unclosable here by construction. What it rules out is the reword that
+    // drops the deciding words; a claim contradicted by a clause ADDED after
+    // them still matches, so accidental drift is narrowed, not excluded. What
+    // is left is review's, which this file's header already says.
+    expect(claim.reverification.scope, "the scope states where this result stops applying").toMatch(
+      /bounded to out-of-workspace paths OUTSIDE the system temporary directory/u,
+    );
+    // And the boundary has to reach the TIER VERDICT, not sit only in the
+    // entry beneath it. The verdict is the slot a consumer reads to decide
+    // whether the mutation floor holds; a caveat one level down is a caveat
+    // that will not be read by whoever acts on the tier.
+    // Matched on the clause that STATES the boundary, polarity included: the
+    // method names the directory more than once, so a loose match survives
+    // both the clause being rewritten away and its verdict being negated in
+    // place.
+    const grade = hostById.get("codex-cli").grade.reverification;
+    expect(grade.method, "the tier verdict carries the boundary its floor was re-established under").toMatch(
+      /re-established for out-of-workspace paths OUTSIDE the system temporary directory only/u,
+    );
+    // And the consequence an operator has to act on, not just the caveat.
+    expect(grade.method, "the tier verdict states what the boundary costs").toMatch(/gets no scoping/iu);
+  });
+
   it("cannot grade Tier 3 over a surviving background child", () => {
     const cc = hostById.get("claude-code");
     expect(cc.probes.gracefulTeardown.answer).toMatch(/^yes/u);
@@ -443,6 +611,72 @@ describe("the granted-shell journal-defense posture", () => {
     expect(scenario.refs).toEqual(expect.arrayContaining(hosts.map((host) => `${host.hostId}.${CLAIM}`)));
     // And say so in the statement, which is what an operator actually reads.
     expect(scenario.statement).toMatch(/per-host/u);
+  });
+});
+
+/**
+ * THE DELIVERY-LANE BINDING POSITION, EXECUTABLE. A graded capability says what
+ * a host's admission surface can be made to enforce. A delivery lane needs
+ * something that actually composes that surface — and those are different
+ * claims that read alike once they are both sitting in a qualification record.
+ * One host here has a binding module; the other has only the grading. An
+ * ABSENT position is the outcome that must not be reachable, because silence
+ * on a host with no binding reads exactly like a host that has one.
+ *
+ * The enumeration is driven off the record's own host list, so a host added
+ * without a position fails and a position removed from a host in the record
+ * fails. A named module must also exist on disk: a path that stops resolving
+ * is a lane that quietly stopped being backed by anything.
+ */
+describe("the delivery-lane binding position", () => {
+  it("states a position for each host the record grades, with none left absent", () => {
+    expect(hosts.length, "the record grades at least one host").toBeGreaterThan(0);
+    const withPosition = hosts.filter((host) => host.deliveryLaneBinding !== undefined).map((host) => host.hostId);
+    expect(withPosition, "every graded host states a delivery-lane binding position").toEqual(hosts.map((host) => host.hostId));
+    for (const host of hosts) {
+      const position = host.deliveryLaneBinding;
+      const context = `${host.hostId}.deliveryLaneBinding`;
+      // A position is a verdict either way; "not mentioned" is not one of them.
+      expect(["present", "absent"], context).toContain(position.status);
+      expect(position.detail.length, `${context} detail`).toBeGreaterThan(0);
+      // Present means a module, absent means explicitly none — never a path
+      // on a host that claims no binding, never a bare claim with no module.
+      if (position.status === "present") {
+        expect(typeof position.module, `${context} names its module`).toBe("string");
+        expect(
+          existsSync(path.join(repoRoot, position.module)),
+          `${context} names a module that does not exist: ${position.module}`,
+        ).toBe(true);
+      } else {
+        expect(position.module, `${context} claims no binding, so it must name no module`).toBeNull();
+      }
+    }
+  });
+
+  it("does not let a graded capability stand in for a delivery lane on the Codex host", () => {
+    // This is the ticket's central answer and the reason the record grades a
+    // host it cannot yet deliver on. The capability grading below is real and
+    // was re-established against the installed CLI; what does not exist is
+    // anything to drive a lane with. Flipping this to `present` without a
+    // module fails the rule above, which is the point.
+    const cx = hostById.get("codex-cli");
+    expect(cx.deliveryLaneBinding.status).toBe("absent");
+    expect(cx.grade.tier, "the capabilities are graded even though the lane is not").toBeGreaterThanOrEqual(1);
+    // The carve-out that a sub-Tier-1 second host runs as capability
+    // verification only must not be read as manufacturing a lane. Matched with
+    // the qualifying clause, because "does not create a lane" alone survives
+    // inside a sentence declaring the graded capabilities ARE the lane.
+    expect(cx.deliveryLaneBinding.detail).toMatch(/does not create a lane where no binding exists/iu);
+  });
+
+  it("backs the Claude Code lane with a module that exists", () => {
+    const cc = hostById.get("claude-code");
+    expect(cc.deliveryLaneBinding.status).toBe("present");
+    expect(cc.deliveryLaneBinding.module).toMatch(/host\/claude-code\.ts$/u);
+    // Asserted here too, not only in the enumeration above: a test that
+    // promises existence in its name and checks only the shape of a string is
+    // the kind that reads as covered while covering nothing.
+    expect(existsSync(path.join(repoRoot, cc.deliveryLaneBinding.module))).toBe(true);
   });
 });
 

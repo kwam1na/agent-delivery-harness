@@ -1,7 +1,7 @@
 {
   "schemaVersion": "host-admission-capabilities/1",
   "description": "Graded capability record for trusted host-control admission, per exact host version, against the capability ladder: Tier 0 read-only inspection only; Tier 1 mutation floor (deny-until-attested grant enforcement, worktree-materialized digest-receipted projection, binding attestation, isolated operator-confirmation channel, fence-revocation cancellation, fresh-worktree-only resume); Tier 2 trusted graceful lifecycle events; Tier 3 graceful termination provenance with verified descendant teardown, enabling same-worktree resume. Facts probed on a real host carry live-probe or recorded-observation provenance; properties the product binding owns on any host are proven by the frozen fixtures in fixtures/host-admission-fixtures.json against the model-external admission validator.",
-  "gradedAt": "2026-08-31T15:45:00Z",
+  "gradedAt": "2026-08-31T20:10:00Z",
   "platform": "macOS 15.6.1 arm64",
   "verificationKinds": [
     "live-probe",
@@ -254,6 +254,11 @@
       "multiStageAdmission": {
         "oneShotSurface": false,
         "detail": "settings, permissions, and hooks reload mid-session and PreToolUse evaluates every invocation, so the mandatory interceptor branch for multi-stage sessions is available for the life of the session"
+      },
+      "deliveryLaneBinding": {
+        "status": "present",
+        "module": "packages/kernel/src/host/claude-code.ts",
+        "detail": "a host-binding module exists and composes this host's admission surface: session settings wiring the model-external interceptor and the lifecycle hook, the candidate-writable scope exclusion this record graded, the worktree-materialized projection, and the binding-minted attestation. Composition returns data; the product does not launch the host."
       }
     },
     {
@@ -262,7 +267,16 @@
       "admissionSurface": "app-server task-and-turn admission path: JSON-RPC over stdio (initialize handshake verified live); thread/start and turn/start carry sandbox policy, permissions, approval policy, approvals reviewer, and cwd per thread and per turn; approval requests route to the client via execCommandApproval / applyPatchApproval / item-level request-approval server requests",
       "grade": {
         "tier": 1,
-        "reason": "Tier 1 mutation floor: OS-level sandbox enforcement live-probed model-free (read-only denies writes; workspace-write scopes writes to the workspace; .git denied inside the workspace) and per-thread/per-turn grant application is a documented protocol surface; Tier 2 lifecycle notifications and Tier 3 descendant teardown have positive evidence (teardown live-probed on the exec surface, lifecycle events protocol-documented) but the app-server admission surface itself was not driven through a live turn in this spike, so Tier 2-3 stay provisional rather than graded."
+        "reason": "Tier 1 mutation floor: OS-level sandbox enforcement live-probed model-free (read-only denies writes; workspace-write scopes writes to the workspace; .git denied inside the workspace) and per-thread/per-turn grant application is a documented protocol surface; Tier 2 lifecycle notifications and Tier 3 descendant teardown have positive evidence (teardown live-probed on the exec surface, lifecycle events protocol-documented) but the app-server admission surface itself was not driven through a live turn in this spike, so Tier 2-3 stay provisional rather than graded.",
+        "reverification": {
+          "kind": "live-probe",
+          "hostVersion": "0.151.0",
+          "outcome": "holds",
+          "surface": "codex --version, codex sandbox --permission-profile in a disposable git repository, codex app-server generate-json-schema --experimental --out, and a codex app-server initialize handshake over stdio, all with CODEX_HOME pointed at a disposable directory so no operator configuration was read or written",
+          "method": "the tier verdict was re-taken, not restated. UNLIKE THE CLAUDE CODE GRADE, WHICH COULD NOT BE RE-OBSERVED AT ALL, the deciding leg of this one is reachable without a model: the Tier 1 mutation floor rests on OS sandbox enforcement, and `codex sandbox` executes an arbitrary command under that same seatbelt policy with no session and no authentication. Every clause of the Tier 1 reason was re-driven at 0.151.0 and each held, WITH ONE BOUNDARY THAT BELONGS ON THE VERDICT AND NOT ONLY IN THE ENTRY BENEATH IT: the workspace-scoping clause was re-established for out-of-workspace paths OUTSIDE the system temporary directory only. Under it the sandboxed write succeeded, because the seatbelt policy grants that directory as a writable root independently of the workspace. A delivery workspace materialized under the temporary directory therefore gets no scoping from the control this floor rests on, which is a deployment constraint rather than a defect in the grading, and the full probe is recorded under denyUntilAttestedGrant. The Tier 2-3 clauses were NOT re-driven and are unchanged in what they claim: they still say the app-server admission surface was never taken through a live turn, which remains true, because doing so requires an authenticated host this product must never launch. So the tier is 1 for the same reason it was 1, re-established rather than carried forward, and the provisional legs stay provisional.",
+          "observedAt": "2026-08-31T20:08:00Z",
+          "scope": "the tier verdict and the Tier 1 mutation-floor clauses beneath it. Eight slots in this host entry carry their own outcome: four capability entries (readOnlyInspection, denyUntilAttestedGrant, gracefulLifecycleEvents, terminationProvenanceWithDescendantTeardown), the common-Git authority position re-observed separately ahead of this re-grade, and all three mandated probes. THE ENTRIES NOT RE-OBSERVED ARE NAMED RATHER THAN LEFT TO INFERENCE: sameWorktreeResume, which was explicitly deferred at grading and remains ungraded, and the five product-owned fixture-verified entries (worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume), which are host-version-independent by construction — they name fixture cases rather than a host observation, so there is no host version for them to have gone stale against."
+        }
       },
       "capabilities": {
         "readOnlyInspection": {
@@ -273,6 +287,15 @@
             "surface": "codex sandbox -c sandbox_mode=read-only (v0.147.0)",
             "method": "model-free command execution under the host sandbox; write denied, read succeeded",
             "observedAt": "2026-08-30T12:06:00Z"
+          },
+          "reverification": {
+            "kind": "live-probe",
+            "hostVersion": "0.151.0",
+            "outcome": "holds",
+            "surface": "codex sandbox --permission-profile :read-only in a disposable git repository, with CODEX_HOME pointed at a disposable directory",
+            "method": "model-free command execution, re-run because the grading above was taken on 0.147.0. Reading a seeded file under :read-only SUCCEEDED and printed its contents, and writing a file into the same directory failed with operation-not-permitted leaving nothing on disk. The successful read is the control that matters: a denial on its own is equally consistent with a sandbox that refused to run the command at all, in which case the absent file proves nothing.",
+            "observedAt": "2026-08-31T20:00:00Z",
+            "scope": "this one capability only. It re-establishes that the read-only profile still denies writes and still permits reads; it says nothing about the workspace-write profile, which denyUntilAttestedGrant covers, and nothing about any lifecycle behaviour."
           }
         },
         "denyUntilAttestedGrant": {
@@ -283,6 +306,15 @@
             "surface": "codex sandbox seatbelt enforcement (live, model-free) plus the generated app-server protocol schema (thread/start, turn/start, execCommandApproval)",
             "method": "writes outside the workspace and inside .git denied by the OS sandbox; admission parameters and client-routed approvals recorded from the version-exact protocol schema bundle",
             "observedAt": "2026-08-30T12:06:00Z"
+          },
+          "reverification": {
+            "kind": "live-probe",
+            "hostVersion": "0.151.0",
+            "outcome": "holds",
+            "surface": "codex sandbox --permission-profile :workspace in a disposable git repository, plus the 0.151.0 app-server protocol schema bundle generated by codex app-server generate-json-schema --experimental --out, both with CODEX_HOME pointed at a disposable directory",
+            "method": "the workspace-scoping half was re-driven model-free and the protocol half re-enumerated. A write inside the workspace root SUCCEEDED and a write to a disposable directory OUTSIDE it failed with operation-not-permitted, with an unsandboxed control write to that same outside path succeeding to prove the path was writable at all. THE FIRST ATTEMPT AT THIS PROBE PRODUCED A FALSE NEGATIVE AND IS RECORDED BECAUSE THE RECOVERY IS THE FINDING: when the outside directory was placed under the system temporary directory, the sandboxed write SUCCEEDED, which reads as workspace scoping having been withdrawn at 0.151.0. It has not been. The seatbelt policy grants the temporary directory as a writable root independently of the workspace, so an out-of-workspace path chosen there is not out of policy; repeating the identical probe against a path outside the temporary directory restored the denial. This is the same shape of confound as the workspace-trust gate on the other host in this record — an ambient grant that makes an arm look permissive for a reason unrelated to the parameter under test — and it must be stated, because a delivery workspace materialized under the temporary directory would NOT be scoped by this control. On the protocol half, thread/start and turn/start still carry sandbox, permissions, approvalPolicy, approvalsReviewer, and cwd, and approvals still route to the client, so the pre-turn admission and per-invocation decision points the mechanism names are both present at 0.151.0.",
+            "observedAt": "2026-08-31T20:02:00Z",
+            "scope": "the workspace-scoping half and the protocol half of this entry, and NOT equally. The scoping observation is bounded to out-of-workspace paths OUTSIDE the system temporary directory: under that directory the write succeeds and this control does not apply. The protocol half is a schema enumeration only — the admission parameters are present, and no claim is made that applying them through a live thread was observed, because it was not."
           }
         },
         "commonGitAuthorityPathProtected": {
@@ -371,6 +403,15 @@
             "surface": "codex app-server generate-json-schema --experimental (v0.147.0)",
             "method": "generated schema bundle enumeration; initialize handshake verified live over stdio",
             "observedAt": "2026-08-30T12:04:00Z"
+          },
+          "reverification": {
+            "kind": "live-probe",
+            "hostVersion": "0.151.0",
+            "outcome": "holds",
+            "surface": "codex app-server generate-json-schema --experimental --out <disposable dir>, and a codex app-server initialize handshake driven over stdio, with CODEX_HOME pointed at a disposable directory",
+            "method": "the schema bundle was regenerated at 0.151.0 and still enumerates the thread and turn lifecycle methods and their notifications, so the mechanism's claim about what the protocol offers is re-established rather than carried forward. The initialize handshake was driven live again: the server answered the request and then emitted an unsolicited status notification, which is the only part of the lifecycle path this probe actually exercises. The handshake echoed back a codexHome equal to the disposable directory, which is the evidence that no operator configuration was consulted. NOTE THE INVOCATION CHANGED: at 0.147.0 the generator wrote to standard output, and at 0.151.0 it requires --out and refuses without it, so a re-run of the recorded command would have failed for a reason unrelated to the claim. The status stays protocol-evidenced-not-live-exercised: enumerating the notifications and completing a handshake is not the same as observing them fire across a real turn, and that still needs an authenticated session.",
+            "observedAt": "2026-08-31T20:06:00Z",
+            "scope": "the protocol surface and the handshake, not the events firing. The bundle enumerates the lifecycle methods and the initialize handshake completes; neither shows a lifecycle notification emitted across a real turn, which is why the status stays protocol-evidenced-not-live-exercised."
           }
         },
         "terminationProvenanceWithDescendantTeardown": {
@@ -381,6 +422,16 @@
             "surface": "codex exec -s workspace-write in a disposable directory (v0.147.0)",
             "method": "child pid recorded by the session; liveness check after clean host end found the child already gone",
             "observedAt": "2026-08-30T12:13:00Z"
+          },
+          "reverification": {
+            "kind": "recorded-observation",
+            "hostVersion": "0.151.0",
+            "outcome": "unverified",
+            "surface": "codex --help at 0.151.0, for whether any model-free surface can stand in for the one this claim was observed on",
+            "method": "the original observation was taken on `codex exec`, which runs a real model turn against an authenticated account: the child whose liveness decides the answer only exists because a model chose to launch it. There is no model-free substitute. `codex sandbox` executes a command under the same seatbelt policy and was used to re-drive every sandbox-enforcement claim in this entry, but it runs no session, so nothing is torn down at the end of one and it cannot answer this question. The claim therefore stands on its 0.147.0 observation and is stated as standing on it, rather than being carried silently forward under a 0.151.0 heading.",
+            "observedAt": "2026-08-31T20:04:00Z",
+            "reason": "the deciding evidence is a descendant of a real model turn on an authenticated host, which this product must never launch; the lane is operator-only",
+            "scope": "the search for a model-free substitute surface, which came up empty; the claim itself is untouched and stands on its 0.147.0 observation."
           }
         },
         "sameWorktreeResume": {
@@ -404,6 +455,16 @@
             "surface": "codex exec -s workspace-write (v0.147.0), disposable directory",
             "method": "child pid recorded by the session, liveness checked after host exit",
             "observedAt": "2026-08-30T12:13:00Z"
+          },
+          "reverification": {
+            "kind": "recorded-observation",
+            "hostVersion": "0.151.0",
+            "outcome": "unverified",
+            "surface": "codex --help at 0.151.0, for a model-free surface that ends a session the way the recorded probe did",
+            "method": "this probe and the terminationProvenanceWithDescendantTeardown capability are answered by the same observation, so they go unreached for the same reason: the background child is a descendant of a real model turn, and no model-free surface on this host starts and cleanly ends a session for one to survive. The answer stays `no` on its 0.147.0 observation and is stated as standing on it. Recording it as still holding would be the specific error this record exists to prevent, because a teardown answer is exactly the kind of behaviour a host version can change without announcing it.",
+            "observedAt": "2026-08-31T20:04:00Z",
+            "reason": "the probe requires a real model turn on an authenticated host to produce the descendant whose survival it measures; the lane is operator-only",
+            "scope": "the search for a model-free substitute surface, which came up empty; the recorded answer is untouched and stands on its 0.147.0 observation. This probe and the terminationProvenanceWithDescendantTeardown capability share one observation and therefore share this boundary."
           }
         },
         "approvalAssertionSource": {
@@ -415,6 +476,15 @@
             "surface": "app-server protocol schema (approval server requests); local platform inspection",
             "method": "schema enumeration plus presence check of OS authentication surfaces",
             "observedAt": "2026-08-30T12:05:00Z"
+          },
+          "reverification": {
+            "kind": "recorded-observation",
+            "hostVersion": "0.151.0",
+            "outcome": "holds",
+            "surface": "the 0.151.0 app-server protocol schema bundle and a presence check of the OS authentication surfaces on this platform",
+            "method": "both halves re-enumerated. The approval surface at 0.151.0 is wider than it was — it now carries a reviewer selection and a family of guardian review actions covering commands, patches, MCP tool calls, and network access — but every one of them is still a request routed to the app-server CLIENT for a decision. That is the whole of the finding: a channel the binding serves is not an authenticated operator assertion, and a richer set of things the client may be asked to decide does not change who is asserting. No OS biometric or password integration appeared. The OS-native side is unchanged: LocalAuthentication.framework, /usr/bin/security, and /usr/bin/bioutil are all still present, so the maintenance-lane provider the gating names still has something to bind to.",
+            "observedAt": "2026-08-31T20:07:00Z",
+            "scope": "both halves of this probe: who the approval channel routes to, re-enumerated from the 0.151.0 schema, and which OS authentication surfaces are present on this platform. It makes no claim that the maintenance-lane provider actually binds to them, which is product-side and fixture-verified elsewhere."
           }
         },
         "discoveryScopingExclusivity": {
@@ -426,12 +496,26 @@
             "surface": "app-server protocol schema (skills methods) and codex --help (v0.147.0)",
             "method": "schema and CLI surface enumeration",
             "observedAt": "2026-08-30T12:05:00Z"
+          },
+          "reverification": {
+            "kind": "live-probe",
+            "hostVersion": "0.151.0",
+            "outcome": "holds",
+            "surface": "codex debug prompt-input, which renders the model-visible prompt input as JSON without running a model, driven across seven arms in a disposable git repository with CODEX_HOME pointed at a disposable directory, alongside the regenerated 0.151.0 protocol schema bundle",
+            "method": "the answer was re-driven empirically this time rather than read off the schema, because the equivalent question MOVED on the other host in this record at its own version bump and the schema alone cannot tell exclusivity from addition. THE CONFOUND WAS GUARDED FROM BOTH SIDES BEFORE ANY ARM WAS READ. An ambient home instruction file, an ambient project instruction file, and an ambient home skill were planted so the ambient scopes were genuinely NON-EMPTY — against an empty disposable home every arm shows nothing loaded, and nothing loaded reads exactly like exclusivity. The baseline arm confirmed all three ambient markers present. A second control confirmed the probe can SEE a scope disappear: setting the project document budget to zero dropped the project marker while the home marker and the home skill both survived. Without that arm, 'no arm changed anything' would have been equally consistent with a probe that reads nothing at all. Against those two controls, NO ARM YIELDED THE PINNED ROOT AND NO ARM EXCLUDED BOTH AMBIENT SCOPES. The result therefore holds at 0.151.0 and the downgrade position for add-only hosts still applies. THE SUPPORTING REASON HAS PARTLY MOVED AND THAT IS RECORDED RATHER THAN QUIETLY REPHRASED: the 0.147.0 detail says no exclusive-scoping admission parameter exists in the protocol schema, and at 0.151.0 that sentence is too strong. thread/start now carries runtimeWorkspaceRoots, described as REPLACING the thread's runtime workspace roots, and selectedCapabilityRoots, a platform-supplied root selection. Neither was shown to scope skill or instruction discovery, and neither can be: they are thread/start parameters, so demonstrating what they exclude means driving a real thread on an authenticated host. The verdict is unchanged; what has changed is that it now rests on those parameters being unproven rather than absent, and a future re-grade should drive them rather than re-reading the schema.",
+            "observedAt": "2026-08-31T20:05:00Z",
+            "scope": "the exclusivity verdict as driven through the model-visible prompt input, across the ambient instruction and skill scopes reachable that way. It does NOT cover the two thread/start parameters it names: runtimeWorkspaceRoots and selectedCapabilityRoots were read from the schema and never driven, because driving them needs a real thread on an authenticated host. A future re-grade owes exactly that."
           }
         }
       },
       "multiStageAdmission": {
         "oneShotSurface": false,
         "detail": "sandbox policy, permissions, approval policy, and cwd are re-appliable per turn via turn/start overrides, and approval routing gives the binding a per-invocation decision point, so multi-stage sessions have the mandatory interceptor branch available"
+      },
+      "deliveryLaneBinding": {
+        "status": "absent",
+        "module": null,
+        "detail": "NO host-binding module exists for this host, and that is the blocker rather than an oversight. This entry grades CAPABILITIES: what the host's admission surface can be made to enforce, re-established above against the installed version. A graded capability is not a delivery lane. There is no counterpart here to the other host's binding module — nothing composes thread/start and turn/start admission, materializes the projection into a Codex-created workspace, serves the approval channel as the app-server client, or mints an attestation over any of it — so there is nothing to drive a lane with, and the stage-checkpoint and cross-host comparison legs this host's integration owes cannot be run against a binding that does not exist. THE CAPABILITY-VERIFICATION CARVE-OUT DOES NOT CREATE A LANE WHERE NO BINDING EXISTS: it governs how a second host is qualified once one is there to qualify. Writing that binding is a build, not a re-grading, and it needs the app-server client the sandbox surface used here deliberately avoids being."
       }
     }
   ],
