@@ -218,8 +218,14 @@ describe("the frozen baseline is characterized before anything is scored against
     const baselineSilent = { ...reachableBaseline };
     delete (baselineSilent as Record<string, unknown>)["provingHost"];
 
+    // The strongest form of record silence is no baseline block at all — a
+    // record predating the field entirely, not one that merely dropped it.
+    const recordBlockless = fullSet([{}, {}, {}]);
+    delete recordBlockless["baseline"];
+
     const cases: [string, any, any][] = [
       ["the record is silent", reachableBaseline, recordSilent],
+      ["the record carries no baseline block", reachableBaseline, recordBlockless],
       ["the baseline is silent", baselineSilent, fullSet([{}, {}, {}])],
       ["both are silent", baselineSilent, recordSilent],
     ];
@@ -315,6 +321,10 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     const verdict = scoreShadowMilestone(reachableBaseline, record);
     expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
     const note = verdict.incomplete.find((row) => row.code === "comparison_set_mix_mismatch")!;
+    // The unrecognised-category branch specifically. The over-cap branch emits
+    // the same code and also interpolates the category name, so asserting the
+    // code and "infra" alone is satisfied by the wrong branch.
+    expect(note.message).toContain("which the baseline mix does not include");
     expect(note.message).toContain("infra");
     expect(verdict.status).toBe("incomplete");
     expect(verdict.shadow).toBeNull();
@@ -472,15 +482,21 @@ describe("a malformed measurement makes the set incomplete, never a scored zero"
     // observed, nothing scored yet. Unpinned, a weaker guard here reads the
     // members off `undefined` and the scorer throws instead of reporting an
     // unfinished measurement.
-    const unscored = entry("shadow-operations", "operations");
-    delete unscored["score"];
-    const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), unscored]);
-    const verdict = scoreShadowMilestone(reachableBaseline, record);
-    expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
-    const note = verdict.incomplete.find((row) => row.code === "measurement_missing")!;
-    expect(note.message).toContain("carries no score block");
-    expect(verdict.status).toBe("incomplete");
-    expect(verdict.shadow).toBeNull();
+    // Both spellings of "not scored": the key absent, and the key present but
+    // null. `typeof null` is "object", so the null half needs its own operand
+    // in the guard and its own case here.
+    for (const spelling of ["absent", "null"] as const) {
+      const unscored = entry("shadow-operations", "operations");
+      if (spelling === "absent") delete unscored["score"];
+      else unscored["score"] = null;
+      const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), unscored]);
+      const verdict = scoreShadowMilestone(reachableBaseline, record);
+      expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+      const note = verdict.incomplete.find((row) => row.code === "measurement_missing")!;
+      expect(note.message).toContain("carries no score block");
+      expect(verdict.status).toBe("incomplete");
+      expect(verdict.shadow).toBeNull();
+    }
   });
 
   it("rejects a count that is not a non-negative integer rather than coercing it", () => {
