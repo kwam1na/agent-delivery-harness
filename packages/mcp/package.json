@@ -5,7 +5,7 @@
   "description": "MCP server exposing the delivery harness submission surface",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.6.0"
   },
   "dependencies": {
     "@agent-delivery-harness/cli": "0.1.0",

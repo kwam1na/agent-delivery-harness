@@ -33,9 +33,8 @@
  * counted as an interruption, never as an operator intervention.
  */
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   assertionLaneAvailability,
   evaluateConfirmationEcho,
@@ -226,10 +225,46 @@ const NAMESPACE = "managed-delivery";
 const OWNER_DIR = 0o700;
 const OWNER_FILE = 0o600;
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CHECKOUT_ROOT = path.resolve(HERE, "..", "..", "..", "..");
-const HOOK_MAIN = path.resolve(HERE, "..", "host", "hook-main.ts");
-const TSX_BIN = path.join(CHECKOUT_ROOT, "node_modules", ".bin", "tsx");
+/**
+ * The model-external hook entry, named the way the packed composition STAGES
+ * it — relative to the generation root rather than to a checkout layout above
+ * this module.
+ *
+ * The command that names it runs on the RUNNING Node executable and nothing
+ * else. A composition stages the harness packages and no `node_modules`, so a
+ * command naming a dependency binary resolved from a checkout points at
+ * something an installed generation does not have; this repository ships zero
+ * runtime dependencies, and the emitted command has to hold to that too. Node
+ * strips the types itself, which is why `tsconfig.base.json` pins
+ * `erasableSyntaxOnly`.
+ *
+ * The flag is why the package's engines floor is 22.6 and not 22: earlier
+ * 22.x rejects it outright, and the interceptor would then never start — an
+ * empty stdout and an exit code the host does not read as blocking, which is
+ * a deny-until-attested boundary failing OPEN.
+ */
+const GENERATION_HOOK_ENTRY = "harness/packages/kernel/src/host/hook-main.ts";
+const HOOK_RUNTIME_ARGS: readonly string[] = Object.freeze(["--experimental-strip-types"]);
+
+/**
+ * The staged hook entry, resolved to the spelling the entry will recognize as
+ * its own — or `undefined` when the generation does not stage it.
+ *
+ * RESOLVED, not merely joined. The entry decides it was invoked directly by
+ * comparing its argument vector against its own module URL, and Node resolves
+ * that URL through symlinks. An installation path reached through a symlink —
+ * which is the DEFAULT spelling of the temp root on some platforms — would
+ * therefore start the process and run nothing: no interceptor, no refusal, and
+ * a session that looks admitted. Resolving here is what makes the emitted
+ * command the entry's own name for itself.
+ */
+async function resolveStagedHookEntry(target: string): Promise<string | undefined> {
+  try {
+    return (await stat(target)).isFile() ? await realpath(target) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The host this facade's binding drives; the key into the graded record. */
 const HOST_ID = "claude-code";
@@ -2341,10 +2376,32 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // mid-session, and a superseded session must keep reading its own
       // configuration and its own — now voided — state.
       const statePath = path.join(bindingDir, bindingStateFile(fence));
+
+      // A session wired to a hook entry that is not there would compose
+      // cleanly and then have no interceptor at all, so resolution failing is
+      // a refusal rather than a throw.
+      //
+      // UNREACHABLE IN PRACTICE, AND SAID SO RATHER THAN DRESSED UP. Every
+      // guarded operation reloads this delivery's PINNED generation and
+      // re-verifies its digest closure, so a root missing a staged file is
+      // already refused as `trust_ineligible` — which is the refusal the
+      // qualification lane pins, because it is the one that fires. What is
+      // left for this branch is a race after that verification, and nothing
+      // falsifies it; it keeps the resolution total, and it is recorded as
+      // unexercised in qualifications/product-qualification.json.
+      const hookEntry = await resolveStagedHookEntry(path.join(guarded.generationRoot, ...GENERATION_HOOK_ENTRY.split("/")));
+      if (hookEntry === undefined) {
+        return refuse(
+          "hook_entry_missing",
+          `The installed generation stages no model-external hook entry at ${GENERATION_HOOK_ENTRY}.`,
+          "Reinstall or roll back to a generation whose closure verifies; a session cannot be admitted without its interceptor.",
+        );
+      }
+
       const session = await composeClaudeCodeSession({
         bindingDir,
         statePath,
-        hookCommand: [TSX_BIN, HOOK_MAIN],
+        hookCommand: [process.execPath, ...HOOK_RUNTIME_ARGS, hookEntry],
         // The session's own identity, baked into its hook command: a later
         // invocation overwrites the shared binding state, and this is how a
         // superseded-but-still-running session recognizes that it has been.

@@ -29,14 +29,19 @@ import {
   DISPOSABLE_SPECS,
   FORBIDDEN_PRODUCT_EXECUTABLES,
   FORBIDDEN_WORKSPACE_OPERATIONS,
+  GENERATION_HOOK_ENTRY,
   REQUIRED_LIFECYCLE_STEPS,
   REQUIRED_NEGATIVE_PROBES,
+  REQUIRED_PUBLISHED_NAMES,
   antiVacuityFindings,
   buildDisposableRepository,
   decideObservations,
   forbiddenProcessFinding,
+  hookCommandFindings,
   isInside,
+  parseHookCommandLine,
   policyIndependenceFindings,
+  publishedSurfaceFindings,
   refusalOutcome,
   runProductQualification,
 } from "./qualify-product.ts";
@@ -254,6 +259,139 @@ describe("the required sets the lane quantifies over", () => {
     // would not have caught it.
     expect(REQUIRED_NEGATIVE_PROBES).toContain("qualification-flag-required");
     expect(REQUIRED_NEGATIVE_PROBES).toContain("qualification-flag-refused-on-production");
+  });
+});
+
+/**
+ * THE PACKED SURFACE — the gap between a source tree and a published artifact,
+ * which every source-importing suite in this repository is blind to by
+ * construction. These two rules are what closes it, so they get the same
+ * both-directions treatment as everything above.
+ */
+describe("the published-surface rule", () => {
+  it("reports nothing when the package publishes every required name", () => {
+    expect(publishedSurfaceFindings(["sha256Hex", ...REQUIRED_PUBLISHED_NAMES, "packComposition"])).toEqual([]);
+  });
+
+  it("names the required export a package does not publish", () => {
+    // The defect itself: the module is in the source tree, the package entry
+    // does not re-export it, and no source-importing suite can tell.
+    const findings = publishedSurfaceFindings(["sha256Hex", "packComposition", "installComposition"]);
+    expect(findings.map((finding) => finding.subject)).toEqual(["verifyGenerationClosure"]);
+    expect(findings[0]?.rule).toBe("packed-surface");
+    expect(findings[0]?.message).toContain("exports");
+  });
+
+  // THE ABSENCE-ASSERTION CONTROL. Without this, a resolve that produced `{}`
+  // would make every membership assertion above report the required names as
+  // missing for the wrong reason — or, with the loop written the other way,
+  // report nothing at all.
+  it("fails an enumeration that resolved no exported name whatsoever", () => {
+    const findings = publishedSurfaceFindings([]);
+    expect(findings.map((finding) => finding.subject)).toContain("published-exports");
+  });
+
+  it("requires a non-empty set of names, so the membership loop quantifies over something", () => {
+    expect(REQUIRED_PUBLISHED_NAMES.length).toBeGreaterThan(0);
+    expect(REQUIRED_PUBLISHED_NAMES).toContain("verifyGenerationClosure");
+  });
+});
+
+describe("the emitted hook command rule", () => {
+  const ENTRY = `/gen/${GENERATION_HOOK_ENTRY}`;
+  const CLEAN_HOOK = {
+    command: ["/usr/bin/node", "--experimental-strip-types", ENTRY],
+    generationRoot: "/gen",
+    stagedRelativePaths: [GENERATION_HOOK_ENTRY, "harness/LICENSE"],
+    nodeExecutable: "/usr/bin/node",
+  };
+  const subjects = (input: Parameters<typeof hookCommandFindings>[0]): string[] =>
+    hookCommandFindings(input).map((finding) => finding.subject);
+
+  it("reports nothing for a command that runs the staged entry on the running runtime", () => {
+    expect(hookCommandFindings(CLEAN_HOOK)).toEqual([]);
+  });
+
+  it("fails a command launched by a dependency binary no composition stages", () => {
+    // The defect: `node_modules/.bin/tsx`, resolved from a checkout layout the
+    // packed composition does not reproduce.
+    const found = subjects({ ...CLEAN_HOOK, command: ["/gen/harness/node_modules/.bin/tsx", ENTRY] });
+    expect(found).toContain("hook-runtime");
+  });
+
+  // ── THE TWO HALVES, EACH PROVEN INSUFFICIENT ALONE ────────────────────────
+  //
+  // These are the pair the rule exists for. A sensor that read only the
+  // command string passes the first; a sensor that checked only the staged
+  // inventory passes the second. Both are here so neither can be deleted
+  // without a named test going red.
+
+  it("fails a command that points elsewhere even though the entry IS staged", () => {
+    const found = subjects({ ...CLEAN_HOOK, command: ["/usr/bin/node", "/gen/harness/packages/kernel/src/host/hook-other.ts"] });
+    expect(found).toContain("hook-entry");
+  });
+
+  it("fails the correct command when the generation stages the entry nowhere", () => {
+    const found = subjects({ ...CLEAN_HOOK, stagedRelativePaths: ["harness/LICENSE"] });
+    expect(found).toContain("hook-entry");
+  });
+
+  it("fails a command naming a path outside the installed generation root", () => {
+    const found = subjects({ ...CLEAN_HOOK, command: ["/usr/bin/node", "/somewhere/else/hook-main.ts"] });
+    expect(found).toContain("hook-entry");
+    expect(hookCommandFindings({ ...CLEAN_HOOK, command: ["/usr/bin/node", "/somewhere/else/hook-main.ts"] })[0]?.message).toContain(
+      "outside",
+    );
+  });
+
+  it("is not satisfied by a sibling root sharing the generation root's prefix", () => {
+    // The MESSAGE, not just the subject. `/gen-2/…` is also unstaged, so the
+    // staging half reports the same subject and this test would stay green
+    // over a containment check degraded to a prefix comparison — a red for the
+    // wrong reason, which is indistinguishable from coverage until someone
+    // looks.
+    const sibling = { ...CLEAN_HOOK, command: ["/usr/bin/node", `/gen-2/${GENERATION_HOOK_ENTRY}`] };
+    expect(subjects(sibling)).toContain("hook-entry");
+    expect(hookCommandFindings(sibling)[0]?.message).toContain("outside");
+  });
+
+  // ── The enumerating mechanisms ────────────────────────────────────────────
+
+  it("fails an empty command rather than passing every path assertion over nothing", () => {
+    expect(subjects({ ...CLEAN_HOOK, command: [] })).toEqual(["hook-command"]);
+  });
+
+  it("fails a generation that stages no file at all", () => {
+    expect(subjects({ ...CLEAN_HOOK, stagedRelativePaths: [] })).toContain("staged-inventory");
+  });
+
+  it("fails a command that names no path for the staging check to resolve", () => {
+    expect(subjects({ ...CLEAN_HOOK, command: ["/usr/bin/node", "--experimental-strip-types"] })).toContain("hook-entry");
+  });
+});
+
+describe("the composed hook command line", () => {
+  it("reads back the exact vector the host was handed, spaces and all", () => {
+    const vector = ["/usr/bin/node", "--experimental-strip-types", "/gen/a dir/hook-main.ts", "pre-tool-use", "/b/state.json", "7"];
+    expect(parseHookCommandLine(vector.map((part) => JSON.stringify(part)).join(" "))).toEqual(vector);
+  });
+
+  it("declares the staged entry independently of the product, as a generation-relative path", () => {
+    // Spelled here rather than imported, so a product that relocates the entry
+    // has to come past this file. A '/'-separated relative path is what the
+    // manifest inventory records; anything else would never match it.
+    expect(GENERATION_HOOK_ENTRY.startsWith("harness/")).toBe(true);
+    expect(path.isAbsolute(GENERATION_HOOK_ENTRY)).toBe(false);
+    expect(GENERATION_HOOK_ENTRY).not.toContain("\\");
+  });
+
+  it("requires BOTH refusals a generation missing that entry has to produce", () => {
+    // Detectable and refused are different claims. The first says an adopter
+    // can find out; the second says the product does not quietly wire a
+    // session to a command that names nothing. Requiring only one would leave
+    // the other free to disappear.
+    expect(REQUIRED_NEGATIVE_PROBES).toContain("closure-detects-missing-staged-hook-entry");
+    expect(REQUIRED_NEGATIVE_PROBES).toContain("bind-refuses-generation-missing-staged-hook-entry");
   });
 });
 

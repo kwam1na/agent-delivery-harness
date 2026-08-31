@@ -21,7 +21,7 @@ goes red.
 
 ## Prerequisites
 
-- Node ≥ 22 and git.
+- Node ≥ 22.6 and git.
 - A git repository with the change you want to deliver already committed on a
   branch, and a base ref (this walkthrough uses `origin/main`) that resolves.
 - A `package.json` declaring `"type": "module"` — the config file and the

@@ -5,7 +5,7 @@
   "description": "Config-driven delivery-evidence kernel: validator, identity, records, gate evaluator",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.6.0"
   },
   "exports": {
     ".": "./src/index.ts"

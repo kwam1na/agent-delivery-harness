@@ -106,8 +106,12 @@ cannot drift from the tool.
 
 ## Runtimes
 
-Node ≥ 22 (engines floor). CI matrix: Node 22, Node 24, Bun. All process
-control uses `node:child_process`; Bun-only APIs are banned by static sensor.
+Node ≥ 22.6 (engines floor). The floor is 22.6 rather than 22 because the
+managed facade emits a hook command carrying `--experimental-strip-types`,
+which earlier 22.x rejects outright — the interceptor would not start, and a
+deny-until-attested boundary that does not start is not one. CI matrix: Node
+22, Node 24, Bun. All process control uses `node:child_process`; Bun-only APIs
+are banned by static sensor.
 
 ## Working on it
 
