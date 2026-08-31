@@ -230,6 +230,12 @@ export async function emitProjectionConsumptionRecord(
     // So the binding's check is about slot economy against an unvalidated
     // receipt; this one is the admissibility rule, against a validated one.
     // Removing either brings back a defect the other does not cover.
+    //
+    // The gap between interception and this check is real but cannot make the
+    // record false: every projection byte is re-verified above, so a run whose
+    // worktree changed after the observation fails verification rather than
+    // emitting. The most a delay can cost is a stale provenance, never a
+    // claim about bytes that are no longer there.
     !projection.entries.includes(observation.entry)
   ) {
     return unobserved("projection-not-consumed");

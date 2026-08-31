@@ -210,10 +210,16 @@ describe("projectionEntryTouched", () => {
     // THE KNOWN UNDER-OBSERVATION, pinned so it cannot be forgotten or
     // quietly claimed away. A skill invocation names a skill, not a file, and
     // a shell command carrying arguments does not resolve as a path — so a
-    // run that reaches its workflow source either way is invisible here and
-    // its delivery is EXCLUDED rather than affirmed. That is the safe
-    // direction, and it is why the milestone may stay unscoreable until the
-    // binding can observe the host's own skill resolution.
+    // run that reaches its workflow source ONLY in those ways is invisible
+    // here and its delivery is EXCLUDED rather than affirmed. That is the
+    // safe direction.
+    //
+    // It is NOT a forecast that the milestone is unscoreable. A live probe
+    // against this host observed the opposite: an ordinary delivery turn
+    // named receipted entries through Read/file_path repeatedly, and the
+    // observation was recorded. What remains true is the narrow statement
+    // these two payloads make, and the live lane's consumption probe is what
+    // keeps the broader claim honest for any binding.
     expect(touched({ skill: "deliver-work", args: "execute" })).toBeUndefined();
     expect(touched({ command: "cat .managed-projection/workflows/delivery-v1.json" })).toBeUndefined();
   });

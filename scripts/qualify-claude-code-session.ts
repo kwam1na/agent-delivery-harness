@@ -21,6 +21,16 @@
  *   5. DESCENDANT TEARDOWN — whether a detached background child survives the
  *      clean host end. This is the Tier 3 gate, and the honest answer decides
  *      whether same-workspace resume is available at all.
+ *   6. PROJECTION CONSUMPTION IS OBSERVED — whether an ordinary delivery turn
+ *      causes the interceptor to record that the run named a receipted entry
+ *      of the run-pinned projection. This is the acceptance check for the
+ *      milestone's consumption record, and it exists here because the failure
+ *      it guards against is INVISIBLE to every in-process sensor: when the
+ *      mechanism is dead, it produces no observation, which is spelled exactly
+ *      like a run that honestly consumed nothing. A live host is the only
+ *      thing that can tell those apart. Any second binding — the Codex one
+ *      included — has to pass this same probe on its own surface before its
+ *      deliveries may be counted.
  *
  * Everything the PRODUCT owns — the projection lifecycle, the journal records,
  * the normalized checkpoint outcomes — is proven by the in-process sensors and
@@ -39,6 +49,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { digestCanonical } from "../packages/kernel/src/digest.ts";
+import { createExecPort } from "../packages/kernel/src/host/exec-port.ts";
+import {
+  PROJECTION_RECEIPT_FILE,
+  materializeProjection,
+  mintGrantAttestation,
+} from "../packages/kernel/src/host/claude-code.ts";
+import { projectionConsumptionObservationFile } from "../packages/kernel/src/host/consumption-gate-record.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
@@ -335,6 +352,113 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
               : "no — the child was gone, so descendant teardown is VERIFIED",
         satisfied: survived !== undefined,
       });
+
+      // ── 6: an ordinary delivery turn is observed consuming the projection ──
+      {
+        // NOT under the lane's own temp root: that root is symlinked on macOS,
+        // and the grant's write-path normalization denies a write addressed by
+        // its resolved path there, so the session could not do ordinary work
+        // and a negative result would be unattributable.
+        const cwd = mkdtempSync(path.join("/private/tmp", "cc-live-consumption-"));
+        try {
+          const bindingDir = path.join(cwd, "binding");
+          const worktreeDir = path.join(cwd, "worktree");
+          mkdirSync(path.join(worktreeDir, "src"), { recursive: true });
+          mkdirSync(bindingDir, { recursive: true });
+          writeFileSync(path.join(worktreeDir, "src", "greet.mjs"), "export const greet = (name) => `Hello, ${name}`;\n");
+          // The binding configures a worktree-scoped exclusion, so the tree it
+          // materializes into has to be a real repository.
+          const git = (...args: string[]): void => {
+            execFileSync("git", args, { cwd: worktreeDir, stdio: "ignore" });
+          };
+          git("init", "--initial-branch", "main");
+          git("config", "user.email", "live-probe@example.invalid");
+          git("config", "user.name", "Live Probe");
+          git("add", "-A");
+          git("commit", "--quiet", "--no-gpg-sign", "-m", "base");
+          const generationRoot = path.join(cwd, "generation");
+          mkdirSync(path.join(generationRoot, "skills"), { recursive: true });
+          writeFileSync(
+            path.join(generationRoot, "skills", "agent-skills-core-v1.zip"),
+            readFileSync(path.join(REPO_ROOT, "qualifications", "fixtures", "agent-skills-core-v1-composition.zip")),
+          );
+          const deliveryId = "dlv-live-consumption";
+          const materialized = await materializeProjection({
+            worktreeDir,
+            generationRoot,
+            deliveryId,
+            fence: PROBE_FENCE,
+            bindingDir,
+            exec: createExecPort(),
+          });
+          if (!materialized.ok) throw new Error(`projection materialization failed: ${JSON.stringify(materialized.blockers)}`);
+
+          const statePath = path.join(bindingDir, "state.json");
+          const observationFile = path.join(bindingDir, projectionConsumptionObservationFile(PROBE_FENCE));
+          const grant = {
+            spec: "execution-grant/1",
+            profile: "checkpoint",
+            allowedCapabilities: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+            writablePaths: ["src"],
+            protectedPaths: [".git", ".managed-projection"],
+            forbiddenOperations: [],
+          };
+          const expectation = {
+            profile: "checkpoint" as const,
+            hostVersion: version,
+            productTrustRevocationEpoch: 0,
+            observedAt: "2026-01-01T00:00:00Z",
+            deliveryId,
+            invocationFence: PROBE_FENCE,
+            workspaceId: "ws-live-consumption",
+            projectionDigest: materialized.projectionDigest,
+            discoveryConfigurationDigest: "b".repeat(64),
+            registeringInstallationId: "install-live-probe",
+            activeProfile: "confirmation-fixture",
+          };
+          writeFileSync(
+            statePath,
+            `${JSON.stringify({
+              expectation,
+              grant,
+              attestation: mintGrantAttestation({ grant, expectation, expiry: "2099-01-01T00:00:00Z" }),
+              workspaceRoot: worktreeDir,
+              observationPath: path.join(bindingDir, "observation.json"),
+              projectionConsumptionPath: observationFile,
+              projectionReceiptPath: path.join(bindingDir, PROJECTION_RECEIPT_FILE),
+              deliveryId,
+            })}\n`,
+            { mode: 0o600 },
+          );
+          const settingsPath = writeSettings({ bindingDir, statePath, allow: [...grant.allowedCapabilities] });
+          await runSession({
+            cwd: worktreeDir,
+            settingsPath,
+            // Deliberately names no projection path and asks for no file to be
+            // read: naming one would prove only that a path the probe supplied
+            // came back, which is not the question.
+            prompt:
+              "Follow this repository's delivery workflow to execute the following scoped work, " +
+              "using whatever delivery skill or workflow guidance is available to you in this session: " +
+              "add a farewell function to src/greet.mjs.",
+            timeoutMs: 300_000,
+          });
+          const recorded = landed(observationFile);
+          const entry = recorded
+            ? (JSON.parse(readFileSync(observationFile, "utf8")) as { entry?: string }).entry
+            : undefined;
+          probes.push({
+            id: "projection-consumption-observed",
+            question: "does an ordinary delivery turn cause the binding to record that the run named a receipted projection entry?",
+            answer: recorded
+              ? `yes — the interceptor recorded ${JSON.stringify(entry)}`
+              : "no — no observation was recorded, so no delivery of this host can ever be counted in the milestone's comparison set",
+            satisfied: recorded,
+          });
+        } finally {
+          rmSync(cwd, { recursive: true, force: true });
+        }
+      }
 
       return {
         hostVersion: version,
