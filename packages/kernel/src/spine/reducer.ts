@@ -149,7 +149,18 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
   let contractId: string | undefined;
   let lastActiveState: DeliveryState = "accepted";
   let registered = false;
+  let finishLineRecorded = false;
   const idempotencyKeys = new Set<string>();
+  /** Recorded action intents, and what each one's result observed. */
+  const actionIntents = new Map<string, { readonly action: string; outcome?: string; verification?: string }>();
+  /**
+   * The verification of the MOST RECENT observed result. `acting -> acting` is
+   * an enumerated row, so a delivery can carry several actions; the terminal
+   * edge is about the action just taken, never about any action that passed
+   * earlier in the sequence.
+   */
+  let lastActionVerification: string | undefined;
+  let lastActionOutcome: string | undefined;
 
   entries.forEach((value, index) => {
     const at = `/${index}`;
@@ -274,12 +285,142 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
         generationDigest = payload["generationDigest"] as string;
         break;
       }
+      case "finish.line.recorded": {
+        // The finish-line result is composed at the terminal-success edge and
+        // nowhere else; an approving review earlier in the loop composes
+        // nothing on its own.
+        if (state !== "ready") {
+          collector.emit(
+            "invalid_transition",
+            at,
+            `a finish-line result is recorded in ready; the delivery is in ${state}`,
+          );
+          return;
+        }
+        // The result is another delivery's evidence unless it names this one.
+        const result = payload["result"];
+        if (isSpineRecord(result) && result["deliveryId"] !== deliveryId) {
+          collector.emit(
+            "subject_mismatch",
+            `${at}/payload/result/deliveryId`,
+            `the result names delivery ${String(result["deliveryId"])}; this journal belongs to ${deliveryId}`,
+          );
+          return;
+        }
+        finishLineRecorded = true;
+        break;
+      }
+      case "action.intent.recorded": {
+        // The intent precedes the invocation, and the invocation only ever
+        // happens while acting.
+        if (state !== "acting") {
+          collector.emit("invalid_transition", at, `an action intent is recorded while acting; the delivery is in ${state}`);
+          return;
+        }
+        const intentId = payload["intentId"] as string;
+        if (actionIntents.has(intentId)) {
+          collector.emit("unsupported_combination", `${at}/payload/intentId`, `intent ${intentId} was already recorded`);
+          return;
+        }
+        // The matrix takes the next acting step only once EVERY prior action
+        // IS RECONCILED, and reconciled means exactly what terminal success
+        // means: the action succeeded and its required post-action
+        // verification PASSED. `not-attempted` says a required check did not
+        // run, so it is not reconciled either — an action with nothing to
+        // verify records `passed`, and a genuinely unrun check leaves the
+        // delivery through `blocked`. One rule serves both edges, so a
+        // newcomer's own result can never stand in for a predecessor's.
+        const unreconciled = [...actionIntents.entries()].find(
+          ([, each]) => each.outcome !== "succeeded" || each.verification !== "passed",
+        );
+        if (unreconciled !== undefined) {
+          collector.emit(
+            "invalid_transition",
+            at,
+            `intent ${unreconciled[0]} is ${unreconciled[1].verification === undefined ? "still unobserved" : `observed as ${String(unreconciled[1].outcome)}/${String(unreconciled[1].verification)}`}; the next acting step begins only once every prior action is reconciled`,
+          );
+          return;
+        }
+        actionIntents.set(intentId, { action: payload["action"] as string });
+        // A newly recorded intent has no observed result, so the previous
+        // action's pass stops standing for anything.
+        lastActionVerification = undefined;
+        lastActionOutcome = undefined;
+        break;
+      }
+      case "action.result.recorded": {
+        const intentId = payload["intentId"] as string;
+        if (state !== "acting") {
+          collector.emit("invalid_transition", at, `an action result is recorded while acting; the delivery is in ${state}`);
+          return;
+        }
+        const intent = actionIntents.get(intentId);
+        if (intent === undefined) {
+          collector.emit(
+            "invalid_transition",
+            `${at}/payload/intentId`,
+            `no intent ${intentId} was recorded; an external action is never observed without its prior intent`,
+          );
+          return;
+        }
+        if (intent.verification !== undefined) {
+          // The irreversible action must never be repeated, so its observed
+          // result is written exactly once.
+          collector.emit(
+            "unsupported_combination",
+            `${at}/payload/intentId`,
+            `intent ${intentId} already carries an observed result; an irreversible action is never repeated`,
+          );
+          return;
+        }
+        if (intent.action !== payload["action"]) {
+          collector.emit(
+            "unsupported_combination",
+            `${at}/payload/action`,
+            `intent ${intentId} was recorded for ${intent.action}; a result cannot observe a different action`,
+          );
+          return;
+        }
+        intent.outcome = payload["outcome"] as string;
+        intent.verification = payload["verification"] as string;
+        lastActionOutcome = intent.outcome;
+        lastActionVerification = intent.verification;
+        break;
+      }
       case "transition.committed": {
         const from = payload["from"] as DeliveryState;
         const to = payload["to"] as DeliveryState;
         if (from !== state) {
           collector.emit("invalid_transition", `${at}/payload/from`, `transition leaves ${from}; the delivery is in ${state}`);
           return;
+        }
+        // Terminal success is never a bare edge. Out of `ready` it stands on a
+        // recorded merge-ready result; out of `acting` it stands on an
+        // observed action result whose verification passed — and the
+        // verification-failed variant stands on exactly the opposite.
+        if (from === "ready" && to === "completed" && !finishLineRecorded) {
+          collector.emit(
+            "invalid_transition",
+            `${at}/payload/to`,
+            "terminal success requires a recorded merge-ready finish-line result; a green review alone completes nothing",
+          );
+          return;
+        }
+        // Both terminal-ish edges out of `acting` are about the action just
+        // taken, and both require it to have SUCCEEDED: the difference between
+        // them is only whether its required verification passed. A failed or
+        // indeterminate action enters neither — its name would assert a
+        // success that did not happen — and leaves through `blocked`.
+        if (from === "acting" && (to === "completed" || to === "action_succeeded_verification_failed")) {
+          const wanted = to === "completed" ? "passed" : "failed";
+          if (lastActionOutcome !== "succeeded" || lastActionVerification !== wanted) {
+            collector.emit(
+              "invalid_transition",
+              `${at}/payload/to`,
+              `acting -> ${to} requires the LAST observed action result to be succeeded/${wanted}; it is ${lastActionOutcome ?? "unobserved"}/${lastActionVerification ?? "unobserved"}`,
+            );
+            return;
+          }
         }
         const blockedResume = from === "blocked" && to === lastActiveState;
         if (!blockedResume && !isDeliveryTransitionValid(from, to)) {
@@ -292,6 +433,10 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           );
           return;
         }
+        // A finish-line result is composed over one candidate. A delivery that
+        // leaves `ready` for anything but success may return with a different
+        // candidate, so the earlier result stops standing for anything.
+        if (from === "ready" && to !== "completed") finishLineRecorded = false;
         if (!isSuspended(state) && !isTerminal(state)) lastActiveState = state;
         state = to;
         break;

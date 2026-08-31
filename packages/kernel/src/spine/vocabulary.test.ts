@@ -132,28 +132,27 @@ describe("the frozen event-kind vocabulary", () => {
         // the same sanctioned path: the pair was enumerated with that owner
         // from the start, and its payload is now frozen in `journal.ts`.
         "contract.amended",
+        // Defined out of reservation by the merge-ready finish-line unit, on
+        // the same path: the post-action payloads are now frozen in
+        // `journal.ts`, and the external-actions unit extends them.
+        "action.intent.recorded",
+        "action.result.recorded",
       ].sort(),
     );
   });
 
   it("enumerates the reserved kinds with their owning journals verbatim", () => {
     expect(kindsIn("intake", "reserved")).toEqual([]);
-    expect(kindsIn("delivery", "reserved")).toEqual(
-      [
-        "action.intent.recorded",
-        "action.result.recorded",
-        "control.plane.mirror.recorded",
-      ].sort(),
-    );
+    expect(kindsIn("delivery", "reserved")).toEqual(["control.plane.mirror.recorded"]);
     expect(kindsIn("maintenance", "reserved")).toEqual([]);
     // Both maintenance families are now defined by their owning units: the
     // maintenance lane and the retention/export/deletion contract family.
     expect(kindsIn("maintenance", "active")).toEqual(["maintenance.action.recorded", "retention.action.recorded"]);
   });
 
-  it("counts 27 active and 3 reserved (journal, kind) pairs", () => {
-    expect(activePairs.length).toBe(27);
-    expect(reservedPairs.length).toBe(3);
+  it("counts 29 active and 1 reserved (journal, kind) pairs", () => {
+    expect(activePairs.length).toBe(29);
+    expect(reservedPairs.length).toBe(1);
   });
 
   it("homes operator.confirmation.recorded in exactly two journals — the vocabulary is keyed by (journal, kind) pairs", () => {
@@ -202,7 +201,6 @@ describe("classifyEventKind", () => {
   });
 
   it("classifies an enumerated reserved pair as reserved — even the observation-only mirror kind", () => {
-    expect(classifyEventKind("delivery", "action.intent.recorded")).toEqual({ status: "reserved" });
     expect(classifyEventKind("delivery", "control.plane.mirror.recorded")).toEqual({ status: "reserved" });
   });
 

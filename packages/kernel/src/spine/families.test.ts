@@ -448,6 +448,12 @@ describe("the merge-ready finish line", () => {
     finishLine: "merge-ready",
     deliveryId: "delivery-1",
     candidate: { treeSha: OID, deliverableDigest: DIGEST },
+    recordedCandidate: { treeSha: "e".repeat(40), baseTipSha: "f".repeat(40) },
+    policyDigest: DIGEST,
+    completedObligations: ["review-green"],
+    trackedRecordDigest: "d".repeat(64),
+    externalVerification: "passed",
+    productTrustLabel: PRODUCT_TRUST_LABEL,
     outcomeVerificationDigest: digestCanonical(verification),
     mergeReadyObligationsSatisfied: true,
   });
@@ -464,6 +470,21 @@ describe("the merge-ready finish line", () => {
 
   it("rejects a result that claims any finish line other than merge-ready — later finish lines live with their owning units", () => {
     expect(codesOf(validateFinishLineResult({ ...finishLine(outcome()), finishLine: "merge" }))).toContain(
+      "malformed_member",
+    );
+  });
+
+  it("admits exactly one spelling of the external-verifier result and the declared product-trust level", () => {
+    // A result exists only over a PASSING external verification, under the
+    // trust level the substrate itself declares; neither is a caller's claim.
+    expect(codesOf(validateFinishLineResult({ ...finishLine(outcome()), externalVerification: "unavailable" }))).toContain(
+      "malformed_member",
+    );
+    expect(codesOf(validateFinishLineResult({ ...finishLine(outcome()), productTrustLabel: "signed / vendor-attested" }))).toContain(
+      "malformed_member",
+    );
+    // And merge-readiness is never vacuous: no obligation completed is no result.
+    expect(codesOf(validateFinishLineResult({ ...finishLine(outcome()), completedObligations: [] }))).toContain(
       "malformed_member",
     );
   });

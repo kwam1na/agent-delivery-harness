@@ -109,8 +109,8 @@ describe("the append-only checkpoint path", () => {
       journal: "delivery",
       subjectId: "dlv-3",
       expectedRevision: 1,
-      idempotencyKey: "e1-action.intent.recorded",
-      kind: "action.intent.recorded",
+      idempotencyKey: "e1-control.plane.mirror.recorded",
+      kind: "control.plane.mirror.recorded",
       payload: {},
     });
     expect(reserved.ok).toBe(false);

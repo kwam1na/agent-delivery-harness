@@ -156,9 +156,14 @@ export const EVENT_VOCABULARY: readonly EventKindEntry[] = Object.freeze([
   // confirmed outcome amendment, which creates a NEW contract identity; the
   // full re-evaluation it forces is an ordinary transition beside it.
   entry("delivery", "contract.amended", "active"),
+  // Defined by the merge-ready finish-line unit out of reservation — the
+  // sanctioned per-tranche path: both pairs were enumerated with this owner
+  // from the start, and their payloads (the durable intent recorded before an
+  // external action, and the observed result recorded after it) are now frozen
+  // in `journal.ts`. The external-actions unit extends them; it adds no pair.
+  entry("delivery", "action.intent.recorded", "active"),
+  entry("delivery", "action.result.recorded", "active"),
   // Reserved — payloads belong to their owning units; reject until defined.
-  entry("delivery", "action.intent.recorded", "reserved", false, "finish-line actions"),
-  entry("delivery", "action.result.recorded", "reserved", false, "finish-line actions"),
   entry("delivery", "control.plane.mirror.recorded", "reserved", true, "control-plane coordination"),
 ]);
 

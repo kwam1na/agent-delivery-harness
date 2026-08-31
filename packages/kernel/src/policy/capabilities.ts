@@ -17,6 +17,7 @@
  * taxonomy the plan reserved for the adapter SDK.
  */
 import { SENSOR_RESULT_SPEC } from "../spine/capability.ts";
+import { EXTERNAL_ACTIONS } from "../spine/finish-line.ts";
 import {
   oneOf,
   specLiteral,
@@ -134,8 +135,13 @@ export const READ_ONLY_CAPABILITY_KINDS = Object.freeze(["sensor", "status-recon
  */
 export const PRIVILEGED_CAPABILITY_KINDS = Object.freeze(["pr-creation", "merge", "deploy", "approval-request"] as const);
 
-/** The external actions a declarative document can grant as authority. */
-export const PRIVILEGED_ACTIONS = Object.freeze(["pr-creation", "merge", "deploy"] as const);
+/**
+ * The external actions a declarative document can grant as authority. The list
+ * itself is frozen in the spine's finish-line contract — the journal's
+ * post-action payloads name it and the spine cannot reach into this module —
+ * so the grant model consumes that one definition instead of keeping a second.
+ */
+export const PRIVILEGED_ACTIONS = EXTERNAL_ACTIONS;
 
 /** Each kind's contracted result spec; a descriptor claiming another rejects. */
 export const CAPABILITY_RESULT_SPECS: Readonly<Record<PolicyCapabilityKind, string>> = Object.freeze({

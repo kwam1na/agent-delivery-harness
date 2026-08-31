@@ -47,18 +47,14 @@ describe("the journal-entry envelope", () => {
   });
 
   it("rejects a reserved kind WITH a payload", () => {
-    const codes = codesOf(entry({ kind: "action.intent.recorded", payload: { anything: 1 } }));
+    const codes = codesOf(entry({ kind: "control.plane.mirror.recorded", payload: { anything: 1 } }));
     expect(codes).toContain("reserved_kind");
   });
 
   it("rejects a reserved kind WITHOUT a payload", () => {
-    const value = entry({ kind: "action.intent.recorded" });
+    const value = entry({ kind: "control.plane.mirror.recorded" });
     delete value["payload"];
     expect(codesOf(value)).toContain("reserved_kind");
-  });
-
-  it("rejects the reserved observation-only mirror kind the same way", () => {
-    expect(codesOf(entry({ kind: "control.plane.mirror.recorded", payload: {} }))).toContain("reserved_kind");
   });
 
   it("rejects an out-of-vocabulary kind as unknown", () => {
@@ -251,5 +247,43 @@ describe("the journal-entry envelope", () => {
     expect(
       codesOf(entry({ journal: "maintenance", subjectId: "install-1", kind: "contract.amended", payload: wellFormed })),
     ).toContain("unknown_kind");
+  });
+
+  it("freezes action.intent.recorded: the durable intent recorded BEFORE an external action", () => {
+    const intent = (payload: Record<string, unknown>): Record<string, unknown> =>
+      entry({ kind: "action.intent.recorded", payload });
+    const wellFormed = {
+      intentId: "intent-1",
+      action: "merge",
+      candidate: { treeSha: OID, deliverableDigest: DIGEST },
+      policyDigest: DIGEST,
+      approval: "required",
+    };
+    expect(validateJournalEntry(intent(wellFormed))).toEqual({ ok: true });
+    // Only the three frozen external actions; a sensor is not an action.
+    expect(codesOf(intent({ ...wellFormed, action: "sensor" }))).toContain("malformed_member");
+    expect(codesOf(intent({ ...wellFormed, approval: "maybe" }))).toContain("malformed_member");
+    expect(codesOf(intent({ ...wellFormed, note: "because" }))).toContain("unknown_member");
+  });
+
+  it("freezes action.result.recorded: the observed result, and the combination that never repeats", () => {
+    const result = (payload: Record<string, unknown>): Record<string, unknown> =>
+      entry({ kind: "action.result.recorded", payload });
+    const wellFormed = {
+      intentId: "intent-1",
+      action: "merge",
+      outcome: "succeeded",
+      verification: "passed",
+      externalReference: "https://example.invalid/pull/1",
+    };
+    expect(validateJournalEntry(result(wellFormed))).toEqual({ ok: true });
+    // An action whose reference is unknown (a lost response) still records.
+    expect(
+      validateJournalEntry(result({ ...wellFormed, outcome: "indeterminate", verification: "not-attempted", externalReference: "absent-by-state" })),
+    ).toEqual({ ok: true });
+    // Passing post-action verification belongs to a succeeded action alone.
+    expect(codesOf(result({ ...wellFormed, outcome: "failed" }))).toContain("unsupported_combination");
+    expect(codesOf(result({ ...wellFormed, outcome: "indeterminate" }))).toContain("unsupported_combination");
+    expect(codesOf(result({ ...wellFormed, verification: "unknown" }))).toContain("malformed_member");
   });
 });

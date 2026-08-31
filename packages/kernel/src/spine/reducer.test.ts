@@ -16,6 +16,7 @@ import {
   reduceIntakeJournal,
   reduceMaintenanceJournal,
 } from "./reducer.ts";
+import { PRODUCT_TRUST_LABEL } from "./composition.ts";
 import { DELIVERY_STATES, INTAKE_STATES, TERMINAL_DELIVERY_STATES } from "./vocabulary.ts";
 
 const DIGEST = "a".repeat(64);
@@ -715,5 +716,354 @@ describe("the iterative-intake records", () => {
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.state.contractConfirmed).toBe(true);
+  });
+});
+
+// ── The finish line and the post-action states ─────────────────────────────
+
+/**
+ * The reducer half of "terminate successfully only after the finish line".
+ * Terminal success is not an edge a caller may simply commit: `ready ->
+ * completed` requires a recorded merge-ready result, and the post-action
+ * states require the intent and result records their external action produced.
+ */
+describe("the finish line and the post-action states", () => {
+  const mergeReadyResult = {
+    spec: "finish-line-result/1",
+    finishLine: "merge-ready",
+    deliveryId: "delivery-1",
+    candidate: { treeSha: OID, deliverableDigest: DIGEST },
+    recordedCandidate: { treeSha: OID, baseTipSha: OID },
+    policyDigest: DIGEST,
+    completedObligations: ["review-green"],
+    trackedRecordDigest: DIGEST2,
+    externalVerification: "passed",
+    productTrustLabel: PRODUCT_TRUST_LABEL,
+    outcomeVerificationDigest: DIGEST2,
+    mergeReadyObligationsSatisfied: true,
+  };
+
+  const intent = {
+    intentId: "intent-1",
+    action: "merge",
+    candidate: { treeSha: OID, deliverableDigest: DIGEST },
+    policyDigest: DIGEST,
+    approval: "not-required",
+  };
+
+  const actionResult = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    intentId: "intent-1",
+    action: "merge",
+    outcome: "succeeded",
+    verification: "passed",
+    externalReference: "https://example.invalid/pull/1",
+    ...over,
+  });
+
+  /** The frozen chain from the opening journal to `ready`, ending at revision 14. */
+  const toReady = (): Entry[] => {
+    const chain: readonly (readonly [string, string])[] = [
+      ["preparing", "planning"],
+      ["planning", "implementing"],
+      ["implementing", "validating"],
+      ["validating", "reviewing"],
+      ["reviewing", "compounding"],
+      ["compounding", "admitting"],
+      ["admitting", "recording"],
+    ];
+    const entries = [...openingEntries()];
+    chain.forEach(([from, to], index) => {
+      entries.push(deliveryEntry(6 + index, "transition.committed", { from, to }));
+    });
+    entries.push(
+      deliveryEntry(13, "transition.committed", {
+        from: "recording",
+        to: "ready",
+        trackedRecord: { path: "delivery/records/record.json", sha256: DIGEST2 },
+      }),
+    );
+    return entries;
+  };
+
+  it("refuses terminal success that no recorded finish-line result stands behind", () => {
+    const codes = reduceCodes([...toReady(), deliveryEntry(14, "transition.committed", { from: "ready", to: "completed" })]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  it("completes once the merge-ready result is journaled", () => {
+    const outcome = reduceDeliveryJournal([
+      ...toReady(),
+      deliveryEntry(14, "finish.line.recorded", { result: mergeReadyResult }),
+      deliveryEntry(15, "transition.committed", { from: "ready", to: "completed" }),
+    ]);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("completed");
+  });
+
+  it("records a finish-line result only in ready — a green review composes nothing on its own", () => {
+    const entries = [...openingEntries()];
+    entries.push(deliveryEntry(6, "transition.committed", { from: "preparing", to: "planning" }));
+    entries.push(deliveryEntry(7, "finish.line.recorded", { result: mergeReadyResult }));
+    expect(reduceCodes(entries)).toContain("invalid_transition");
+  });
+
+  it("records an action intent only while acting — never at ready, before the delivery is authorized to act", () => {
+    expect(reduceCodes([...toReady(), deliveryEntry(14, "action.intent.recorded", intent)])).toContain("invalid_transition");
+  });
+
+  it("carries an authorized action from ready through acting to completed", () => {
+    const outcome = reduceDeliveryJournal([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult()),
+      deliveryEntry(17, "transition.committed", { from: "acting", to: "completed" }),
+    ]);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("completed");
+  });
+
+  it("refuses a result for an intent the journal never recorded", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.result.recorded", actionResult()),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  it("never records a second result for one intent — an irreversible action is not repeated", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult()),
+      deliveryEntry(17, "action.result.recorded", actionResult({ verification: "failed", outcome: "succeeded" })),
+    ]);
+    expect(codes).toContain("unsupported_combination");
+  });
+
+  it("refuses terminal success while the action's verification has not passed", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult({ verification: "failed" })),
+      deliveryEntry(17, "transition.committed", { from: "acting", to: "completed" }),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  /**
+   * A multi-action delivery, journaled entry by entry after `ready -> acting`.
+   * `acting -> acting` is an enumerated row, so several actions in one
+   * delivery is a designed shape, and no action's result may ever stand in
+   * for another's — in any interleaving of intents and results.
+   */
+  const acting = (...appends: readonly (readonly [string, Record<string, unknown>])[]): Entry[] => [
+    ...toReady(),
+    deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+    ...appends.map(([kind, payload], index) => deliveryEntry(15 + index, kind, payload)),
+  ];
+
+  const intentFor = (intentId: string, action: string): Record<string, unknown> => ({ ...intent, intentId, action });
+  const resultFor = (
+    intentId: string,
+    action: string,
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({ ...actionResult({ intentId, action }), ...over });
+
+  it("judges the terminal edge on the LAST result, never on an earlier action that passed", () => {
+    const twoStep = (last: Record<string, unknown>): Entry[] =>
+      acting(
+        ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+        ["action.result.recorded", resultFor("intent-pr", "pr-creation")],
+        ["transition.committed", { from: "acting", to: "acting" }],
+        ["action.intent.recorded", intentFor("intent-merge", "merge")],
+        ["action.result.recorded", resultFor("intent-merge", "merge", last)],
+        ["transition.committed", { from: "acting", to: "completed" }],
+      );
+    expect(reduceCodes(twoStep({ outcome: "succeeded", verification: "failed" }))).toContain("invalid_transition");
+    const verified = reduceDeliveryJournal(twoStep({ outcome: "succeeded", verification: "passed" }));
+    expect(verified.ok, JSON.stringify(verified)).toBe(true);
+  });
+
+  it("refuses a second intent while any prior action is unreconciled", () => {
+    // `not-attempted` says a REQUIRED check did not run, so it is unreconciled
+    // exactly like a failure: an action with nothing to verify records
+    // `passed`. Every ordering, including both intents opened before either
+    // result, so no newcomer's result can carry a predecessor's edge.
+    const unreconciled: readonly Record<string, unknown>[] = [
+      { outcome: "succeeded", verification: "failed" },
+      { outcome: "succeeded", verification: "not-attempted" },
+      { outcome: "failed", verification: "failed" },
+      { outcome: "indeterminate", verification: "not-attempted" },
+    ];
+    for (const observed of unreconciled) {
+      expect(
+        reduceCodes(
+          acting(
+            ["action.intent.recorded", intentFor("intent-merge", "merge")],
+            ["action.result.recorded", resultFor("intent-merge", "merge", observed)],
+            ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+          ),
+        ),
+        JSON.stringify(observed),
+      ).toContain("invalid_transition");
+    }
+
+    // Two intents in flight at once — neither observed yet.
+    expect(
+      reduceCodes(
+        acting(
+          ["action.intent.recorded", intentFor("intent-merge", "merge")],
+          ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+        ),
+      ),
+    ).toContain("invalid_transition");
+  });
+
+  it("refuses terminal success for an in-flight action on the PREVIOUS action's pass", () => {
+    // A durably recorded intent whose result was never observed — the
+    // lost-response case — is not a delivery that succeeded.
+    expect(
+      reduceCodes(
+        acting(
+          ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+          ["action.result.recorded", resultFor("intent-pr", "pr-creation")],
+          ["action.intent.recorded", intentFor("intent-merge", "merge")],
+          ["transition.committed", { from: "acting", to: "completed" }],
+        ),
+      ),
+    ).toContain("invalid_transition");
+  });
+
+  it("carries a reconciled chain of actions to completion, one rule at both edges", () => {
+    // An action with nothing to verify records `passed`; that is what makes it
+    // reconciled, and the same value is what the terminal edge demands.
+    const journal = acting(
+      ["action.intent.recorded", intentFor("intent-pr", "pr-creation")],
+      ["action.result.recorded", resultFor("intent-pr", "pr-creation")],
+      ["transition.committed", { from: "acting", to: "acting" }],
+      ["action.intent.recorded", intentFor("intent-merge", "merge")],
+      ["action.result.recorded", resultFor("intent-merge", "merge")],
+      ["transition.committed", { from: "acting", to: "completed" }],
+    );
+    const outcome = reduceDeliveryJournal(journal);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.state).toBe("completed");
+  });
+
+  it("leaves an action whose required verification did not run through blocked, not through success", () => {
+    // Neither terminal edge is open to it — success needs `passed` and the
+    // verification-failed variant needs `failed` — and it is not a dead end:
+    // `blocked` is the honest exit for a check that never ran.
+    const unrun: readonly [string, Record<string, unknown>][] = [
+      ["action.intent.recorded", intentFor("intent-merge", "merge")],
+      ["action.result.recorded", resultFor("intent-merge", "merge", { outcome: "succeeded", verification: "not-attempted" })],
+    ];
+    for (const to of ["completed", "action_succeeded_verification_failed"]) {
+      expect(reduceCodes(acting(...unrun, ["transition.committed", { from: "acting", to }])), to).toContain(
+        "invalid_transition",
+      );
+    }
+    const blocked = reduceDeliveryJournal(acting(...unrun, ["transition.committed", { from: "acting", to: "blocked" }]));
+    expect(blocked.ok, JSON.stringify(blocked)).toBe(true);
+    if (!blocked.ok) return;
+    expect(blocked.state.state).toBe("blocked");
+  });
+
+  it("refuses terminal success while the last authorized action has no observed result at all", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "transition.committed", { from: "acting", to: "completed" }),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  it("refuses a result that observes a different action than its intent", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult({ action: "deploy" })),
+    ]);
+    expect(codes).toContain("unsupported_combination");
+  });
+
+  it("refuses a finish-line result composed for another delivery", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "finish.line.recorded", { result: { ...mergeReadyResult, deliveryId: "delivery-2" } }),
+    ]);
+    expect(codes).toContain("subject_mismatch");
+  });
+
+  it("voids a recorded result once the delivery leaves ready for anything but success", () => {
+    // The result was composed over the candidate that stood at `ready`. Leaving
+    // for re-validation and returning means it stands for nothing.
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "finish.line.recorded", { result: mergeReadyResult }),
+      deliveryEntry(15, "transition.committed", { from: "ready", to: "awaiting_approval" }),
+      deliveryEntry(16, "transition.committed", { from: "awaiting_approval", to: "validating" }),
+      deliveryEntry(17, "transition.committed", { from: "validating", to: "reviewing" }),
+      deliveryEntry(18, "transition.committed", { from: "reviewing", to: "compounding" }),
+      deliveryEntry(19, "transition.committed", { from: "compounding", to: "admitting" }),
+      deliveryEntry(20, "transition.committed", { from: "admitting", to: "recording" }),
+      deliveryEntry(21, "transition.committed", { from: "recording", to: "ready" }),
+      deliveryEntry(22, "transition.committed", { from: "ready", to: "completed" }),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  it("keeps action_succeeded_verification_failed to actions that actually succeeded", () => {
+    // The state's name and its matrix condition both assert that the external
+    // action SUCCEEDED. An action that failed or came back indeterminate did
+    // not, whatever its verification says, and leaves through `blocked`.
+    for (const observed of [
+      { outcome: "failed", verification: "failed" },
+      { outcome: "indeterminate", verification: "failed" },
+    ]) {
+      expect(
+        reduceCodes(
+          acting(
+            ["action.intent.recorded", intentFor("intent-merge", "merge")],
+            ["action.result.recorded", resultFor("intent-merge", "merge", observed)],
+            ["transition.committed", { from: "acting", to: "action_succeeded_verification_failed" }],
+          ),
+        ),
+        JSON.stringify(observed),
+      ).toContain("invalid_transition");
+    }
+  });
+
+  it("enters action_succeeded_verification_failed on exactly that observed pair", () => {
+    const failed = reduceDeliveryJournal([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult({ verification: "failed" })),
+      deliveryEntry(17, "transition.committed", { from: "acting", to: "action_succeeded_verification_failed" }),
+    ]);
+    expect(failed.ok, JSON.stringify(failed)).toBe(true);
+    if (!failed.ok) return;
+    expect(failed.state.state).toBe("action_succeeded_verification_failed");
+
+    // A verified action never enters it: the state records an irreversible
+    // action that must not be repeated, not an ordinary completion.
+    const verified = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult()),
+      deliveryEntry(17, "transition.committed", { from: "acting", to: "action_succeeded_verification_failed" }),
+    ]);
+    expect(verified).toContain("invalid_transition");
   });
 });

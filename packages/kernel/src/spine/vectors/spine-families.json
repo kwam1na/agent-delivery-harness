@@ -455,9 +455,81 @@
                   "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                   "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
+                "recordedCandidate": {
+                  "treeSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                  "baseTipSha": "ffffffffffffffffffffffffffffffffffffffff"
+                },
+                "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "completedObligations": ["review-green"],
+                "trackedRecordDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "externalVerification": "passed",
+                "productTrustLabel": "local-digest / operator-pinned",
                 "outcomeVerificationDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "mergeReadyObligationsSatisfied": true
               }
+            }
+          }
+        },
+        {
+          "name": "a recorded action intent",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 21,
+            "idempotencyKey": "dk-21",
+            "kind": "action.intent.recorded",
+            "payload": {
+              "intentId": "intent-1",
+              "action": "merge",
+              "candidate": {
+                "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": "required"
+            }
+          }
+        },
+        {
+          "name": "an observed action result",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 22,
+            "idempotencyKey": "dk-22",
+            "kind": "action.result.recorded",
+            "payload": {
+              "intentId": "intent-1",
+              "action": "merge",
+              "outcome": "succeeded",
+              "verification": "passed",
+              "externalReference": "https://example.invalid/pull/1"
+            }
+          }
+        },
+        {
+          "name": "an action result claiming passing verification over a failed action",
+          "verdict": "reject",
+          "codes": [
+            "unsupported_combination"
+          ],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 22,
+            "idempotencyKey": "dk-22",
+            "kind": "action.result.recorded",
+            "payload": {
+              "intentId": "intent-1",
+              "action": "merge",
+              "outcome": "failed",
+              "verification": "passed",
+              "externalReference": "absent-by-state"
             }
           }
         },
@@ -473,7 +545,7 @@
             "subjectId": "delivery-1",
             "expectedRevision": 3,
             "idempotencyKey": "dk-3",
-            "kind": "action.intent.recorded",
+            "kind": "control.plane.mirror.recorded",
             "payload": {
               "action": "merge"
             }
@@ -491,7 +563,7 @@
             "subjectId": "delivery-1",
             "expectedRevision": 0,
             "idempotencyKey": "dk-9",
-            "kind": "action.intent.recorded"
+            "kind": "control.plane.mirror.recorded"
           }
         },
         {
@@ -1493,6 +1565,15 @@
               "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
               "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
+            "recordedCandidate": {
+              "treeSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "baseTipSha": "ffffffffffffffffffffffffffffffffffffffff"
+            },
+            "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "completedObligations": ["review-green"],
+            "trackedRecordDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "externalVerification": "passed",
+            "productTrustLabel": "local-digest / operator-pinned",
             "outcomeVerificationDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "mergeReadyObligationsSatisfied": true
           }
@@ -1511,6 +1592,15 @@
               "treeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
               "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
+            "recordedCandidate": {
+              "treeSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "baseTipSha": "ffffffffffffffffffffffffffffffffffffffff"
+            },
+            "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "completedObligations": ["review-green"],
+            "trackedRecordDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "externalVerification": "passed",
+            "productTrustLabel": "local-digest / operator-pinned",
             "outcomeVerificationDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "mergeReadyObligationsSatisfied": false
           }

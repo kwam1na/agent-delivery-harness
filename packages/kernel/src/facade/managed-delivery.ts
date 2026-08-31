@@ -99,7 +99,7 @@ import {
   type WaiverProposal,
 } from "../evidence/waiver.ts";
 import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence/blocker-inventory.ts";
-import { composeMergeReadyResult } from "../finish-line/merge-ready.ts";
+import { decideFinishLine, type ExternalVerification } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
   bindingStateFile,
@@ -2952,6 +2952,29 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!referenced.ok) return referenced;
 
       await writeOwned(path.join(await deliveryDir(deliveryId), "outcome.json"), `${JSON.stringify(outcome)}\n`);
+
+      // WHICH OBLIGATIONS ACTUALLY COMPLETED. The finish line binds them, so
+      // they are retained here rather than re-derived later from a policy that
+      // only says which obligations were ACTIVATED. The facade completes
+      // `outcome.verification` itself — criterion mapping plus the
+      // positive-criterion rule above — and the admission gate completes the
+      // rest. Only a BLOCKED resolution completed nothing: `not_applicable` is
+      // the ordinary answer for an obligation this candidate never activated,
+      // and treating it as incomplete would deadlock the finish line on work
+      // nothing was ever supposed to run.
+      const completedObligations = [
+        ...new Set([
+          "outcome.verification",
+          ...(admission.decision?.resolutions ?? [])
+            .filter((resolution) => resolution.kind !== "blocked")
+            .map((resolution) => resolution.obligationId),
+        ]),
+      ].sort();
+      await writeOwned(
+        path.join(await deliveryDir(deliveryId), "admission.json"),
+        `${JSON.stringify({ completedObligations })}\n`,
+      );
+
       const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "admitting", to: "recording" });
       if (!transitioned.ok) return transitioned;
       return { ok: true, state: "recording" };
@@ -3127,23 +3150,119 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     async completeFinishLine({ deliveryId, fence }) {
       const guarded = await guard(deliveryId, { requireState: ["ready"], verifyWorkspace: true, invokingFence: fence, fenceRequired: true });
       if (!("store" in guarded)) return guarded;
-      const outcome = await readJson<OutcomeVerification>(path.join(await deliveryDir(deliveryId), "outcome.json"));
+      const workspace = guarded.workspace;
+      if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
+      const dir = await deliveryDir(deliveryId);
+      const outcome = await readJson<OutcomeVerification>(path.join(dir, "outcome.json"));
       if (outcome === undefined) {
         return refuse("outcome_missing", "No outcome verification is on file for this delivery.", "Admit the delivery first.");
       }
-      const composed = composeMergeReadyResult({ deliveryId, outcome });
-      if (!composed.ok) {
+      const completed = await readJson<{ completedObligations: readonly string[] }>(path.join(dir, "admission.json"));
+      if (completed === undefined || !Array.isArray(completed.completedObligations)) {
+        return refuse("admission_missing", "No readable admission result is on file for this delivery.", "Admit the delivery first.");
+      }
+
+      // The tracked record's digest, as journaled on the `recording` edge, and
+      // the candidate recaptured there.
+      const recordingTransition = [...guarded.views]
+        .reverse()
+        .find((view) => view.kind === "transition.committed" && view.payload["trackedRecord"] !== undefined);
+      const trackedRecord = recordingTransition?.payload["trackedRecord"] as { path: string; sha256: string } | undefined;
+      const recordedCandidate = currentCandidateOf(guarded.views);
+      if (trackedRecord === undefined || recordedCandidate === undefined) {
+        return refuse("record_missing", "No tracked-record transition is journaled for this delivery.", "Record the delivery first.");
+      }
+
+      // TERMINAL SUCCESS IS A RECHECK SITE. The candidate and its base are
+      // re-observed here, and the external verifier — the same pure core the
+      // repository's pull-request Action runs — is re-run over the committed
+      // record, so hosted and local merge-ready evidence are both current.
+      const rootDir = workspace.worktreeDir;
+      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
+      if (!capture.ok) return capture.failure;
+      const captured = capture.candidate;
+
+      // The record is read BEFORE the decision: it carries the base coordinates
+      // it was written against, observed through the same capture path as the
+      // base observed now, so the two are comparable values rather than two
+      // refs resolved by different rules at different moments.
+      //
+      // The record path is keyed on the CURRENT deliverable digest, so a moved
+      // candidate has no record at it. That is not reported as a missing
+      // record: the verifier is simply unavailable, which blocks on its own,
+      // and the decision below names the movement that actually happened. With
+      // no record there is no recorded base to compare, so the observed one
+      // stands in — it can never turn the blocked decision into a pass.
+      let externalVerification: ExternalVerification = "unavailable";
+      let recordedBaseTipSha = captured.base.tipSha;
+      const relativePath = deliveryRecordPathFor(input.config, captured.deliverable.digest);
+      let recordText: string | undefined;
+      try {
+        recordText = await readFile(path.join(rootDir, relativePath), "utf8");
+      } catch {
+        recordText = undefined;
+      }
+      if (recordText !== undefined) {
+        // A record the verifier cannot read is a finding, never a skip.
+        const parsed = parseDeliveryRecord(recordText);
+        if (!parsed.ok) return refuseWith(parsed.blockers);
+        recordedBaseTipSha = parsed.record.candidateBinding.baseTipSha;
+        const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
+        if (listed.code === 0) {
+          // The verifier's protected-authority-path rule does not run over a
+          // tree it could not list, and half a verification is not a pass — so
+          // a failed listing leaves the verification unavailable.
+          const check = verifyDeliveryRecord(
+            input.config,
+            parsed.record,
+            { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
+            { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
+            { candidateTreePaths: listed.out.split("\u0000").filter((entry) => entry.length > 0) },
+          );
+          externalVerification = check.ok ? "passed" : "failed";
+        }
+      }
+
+      // The declared product-trust level, read verbatim from the pinned
+      // generation's own manifest — never from anything the candidate carries.
+      const generation = await loadPinnedGeneration({
+        installationPath: input.installation.installationPath,
+        generationDigest: guarded.meta.generationDigest,
+      });
+      const declaredProductTrustLabel = generation.ok
+        ? String((generation.manifest["pin"] as Record<string, unknown> | undefined)?.["productTrustLabel"] ?? "")
+        : "";
+
+      const decision = decideFinishLine({
+        deliveryId,
+        contract: guarded.meta.contract,
+        policy: guarded.meta.policy,
+        outcome,
+        record: { treeSha: recordedCandidate.treeSha, baseTipSha: recordedBaseTipSha, digest: trackedRecord.sha256 },
+        observed: { treeSha: captured.treeSha, baseTipSha: captured.base.tipSha },
+        admission: { admitted: true, completedObligations: completed.completedObligations },
+        externalVerification,
+        declaredProductTrustLabel,
+      });
+      if (decision.kind !== "completed") {
+        // Merge-ready never falls through to an action here: an authorized
+        // merge or deploy is the external-actions unit's, and this slice
+        // invokes none, so anything but terminal success is a refusal.
+        const detail =
+          decision.kind === "blocked"
+            ? decision.refusals.map((refusal) => refusal.message).join("; ")
+            : `the contract requests a ${guarded.meta.contract.requestedFinishLine} finish line, whose ${decision.action} action no bound adapter can invoke`;
         return refuse(
           "finish_line_refused",
-          `The merge-ready result failed the spine's cross-checks: ${composed.rejections.map((rejection) => rejection.message).join("; ")}`,
-          "Resolve every criterion, then complete the finish line.",
+          `The merge-ready finish line was refused: ${detail}`.slice(0, 1900),
+          "Resolve every criterion and obligation on the recorded candidate, then complete the finish line.",
         );
       }
-      const recorded = await appendEntry(guarded.store, deliveryId, "finish.line.recorded", { result: composed.result });
+      const recorded = await appendEntry(guarded.store, deliveryId, "finish.line.recorded", { result: decision.result });
       if (!recorded.ok) return recorded;
       const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "ready", to: "completed" });
       if (!transitioned.ok) return transitioned;
-      return { ok: true, state: "completed", resultDigest: digestCanonical(composed.result) };
+      return { ok: true, state: "completed", resultDigest: digestCanonical(decision.result) };
     },
 
     async sessionEnded({ deliveryId, fence }) {
