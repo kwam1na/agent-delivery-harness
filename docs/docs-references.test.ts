@@ -153,14 +153,17 @@ describe("the documentation's references", () => {
 
 const textOf = (document: string): string => readFileSync(path.join(REPO_ROOT, document), "utf8");
 
-/** How the guides spell a small count in prose. Only values actually stated. */
+/**
+ * Prose spellings for counts a guide writes as a word rather than as digits.
+ * Only the CLI command count is spelled that way today; the neighbouring
+ * entries exist so that advancing it by one or two produces a comparison
+ * instead of the `add it to NUMBER_WORDS` failure below.
+ */
 const NUMBER_WORDS: Readonly<Record<number, string>> = Object.freeze({
-  6: "six",
-  7: "seven",
+  8: "eight",
   9: "nine",
   10: "ten",
-  17: "seventeen",
-  20: "twenty",
+  11: "eleven",
 });
 
 /**
@@ -260,11 +263,24 @@ describe("the computable counts the documentation states", () => {
   it("states the conformance kit's vector count", () => {
     const kit = JSON.parse(readFileSync(path.join(REPO_ROOT, "packages/conformance/vectors/kit.json"), "utf8")) as {
       vectors: readonly unknown[];
+      counts: { total: number; accept: number; reject: number };
     };
     everyStatementAgrees("the conformance vector count", /(\d+)-vector/g, String(kit.vectors.length));
     everyStatementAgrees("the conformance vector count", /\*\*(\d+) golden/g, String(kit.vectors.length));
     everyStatementAgrees("the conformance vector count", /All (\d+) are decided/g, String(kit.vectors.length));
     everyStatementAgrees("the conformance vector count", /total: (\d+)/g, String(kit.vectors.length));
+
+    // The accept/reject split rides in the same sentences as the total, and is
+    // just as computable — it drifts the moment the kit is rebalanced, while
+    // the total beside it re-stamps loudly.
+    everyStatementAgrees("the accept-vector count", /\((\d+) accept/g, String(kit.counts.accept));
+    everyStatementAgrees("the accept-vector count", /(\d+) accept,/g, String(kit.counts.accept));
+    everyStatementAgrees("the accept-vector count", /accept\/ +\((\d+)\)/g, String(kit.counts.accept));
+    everyStatementAgrees("the accept-vector count", /accept: (\d+)/g, String(kit.counts.accept));
+    everyStatementAgrees("the reject-vector count", /(\d+) reject\)/g, String(kit.counts.reject));
+    everyStatementAgrees("the reject-vector count", /(\d+) reject\*\*/g, String(kit.counts.reject));
+    everyStatementAgrees("the reject-vector count", /reject\/ +\((\d+)\)/g, String(kit.counts.reject));
+    everyStatementAgrees("the reject-vector count", /reject:\n?(\d+)/g, String(kit.counts.reject));
   });
 
   it("states the reviewer charter set the pinned composition ships", () => {

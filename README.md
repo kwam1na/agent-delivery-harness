@@ -163,13 +163,15 @@ and in the CLI's usage text to match in both directions.
 [`docs/docs-references.test.ts`](docs/docs-references.test.ts) resolves every
 relative link in this README and the top-level guides, and checks the computable
 counts those documents state — the facade's operation inventory, the delivery
-and intake state vocabularies, the CLI command count, the conformance kit's
-vector count, the frozen trust label, and the reviewer charter set the pinned
-composition ships. Each of those is checked by agreement rather than by
-presence: every sentence stating the count, in every document the sensor scans,
-must carry the value the tree computes. Stating it in a new guide is covered the
-moment the guide exists, and re-stamping one mention while leaving another stale
-is a failure rather than a pass. Both the link enumeration and the count
+and intake state vocabularies, the CLI command count, and the conformance kit's
+vector count and accept/reject split. Each of those counts is checked by
+agreement rather than by presence: every sentence stating it, in every document
+the sensor scans, must carry the value the tree computes. Stating it in a new
+guide is covered the moment the guide exists, and re-stamping one mention while
+leaving another stale is a failure rather than a pass. The reviewer charter set
+the pinned composition ships is checked the same way, resolved through the real
+archive. The frozen trust label is not a count and is checked differently — the
+documents must quote it verbatim. Both the link enumeration and the count
 patterns are guarded against matching nothing, because a claim over a set that
 turned out empty would otherwise pass silently.
 
