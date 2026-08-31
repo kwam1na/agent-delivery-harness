@@ -1,7 +1,7 @@
 {
   "spec": "delivery-harness-shadow-activation/1",
   "repositoryId": "agent-delivery-harness",
-  "recordedAt": "2026-08-31T04:40:00Z",
+  "recordedAt": "2026-08-31T06:40:00Z",
   "purpose": "This repository's activation metadata for the read-only shadow window: the composed delivery product is installed in shadow mode and its run-pinned projection is materialized into managed delivery worktrees, while npm run check and the delivery-harness gate loop remain the repository's only delivery authority. The discovery-scoping mechanism is product-owned; this document carries only this repository's activation of it and the positions the exactly-one-discovery guard enforces.",
   "installationMode": "shadow",
   "deliveryAuthority": "none",
@@ -9,7 +9,7 @@
   "selfApplicationNote": "The product being installed here is built from this repository. The installation is nonetheless a pinned, digest-addressed generation packed from a chosen source commit and installed read-only outside the working tree, so the bytes that would drive a shadow delivery are never the candidate's. That separation is what keeps the direction of authority unambiguous while the governed repository and the implementing repository are the same one.",
   "product": {
     "repository": "agent-delivery-harness",
-    "commit": "9371d97029cbf1bbd58c06059c079623f76791a9",
+    "commit": "a88ac86117e6793a5ef82fbde3290646f8b88c94",
     "compositionProfile": "production",
     "compositionProfileNote": "the fixture profile registers deliveries only in the disposable repositories its install receipt names, so an installation serving this repository must carry the production profile; the read-only posture comes from this document's shadow installation mode, not from the profile",
     "qualificationRecords": [
@@ -65,26 +65,26 @@
     "absentOrNegative": "excluded from the comparison set",
     "writtenInto": ".agents/policy/shadow-milestone-gate-record.json",
     "whatTheGuardChecks": "the record's declared source and its shape — the guard reads the gate-record artifact and cannot itself verify that the bytes came from the binding",
-    "whatProvenanceRestsOn": "two things outside the guard: .agents is an additionally protected path in every checkpoint grant of .agents/policy/repository-policy.json, so no execution grant may write the gate record; and the binding-side writer that emits the entry. That writer is not present in the product at the pinned commit, so until it ships the entry has no admissible producer and the comparison set stays empty — which is the correct outcome, not a gap the guard papers over."
+    "whatProvenanceRestsOn": "two things outside the guard: the binding-side writer that emits the entry, and the protected-path property that keeps the artifact out of every session's reach. The writer ships in the product at the pinned commit, so an entry now has an admissible producer; the remaining rest-point is that .agents is an additionally protected path in every checkpoint grant of .agents/policy/repository-policy.json, so no execution grant may write the gate record and the only thing that can author an entry is the binding."
   },
   "ambientDiscoveryLayout": {
     "owner": "scripts/shadow-discovery-guard.ts",
     "note": "the guard owns the root set and its pinned digest; they are not duplicated here so there is one place to change and one place to review"
   },
   "characterization": {
-    "method": "a disposable shadow install of the composed product followed by one projection materialization into a managed delivery worktree, driven through the product's own installer and Claude Code binding. The repository under characterization was a disposable clone in a temp directory, so no byte and no git configuration of the real repository was touched, and no host configuration outside the disposable directories was written.",
-    "compositionProfile": "confirmation-fixture, with the disposable repository identity delivery-harness-shadow-characterization — the characterization ran in a scratch clone, so it used the qualification profile rather than the production profile the real installation carries",
-    "observedAt": "2026-08-31T04:32:00Z",
+    "method": "a disposable shadow install of the composed product followed by one projection materialization into a managed delivery worktree, one interception of a run naming a receipted projection entry, and one gate-record emission — all driven through the product's own installer, Claude Code binding, and model-external interceptor. The repository under characterization was a disposable clone in a temp directory, so no byte and no git configuration of the real repository was touched, and no host configuration outside the disposable directories was written.",
+    "compositionProfile": "confirmation-fixture, with the disposable repository identity disposable-skeleton — the characterization ran in a scratch clone, so it used the qualification profile rather than the production profile the real installation carries",
+    "observedAt": "2026-08-31T06:24:00Z",
     "observed": {
-      "generationDigest": "68c69f02807574afbfa6c102fdd6f886f70ed1e5a1f0447ad7901e9ace714bb6",
-      "installationId": "install-464b5f46c7bcecf35935cbd5f7a14c55",
-      "projectionDigest": "0614b0972c0941a836db55ee37ba9ad3cdb0d75e8df85a76c9b6e815182a6d4f",
+      "generationDigest": "f1e1d514a36e3e5c7573d6d371a372438f192a0e758e57123140f4e94cc49e1c",
+      "installationId": "install-7baae823afb4d9bb09864c422a07ce5f",
+      "projectionDigest": "a8bf944ec640ef5f0e6bfeee118d880744f13205b4733f790e125d9c10d30a82",
       "managedWorktree": {
-        "path": ".worktrees/managed/shadow-1",
+        "path": ".worktrees/managed/dlv-2c6b94928f86",
         "projectionPresent": true,
         "gitStatusPorcelain": "",
         "consumptionMarker": {
-          "deliveryId": "delivery-harness-shadow-characterization-1",
+          "deliveryId": "dlv-2c6b94928f86",
           "fence": 1,
           "consumed": "skills/agent-skills-core-v1.zip"
         }
@@ -98,8 +98,23 @@
         "path": ".worktrees/sibling",
         "projectionPresent": false,
         "consumptionMarkerRead": "consumption_marker_missing"
+      },
+      "gateRecordEntry": {
+        "id": "dlv-2c6b94928f86",
+        "category": "code",
+        "countedInComparisonSet": true,
+        "projectionConsumption": {
+          "source": "binding",
+          "affirmative": true,
+          "projectionDigest": "a8bf944ec640ef5f0e6bfeee118d880744f13205b4733f790e125d9c10d30a82",
+          "marker": {
+            "deliveryId": "dlv-2c6b94928f86",
+            "fence": 1,
+            "consumed": "skills/agent-skills-core-v1.zip"
+          }
+        }
       }
     },
-    "conclusion": "the projection landed only in the managed delivery worktree, was invisible to git there, left the repository root and the non-managed worktree untouched, and produced a consumption record the binding — not the session — authored"
+    "conclusion": "the projection landed only in the managed delivery worktree, was invisible to git there, left the repository root and the non-managed worktree untouched, and produced a consumption record the binding — not the session — authored. The same characterization replayed against the previous pin reproduced that pin's recorded generation digest 68c69f02807574afbfa6c102fdd6f886f70ed1e5a1f0447ad7901e9ace714bb6 and emitted no gate-record entry at all, because that generation carries no writer. The entry above is what the re-pin buys, and every field of it matches the shape shadow-milestone-gate-record.json requires of an admissible record."
   }
 }

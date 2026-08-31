@@ -74,13 +74,13 @@ type GuardOptions = Parameters<typeof runShadowDiscoveryGuard>[1];
  * Runs the guard with the real layout observations neutralised by default, and
  * with commit resolution injected.
  *
- * Commit resolution is injected rather than left to git because CI checks out
- * at depth 1: the pinned product commit is a real object in a full clone and
- * simply absent from a shallow one, and git cannot tell those apart. The rule
- * is therefore driven on both branches through the injected resolver plus a
- * scratch-repository row that exercises real git, while the live resolution
- * against the real activation is what `npm run sensor:shadow` performs in a
- * full clone.
+ * Commit resolution is injected so both branches of the rule can be driven from
+ * one row each, without depending on which objects the checkout happens to
+ * carry: a pinned commit absent from a shallow clone and a fabricated one look
+ * identical to git. Real git is exercised alongside, by a scratch-repository
+ * row and by the row that reads the pinned tree — CI checks out full history
+ * for the latter — while the live resolution against the real activation is
+ * what `npm run sensor:shadow` performs.
  */
 async function guard(plant: Plant, options: GuardOptions = {}) {
   const policyDir = await plantPolicyDir(plant);
@@ -263,11 +263,47 @@ describe("the guard's own observations, with nothing injected", () => {
 
 describe("the pinned product commit", () => {
   it("is a full 40-character object id in the real activation", async () => {
-    // The half that is safe to assert under CI's shallow checkout. The other
-    // half — that it resolves — is what `npm run sensor:shadow` enforces in a
-    // full clone, and what the scratch-repository row below proves works.
+    // The half that holds whatever objects the checkout carries. The other
+    // half — that it resolves — is what `npm run sensor:shadow` enforces, and
+    // what the scratch-repository row below proves works.
     const activation = JSON.parse(await readFile(path.join(POLICY_DIR, SHADOW_ACTIVATION_FILE), "utf8"));
     expect(activation.product.commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("names a generation whose tree carries the binding-side gate-record writer and the canonicalized write-path interceptor", async () => {
+    // The pin is what decides whether a shadow delivery can produce an
+    // admissible gate-record entry at all: a generation without the writer
+    // materializes a projection and records nothing, and one without the
+    // canonicalized write path denies legitimate writes in the temp-directory
+    // worktree shape the shadow window uses. Both are properties of the pinned
+    // TREE, so both are read out of it rather than out of the checkout.
+    const activation = JSON.parse(await readFile(path.join(POLICY_DIR, SHADOW_ACTIVATION_FILE), "utf8"));
+    const pin = activation.product.commit as string;
+    const show = (spec: string): string | undefined => {
+      try {
+        return execFileSync("git", ["-C", ROOT, "show", spec], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      } catch {
+        return undefined;
+      }
+    };
+    const writer = show(`${pin}:packages/kernel/src/host/consumption-gate-record.ts`);
+    const interceptor = show(`${pin}:packages/kernel/src/host/hook-main.ts`);
+    if (writer === undefined && interceptor === undefined) {
+      // A shallow clone genuinely does not carry the pinned commit. Reading
+      // nothing is excused only there, so the excuse itself is asserted — in a
+      // full clone an unreadable pin stays a failure, and CI checks out full
+      // history precisely so this row is not excused on every hosted run.
+      expect(
+        execFileSync("git", ["-C", ROOT, "rev-parse", "--is-shallow-repository"], { encoding: "utf8" }).trim(),
+      ).toBe("true");
+      return;
+    }
+    const absent = "<the pinned tree carries no such file>";
+    expect(writer ?? absent).toContain("emitProjectionConsumptionRecord");
+    expect(interceptor ?? absent).toContain("walkPath");
   });
 
   it("refuses an id that does not resolve to a commit", async () => {
@@ -283,7 +319,7 @@ describe("the pinned product commit", () => {
   it("refuses an abbreviated id", async () => {
     const result = await guard({
       activation: (value) => {
-        value.product.commit = "9371d97";
+        value.product.commit = "a88ac86";
       },
     });
     expect(codes(result)).toContain("product_commit_unresolvable");
