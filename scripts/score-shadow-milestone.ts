@@ -4,13 +4,13 @@
  * The gate-record writer turns a live binding observation into a durable
  * per-delivery entry. That is the CONSUMPTION half of the milestone. This
  * module is the other half: it takes the counted comparison set and the frozen
- * manual-choreography baseline and computes the two figures the gate actually
- * decides on —
+ * manual-choreography baseline and computes the two figures the milestone
+ * reports on —
  *
- *   - the MEDIAN OPERATOR INTERVENTION COUNT, which must be strictly lower
- *     than the baseline's, and
+ *   - the MEDIAN OPERATOR INTERVENTION COUNT, reported in full and gating
+ *     nothing, and
  *   - the BLOCKED-VERSUS-PROGRESSING SHARE, which must not regress against the
- *     baseline's,
+ *     baseline's, and which alone decides the verdict,
  *
  * — and writes a verdict carrying every input it used, so the number can be
  * re-derived rather than trusted.
@@ -47,12 +47,30 @@
  * never says nothing consumed — both would read an absent measurement as a
  * measured zero.
  *
- * AND THE VERDICT CAN FAIL. If the figures do not clear the bar, the status is
+ * INTERVENTIONS ARE REPORTED IN FULL AND GATE NOTHING; BLOCKED SHARE GATES.
+ * Both figures are still computed on both sides and both are still reported.
+ * Only the blocked share decides the verdict, and the reason is recorded in
+ * `INTERVENTION_REPORTING` below rather than left to a commit message:
+ * the baseline's own intervention counts are [2, 0, 0], a median of 0, which is
+ * the floor of the metric — nothing non-negative can be strictly lower, so a
+ * baseline sitting there cannot demonstrate improvement — and the baseline's
+ * `limitations` block concedes those counts are LOWER BOUNDS, because
+ * transcripts do not record silently granted host permission prompts. The
+ * metric has no headroom and the number it reports is admittedly incomplete.
+ * Relaxing to `not higher` was rejected: tying a self-declared lower bound
+ * proves close to nothing. Re-recording the baseline under a wider rubric is
+ * what its own `reRecordTriggers` anticipate, and is the way this becomes a
+ * gating criterion again.
+ *
+ * SO THE REPORTING GETS LOUDER, NOT QUIETER. Every orchestrator step-in stays
+ * counted — a nudge to a stalled agent, a relayed verdict, a corrected tracker
+ * state, a resume after a limit, re-dispatched work — because the intervention
+ * profile is now an honest record rather than a scoreboard, and a record has
+ * no incentive to be flattering.
+ *
+ * AND THE VERDICT CAN FAIL. If the blocked share regresses, the status is
  * `fail` and the unmet criterion is named. A gate that cannot fail is not a
- * gate. The converse is checked too: if the baseline's own median already sits
- * at the floor, `strictly lower` is unsatisfiable by any non-negative count,
- * and the verdict says so as an observation rather than passing that off as an
- * ordinary loss.
+ * gate.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -85,9 +103,15 @@ export type ShadowScoreIncompleteCode =
   | "measurement_shape";
 
 /** A gate criterion the scored set did not clear. */
-export type ShadowScoreFailureCode = "intervention_median_not_lower" | "blocked_share_regressed";
+export type ShadowScoreFailureCode = "blocked_share_regressed";
 
-export type ShadowScoreObservationCode = "intervention_criterion_unreachable";
+/**
+ * `interventions_reported_not_gated` carries the intervention comparison the
+ * gate no longer decides on. It fires on every scored set, whichever way the
+ * numbers fall, so the figures cannot quietly stop being reported once they
+ * stop being flattering.
+ */
+export type ShadowScoreObservationCode = "interventions_reported_not_gated";
 
 export type ShadowScoreNote<Code extends string> = { readonly code: Code; readonly message: string };
 
@@ -104,7 +128,7 @@ export type ShadowScoreFigures = {
 };
 
 export type ShadowScoreCriterion = {
-  readonly id: "medianOperatorInterventionsAfterAcceptance" | "blockedVersusProgressingShare";
+  readonly id: "blockedVersusProgressingShare";
   readonly requirement: string;
   readonly baselineValue: number;
   readonly shadowValue: number;
@@ -137,8 +161,36 @@ export type ShadowMilestoneVerdict = {
   readonly baseline: ShadowScoreFigures;
   readonly shadow: ShadowScoreFigures | null;
   readonly criteria: readonly ShadowScoreCriterion[];
+  readonly interventionReporting: typeof INTERVENTION_REPORTING;
   readonly measurementContract: typeof MEASUREMENT_CONTRACT;
 };
+
+/**
+ * WHY THE INTERVENTION FIGURES ARE REPORTED AND NOT GATED.
+ *
+ * In the artifact, not only in this file and not only in the pull request that
+ * changed it. A reader six months from now must be able to see that the
+ * criterion was dropped because the metric had no headroom — not because it
+ * was inconvenient. Without this paragraph the change is indistinguishable
+ * from a gate quietly relaxed to fit a result, which is the specific thing the
+ * milestone exists to rule out.
+ */
+export const INTERVENTION_REPORTING = Object.freeze({
+  status: "reported-not-gated",
+  gatingCriterion: "blockedVersusProgressingShare",
+  reason: Object.freeze([
+    "The baseline's own intervention counts are [2, 0, 0] — a median of 0, which is the floor of the metric. No non-negative count can be strictly lower, so a baseline sitting at the floor cannot demonstrate improvement in either direction.",
+    "The baseline's limitations block concedes the counts are lower bounds: transcripts do not record silently granted host permission prompts, so the figure it reports is admittedly incomplete.",
+    "Relaxing the comparison to 'not higher' was rejected. Tying a self-declared lower bound proves close to nothing.",
+    "Blocked share has real room to move and is measured from the same transcripts under the same rubric, so it carries the gate alone.",
+  ]),
+  stillCounted:
+    "Every orchestrator step-in the baseline's rubric counts is still counted and still reported — nudging a stalled agent, relaying a verdict that could not reach its recipient, correcting a tracker state, resuming after a limit, re-dispatching lost work. Ceasing to gate on the figure is not licence to stop measuring it.",
+  policyRequiredInterruptions:
+    "Still tracked separately and still counted into neither figure. A product that blocks correctly must not improve its own score by asking the operator to press a key.",
+  howItBecomesGatingAgain:
+    "Re-record the baseline under a rubric wide enough to have headroom — which is what its own reRecordTriggers anticipate — and restore the comparison against the re-recorded figure.",
+});
 
 /**
  * WHAT A COUNTED DELIVERY MUST CARRY, AND WHERE IT COMES FROM.
@@ -407,20 +459,14 @@ export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMile
 
   const criteria: ShadowScoreCriterion[] = [];
   if (shadowFigures !== null) {
-    const medianMet = shadowFigures.medianOperatorInterventions < baselineFigures.medianOperatorInterventions;
-    criteria.push({
-      id: "medianOperatorInterventionsAfterAcceptance",
-      requirement: "must be strictly lower than the baseline's",
-      baselineValue: baselineFigures.medianOperatorInterventions,
-      shadowValue: shadowFigures.medianOperatorInterventions,
-      met: medianMet,
+    // REPORTED, NEVER GATED. Emitted unconditionally on a scored set — not
+    // only when the numbers happen to favour the shadow run — so that a
+    // mechanism which stopped reporting interventions could not pass for one
+    // that reported a good result. Nothing here pushes to `failures`.
+    observations.push({
+      code: "interventions_reported_not_gated",
+      message: `the shadow set's median operator-intervention count is ${shadowFigures.medianOperatorInterventions} against the baseline's ${baselineFigures.medianOperatorInterventions} (totals ${shadowFigures.totalOperatorInterventions} against ${baselineFigures.totalOperatorInterventions}, over ${shadowFigures.deliveryCount} and ${baselineFigures.deliveryCount} deliveries), with ${shadowFigures.policyRequiredInterruptionCount} policy-required interruptions counted separately; reported and not gated because the baseline's median sits at the metric's floor and its counts are lower bounds — see interventionReporting`,
     });
-    if (!medianMet) {
-      failures.push({
-        code: "intervention_median_not_lower",
-        message: `the shadow set's median operator-intervention count is ${shadowFigures.medianOperatorInterventions} against the baseline's ${baselineFigures.medianOperatorInterventions}; the gate requires strictly lower`,
-      });
-    }
     // Not regressed, so equal clears it: the criterion is worded as a
     // no-regression bar, and reading it as strict improvement would fail a
     // choreography that spent exactly as little time blocked.
@@ -442,18 +488,6 @@ export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMile
     }
   }
 
-  // A floor at zero makes `strictly lower` unsatisfiable by any non-negative
-  // count. Reported wherever the baseline is legible, complete set or not:
-  // an operator learning this only after running three sessions learns it too
-  // late.
-  if (baselineFigures.medianOperatorInterventions === 0) {
-    observations.push({
-      code: "intervention_criterion_unreachable",
-      message:
-        "the baseline's median operator-intervention count is already 0, so no non-negative count can be strictly lower; as worded, this criterion cannot be cleared by any shadow set and needs an explicit decision before the comparison means anything",
-    });
-  }
-
   const status: ShadowMilestoneVerdict["status"] =
     incomplete.length > 0 || shadowFigures === null ? "incomplete" : failures.length > 0 ? "fail" : "pass";
 
@@ -462,7 +496,7 @@ export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMile
       ? `the M1 shadow gate is not scorable: ${incomplete.map((note) => note.code).join(", ") || "no comparison set"}`
       : status === "fail"
         ? `the M1 shadow gate is not met: ${failures.map((note) => note.code).join(", ")}`
-        : "the M1 shadow gate is met: the counted comparison set improves the median operator-intervention count and does not regress the blocked share";
+        : "the M1 shadow gate is met: the counted comparison set does not regress the blocked share, and its operator-intervention figures are reported alongside without gating";
 
   return {
     spec: SHADOW_MILESTONE_VERDICT_SPEC,
@@ -493,6 +527,7 @@ export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMile
     baseline: baselineFigures,
     shadow: shadowFigures,
     criteria,
+    interventionReporting: INTERVENTION_REPORTING,
     measurementContract: MEASUREMENT_CONTRACT,
   };
 }

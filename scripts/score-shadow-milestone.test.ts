@@ -134,14 +134,23 @@ describe("the frozen baseline is characterized before anything is scored against
     expect(verdict.inputs.baseline.capturedAt).toBe(baseline.capturedAt);
   });
 
-  it("reports that the frozen baseline's median sits at the floor, so strictly-lower is unsatisfiable", () => {
+  it("records in the artifact itself why the intervention figures are reported and not gated", () => {
+    // The rationale has to survive without this test file and without the pull
+    // request that changed it. A reader must be able to see that the metric had
+    // no headroom, rather than infer a criterion dropped for convenience.
     const verdict = scoreShadowMilestone(baseline, gateRecord([]));
-    expect(verdict.observations.map((note) => note.code)).toContain("intervention_criterion_unreachable");
+    expect(verdict.interventionReporting.status).toBe("reported-not-gated");
+    expect(verdict.interventionReporting.gatingCriterion).toBe("blockedVersusProgressingShare");
+    const reason = verdict.interventionReporting.reason.join(" ");
+    expect(reason).toContain("floor of the metric");
+    expect(reason).toContain("lower bounds");
+    expect(verdict.interventionReporting.stillCounted).toContain("still counted");
+    expect(verdict.interventionReporting.howItBecomesGatingAgain).toContain("Re-record the baseline");
   });
 
-  it("does not report the criterion unreachable when the baseline median is above the floor", () => {
-    const verdict = scoreShadowMilestone(reachableBaseline, gateRecord([]));
-    expect(verdict.observations.map((note) => note.code)).not.toContain("intervention_criterion_unreachable");
+  it("pins the baseline figure the decision rests on: a median already at the floor", () => {
+    const verdict = scoreShadowMilestone(baseline, gateRecord([]));
+    expect(verdict.baseline.medianOperatorInterventions).toBe(0);
   });
 
   it("refuses a baseline that is not the frozen manual-choreography artifact", () => {
@@ -378,26 +387,59 @@ describe("a malformed measurement makes the set incomplete, never a scored zero"
   });
 });
 
-describe("the gate can be lost", () => {
-  it("fails when the median intervention count is not strictly lower", () => {
-    const verdict = scoreShadowMilestone(
-      reachableBaseline,
-      fullSet([{ interventionCount: 2 }, { interventionCount: 2 }, { interventionCount: 2 }]),
-    );
-    expect(verdict.status).toBe("fail");
-    expect(verdict.failures.map((note) => note.code)).toEqual(["intervention_median_not_lower"]);
-    expect(verdict.criteria.find((row) => row.id === "medianOperatorInterventionsAfterAcceptance")?.met).toBe(false);
-  });
+describe("operator interventions are reported in full and gate nothing", () => {
+  const worseInterventions = fullSet([
+    { interventionCount: 9 },
+    { interventionCount: 9 },
+    { interventionCount: 9 },
+  ]);
 
-  it("passes when the median intervention count is strictly lower", () => {
-    const verdict = scoreShadowMilestone(
-      reachableBaseline,
-      fullSet([{ interventionCount: 1 }, { interventionCount: 1 }, { interventionCount: 1 }]),
-    );
+  it("does not fail a set whose interventions are far worse than the baseline's", () => {
+    // The gating direction. A scorer that still gated on interventions would
+    // fail this set — its median of 9 is well above the baseline's 2.
+    const verdict = scoreShadowMilestone(reachableBaseline, worseInterventions);
     expect(verdict.status).toBe("pass");
-    expect(verdict.criteria.find((row) => row.id === "medianOperatorInterventionsAfterAcceptance")?.met).toBe(true);
+    expect(verdict.failures).toEqual([]);
   });
 
+  it("names blocked share as the only criterion the verdict is decided on", () => {
+    const verdict = scoreShadowMilestone(reachableBaseline, worseInterventions);
+    expect(verdict.criteria.map((row) => row.id)).toEqual(["blockedVersusProgressingShare"]);
+  });
+
+  it("still reports the intervention comparison, with its real figures, on that same set", () => {
+    // The reporting direction, and the absence-assertion guard: a mechanism
+    // that had stopped reporting interventions altogether would satisfy the
+    // does-not-fail test above for free. The numbers must actually be there.
+    const verdict = scoreShadowMilestone(reachableBaseline, worseInterventions);
+    expect(verdict.shadow?.medianOperatorInterventions).toBe(9);
+    expect(verdict.shadow?.totalOperatorInterventions).toBe(27);
+    const note = verdict.observations.find((row) => row.code === "interventions_reported_not_gated");
+    expect(note).toBeDefined();
+    // Both sides, in one phrase, so a bare "reported" cannot satisfy this and
+    // a stray digit elsewhere in the sentence cannot either.
+    expect(note!.message).toContain("median operator-intervention count is 9 against the baseline's 2");
+    expect(note!.message).toContain("totals 27 against 8");
+  });
+
+  it("reports them just the same when the set is favourable, so the figure cannot go quiet when it flatters", () => {
+    const verdict = scoreShadowMilestone(
+      reachableBaseline,
+      fullSet([{ interventionCount: 0 }, { interventionCount: 0 }, { interventionCount: 0 }]),
+    );
+    expect(verdict.observations.map((row) => row.code)).toContain("interventions_reported_not_gated");
+    expect(verdict.shadow?.medianOperatorInterventions).toBe(0);
+    expect(verdict.status).toBe("pass");
+  });
+
+  it("reports nothing to compare when there is no scored set, rather than inventing a zero", () => {
+    const verdict = scoreShadowMilestone(reachableBaseline, gateRecord([]));
+    expect(verdict.observations.map((row) => row.code)).not.toContain("interventions_reported_not_gated");
+    expect(verdict.shadow).toBeNull();
+  });
+});
+
+describe("the gate can be lost", () => {
   it("fails on a regressed blocked share even when interventions improved", () => {
     const verdict = scoreShadowMilestone(
       reachableBaseline,
@@ -409,7 +451,6 @@ describe("the gate can be lost", () => {
     );
     expect(verdict.status).toBe("fail");
     expect(verdict.failures.map((note) => note.code)).toEqual(["blocked_share_regressed"]);
-    expect(verdict.criteria.find((row) => row.id === "medianOperatorInterventionsAfterAcceptance")?.met).toBe(true);
   });
 
   it("clears the share criterion on an exactly equal share, which is a no-regression bar", () => {
@@ -465,6 +506,13 @@ describe("the committed verdict artifact matches the tree it was computed from",
     expect(committed.spec).toBe(SHADOW_MILESTONE_VERDICT_SPEC);
     expect(committed.inputs.baseline.path).toBe(BASELINE_PATH);
     expect(committed.inputs.gateRecord.path).toBe(GATE_RECORD_PATH);
+  });
+
+  it("carries the reported-not-gated rationale, so the artifact explains itself without this repository's history", () => {
+    const committed = readJson(VERDICT_PATH);
+    expect(committed.interventionReporting.status).toBe("reported-not-gated");
+    expect(committed.interventionReporting.reason.join(" ")).toContain("floor of the metric");
+    expect(committed.interventionReporting.reason.join(" ")).toContain("lower bounds");
   });
 
   it("states the measurement contract, including that the transcript must survive the session", () => {

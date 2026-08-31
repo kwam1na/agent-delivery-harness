@@ -9,12 +9,7 @@
     }
   ],
   "failures": [],
-  "observations": [
-    {
-      "code": "intervention_criterion_unreachable",
-      "message": "the baseline's median operator-intervention count is already 0, so no non-negative count can be strictly lower; as worded, this criterion cannot be cleared by any shadow set and needs an explicit decision before the comparison means anything"
-    }
-  ],
+  "observations": [],
   "inputs": {
     "baseline": {
       "path": "qualifications/manual-choreography-baseline.json",
@@ -51,6 +46,19 @@
   },
   "shadow": null,
   "criteria": [],
+  "interventionReporting": {
+    "status": "reported-not-gated",
+    "gatingCriterion": "blockedVersusProgressingShare",
+    "reason": [
+      "The baseline's own intervention counts are [2, 0, 0] — a median of 0, which is the floor of the metric. No non-negative count can be strictly lower, so a baseline sitting at the floor cannot demonstrate improvement in either direction.",
+      "The baseline's limitations block concedes the counts are lower bounds: transcripts do not record silently granted host permission prompts, so the figure it reports is admittedly incomplete.",
+      "Relaxing the comparison to 'not higher' was rejected. Tying a self-declared lower bound proves close to nothing.",
+      "Blocked share has real room to move and is measured from the same transcripts under the same rubric, so it carries the gate alone."
+    ],
+    "stillCounted": "Every orchestrator step-in the baseline's rubric counts is still counted and still reported — nudging a stalled agent, relaying a verdict that could not reach its recipient, correcting a tracker state, resuming after a limit, re-dispatching lost work. Ceasing to gate on the figure is not licence to stop measuring it.",
+    "policyRequiredInterruptions": "Still tracked separately and still counted into neither figure. A product that blocks correctly must not improve its own score by asking the operator to press a key.",
+    "howItBecomesGatingAgain": "Re-record the baseline under a rubric wide enough to have headroom — which is what its own reRecordTriggers anticipate — and restore the comparison against the re-recorded figure."
+  },
   "measurementContract": {
     "scoredBy": "operator",
     "againstRubric": "the baseline's operatorInterventionRubric, by the baseline's own method.scoring steps",
