@@ -429,7 +429,7 @@ export interface VerifyDeliveryRecordOptions {
 }
 
 /** True when the path lies INSIDE one of the delivery-owned sets. */
-function isDeliveryOwnedTreePath(repoPath: string): boolean {
+export function isDeliveryOwnedTreePath(repoPath: string): boolean {
   const segments = repoPath.split("/");
   return segments.length > 1 && DELIVERY_OWNED_TREE_PREFIXES.includes(segments[0] as string);
 }

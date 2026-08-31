@@ -153,6 +153,14 @@ describe("evaluateWaiverConsumption", () => {
     expect(codesOf(verdict)).toContain("waiver_self_approved");
   });
 
+  it("refuses an origin that names nobody — a blank identity approves in no one's name", () => {
+    for (const origin of ["waiver-approval:", "waiver-approval:   ", "managed-delivery.facade"]) {
+      expect(codesOf(evaluateWaiverConsumption(assertionFor({ origin }), contextFor()))).toContain(
+        "waiver_approver_unnamed",
+      );
+    }
+  });
+
   it("refuses consumption after admission — only reviewing, remediating, and admitting carry a waiver", () => {
     for (const state of ["recording", "ready", "completed"] as const) {
       expect(codesOf(evaluateWaiverConsumption(assertionFor(), contextFor({ deliveryState: state })))).toContain(

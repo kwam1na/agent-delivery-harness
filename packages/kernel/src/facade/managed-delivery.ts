@@ -61,8 +61,8 @@ import { digestCanonical, sha256Hex } from "../digest.ts";
 import { createArtifactsPort } from "../artifacts.ts";
 import { runAdmission } from "../admission.ts";
 import {
-  DELIVERY_OWNED_TREE_PREFIXES,
   buildDeliveryRecord,
+  isDeliveryOwnedTreePath,
   deliveryRecordBytes,
   deliveryRecordPathFor,
   parseDeliveryRecord,
@@ -2993,15 +2993,12 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // no record can excuse, and it is caught here as well as by the
       // external verifier below — two independent statements of one rule,
       // sharing one closed constant so they cannot drift.
-      const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "HEAD");
-      const candidateTreePaths = listed.out
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-      const owned = candidateTreePaths.filter((repoPath) => {
-        const segments = repoPath.split("/");
-        return segments.length > 1 && DELIVERY_OWNED_TREE_PREFIXES.includes(segments[0] as string);
-      });
+      // `-z` and NUL separation, never newline splitting: without it git
+      // quotes a path containing a newline, and the quoted form no longer
+      // starts with the delivery-owned segment it is inside.
+      const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
+      const candidateTreePaths = listed.out.split("\u0000").filter((entry) => entry.length > 0);
+      const owned = candidateTreePaths.filter(isDeliveryOwnedTreePath);
       if (owned.length > 0) {
         await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
           code: "record.protected-authority-path",
@@ -3024,11 +3021,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const admitted = currentCandidateOf(guarded.views);
       const recordTree = (await git(rootDir, "rev-parse", "HEAD^{tree}")).out;
       if (admitted !== undefined && admitted.treeSha !== recordTree) {
-        const changed = await git(rootDir, "diff", "--name-only", admitted.treeSha, recordTree);
+        const changed = await git(rootDir, "diff", "--name-only", "-z", admitted.treeSha, recordTree);
         const nonNeutral = changed.out
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
+          .split("\u0000")
+          .filter((entry) => entry.length > 0)
           .filter((repoPath) => !(isReviewNeutralPath(input.config, repoPath) && isRecordNeutralPath(input.config, repoPath)));
         if (nonNeutral.length > 0) {
           // The frozen matrix has a direct edge for exactly this: any
@@ -3069,24 +3065,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
         { candidateTreePaths },
       );
-      if (!check.ok) {
-        // A committed delivery-owned path is a candidate defect, not a record
-        // defect: it returns through validation like any other non-neutral
-        // change rather than leaving the delivery stuck in `recording`.
-        if (check.blockers.some((blocker) => blocker.code === "record_protected_authority_path")) {
-          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
-            code: "record.protected-authority-path",
-            summary: check.blockers
-              .filter((blocker) => blocker.code === "record_protected_authority_path")
-              .map((blocker) => blocker.summary)
-              .join("; ")
-              .slice(0, 1900),
-          });
-          const returned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "recording", to: "validating" });
-          if (!returned.ok) return returned;
-        }
-        return refuseWith(check.blockers);
-      }
+      if (!check.ok) return refuseWith(check.blockers);
 
       const treeSha = (await git(rootDir, "rev-parse", "HEAD^{tree}")).out;
       const branchRefValue = (await git(rootDir, "rev-parse", `refs/heads/${workspace.branchRef}`)).out;

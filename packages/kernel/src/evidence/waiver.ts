@@ -82,9 +82,11 @@ export type WaiverConsumptionVerdict =
 
 /** The approving identity an assertion origin names, when it names one. */
 function approverOf(origin: unknown): string | undefined {
-  return typeof origin === "string" && origin.startsWith(WAIVER_APPROVAL_ORIGIN_PREFIX)
-    ? origin.slice(WAIVER_APPROVAL_ORIGIN_PREFIX.length)
-    : undefined;
+  if (typeof origin !== "string" || !origin.startsWith(WAIVER_APPROVAL_ORIGIN_PREFIX)) return undefined;
+  // An empty or blank identity names nobody: it would pass the distinctness
+  // rule against any real proposer while approving in nobody's name.
+  const approver = origin.slice(WAIVER_APPROVAL_ORIGIN_PREFIX.length).trim();
+  return approver.length > 0 ? approver : undefined;
 }
 
 export function evaluateWaiverConsumption(

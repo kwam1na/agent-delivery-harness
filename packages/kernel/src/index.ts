@@ -311,6 +311,7 @@ export {
   buildDeliveryRecord,
   deliveryRecordBytes,
   deliveryRecordPathFor,
+  isDeliveryOwnedTreePath,
   parseDeliveryRecord,
   selectDeliveryRecordForIdentity,
   verifyDeliveryRecord,
