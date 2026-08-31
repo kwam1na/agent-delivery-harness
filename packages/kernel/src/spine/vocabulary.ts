@@ -150,8 +150,13 @@ export const EVENT_VOCABULARY: readonly EventKindEntry[] = Object.freeze([
   // durable fact about the PRIOR invocation, so it advances the expected
   // journal revision and is not part of the observation-only exemption.
   entry("delivery", "termination.provenance.recorded", "active"),
+  // Defined by the amendment/waiver admission unit out of reservation — the
+  // sanctioned per-tranche path: the pair was enumerated with this owner from
+  // the start, and its payload is now frozen in `journal.ts`. It records a
+  // confirmed outcome amendment, which creates a NEW contract identity; the
+  // full re-evaluation it forces is an ordinary transition beside it.
+  entry("delivery", "contract.amended", "active"),
   // Reserved — payloads belong to their owning units; reject until defined.
-  entry("delivery", "contract.amended", "reserved", false, "amendment/waiver admission"),
   entry("delivery", "action.intent.recorded", "reserved", false, "finish-line actions"),
   entry("delivery", "action.result.recorded", "reserved", false, "finish-line actions"),
   entry("delivery", "control.plane.mirror.recorded", "reserved", true, "control-plane coordination"),

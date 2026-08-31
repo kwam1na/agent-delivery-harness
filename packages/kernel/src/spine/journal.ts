@@ -333,6 +333,34 @@ const terminationProvenancePayload: PayloadCheck = (payload, at, collector) => {
   }
 };
 
+/**
+ * `contract.amended`: a confirmed outcome amendment or waiver that changed the
+ * intended outcome. The whole point of the record is that it creates a NEW
+ * contract identity, so an "amendment" whose new identity is the old one
+ * rejects — an amendment that changes nothing is not one.
+ */
+const contractAmendedPayload: PayloadCheck = (payload, at, collector) => {
+  checkClosed(
+    payload,
+    at,
+    [
+      { name: "previousContractId", check: spineId },
+      { name: "contractId", check: spineId },
+      { name: "contractDigest", check: sha256 },
+      { name: "criterionId", check: spineId },
+      { name: "assertionNonce", check: spineId },
+    ],
+    collector,
+  );
+  if (typeof payload["contractId"] === "string" && payload["contractId"] === payload["previousContractId"]) {
+    collector.emit(
+      "unsupported_combination",
+      `${at}/contractId`,
+      "a confirmed amendment creates a new contract identity; reusing the superseded identity is not an amendment",
+    );
+  }
+};
+
 /** Payload tables for every ACTIVE (journal, kind) pair — frozen here. */
 const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "intake/intake.state.changed": table([
@@ -434,6 +462,7 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "delivery/finish.line.recorded": table([{ name: "result", check: embedded(validateFinishLineResult) }]),
   "delivery/termination.provenance.recorded": terminationProvenancePayload,
   "delivery/approval.assertion.consumed": assertionConsumedPayload,
+  "delivery/contract.amended": contractAmendedPayload,
   "maintenance/maintenance.action.recorded": maintenanceActionPayload,
   // The retention/export/deletion contract family. The record names its
   // target delivery, digests the produced artifact (the export bundle, or the

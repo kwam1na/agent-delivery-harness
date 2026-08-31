@@ -304,6 +304,7 @@ export {
 // core the `verify` command and the GitHub Action share.
 export {
   ATTESTATION_LABEL,
+  DELIVERY_OWNED_TREE_PREFIXES,
   DELIVERY_RECORD_DRIFT_CLASSES,
   DELIVERY_RECORD_VERSION,
   bindingOf,
@@ -324,6 +325,7 @@ export {
   type ParseDeliveryRecordResult,
   type RecomputedIdentity,
   type VerificationBase,
+  type VerifyDeliveryRecordOptions,
 } from "./delivery-record.ts";
 
 // ── The managed-delivery contract spine ─────────────────────────────────────
@@ -631,6 +633,7 @@ export {
 // the qualified Claude Code admission composition, the mandatory review
 // floor, the merge-ready finish line, and one typed status/resume surface.
 export {
+  DISPOSABLE_OUTCOME_AUTHORITIES,
   DISPOSABLE_REVIEW_LENSES,
   DISPOSABLE_SENSOR_CAPABILITY,
   DISPOSABLE_STAGE_GRANT,
@@ -758,12 +761,34 @@ export {
   checkReviewFloor,
   composeOutcomeVerification,
   qualifyReviewAttempts,
+  type ConsumedWaiver,
   type QualifiedAttempts,
   type RecordedReviewAttempt,
   type RecordedSensorResult,
   type ReviewRejection,
   type ReviewVerdict,
 } from "./evidence/review.ts";
+// The waiver doctrine: every waiver a consumed sensitive approval, never a
+// disposition an agent writes for itself.
+export {
+  WAIVER_ACTIONS,
+  WAIVER_APPROVAL_ORIGIN_PREFIX,
+  checkPositiveCriterion,
+  evaluateWaiverConsumption,
+  type PositiveCriterionVerdict,
+  type WaiverAction,
+  type WaiverConsumptionContext,
+  type WaiverConsumptionVerdict,
+  type WaiverProposal,
+  type WaiverRefusal,
+} from "./evidence/waiver.ts";
+// The blocker/remediation inventory — the audit surface for review loops.
+export {
+  DELIVERY_BLOCKER_REMEDIATIONS,
+  composeBlockerInventory,
+  remediationFor,
+  type BlockerInventoryEntry,
+} from "./evidence/blocker-inventory.ts";
 export { composeMergeReadyResult, type ComposeMergeReadyResult } from "./finish-line/merge-ready.ts";
 export {
   createManagedDeliveryFacade,

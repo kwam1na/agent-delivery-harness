@@ -73,6 +73,20 @@ export const DELIVERY_RECORD_DRIFT_CLASSES = [
 
 export type DeliveryRecordDriftClass = (typeof DELIVERY_RECORD_DRIFT_CLASSES)[number];
 
+/**
+ * The two closed, delivery-owned path sets that may never appear in a
+ * candidate tree: the receipted run-pinned projection subtree, and the
+ * binding-written host discovery configuration. Inside a run the compiled
+ * execution grant protects them; here — in the compiled external verifier a
+ * reviewer or a CI job runs, with no product state to consult — a committed
+ * path inside either set is a protected-authority-path violation on its own
+ * evidence. The two lists are held identical by a sensor in the test suite.
+ *
+ * Membership is by path SEGMENT, never by string prefix: `src/managed-
+ * projection-notes.md` names one of these and is nothing to do with it.
+ */
+export const DELIVERY_OWNED_TREE_PREFIXES: readonly string[] = Object.freeze([".managed-projection", ".claude"]);
+
 const DELIVERY_RECORD_SOURCE: BlockerSource = { kind: "delivery-record", id: "delivery-harness.delivery-record" };
 
 const RERECORD: Remediation = {
@@ -404,11 +418,28 @@ export interface DeliveryRecordCheck {
  * from the PR head (never the synthetic merge commit); `base` is the current base
  * state. `workspaceId` is never consulted.
  */
+export interface VerifyDeliveryRecordOptions {
+  /**
+   * The candidate tree's paths, when the caller can enumerate them. Supplied,
+   * the verifier independently rejects any tree carrying a projection or
+   * discovery-configuration path; omitted, that check simply does not run —
+   * this core never reads a repository itself.
+   */
+  readonly candidateTreePaths?: readonly string[];
+}
+
+/** True when the path lies INSIDE one of the delivery-owned sets. */
+function isDeliveryOwnedTreePath(repoPath: string): boolean {
+  const segments = repoPath.split("/");
+  return segments.length > 1 && DELIVERY_OWNED_TREE_PREFIXES.includes(segments[0] as string);
+}
+
 export function verifyDeliveryRecord(
   config: HarnessConfig,
   record: DeliveryRecord,
   recomputedIdentity: RecomputedIdentity,
   base: VerificationBase,
+  options: VerifyDeliveryRecordOptions = {},
 ): DeliveryRecordCheck {
   const policy = config.deliveryRecordVerification.baseMovement;
   const blockers: Blocker[] = [];
@@ -468,6 +499,20 @@ export function verifyDeliveryRecord(
     if (claim.outcome === "blocked") {
       blockers.push(drBlocker("record_claim_blocked", `Claim for ${claim.obligationId} carries a blocked outcome; a record must not.`));
     }
+  }
+
+  // The delivery-owned path sets, judged on the tree's own evidence. This is
+  // the verifier's independent half of the protected-authority-path rule: no
+  // product state, no journal, no grant — just the committed paths.
+  for (const repoPath of options.candidateTreePaths ?? []) {
+    if (!isDeliveryOwnedTreePath(repoPath)) continue;
+    blockers.push(
+      drBlocker(
+        "record_protected_authority_path",
+        `The candidate tree carries ${JSON.stringify(repoPath)}, inside a delivery-owned projection or discovery-configuration path.`,
+        `delivery-owned prefixes: ${DELIVERY_OWNED_TREE_PREFIXES.join(", ")}`,
+      ),
+    );
   }
 
   // Coverage: every declared obligation must be accounted for by a claim.

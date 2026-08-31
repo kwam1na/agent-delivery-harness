@@ -174,4 +174,28 @@ describe("composeOutcomeVerification", () => {
     });
     expect(outcome.criteria[0]?.disposition).toBe("blocked");
   });
+
+  it("records amended-waived only for a criterion whose waiver was CONSUMED, naming the approval", () => {
+    const outcome = composeOutcomeVerification({
+      contract,
+      candidate: { treeSha: candidateTreeSha, deliverableDigest: "f".repeat(64) },
+      sensorResults: [],
+      attempts,
+      waivedCriteria: [{ criterionId: "greeting-behavior", reference: "waive-criterion by ops-lead (nonce-waiver-1)" }],
+    });
+    expect(outcome.criteria[0]?.disposition).toBe("amended-waived");
+    expect(outcome.criteria[0]?.evidence.kind).toBe("review");
+    expect(outcome.criteria[0]?.evidence.reference).toContain("ops-lead");
+  });
+
+  it("keeps a passing criterion passed — a waiver never downgrades real evidence", () => {
+    const outcome = composeOutcomeVerification({
+      contract,
+      candidate: { treeSha: candidateTreeSha, deliverableDigest: "f".repeat(64) },
+      sensorResults: [sensorPassed],
+      attempts,
+      waivedCriteria: [{ criterionId: "greeting-behavior", reference: "waive-criterion by ops-lead (nonce-waiver-1)" }],
+    });
+    expect(outcome.criteria[0]?.disposition).toBe("passed");
+  });
 });

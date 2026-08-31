@@ -270,7 +270,10 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     kind: "dir",
     rules: ["d1", "e"],
     status: "present",
-    d1Allowlist: ["spine/grammar.ts"],
+    // The waiver lane consumes the sensitive-approval assertion contract the
+    // composition-lifecycle unit froze; it never re-authors an approval
+    // primitive of its own.
+    d1Allowlist: ["spine/grammar.ts", "spine/assertion.ts", "spine/vocabulary.ts"],
     d1SiblingAllowance: true,
   },
   {

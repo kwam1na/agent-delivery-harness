@@ -19,6 +19,19 @@ import { REPOSITORY_POLICY_DOCUMENT_SPEC } from "./document.ts";
 
 export { MANDATORY_LENS_CATEGORIES } from "./compile.ts";
 
+/**
+ * The fixed policy's declared outcome authorities: the identities allowed to
+ * confirm that an intended OUTCOME changed, as opposed to merely waiving a
+ * criterion. A repository declaring none cannot amend an outcome mid-delivery
+ * at all — absence of a grant is denial — so the disposable policy declares
+ * exactly one, and no agent identity is ever in the list.
+ *
+ * Like the lens and sensor constants beside it, this is fixed-policy data the
+ * skeleton reads directly; the layered policy document generalizes it along
+ * with them.
+ */
+export const DISPOSABLE_OUTCOME_AUTHORITIES: readonly string[] = Object.freeze(["operator"]);
+
 /** The two lenses the fixed policy activates, one per mandatory category. */
 export const DISPOSABLE_REVIEW_LENSES = Object.freeze([
   { lensId: "lens.outcome-correctness", category: "outcome-correctness" },

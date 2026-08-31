@@ -47,12 +47,12 @@ describe("the journal-entry envelope", () => {
   });
 
   it("rejects a reserved kind WITH a payload", () => {
-    const codes = codesOf(entry({ kind: "contract.amended", payload: { anything: 1 } }));
+    const codes = codesOf(entry({ kind: "action.intent.recorded", payload: { anything: 1 } }));
     expect(codes).toContain("reserved_kind");
   });
 
   it("rejects a reserved kind WITHOUT a payload", () => {
-    const value = entry({ kind: "contract.amended" });
+    const value = entry({ kind: "action.intent.recorded" });
     delete value["payload"];
     expect(codesOf(value)).toContain("reserved_kind");
   });
@@ -231,5 +231,25 @@ describe("the journal-entry envelope", () => {
     expect(codesOf(retention({ ...wellFormed, transcript: "raw bytes" }))).toContain("unknown_member");
     // The kind homes only in the maintenance journal.
     expect(codesOf(entry({ kind: "retention.action.recorded", payload: wellFormed }))).toContain("unknown_kind");
+  });
+
+  it("freezes contract.amended: a confirmed amendment creating a NEW contract identity", () => {
+    const amended = (payload: Record<string, unknown>): Record<string, unknown> =>
+      entry({ kind: "contract.amended", payload });
+    const wellFormed = {
+      previousContractId: "contract-1",
+      contractId: "contract-2",
+      contractDigest: DIGEST,
+      criterionId: "greeting-behavior",
+      assertionNonce: "nonce-waiver-1",
+    };
+    expect(validateJournalEntry(amended(wellFormed))).toEqual({ ok: true });
+    // A "new" identity that is the old one is no amendment at all.
+    expect(codesOf(amended({ ...wellFormed, contractId: "contract-1" }))).toContain("unsupported_combination");
+    // Closed table, and the kind homes only in the delivery journal.
+    expect(codesOf(amended({ ...wellFormed, rationale: "because" }))).toContain("unknown_member");
+    expect(
+      codesOf(entry({ journal: "maintenance", subjectId: "install-1", kind: "contract.amended", payload: wellFormed })),
+    ).toContain("unknown_kind");
   });
 });

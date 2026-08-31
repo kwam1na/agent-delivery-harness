@@ -60,17 +60,25 @@ import {
 import { digestCanonical, sha256Hex } from "../digest.ts";
 import { createArtifactsPort } from "../artifacts.ts";
 import { runAdmission } from "../admission.ts";
-import { buildDeliveryRecord, deliveryRecordBytes, deliveryRecordPathFor, parseDeliveryRecord, verifyDeliveryRecord } from "../delivery-record.ts";
+import {
+  DELIVERY_OWNED_TREE_PREFIXES,
+  buildDeliveryRecord,
+  deliveryRecordBytes,
+  deliveryRecordPathFor,
+  parseDeliveryRecord,
+  verifyDeliveryRecord,
+} from "../delivery-record.ts";
 import { publishPreparationReceipt } from "../preparation.ts";
 import { discoverRecords, resolveRecordStorage } from "../records.ts";
 import { submitManifest } from "../recorder.ts";
 import { createCandidateCapture, evaluateCandidateActivation, type CandidateCommandRunner } from "../candidate.ts";
-import { withDeliverableIdentity } from "../identity.ts";
+import { isRecordNeutralPath, isReviewNeutralPath, withDeliverableIdentity } from "../identity.ts";
 import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
 import type { HarnessConfig } from "../config.ts";
 import type { CaptureCandidate, CapturedCandidate } from "../candidate.types.ts";
 import {
   DISPOSABLE_INTAKE_GRANT,
+  DISPOSABLE_OUTCOME_AUTHORITIES,
   DISPOSABLE_REVIEW_LENSES,
   DISPOSABLE_SENSOR_CAPABILITY,
   DISPOSABLE_STAGE_GRANT,
@@ -80,9 +88,17 @@ import {
   checkReviewFloor,
   composeOutcomeVerification,
   qualifyReviewAttempts,
+  type ConsumedWaiver,
   type RecordedReviewAttempt,
   type RecordedSensorResult,
 } from "../evidence/review.ts";
+import {
+  WAIVER_APPROVAL_ORIGIN_PREFIX,
+  checkPositiveCriterion,
+  evaluateWaiverConsumption,
+  type WaiverProposal,
+} from "../evidence/waiver.ts";
+import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence/blocker-inventory.ts";
 import { composeMergeReadyResult } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
@@ -111,7 +127,7 @@ import {
   trustStorePathFor,
 } from "../substrate/installer.ts";
 import { loadAssertionProviderConfig, type AssertionSourcePort } from "../substrate/assertion-source.ts";
-import { SECURITY_BLOCKED_MIGRATION_ACTION } from "../spine/assertion.ts";
+import { SENSITIVE_APPROVAL_ASSERTION_SPEC, SECURITY_BLOCKED_MIGRATION_ACTION } from "../spine/assertion.ts";
 import { evaluateMigrationConsumption } from "./migration.ts";
 import { parseTrustState } from "../substrate/trust-store.ts";
 import {
@@ -336,6 +352,63 @@ function consumedAssertionNoncesOf(views: readonly JournalEntryView[]): Set<stri
     }
   }
   return nonces;
+}
+
+interface WaiverLedger {
+  /** Proposals still awaiting an approval, oldest first. */
+  readonly pending: readonly WaiverProposal[];
+  /** Criteria whose waiver was CONSUMED, in journal order. */
+  readonly consumed: readonly ConsumedWaiver[];
+}
+
+/**
+ * The waiver ledger, derived from the journal alone — no second authority.
+ * A proposal is pending from its `approval.request.recorded` until a waiver
+ * consumption answers it or a typed voiding blocker retires it, and each
+ * consumption is paired with the proposal it answers by journal order, which
+ * is the same order the facade consumes them in.
+ */
+function waiverLedgerOf(views: readonly JournalEntryView[]): WaiverLedger {
+  const pendingStack: WaiverProposal[] = [];
+  const consumed: ConsumedWaiver[] = [];
+  let candidate = "";
+  for (const view of views) {
+    switch (view.kind) {
+      case "invocation.fenced":
+        candidate = view.payload["candidateTreeSha"] as string;
+        break;
+      case "candidate.recaptured":
+        candidate = view.payload["treeSha"] as string;
+        break;
+      case "approval.request.recorded":
+        pendingStack.push({
+          requestKind: view.payload["requestKind"] as "waiver" | "amendment",
+          criterionId: view.payload["criterionId"] as string,
+          actorId: view.payload["actorId"] as string,
+          candidateTreeSha: candidate,
+        });
+        break;
+      case "blocker.recorded":
+        if (view.payload["code"] === "approval.proposal-voided") pendingStack.pop();
+        break;
+      case "approval.assertion.consumed": {
+        const assertion = view.payload["assertion"] as Record<string, unknown> | undefined;
+        const origin = String(assertion?.["origin"] ?? "");
+        if (!origin.startsWith(WAIVER_APPROVAL_ORIGIN_PREFIX)) break;
+        const answered = pendingStack.pop();
+        if (answered !== undefined) {
+          consumed.push({
+            criterionId: answered.criterionId,
+            reference: `${String(assertion?.["action"])} by ${origin.slice(WAIVER_APPROVAL_ORIGIN_PREFIX.length)} (${String(assertion?.["nonce"])})`,
+          });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return { pending: pendingStack, consumed };
 }
 
 function sensorResultsOf(views: readonly JournalEntryView[]): RecordedSensorResult[] {
@@ -571,6 +644,50 @@ export interface ManagedDeliveryFacade {
     readonly reason: string;
     readonly fence: number;
   }): Promise<{ readonly ok: true; readonly state: DeliveryState } | FacadeFailure>;
+
+  /**
+   * The waiver's approval half, and the ONLY way a proposal becomes valid.
+   * One fresh model-external interactive evaluation from the installation's
+   * configured assertion source is consumed as a delivery-bound sensitive
+   * approval against the pending proposal: an approver who is the proposer is
+   * refused, a proposal made against a superseded candidate voids, and an
+   * expired or replayed evaluation is refused.
+   *
+   * `outcomeChanging` selects the approving action, and only a
+   * policy-declared outcome authority may take it. A confirmed amendment
+   * creates a NEW contract identity and forces full re-evaluation — which is
+   * why it is not consumable at `admitting`: there is no review left to
+   * re-open from there.
+   */
+  consumeWaiver(input: {
+    readonly deliveryId: string;
+    /** The approving identity; never the proposing actor. */
+    readonly approverId: string;
+    readonly outcomeChanging: boolean;
+    readonly fence: number;
+    /** The consumption instant; the facade never consults a clock itself. */
+    readonly now: string;
+    readonly assertionSource?: AssertionSourcePort;
+  }): Promise<
+    | {
+        readonly ok: true;
+        readonly criterionId: string;
+        readonly outcomeChanging: boolean;
+        readonly contractId: string;
+        readonly state: DeliveryState;
+      }
+    | FacadeFailure
+  >;
+
+  /**
+   * The blocker/remediation inventory: every blocker this delivery journaled,
+   * its declared remediation, and whether the delivery left the suspended
+   * state it caused. This is the audit surface for review loops — the current
+   * state says only where the delivery is now.
+   */
+  blockerInventory(input: { readonly deliveryId: string }): Promise<
+    { readonly ok: true; readonly entries: readonly BlockerInventoryEntry[] } | FacadeFailure
+  >;
 
   /**
    * Cancellation, first half: enter `cancellation_requested`, revoke the
@@ -2367,14 +2484,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // does not leave its state for this; blocker.recorded alone never
       // suspends.
       if (previous === undefined || previous.treeSha !== treeSha) {
-        const proposals = guarded.views.filter((view) => view.kind === "approval.request.recorded").length;
-        const voided = guarded.views.filter(
-          (view) => view.kind === "blocker.recorded" && view.payload["code"] === "approval.proposal-voided",
-        ).length;
-        for (let index = voided; index < proposals; index += 1) {
+        // Exactly the proposals still pending — never one already consumed or
+        // already voided; the ledger is the single reading of that.
+        for (const pending of waiverLedgerOf(guarded.views).pending) {
           await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
             code: "approval.proposal-voided",
-            summary: "the candidate changed since the proposal; the stale waiver/amendment proposal is void and must be re-proposed against the new candidate",
+            summary:
+              `the candidate changed since criterion ${pending.criterionId} was proposed; the stale proposal is void and must be re-proposed against the new candidate`.slice(
+                0,
+                1900,
+              ),
           });
         }
       }
@@ -2646,8 +2765,29 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         candidate: { treeSha: current.treeSha, deliverableDigest: captured.deliverable.digest },
         sensorResults: sensorResultsOf(guarded.views),
         attempts,
+        waivedCriteria: waiverLedgerOf(guarded.views).consumed,
       });
-      const unresolved = outcome.criteria.filter((criterion) => criterion.disposition !== "passed");
+
+      // The blanket-waiver rule, stated at admission as well as at the finish
+      // line: waiving every criterion is not a delivery that succeeded.
+      const positive = checkPositiveCriterion(outcome.criteria);
+      if (!positive.ok) {
+        await recordBlockerAndTransition(
+          guarded.store,
+          deliveryId,
+          guarded.state,
+          "outcome.blanket-waiver",
+          positive.blockers.map((blocker) => blocker.message).join("; ").slice(0, 1900),
+          "blocked",
+        );
+        return refuse(
+          "blanket_waiver",
+          "No acceptance criterion passed; a blanket waiver cannot produce delivery success.",
+          "Rescope or cancel the delivery; at least one positive criterion must actually pass.",
+        );
+      }
+
+      const unresolved = outcome.criteria.filter((criterion) => criterion.disposition === "blocked");
       if (unresolved.length > 0) {
         await recordBlockerAndTransition(
           guarded.store,
@@ -2848,6 +2988,66 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
 
+      // The delivery-owned path sets, first: a committed projection or
+      // discovery-configuration path is a protected-authority-path violation
+      // no record can excuse, and it is caught here as well as by the
+      // external verifier below — two independent statements of one rule,
+      // sharing one closed constant so they cannot drift.
+      const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "HEAD");
+      const candidateTreePaths = listed.out
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      const owned = candidateTreePaths.filter((repoPath) => {
+        const segments = repoPath.split("/");
+        return segments.length > 1 && DELIVERY_OWNED_TREE_PREFIXES.includes(segments[0] as string);
+      });
+      if (owned.length > 0) {
+        await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+          code: "record.protected-authority-path",
+          summary: `the candidate tree carries delivery-owned paths: ${owned.join(", ")}`.slice(0, 1900),
+        });
+        const returned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "recording", to: "validating" });
+        if (!returned.ok) return returned;
+        return refuse(
+          "record_protected_authority_path",
+          `The candidate tree carries delivery-owned paths (${owned.join(", ")}); the delivery returns to validation.`,
+          "Remove the projection or discovery-configuration path from the candidate tree; delivery-owned paths are never committed.",
+        );
+      }
+
+      // BOTH-NEUTRAL VERIFICATION, before anything reads the record. The
+      // recording commit may stage only policy-declared review-neutral AND
+      // record-neutral artifacts; any other byte is a candidate change, and a
+      // candidate change after the final aligned review returns the delivery
+      // to validation rather than being recorded over.
+      const admitted = currentCandidateOf(guarded.views);
+      const recordTree = (await git(rootDir, "rev-parse", "HEAD^{tree}")).out;
+      if (admitted !== undefined && admitted.treeSha !== recordTree) {
+        const changed = await git(rootDir, "diff", "--name-only", admitted.treeSha, recordTree);
+        const nonNeutral = changed.out
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .filter((repoPath) => !(isReviewNeutralPath(input.config, repoPath) && isRecordNeutralPath(input.config, repoPath)));
+        if (nonNeutral.length > 0) {
+          // The frozen matrix has a direct edge for exactly this: any
+          // non-neutral byte or identity change returns to validation, and
+          // from there to a fresh aligned final review.
+          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+            code: "record.non-neutral-change",
+            summary: `the recording commit changed non-neutral paths: ${nonNeutral.join(", ")}`.slice(0, 1900),
+          });
+          const returned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "recording", to: "validating" });
+          if (!returned.ok) return returned;
+          return refuse(
+            "record_non_neutral",
+            `The recording commit changed non-neutral paths (${nonNeutral.join(", ")}); the delivery returns to validation and a fresh final review.`,
+            "Stage only review-neutral and record-neutral artifacts in the recording commit.",
+          );
+        }
+      }
+
       const relativePath = deliveryRecordPathFor(input.config, captured.deliverable.digest);
       let recordText: string;
       try {
@@ -2859,14 +3059,34 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!parsed.ok) return refuseWith(parsed.blockers);
 
       // The compiled external verifier's pure core — the same check the
-      // repository's pull-request Action runs.
+      // repository's pull-request Action runs — over the committed tree's own
+      // paths, so a candidate carrying a projection or discovery-configuration
+      // path is rejected on the tree's evidence alone.
       const check = verifyDeliveryRecord(
         input.config,
         parsed.record,
         { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
         { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
+        { candidateTreePaths },
       );
-      if (!check.ok) return refuseWith(check.blockers);
+      if (!check.ok) {
+        // A committed delivery-owned path is a candidate defect, not a record
+        // defect: it returns through validation like any other non-neutral
+        // change rather than leaving the delivery stuck in `recording`.
+        if (check.blockers.some((blocker) => blocker.code === "record_protected_authority_path")) {
+          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+            code: "record.protected-authority-path",
+            summary: check.blockers
+              .filter((blocker) => blocker.code === "record_protected_authority_path")
+              .map((blocker) => blocker.summary)
+              .join("; ")
+              .slice(0, 1900),
+          });
+          const returned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "recording", to: "validating" });
+          if (!returned.ok) return returned;
+        }
+        return refuseWith(check.blockers);
+      }
 
       const treeSha = (await git(rootDir, "rev-parse", "HEAD^{tree}")).out;
       const branchRefValue = (await git(rootDir, "rev-parse", `refs/heads/${workspace.branchRef}`)).out;
@@ -3009,6 +3229,177 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // remains in its current state. Consumption belongs to the
       // sensitive-approval lane, whose journal kind stays reserved here.
       return { ok: true, state: guarded.state };
+    },
+
+    async consumeWaiver({ deliveryId, approverId, outcomeChanging, fence, now, assertionSource }) {
+      const guarded = await guard(deliveryId, {
+        requireState: ["reviewing", "remediating", "admitting"],
+        verifyWorkspace: true,
+        invokingFence: fence,
+        fenceRequired: true,
+      });
+      if (!("store" in guarded)) return guarded;
+      const current = currentCandidateOf(guarded.views);
+      if (current === undefined) return refuse("no_candidate", "No candidate is checkpointed.", "Checkpoint a candidate first.");
+
+      // An outcome amendment forces full re-evaluation, and the only edges
+      // that reach re-evaluation leave `reviewing` and `remediating`. At
+      // `admitting` there is no review left to re-open, so the amendment is
+      // refused rather than pretended.
+      if (outcomeChanging && guarded.state === "admitting") {
+        return refuse(
+          "amendment_after_review",
+          "An outcome amendment forces full re-evaluation; at admission there is no review left to re-open.",
+          "Return the delivery to review, then confirm the amendment there.",
+        );
+      }
+
+      const trust = await readTrust();
+      if (trust === undefined) {
+        return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
+      }
+      const binding = await registrationBinding({
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+      });
+      if (!binding.ok) {
+        return refuse("installation_unresolved", "No install receipt resolves this installation.", "Install the composition first.");
+      }
+      const providerConfig = await loadAssertionProviderConfig(input.installation.installationPath);
+      if (!providerConfig.ok) {
+        return refuse(
+          "assertion_source_unavailable",
+          "The assertion provider configuration is absent or corrupt; sensitive operations fail closed.",
+          "An operator-performed installer repair re-establishes the assertion source.",
+        );
+      }
+      const source = assertionSource ?? assertionSourceForKind(providerConfig.config.sourceKind);
+      const availability = await source.probe();
+      if (!availability.available) {
+        return refuse(
+          "assertion_source_unavailable",
+          `The configured assertion source is unavailable: ${availability.detail}`,
+          "An operator-performed installer repair re-establishes the assertion source.",
+        );
+      }
+
+      const ledger = waiverLedgerOf(guarded.views);
+      const pendingProposal = ledger.pending[ledger.pending.length - 1];
+      const action = outcomeChanging ? "confirm-outcome-amendment" : "waive-criterion";
+      const evaluation = await source.evaluate({
+        action,
+        disclosure:
+          `Approve ${action} of criterion ${pendingProposal?.criterionId ?? "(none proposed)"} on delivery ${deliveryId}, ` +
+          `candidate ${current.treeSha}, as ${approverId}`,
+      });
+      if (!evaluation.ok) {
+        return refuse("assertion_refused", `The interactive evaluation was not granted: ${evaluation.reason}`, "The approver declined; the proposal stays pending.");
+      }
+
+      const assertion: Record<string, unknown> = {
+        spec: SENSITIVE_APPROVAL_ASSERTION_SPEC,
+        assertionClass: "delivery-bound",
+        origin: `${WAIVER_APPROVAL_ORIGIN_PREFIX}${approverId}`,
+        action,
+        expiry: evaluation.expiry,
+        nonce: evaluation.nonce,
+        assertionSource: evaluation.sourceKind,
+        productTrustRevocationEpoch: trust.revocationEpoch,
+        repositoryAuthorityRevocationEpoch: guarded.meta.policy.repositoryAuthorityRevocationEpoch,
+        deliveryId,
+        candidateTreeSha: current.treeSha,
+        policyDigest: guarded.meta.policy.policyDigest,
+        invocationFence: guarded.lastFence,
+        targetInstallationId: "absent-by-state",
+        targetGenerationDigest: "absent-by-state",
+        targetHighWaterMark: "absent-by-state",
+        expectedJournalRevision: "absent-by-state",
+      };
+
+      const verdict = evaluateWaiverConsumption(assertion, {
+        deliveryId,
+        deliveryState: guarded.state,
+        candidateTreeSha: current.treeSha,
+        policyDigest: guarded.meta.policy.policyDigest,
+        productTrustRevocationEpoch: trust.revocationEpoch,
+        repositoryAuthorityRevocationEpoch: guarded.meta.policy.repositoryAuthorityRevocationEpoch,
+        invocationFence: guarded.lastFence,
+        proposal: pendingProposal,
+        contractCriterionIds: guarded.meta.contract.acceptanceCriteria.map((criterion) => criterion.criterionId),
+        outcomeAuthorities: DISPOSABLE_OUTCOME_AUTHORITIES,
+        currentProfile: binding.activeCompositionProfile,
+        consumedNonces: consumedAssertionNoncesOf(guarded.views),
+        now,
+      });
+      if (!verdict.ok) {
+        // A proposal that went stale against a later candidate is retired
+        // durably, so the pending marker cannot be carried forward silently.
+        if (verdict.blockers.some((blocker) => blocker.code === "waiver_proposal_stale")) {
+          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+            code: "approval.proposal-voided",
+            summary: `the candidate changed since criterion ${String(pendingProposal?.criterionId)} was proposed; the stale proposal is void`.slice(0, 1900),
+          });
+        }
+        return refuseWith(
+          verdict.blockers.map((blocker) =>
+            createBlocker({
+              code: blocker.code,
+              source: SOURCE,
+              summary: blocker.message,
+              remediations: [
+                {
+                  id: `${blocker.code.replaceAll("_", "-")}-remediation`,
+                  kind: "manual_action",
+                  summary: "A waiver is valid only as a consumed sensitive approval bound to the current candidate; the proposal stays unapproved.",
+                },
+              ],
+            }),
+          ),
+        );
+      }
+
+      const consumed = await appendEntry(guarded.store, deliveryId, "approval.assertion.consumed", {
+        assertion,
+        newRegisteringInstallationId: "absent-by-state",
+      });
+      if (!consumed.ok) return consumed;
+
+      if (!verdict.outcomeChanging) {
+        return { ok: true, criterionId: verdict.criterionId, outcomeChanging: false, contractId: guarded.meta.contract.contractId, state: guarded.state };
+      }
+
+      // A confirmed amendment creates a NEW contract identity, and the
+      // delivery re-evaluates against it from the earliest state the frozen
+      // matrix can reach.
+      const previousContractId = guarded.meta.contract.contractId;
+      // The new identity is derived from the consumed approval, so it is
+      // reproducible from the journal and unique per amendment.
+      const amendedContract: AcceptedContract = {
+        ...guarded.meta.contract,
+        contractId: `${previousContractId}.amended-${sha256Hex(evaluation.nonce).slice(0, 12)}`,
+      };
+      const amended = await appendEntry(guarded.store, deliveryId, "contract.amended", {
+        previousContractId,
+        contractId: amendedContract.contractId,
+        contractDigest: digestCanonical(amendedContract),
+        criterionId: verdict.criterionId,
+        assertionNonce: evaluation.nonce,
+      });
+      if (!amended.ok) return amended;
+      await writeOwned(
+        path.join(await deliveryDir(deliveryId), "delivery.json"),
+        `${JSON.stringify({ ...guarded.meta, contract: amendedContract } satisfies DeliveryMeta)}\n`,
+      );
+      const to: DeliveryState = guarded.state === "reviewing" ? "remediating" : "validating";
+      const transitioned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: guarded.state, to });
+      if (!transitioned.ok) return transitioned;
+      return { ok: true, criterionId: verdict.criterionId, outcomeChanging: true, contractId: amendedContract.contractId, state: to };
+    },
+
+    async blockerInventory({ deliveryId }) {
+      const guarded = await guard(deliveryId, { allowPendingTakeover: true });
+      if (!("store" in guarded)) return guarded;
+      return { ok: true, entries: composeBlockerInventory(guarded.views) };
     },
 
     async requestCancellation({ deliveryId }) {

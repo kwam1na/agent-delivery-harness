@@ -126,6 +126,8 @@ export interface DeliveryJournalState {
   readonly policyDigest?: string;
   readonly authorityEpoch?: number;
   readonly generationDigest?: string;
+  /** The contract identity in force, once a confirmed amendment created one. */
+  readonly contractId?: string;
   /** The last non-suspended state — where a blocked delivery may resume. */
   readonly lastActiveState: DeliveryState;
 }
@@ -144,6 +146,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
   let policyDigest: string | undefined;
   let authorityEpoch: number | undefined;
   let generationDigest: string | undefined;
+  let contractId: string | undefined;
   let lastActiveState: DeliveryState = "accepted";
   let registered = false;
   const idempotencyKeys = new Set<string>();
@@ -236,6 +239,32 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
         }
         break;
       }
+      case "contract.amended": {
+        // A confirmed amendment is consumed exactly where its waiver is —
+        // reviewing, remediating, or admitting — and it supersedes the
+        // CURRENT contract identity, never an earlier one in the chain. It
+        // moves no state on its own; the forced full re-evaluation is an
+        // ordinary transition beside it.
+        if (state !== "reviewing" && state !== "remediating" && state !== "admitting") {
+          collector.emit(
+            "invalid_transition",
+            at,
+            `a confirmed amendment is journaled within reviewing, remediating, or admitting; the delivery is in ${state}`,
+          );
+          return;
+        }
+        const previous = payload["previousContractId"] as string;
+        if (contractId !== undefined && previous !== contractId) {
+          collector.emit(
+            "subject_mismatch",
+            `${at}/payload/previousContractId`,
+            `the amendment supersedes ${previous}; this delivery's contract identity is ${contractId}`,
+          );
+          return;
+        }
+        contractId = payload["contractId"] as string;
+        break;
+      }
       case "policy.snapshot.bound": {
         policyDigest = payload["policyDigest"] as string;
         authorityEpoch = payload["repositoryAuthorityEpoch"] as number;
@@ -295,6 +324,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
     ...(policyDigest === undefined ? {} : { policyDigest }),
     ...(authorityEpoch === undefined ? {} : { authorityEpoch }),
     ...(generationDigest === undefined ? {} : { generationDigest }),
+    ...(contractId === undefined ? {} : { contractId }),
   };
   return { ok: true, state: base };
 }

@@ -10,7 +10,12 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { deliveryRecordPathFor, parseDeliveryRecord, verifyDeliveryRecord } from "@agent-delivery-harness/kernel";
+import {
+  deliveryRecordPathFor,
+  parseDeliveryRecord,
+  runGitCommand,
+  verifyDeliveryRecord,
+} from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
@@ -67,7 +72,22 @@ export const verifyCommand: CommandDescriptor = {
       return { kind: "blocked", blockers: [...parsed.blockers] };
     }
 
-    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base);
+    // The tracked tree's own paths, so this command rejects a candidate
+    // carrying a projection or discovery-configuration path exactly as the
+    // Action does. An unreadable listing supplies no paths rather than a
+    // false clean bill: the check simply does not run.
+    const listing = await runGitCommand(["git", "ls-tree", "-r", "--name-only", "--full-tree", "HEAD"], {
+      cwd: context.rootDir,
+    });
+    const candidateTreePaths =
+      listing.exitCode === 0
+        ? listing.stdout
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+        : [];
+
+    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths });
     if (!check.ok) {
       return { kind: "blocked", blockers: [...check.blockers] };
     }
