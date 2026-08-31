@@ -360,8 +360,20 @@ const CAPTURED: StdioOptions = ["ignore", "pipe", "pipe"];
 
 const NOW = "2026-08-31T12:00:00Z";
 const LATER = "2026-08-31T12:00:30Z";
-const EXPIRY = "2026-09-01T12:00:00Z";
 const HOST_VERSION = "2.1.97";
+
+/**
+ * The attestation expiry, taken from the AMBIENT clock rather than written as
+ * a literal.
+ *
+ * This lane drives the real model-external interceptor, which is spawned and
+ * compares the expiry against the wall clock rather than against the injected
+ * `NOW` above. A literal expiry therefore ages into a lane that fails on a
+ * DATE rather than on a change; pushing it forward only re-arms that on a
+ * later day. Deriving it states what the lane means — the attestation is valid
+ * at the instant the interceptor reads it.
+ */
+const EXPIRY = `${new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 19)}Z`;
 
 // ── The two disposable repositories ──────────────────────────────────────────
 

@@ -52,8 +52,36 @@ const FIXTURES = path.join(REPO_ROOT, "qualifications", "fixtures");
 
 const NOW = "2026-08-30T12:00:00Z";
 const LATER = "2026-08-30T12:00:30Z";
-const EXPIRY = "2026-08-31T12:00:00Z";
 const HOST_VERSION = "2.1.97";
+
+/** An instant in the shape the binding mints and the interceptor compares. */
+const instant = (atMs: number): string => `${new Date(atMs).toISOString().slice(0, 19)}Z`;
+
+/**
+ * The attestation expiry, taken from the AMBIENT clock rather than written as
+ * a literal.
+ *
+ * Every facade call in this file takes an injected clock, so a literal expiry
+ * is stable against them forever. The tests that drive the real model-external
+ * interceptor cannot inject anything: that binary is spawned, and it compares
+ * the expiry against the wall clock of the machine running the suite. A
+ * literal therefore stops being "the future" the moment wall-clock passes it,
+ * and the file turns red on a DATE rather than on a change — silently, and
+ * everywhere at once.
+ *
+ * Deriving it states the property the tests actually mean, which is that the
+ * attestation is valid at the instant the interceptor reads it. Pushing the
+ * literal forward would only re-arm the same failure on a later day.
+ */
+const EXPIRY = instant(Date.now() + 24 * 60 * 60 * 1000);
+
+/**
+ * An expiry already past on the ambient clock, yet still ahead of the injected
+ * `NOW` the binding mints under — so the attestation is minted successfully and
+ * is refused only when the spawned interceptor compares it to the wall clock.
+ * That is precisely the condition no clock-injected test can reach.
+ */
+const AMBIENT_EXPIRED = instant(Date.now() - 60 * 60 * 1000);
 
 let scratch: string;
 let installationPath: string;
@@ -154,7 +182,7 @@ interface Session {
 
 let sequence = 0;
 
-async function openSession(): Promise<Session> {
+async function openSession(attestationExpiry: string = EXPIRY): Promise<Session> {
   sequence += 1;
   const contract = { ...DISPOSABLE_CONTRACT, contractId: `contract-cc-${sequence}` };
   const presented = await facade.presentContract({ contract, expiry: EXPIRY });
@@ -171,7 +199,7 @@ async function openSession(): Promise<Session> {
     worktreeDir: worktree,
     hostTaskId: `host-${sequence}`,
     observedAt: NOW,
-    attestationExpiry: EXPIRY,
+    attestationExpiry,
   });
   must(bound, "bindWorkspace");
   return { deliveryId: confirmed.deliveryId, worktree, fence: bound.fence };
@@ -781,16 +809,16 @@ describe("the binding-sourced projection-consumption gate record", () => {
    * in the session writes the observation, and no test fixture stands in for
    * it — the point of the record is that this fact was observed, not assumed.
    */
-  const intercept = async (session: Session, invocation: unknown): Promise<void> => {
+  const intercept = async (session: Session, invocation: unknown): Promise<string> => {
     const statePath = await bindingStatePath(session.deliveryId);
-    execFileSync(
+    return execFileSync(
       path.join(REPO_ROOT, "node_modules", ".bin", "tsx"),
       [path.join(REPO_ROOT, "packages", "kernel", "src", "host", "hook-main.ts"), "pre-tool-use", statePath, String(session.fence)],
       { input: JSON.stringify(invocation), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
     );
   };
 
-  const consumeProjection = (session: Session): Promise<void> =>
+  const consumeProjection = (session: Session): Promise<string> =>
     intercept(session, {
       tool_name: "Read",
       tool_input: { file_path: path.join(session.worktree, PROJECTION_DIR, "workflows", "delivery-v1.json") },
@@ -953,5 +981,79 @@ describe("the binding-sourced projection-consumption gate record", () => {
     });
     expect(recorded.ok).toBe(false);
     expect(entriesIn(gateRecordPath)).toEqual([]);
+  });
+
+  /**
+   * The regression pin for an attestation that expires against the AMBIENT
+   * clock.
+   *
+   * This class of failure is invisible to every clock-injected test by
+   * construction: the facade takes its instant as an argument, so an expiry
+   * written as a literal is compared against another literal and stays valid
+   * forever. The interceptor is spawned, reads the wall clock, and compares
+   * against that instead — so an expiry can be simultaneously valid to the
+   * binding that minted it and expired to the interceptor that enforces it.
+   * Nothing below may substitute a fixture for that binary.
+   *
+   * Both directions are pinned in one test on purpose. An interceptor that
+   * always denied, and a writer that always emitted, would each satisfy one
+   * half of this on its own; only the pair distinguishes the mechanism from a
+   * constant.
+   */
+  it("denies the invocation at the spawned interceptor and records nothing once the attestation expires on the ambient clock", async () => {
+    const gateRecordPath = gateRecord("ambient-expiry");
+
+    // The affirmative half: an attestation still valid on the wall clock is
+    // admitted, and the consumption becomes an entry.
+    const live = await openSession();
+    expect(await consumeProjection(live)).toBe("");
+    const emitted = await facade.recordProjectionConsumption({
+      deliveryId: live.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    must(emitted, "recordProjectionConsumption (ambient-valid attestation)");
+    expect(emitted.emitted).toBe(true);
+
+    // The negative half: the SAME rig, differing only in an expiry the binding
+    // still mints under the injected `NOW` but the interceptor sees as past.
+    const stale = await openSession(AMBIENT_EXPIRED);
+    const rendered = await consumeProjection(stale);
+
+    // An admitted invocation renders nothing, so an empty string here IS the
+    // regression — asserted before the parse, which would otherwise fail as a
+    // syntax error pointing at the wrong thing.
+    expect(rendered).not.toBe("");
+
+    // Admission-level, not merely denied: a superseded fence and an unattested
+    // state file are refused earlier and render a different reason.
+    const decision = JSON.parse(rendered) as {
+      hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string };
+    };
+    expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("not_admitted");
+
+    // What ties that denial to the EXPIRY rather than to any other admission
+    // mismatch. The rendered reason cannot: every admission failure collapses
+    // into the one `not_admitted` string, and the specific codes live in a
+    // nested field the hook does not emit. So the expiry is named where it is
+    // observable — in the attested state the interceptor just read. Together
+    // with `live`, which differs from this session in that argument alone, the
+    // pair is what makes the denial attributable.
+    const staleBindingState = JSON.parse(
+      readFileSync(await bindingStatePath(stale.deliveryId), "utf8"),
+    ) as { attestation: { expiry: string } };
+    expect(staleBindingState.attestation.expiry).toBe(AMBIENT_EXPIRED);
+
+    // And the consequence the operator actually pays for: no observation, so
+    // the delivery stays out of the comparison set rather than affirming.
+    const unobserved = await facade.recordProjectionConsumption({
+      deliveryId: stale.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    must(unobserved, "recordProjectionConsumption (ambient-expired attestation)");
+    expect(unobserved.emitted).toBe(false);
+    expect(entriesIn(gateRecordPath).map((entry) => entry.id)).toEqual([live.deliveryId]);
   });
 });
