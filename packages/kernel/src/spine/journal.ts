@@ -111,7 +111,14 @@ export const ACTION_APPROVALS = Object.freeze(["required", "not-required"] as co
  */
 export const EXTERNAL_ACTION_OUTCOMES = Object.freeze(["succeeded", "failed", "indeterminate"] as const);
 
-/** How the required post-action verification resolved. */
+/**
+ * How the required post-action verification resolved. `not-attempted` means a
+ * required check DID NOT RUN — it is never the spelling for "there was nothing
+ * to verify", which records `passed`. The reducer reads it that way at both
+ * the terminal edge and the next-action edge: an action whose required
+ * verification did not run is not reconciled, and the delivery leaves through
+ * `blocked` rather than through success or another action.
+ */
 export const ACTION_VERIFICATIONS = Object.freeze(["passed", "failed", "not-attempted"] as const);
 
 type PayloadCheck = (payload: Record<string, unknown>, at: string, collector: SpineCollector) => void;

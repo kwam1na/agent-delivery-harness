@@ -322,16 +322,15 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           return;
         }
         // The matrix takes the next acting step only once EVERY prior action
-        // IS RECONCILED: observed, succeeded, and not left with a failed
-        // verification. An action that happened with no required post-action
-        // evidence (`succeeded` / `not-attempted`) is reconciled — creating a
-        // pull request has nothing to verify — and the next step may begin. An
-        // unobserved, failed, or indeterminate predecessor is the delivery's
-        // business first, and a succeeded-but-unverified one is the state that
-        // must never be repeated past. Otherwise a newcomer's own result
-        // stands in for its predecessor's at the terminal edge.
+        // IS RECONCILED, and reconciled means exactly what terminal success
+        // means: the action succeeded and its required post-action
+        // verification PASSED. `not-attempted` says a required check did not
+        // run, so it is not reconciled either — an action with nothing to
+        // verify records `passed`, and a genuinely unrun check leaves the
+        // delivery through `blocked`. One rule serves both edges, so a
+        // newcomer's own result can never stand in for a predecessor's.
         const unreconciled = [...actionIntents.entries()].find(
-          ([, each]) => each.verification === undefined || each.outcome !== "succeeded" || each.verification === "failed",
+          ([, each]) => each.outcome !== "succeeded" || each.verification !== "passed",
         );
         if (unreconciled !== undefined) {
           collector.emit(
