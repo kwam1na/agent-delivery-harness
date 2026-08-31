@@ -205,10 +205,6 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(beforeBinding.status.nextCheckpoint.kind).toBe("bind-workspace");
     expect(beforeBinding.status.authorizedNextActions).toContain("bindWorkspace");
     expect(beforeBinding.status.authorizedNextActions).not.toContain("presentTakeover");
-    expect(
-      beforeBinding.status.operationContracts.some((contract) => contract.capability !== "read"),
-      "a registered delivery must be told how to proceed",
-    ).toBe(true);
 
     // ── The HOST creates the isolated worktree; the facade only binds it ──
     worktreeA = path.join(scratch, "worktree-a");

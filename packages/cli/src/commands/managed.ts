@@ -237,6 +237,16 @@ export const managedCommand: CommandDescriptor = {
     // Only the retention operations may name a delivery; everything else binds
     // the fence of the worktree it runs in.
     const RETENTION_OPERATIONS = ["export", "delete"];
+    // Every flag on this surface is space-separated, and this one is refused in
+    // the GNU `--flag=value` form rather than parsed: accepting it here alone
+    // would make the convention inconsistent, and letting it through unread is
+    // the silent-retarget hazard below by another spelling — `indexOf` never
+    // matches `--delivery=id`, so it would fall back to the implicitly resolved
+    // delivery and point a destructive operation somewhere the operator did not
+    // name.
+    if (rest.some((argument) => argument.startsWith("--delivery="))) {
+      return { kind: "usage", message: "--delivery takes its value as a separate argument: --delivery <id>." };
+    }
     const namesDelivery = rest.includes("--delivery");
     if (namesDelivery && !RETENTION_OPERATIONS.includes(operation)) {
       return { kind: "usage", message: `--delivery is accepted only by: ${RETENTION_OPERATIONS.join(", ")}.` };

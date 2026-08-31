@@ -129,6 +129,18 @@ describe("managed", () => {
     }
   });
 
+  it("refuses the --delivery=<id> form instead of silently retargeting", async () => {
+    // `indexOf` never matches the joined form, so an unrefused `--delivery=id`
+    // would fall back to the implicitly resolved delivery — the same
+    // destructive-retarget hazard as the valueless form below.
+    for (const operation of ["export", "delete"]) {
+      for (const argument of ["--delivery=other-id", "--delivery="]) {
+        const message = usageOf((await run(managedCommand, [operation, argument])).result);
+        expect(message, `${operation} ${argument} must be refused`).toContain("--delivery takes its value as a separate argument");
+      }
+    }
+  });
+
   it("refuses --delivery with no value instead of silently retargeting", async () => {
     // A trailing flag reads as absent, and absent falls back to the implicitly
     // resolved delivery — on `delete` that is a typo quietly pointing a

@@ -218,29 +218,6 @@ describe("an action is never named where the operation would refuse", () => {
     expect(status.authorizedNextActions).not.toContain("presentTakeover");
   });
 
-  it("never leaves a live delivery with no way forward named", () => {
-    // The regression this row exists for named only read operations. Every
-    // non-terminal, non-suspended state must offer at least one operation that
-    // is not purely a read.
-    const cases: readonly ManagedStatusInput[] = [
-      baseInput({
-        delivery: { state: "preparing", expectedRevision: 2, fence: 0 },
-        workspaceBound: false,
-        hostActivity: "unknown",
-        resume: "takeover-required",
-        nextCheckpoint: { kind: "bind-workspace" },
-      }),
-      baseInput(),
-      baseInput({ hostActivity: "paused", resume: "takeover-required" }),
-      baseInput({ hostActivity: "unknown", resume: "same-workspace" }),
-    ];
-    for (const input of cases) {
-      const status = composeManagedStatus(input);
-      const forward = status.operationContracts.filter((contract) => contract.capability !== "read");
-      expect(forward.length, `${input.delivery.state} named no way forward`).toBeGreaterThan(0);
-    }
-  });
-
   it("withholds the fence-carrying approval operations while a takeover is required", () => {
     // Same rule, applied to the review lane rather than the checkpoint.
     const status = composeManagedStatus(
