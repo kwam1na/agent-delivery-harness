@@ -117,6 +117,7 @@ import {
 } from "../host/claude-code.ts";
 import {
   emitProjectionConsumptionRecord,
+  projectionConsumptionObservationFile,
   type ProjectionConsumptionUnobserved,
 } from "../host/consumption-gate-record.ts";
 import { createExecPort, type ExecPort } from "../host/exec-port.ts";
@@ -2395,6 +2396,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           attestation,
           workspaceRoot: worktreeDir,
           observationPath,
+          projectionConsumptionPath: path.join(bindingDir, projectionConsumptionObservationFile(fence)),
           journalPath: guarded.store.journalPath,
           deliveryId,
         })}\n`,
@@ -3622,6 +3624,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // delivery whose trust, installation, or projection binding no longer
       // holds. `verifyWorkspace` re-verifies the projection here for the same
       // reason every other workspace operation does.
+      //
+      // This operation deliberately does NOT bind the invocation fence. It
+      // writes no delivery-journal entry, and the facade's own surface
+      // invariant refuses a fence on an operation with nothing the fence could
+      // be checked against. The protection a fence would add is already
+      // structural: the consumption observation the writer requires is
+      // fence-scoped and written only by the model-external interceptor of the
+      // live session, and the fence it is looked up under is the binding's own
+      // workspace record — so a superseded caller reaches no observation of
+      // its own and can affirm nothing.
       const guarded = await guard(deliveryId, { verifyWorkspace: true });
       if (!("store" in guarded)) return guarded;
       if (guarded.workspace === undefined) {
@@ -3636,7 +3648,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         worktreeDir: guarded.workspace.worktreeDir,
         bindingDir: path.join(await deliveryDir(deliveryId), "binding"),
         // The run the record binds is the BINDING's, read from the workspace
-        // record — never a delivery or fence the caller names.
+        // record — the caller's fence has already been checked against the
+        // journal, and this is the value the binding itself materialized under.
         deliveryId,
         fence: guarded.workspace.fence,
         category,

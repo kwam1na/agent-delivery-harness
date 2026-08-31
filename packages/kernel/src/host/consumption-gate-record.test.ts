@@ -22,6 +22,7 @@ import { PROJECTION_DIR, materializeProjection } from "./claude-code.ts";
 import {
   SHADOW_MILESTONE_GATE_RECORD_SPEC,
   emitProjectionConsumptionRecord,
+  projectionConsumptionObservationFile,
 } from "./consumption-gate-record.ts";
 import { createExecPort } from "./exec-port.ts";
 
@@ -83,6 +84,19 @@ async function gateRecordFile(name: string, deliveries: unknown[] = []): Promise
   return file;
 }
 
+/**
+ * What the model-external interceptor writes when the run first reaches into
+ * the projection subtree. The hook's own suite covers the detection; this
+ * stands in for the invocation that triggered it.
+ */
+function observeConsumption(bench: Workbench, deliveryId: string, fence: number, entry = "workflows/delivery-v1.json"): void {
+  mkdirSync(bench.bindingDir, { recursive: true });
+  writeFileSync(
+    path.join(bench.bindingDir, projectionConsumptionObservationFile(fence)),
+    `${JSON.stringify({ deliveryId, fence, entry, observedAt: "2026-08-30T12:00:00Z" })}\n`,
+  );
+}
+
 const deliveriesIn = (file: string): any[] =>
   (JSON.parse(readFileSync(file, "utf8")) as { deliveries: any[] }).deliveries;
 
@@ -107,6 +121,7 @@ describe("emitProjectionConsumptionRecord", () => {
     });
     expect(materialized.ok, JSON.stringify(materialized)).toBe(true);
     if (!materialized.ok) return;
+    observeConsumption(bench, "dlv-shadow-1", 1);
 
     const gateRecordPath = await gateRecordFile("observed");
     const emitted = await emitProjectionConsumptionRecord({
@@ -155,8 +170,8 @@ describe("emitProjectionConsumptionRecord", () => {
       category: "code",
     });
     expect(emitted.ok, JSON.stringify(emitted)).toBe(true);
-    if (!emitted.ok) return;
-    expect(emitted.emitted).toBe(false);
+    if (!emitted.ok || emitted.emitted) throw new Error(`unexpected emission: ${JSON.stringify(emitted)}`);
+    expect(emitted.reason).toBe("projection-unverified");
     expect(deliveriesIn(gateRecordPath)).toEqual([]);
   });
 
@@ -183,8 +198,8 @@ describe("emitProjectionConsumptionRecord", () => {
       category: "code",
     });
     expect(emitted.ok, JSON.stringify(emitted)).toBe(true);
-    if (!emitted.ok) return;
-    expect(emitted.emitted).toBe(false);
+    if (!emitted.ok || emitted.emitted) throw new Error(`unexpected emission: ${JSON.stringify(emitted)}`);
+    expect(emitted.reason).toBe("projection-unverified");
     expect(deliveriesIn(gateRecordPath)).toEqual([]);
   });
 
@@ -199,6 +214,7 @@ describe("emitProjectionConsumptionRecord", () => {
       exec,
     });
     expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-shadow-2", 1);
     const gateRecordPath = await gateRecordFile("other-run");
 
     const wrongFence = await emitProjectionConsumptionRecord({
@@ -209,7 +225,8 @@ describe("emitProjectionConsumptionRecord", () => {
       fence: 2,
       category: "code",
     });
-    expect(wrongFence.ok && wrongFence.emitted).toBe(false);
+    if (!wrongFence.ok || wrongFence.emitted) throw new Error(JSON.stringify(wrongFence));
+    expect(wrongFence.reason).toBe("marker-names-another-run");
 
     const wrongDelivery = await emitProjectionConsumptionRecord({
       gateRecordPath,
@@ -219,7 +236,8 @@ describe("emitProjectionConsumptionRecord", () => {
       fence: 1,
       category: "code",
     });
-    expect(wrongDelivery.ok && wrongDelivery.emitted).toBe(false);
+    if (!wrongDelivery.ok || wrongDelivery.emitted) throw new Error(JSON.stringify(wrongDelivery));
+    expect(wrongDelivery.reason).toBe("marker-names-another-run");
     expect(deliveriesIn(gateRecordPath)).toEqual([]);
   });
 
@@ -239,6 +257,7 @@ describe("emitProjectionConsumptionRecord", () => {
         exec,
       });
       expect(materialized.ok).toBe(true);
+      observeConsumption(bench, deliveryId, 1);
       for (const _attempt of [0, 1]) {
         const emitted = await emitProjectionConsumptionRecord({
           gateRecordPath,
@@ -262,7 +281,7 @@ describe("emitProjectionConsumptionRecord", () => {
 
   it("preserves the artifact's other content and the gate's own measurements", async () => {
     const gateRecordPath = await gateRecordFile("preserve", [
-      { id: "dlv-shadow-prior", category: "operations", countedInComparisonSet: false, operatorInterventions: 4 },
+      { id: "dlv-shadow-prior", category: "operations", operatorInterventions: 4 },
     ]);
     const bench = await workbench("preserve");
     const materialized = await materializeProjection({
@@ -274,6 +293,7 @@ describe("emitProjectionConsumptionRecord", () => {
       exec,
     });
     expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-shadow-prior", 1);
 
     const emitted = await emitProjectionConsumptionRecord({
       gateRecordPath,
@@ -290,8 +310,151 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(document["comparisonSetRequirement"]).toEqual({ mix: { code: 1, docs: 1, operations: 1 }, total: 3 });
     expect(document["deliveries"]).toHaveLength(1);
     // The gate's own measurement survives; the writer owns only the record.
+    // An entry carrying no explicit exclusion is admitted by the record.
     expect(document["deliveries"][0]["operatorInterventions"]).toBe(4);
     expect(document["deliveries"][0]["countedInComparisonSet"]).toBe(true);
+  });
+
+  it("writes no entry when the binding never observed the run reaching into the projection", async () => {
+    const bench = await workbench("never-consumed");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-shadow-unconsumed",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const gateRecordPath = await gateRecordFile("never-consumed");
+
+    // Everything materialization produces is present and intact — the receipt
+    // matches the worktree bytes and the marker names this run — and that is
+    // exactly the state a delivery is in when it resolved every skill from
+    // ambient discovery and never opened the run-pinned subtree. Affirming
+    // consumption here would put a false claim at the centre of the gate.
+    const emitted = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-unconsumed",
+      fence: 1,
+      category: "code",
+    });
+    if (!emitted.ok || emitted.emitted) throw new Error(`unexpected emission: ${JSON.stringify(emitted)}`);
+    expect(emitted.reason).toBe("projection-not-consumed");
+    expect(deliveriesIn(gateRecordPath)).toEqual([]);
+  });
+
+  it("writes no entry for an observation belonging to another run", async () => {
+    const bench = await workbench("other-observation");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-shadow-obs",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const gateRecordPath = await gateRecordFile("other-observation");
+
+    // An observation filed under this fence but naming a different delivery
+    // proves nothing about this one.
+    observeConsumption(bench, "dlv-shadow-somebody-else", 1);
+    const emitted = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-obs",
+      fence: 1,
+      category: "code",
+    });
+    if (!emitted.ok || emitted.emitted) throw new Error(`unexpected emission: ${JSON.stringify(emitted)}`);
+    expect(emitted.reason).toBe("projection-not-consumed");
+    expect(deliveriesIn(gateRecordPath)).toEqual([]);
+  });
+
+  it("loses no entry when two deliveries are emitted concurrently against one artifact", async () => {
+    const gateRecordPath = await gateRecordFile("concurrent");
+    const benches = [];
+    for (const [name, deliveryId] of [
+      ["conc-a", "dlv-conc-a"],
+      ["conc-b", "dlv-conc-b"],
+    ] as const) {
+      const bench = await workbench(name);
+      const materialized = await materializeProjection({
+        worktreeDir: bench.worktreeDir,
+        generationRoot: bench.generationRoot,
+        deliveryId,
+        fence: 1,
+        bindingDir: bench.bindingDir,
+        exec,
+      });
+      expect(materialized.ok).toBe(true);
+      observeConsumption(bench, deliveryId, 1);
+      benches.push({ bench, deliveryId });
+    }
+
+    // Three shadow deliveries share ONE artifact, so concurrent emission is
+    // the intended usage. An unlocked read-modify-write loses one entry
+    // silently, with both callers reporting success.
+    const results = await Promise.all(
+      benches.map(({ bench, deliveryId }) =>
+        emitProjectionConsumptionRecord({
+          gateRecordPath,
+          worktreeDir: bench.worktreeDir,
+          bindingDir: bench.bindingDir,
+          deliveryId,
+          fence: 1,
+          category: "code",
+        }),
+      ),
+    );
+    // Every caller that reported success must be represented on disk; a
+    // caller refused the lock reports a blocker rather than a silent loss.
+    const written = results.filter((result) => result.ok && result.emitted).length;
+    const refused = results.filter((result) => !result.ok).length;
+    expect(written + refused).toBe(2);
+    expect(deliveriesIn(gateRecordPath)).toHaveLength(written);
+    for (const result of results) {
+      if (!result.ok) expect(result.blockers.map((blocker) => blocker.code)).toEqual(["gate_record_locked"]);
+    }
+  });
+
+  it("leaves an exclusion the gate wrote in place", async () => {
+    const gateRecordPath = await gateRecordFile("excluded", [
+      { id: "dlv-shadow-excluded", category: "code", countedInComparisonSet: false, operatorInterventions: 2 },
+    ]);
+    const bench = await workbench("excluded");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-shadow-excluded",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-shadow-excluded", 1);
+
+    const emitted = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-excluded",
+      fence: 1,
+      category: "code",
+    });
+    expect(emitted.ok && emitted.emitted, JSON.stringify(emitted)).toBe(true);
+
+    // The gate excludes a delivery whose measurement it invalidated. The
+    // record is refreshed; the exclusion is not silently reversed.
+    const entries = deliveriesIn(gateRecordPath);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].countedInComparisonSet).toBe(false);
+    expect(entries[0].projectionConsumption.source).toBe("binding");
+    expect(entries[0].operatorInterventions).toBe(2);
   });
 
   it("refuses an artifact that is not the milestone gate record", async () => {
@@ -305,6 +468,7 @@ describe("emitProjectionConsumptionRecord", () => {
       exec,
     });
     expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-shadow-3", 1);
 
     const dir = await mkdtemp(path.join(scratch, "wrong-artifact-policy-"));
     const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
@@ -335,6 +499,7 @@ describe("emitProjectionConsumptionRecord", () => {
       exec,
     });
     expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-shadow-4", 1);
 
     const dir = await mkdtemp(path.join(scratch, "missing-artifact-policy-"));
     const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");

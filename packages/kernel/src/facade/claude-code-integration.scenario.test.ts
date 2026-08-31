@@ -774,9 +774,33 @@ describe("the binding-sourced projection-consumption gate record", () => {
   const entriesIn = (file: string): any[] =>
     (JSON.parse(readFileSync(file, "utf8")) as { deliveries: any[] }).deliveries;
 
+  /**
+   * The run reaching into the run-pinned projection, driven through the REAL
+   * model-external interceptor: the host invokes the hook binary with the
+   * invocation's own arguments, and the binding records what it saw. Nothing
+   * in the session writes the observation, and no test fixture stands in for
+   * it — the point of the record is that this fact was observed, not assumed.
+   */
+  const consumeProjection = async (session: Session): Promise<void> => {
+    const statePath = await bindingStatePath(session.deliveryId);
+    execFileSync(
+      path.join(REPO_ROOT, "node_modules", ".bin", "tsx"),
+      [path.join(REPO_ROOT, "packages", "kernel", "src", "host", "hook-main.ts"), "pre-tool-use", statePath, String(session.fence)],
+      {
+        input: JSON.stringify({
+          tool_name: "Read",
+          tool_input: { file_path: path.join(session.worktree, PROJECTION_DIR, "workflows", "delivery-v1.json") },
+        }),
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+  };
+
   it("gives a shadow delivery an entry the guard admits, and two deliveries two distinct entries", async () => {
     const gateRecordPath = gateRecord("two-deliveries");
     const first = await openSession();
+    await consumeProjection(first);
     const recorded = await facade.recordProjectionConsumption({
       deliveryId: first.deliveryId,
       gateRecordPath,
@@ -786,6 +810,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
     expect(recorded.emitted).toBe(true);
 
     const second = await openSession();
+    await consumeProjection(second);
     must(
       await facade.recordProjectionConsumption({
         deliveryId: second.deliveryId,
@@ -815,6 +840,38 @@ describe("the binding-sourced projection-consumption gate record", () => {
     expect(entries[0].projectionConsumption.marker.deliveryId).not.toBe(
       entries[1].projectionConsumption.marker.deliveryId,
     );
+  });
+
+  it("writes no entry for a delivery whose run never reached into the projection", async () => {
+    const gateRecordPath = gateRecord("untouched");
+    const session = await openSession();
+
+    // A fully bound delivery: the projection is materialized, the receipt
+    // matches, the marker names this run. What has NOT happened is the run
+    // reaching into the subtree — the state of a shadow delivery that
+    // resolved everything from ambient discovery. The gate must not be handed
+    // an affirmation of something nobody observed.
+    const recorded = await facade.recordProjectionConsumption({
+      deliveryId: session.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    must(recorded, "recordProjectionConsumption");
+    expect(recorded.emitted).toBe(false);
+    if (recorded.emitted) return;
+    expect(recorded.reason).toBe("projection-not-consumed");
+    expect(entriesIn(gateRecordPath)).toEqual([]);
+
+    // And the same delivery, after the interceptor observes the read, records.
+    await consumeProjection(session);
+    const afterRead = await facade.recordProjectionConsumption({
+      deliveryId: session.deliveryId,
+      gateRecordPath,
+      category: "code",
+    });
+    must(afterRead, "recordProjectionConsumption (after the read)");
+    expect(afterRead.emitted).toBe(true);
+    expect(entriesIn(gateRecordPath).map((entry) => entry.id)).toEqual([session.deliveryId]);
   });
 
   it("writes no entry for a delivery that never materialized a projection", async () => {

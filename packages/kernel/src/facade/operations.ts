@@ -134,6 +134,17 @@ export const FACADE_OPERATIONS: readonly FacadeOperation[] = Object.freeze([
   entry("finalizeCancellation", "control", "absent-by-state", "advances", ["cli"], "Quarantines the prior workspace and reaches terminal cancelled."),
   entry("presentTakeover", "control", "absent-by-state", "advances", ["facade"], "Presents a takeover for the one operator authorization."),
   entry("tearDownWorkspaceProjection", "control", "absent-by-state", "none", ["facade"], "Tears the run-pinned projection down with the worktree."),
+  // Writes no delivery-journal entry, so it does not bind the fence: the
+  // run it records is fixed by the binding's own fence-scoped consumption
+  // observation and workspace record, not by a fence the caller names.
+  entry(
+    "recordProjectionConsumption",
+    "control",
+    "absent-by-state",
+    "none",
+    ["facade"],
+    "Records the binding-observed projection consumption in the milestone gate record.",
+  ),
   entry("sessionEnded", "control", "required", "observation-only", ["facade"], "Observes that the bound host task is no longer active."),
 
   // Action.

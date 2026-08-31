@@ -14,11 +14,22 @@
  * is that the claim is binding-sourced rather than agent-supplied: a session
  * asserting "I consumed the projection" proves nothing, because a session can
  * assert anything. So the writer takes NO claim from its caller. It re-derives
- * the two facts itself, from binding-owned state:
+ * every fact itself, from binding-owned state:
  *
  *   - the projection digest, from the materialization receipt in the binding's
- *     own directory, re-verified against the worktree bytes; and
- *   - the marker, read back out of the receipted projection subtree.
+ *     own directory, re-verified against the worktree bytes;
+ *   - the marker, read back out of the receipted projection subtree; and
+ *   - the model-external interceptor's observation that THIS run reached into
+ *     the projection subtree.
+ *
+ * THE THIRD FACT IS WHAT MAKES THE RECORD A CONSUMPTION CLAIM. The first two
+ * are both true the instant materialization returns: the receipt matches the
+ * bytes the binding just wrote, and the marker is a file the binding itself
+ * put there. A record resting on those alone would affirm that a projection
+ * was MATERIALIZED, and the milestone would then score deliveries that
+ * resolved everything from ambient discovery and never opened the run-pinned
+ * subtree. The interceptor's observation is the only fact here that requires
+ * the run to have done something, so it is required.
  *
  * A caller supplies only WHICH run it is asking about (delivery and fence) and
  * which baseline category the delivery is measured under. If the binding's own
@@ -31,9 +42,24 @@
  * consumption record — plus the identity and admission flag that record
  * justifies, and preserves every other byte of the artifact it finds.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 import { readConsumptionMarker, verifyProjection } from "./claude-code.ts";
+
+/**
+ * The interceptor's per-fence projection-consumption observation, in the
+ * binding's own directory. Written by the model-external hook, never by a
+ * session: the worktree is session-writable, this directory is not.
+ */
+export const projectionConsumptionObservationFile = (fence: number): string =>
+  `projection-consumption-${fence}.json`;
+
+interface ProjectionConsumptionObservation {
+  readonly deliveryId?: string;
+  readonly fence?: number;
+  readonly entry?: string;
+}
 
 /** The consuming repository's gate-record artifact spec, matched exactly. */
 export const SHADOW_MILESTONE_GATE_RECORD_SPEC = "athena-shadow-milestone-gate-record/1";
@@ -56,6 +82,7 @@ export interface ProjectionConsumptionRecord {
 export const CONSUMPTION_GATE_RECORD_BLOCKER_CODES = Object.freeze([
   "gate_record_unreadable",
   "gate_record_unrecognized",
+  "gate_record_locked",
   "gate_record_write_failed",
 ] as const);
 export type ConsumptionGateRecordBlockerCode = (typeof CONSUMPTION_GATE_RECORD_BLOCKER_CODES)[number];
@@ -68,7 +95,8 @@ export type ConsumptionGateRecordBlockerCode = (typeof CONSUMPTION_GATE_RECORD_B
 export type ProjectionConsumptionUnobserved =
   | "projection-unverified"
   | "marker-unreadable"
-  | "marker-names-another-run";
+  | "marker-names-another-run"
+  | "projection-not-consumed";
 
 export type EmitProjectionConsumptionResult =
   | { readonly ok: true; readonly emitted: true; readonly record: ProjectionConsumptionRecord }
@@ -125,6 +153,28 @@ export async function emitProjectionConsumptionRecord(
     return unobserved("marker-names-another-run");
   }
 
+  // The only fact here that the run had to DO something to produce. Without
+  // it the two checks above affirm materialization, not consumption.
+  let observation: ProjectionConsumptionObservation;
+  try {
+    observation = JSON.parse(
+      await readFile(
+        path.join(input.bindingDir, projectionConsumptionObservationFile(input.fence)),
+        "utf8",
+      ),
+    ) as ProjectionConsumptionObservation;
+  } catch {
+    return unobserved("projection-not-consumed");
+  }
+  if (
+    observation.deliveryId !== input.deliveryId ||
+    observation.fence !== input.fence ||
+    typeof observation.entry !== "string" ||
+    observation.entry.length === 0
+  ) {
+    return unobserved("projection-not-consumed");
+  }
+
   const record: ProjectionConsumptionRecord = {
     source: "binding",
     affirmative: true,
@@ -133,6 +183,39 @@ export async function emitProjectionConsumptionRecord(
   };
 
   // ── The durable entry ─────────────────────────────────────────────────────
+  //
+  // Three shadow deliveries share ONE artifact, so the read-modify-write below
+  // is held under an exclusive lock: without it two concurrent emissions both
+  // read the same bytes and the later write silently discards the earlier
+  // entry — and any measurement the gate had already recorded on it — with
+  // neither caller seeing a failure. The lock is an exclusive-create file
+  // released in `finally`, and the publish is temp-then-rename, so a crash
+  // mid-write leaves the previous artifact intact rather than a truncated one.
+  const lockPath = `${input.gateRecordPath}.lock`;
+  let lock: Awaited<ReturnType<typeof open>>;
+  try {
+    lock = await open(lockPath, "wx");
+  } catch (error) {
+    return fail(
+      "gate_record_locked",
+      `another writer holds ${lockPath}; the milestone gate record takes one writer at a time (remove the lock only if no writer is running): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  try {
+    return await writeEntry(input, record, lockPath);
+  } finally {
+    await lock.close().catch(() => undefined);
+    await rm(lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function writeEntry(
+  input: EmitProjectionConsumptionInput,
+  record: ProjectionConsumptionRecord,
+  lockPath: string,
+): Promise<EmitProjectionConsumptionResult> {
   let text: string;
   try {
     text = await readFile(input.gateRecordPath, "utf8");
@@ -176,21 +259,30 @@ export async function emitProjectionConsumptionRecord(
   // members of the comparison set. Fields the gate wrote — the intervention
   // and blocked-share measurements — are carried through untouched.
   const existing = index >= 0 ? (deliveries[index] as Record<string, unknown>) : {};
+  // The admission this record justifies — but an EXPLICIT exclusion the gate
+  // already wrote stands. The gate excludes a delivery whose measurement it
+  // invalidated, and silently re-admitting it on the next emission would undo
+  // a decision this writer does not own. Absent or true, the record admits.
+  const excluded = existing["countedInComparisonSet"] === false;
   const entry = {
     ...existing,
     id: input.deliveryId,
     category: input.category,
-    // The admission the record justifies, written only alongside it. An entry
-    // the binding never affirmed is never reached by this line at all.
-    countedInComparisonSet: true,
+    countedInComparisonSet: !excluded,
     projectionConsumption: record,
   };
   if (index >= 0) deliveries[index] = entry;
   else deliveries.push(entry);
 
+  // Publish atomically: the temp file is adjacent, so the rename is a
+  // same-filesystem replace and a reader sees either the old artifact or the
+  // new one, never a partial write.
+  const tempPath = `${input.gateRecordPath}.${path.basename(lockPath)}.tmp`;
   try {
-    await writeFile(input.gateRecordPath, `${JSON.stringify({ ...document, deliveries }, null, 2)}\n`);
+    await writeFile(tempPath, `${JSON.stringify({ ...document, deliveries }, null, 2)}\n`);
+    await rename(tempPath, input.gateRecordPath);
   } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
     return fail(
       "gate_record_write_failed",
       `writing ${input.gateRecordPath} failed: ${error instanceof Error ? error.message : String(error)}`,

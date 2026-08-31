@@ -25,6 +25,7 @@ import {
   type CheckpointAdmissionExpectation,
 } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
+import { PROJECTION_DIR } from "./claude-code.ts";
 
 export interface HookBindingState {
   readonly expectation: CheckpointAdmissionExpectation;
@@ -32,6 +33,12 @@ export interface HookBindingState {
   readonly attestation: unknown;
   readonly workspaceRoot: string;
   readonly observationPath: string;
+  /**
+   * Where this fence's projection-consumption observation is recorded, in the
+   * binding's own directory. Absent on a state file written before the
+   * observation existed, which records nothing rather than failing.
+   */
+  readonly projectionConsumptionPath?: string;
   readonly journalPath?: string;
   readonly deliveryId?: string;
 }
@@ -64,6 +71,36 @@ function writesOf(state: HookBindingState, toolName: string, toolInput: Record<s
     writes.push(relative.split(path.sep).join("/"));
   }
   return writes;
+}
+
+/**
+ * The projection entry an invocation names, if it names one.
+ *
+ * This is the ONE thing about a run that the binding can observe rather than
+ * assume: the interceptor is model-external code the HOST invokes with the
+ * invocation's own arguments, so a path resolving inside the run-pinned
+ * projection is the run reaching into that subtree — not a claim the session
+ * made about itself, and not a fact that was already true when the projection
+ * was materialized.
+ *
+ * Every string argument is considered, because the member that carries a path
+ * differs per tool and an allowlist of members would silently under-observe
+ * the next tool that reads a file. A value outside the subtree, and the
+ * subtree root itself, name no entry.
+ */
+export function projectionEntryTouched(
+  workspaceRoot: string,
+  toolInput: Record<string, unknown>,
+): string | undefined {
+  const root = path.resolve(workspaceRoot, PROJECTION_DIR);
+  for (const value of Object.values(toolInput)) {
+    if (typeof value !== "string" || value.length === 0) continue;
+    const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceRoot, value);
+    const relative = path.relative(root, absolute);
+    if (relative.length === 0 || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    return relative.split(path.sep).join("/");
+  }
+  return undefined;
 }
 
 export function decideHookInvocation(
@@ -167,6 +204,33 @@ async function main(argv: readonly string[]): Promise<number> {
       } catch {
         // An unrecorded observation only ages activity toward `unknown`; it
         // never widens the decision.
+      }
+      // The projection-consumption observation, recorded when this run first
+      // reaches into the run-pinned projection. It is written ONCE per fence
+      // and never rewritten: the fact is that consumption happened, and a
+      // later invocation that touches nothing must not erase it.
+      const entry = projectionEntryTouched(
+        state.workspaceRoot,
+        typeof input.tool_input === "object" && input.tool_input !== null ? input.tool_input : {},
+      );
+      if (entry !== undefined && state.projectionConsumptionPath !== undefined) {
+        try {
+          writeFileSync(
+            state.projectionConsumptionPath,
+            `${JSON.stringify({
+              deliveryId: state.deliveryId,
+              fence: state.expectation.invocationFence,
+              entry,
+              observedAt,
+            })}\n`,
+            { mode: 0o600, flag: "wx" },
+          );
+        } catch {
+          // Already recorded for this fence (the exclusive create fails), or
+          // unwritable. Either way the decision above is untouched, and an
+          // unrecorded consumption yields no gate-record entry rather than an
+          // unobserved affirmation.
+        }
       }
     }
     const rendered = renderHookDecision(decision);

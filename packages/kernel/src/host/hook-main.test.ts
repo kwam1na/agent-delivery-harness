@@ -8,7 +8,12 @@
  */
 import { describe, expect, it } from "vitest";
 import { digestCanonical } from "../digest.ts";
-import { decideHookInvocation, renderHookDecision, type HookBindingState } from "./hook-main.ts";
+import {
+  decideHookInvocation,
+  projectionEntryTouched,
+  renderHookDecision,
+  type HookBindingState,
+} from "./hook-main.ts";
 
 const grant = {
   spec: "execution-grant/1",
@@ -132,5 +137,38 @@ describe("renderHookDecision", () => {
 
   it("renders an allow as an empty defer — the host's own permission system still applies", () => {
     expect(renderHookDecision({ allowed: true })).toBe("");
+  });
+});
+
+describe("projectionEntryTouched", () => {
+  const root = "/work/tree";
+
+  it("names the projection entry an invocation reaches into, by any argument", () => {
+    // The member carrying a path differs per tool, so every string argument is
+    // considered — a read is what the binding is trying to observe, and the
+    // read tools do not share one member name.
+    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection/skills/core/SKILL.md" })).toBe(
+      "skills/core/SKILL.md",
+    );
+    expect(projectionEntryTouched(root, { path: ".managed-projection/workflows/delivery-v1.json" })).toBe(
+      "workflows/delivery-v1.json",
+    );
+    expect(projectionEntryTouched(root, { pattern: "**/*.ts", path: ".managed-projection/consumption.json" })).toBe(
+      "consumption.json",
+    );
+  });
+
+  it("names nothing for anything outside the projection subtree", () => {
+    // The negative half, asserted as specifically as the positive: a sibling
+    // whose name merely starts with the subtree's, a traversal back out, the
+    // ambient vendored generation, and the subtree root itself all name no
+    // entry — otherwise ordinary work would read as consumption.
+    expect(projectionEntryTouched(root, { file_path: "/work/tree/src/greet.mjs" })).toBeUndefined();
+    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection-notes/x.md" })).toBeUndefined();
+    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection/../src/a.ts" })).toBeUndefined();
+    expect(projectionEntryTouched(root, { file_path: "/work/tree/.agent-skills/skills/core/SKILL.md" })).toBeUndefined();
+    expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection" })).toBeUndefined();
+    expect(projectionEntryTouched(root, { file_path: "/elsewhere/.managed-projection/a.md" })).toBeUndefined();
+    expect(projectionEntryTouched(root, { count: 3, enabled: true, empty: "" })).toBeUndefined();
   });
 });
