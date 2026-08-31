@@ -42,9 +42,19 @@
  * NOT isolate the host's own state: the session authenticates with, and writes
  * its project history and transcripts into, the operator's real Claude Code
  * configuration directory, exactly as any session that operator runs does.
+ *
+ * WHICH IS WHY THIS LANE IS FOR AN OPERATOR TO RUN, NEVER FOR AN AGENT TO
+ * INVOKE UNATTENDED. `--setting-sources ""` isolates the SETTINGS; it does not
+ * isolate the configuration directory the host authenticates from, and no
+ * environment is scrubbed for the child. A person running this deliberately is
+ * spending their own credentials knowingly. An agent wiring it into an
+ * automated path would be authenticating as the user against the user's live
+ * configuration without the user present — which is exactly the boundary the
+ * opt-in exists to keep visible, not a formality to satisfy. Point
+ * CLAUDE_CONFIG_DIR at a disposable directory to avoid it.
  */
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -355,11 +365,15 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
 
       // ── 6: an ordinary delivery turn is observed consuming the projection ──
       {
-        // NOT under the lane's own temp root: that root is symlinked on macOS,
-        // and the grant's write-path normalization denies a write addressed by
-        // its resolved path there, so the session could not do ordinary work
-        // and a negative result would be unattributable.
-        const cwd = mkdtempSync(path.join("/private/tmp", "cc-live-consumption-"));
+        // The RESOLVED temp root, not the lane's own unresolved one. Where
+        // tmpdir() is a symlink — it is on macOS — the grant's write-path
+        // normalization denies a write addressed by its resolved path, so the
+        // session could not do ordinary work there and a negative result
+        // would be unattributable to the mechanism under test. Resolving is
+        // the same move `projectionEntryTouched` makes for the same reason.
+        // It is a workaround for a defect in `writesOf`, not an intrinsic
+        // requirement: once that resolves too, this can go back to `tmpdir()`.
+        const cwd = mkdtempSync(path.join(realpathSync(tmpdir()), "cc-live-consumption-"));
         try {
           const bindingDir = path.join(cwd, "binding");
           const worktreeDir = path.join(cwd, "worktree");

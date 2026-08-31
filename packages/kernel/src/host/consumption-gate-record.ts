@@ -118,8 +118,15 @@ export const projectionConsumptionObservationFile = (fence: number): string =>
  *
  * The suffix still carries the version, so a `/2` artifact is refused rather
  * than written into with `/1` semantics. This is a shape guard, not an
- * authorization: what the writer may edit is decided by the path its caller
- * supplies.
+ * authorization, and it never was one: the writer's reach is fixed entirely by
+ * `gateRecordPath` and it refuses to create a file, so a hostile spec grants
+ * nothing that pointing the narrower writer at another repository's record did
+ * not already grant.
+ *
+ * What the widening does cost is a MISCONFIGURATION guard. Pointing this
+ * repository's binding at Athena's gate record used to be refused by the spec
+ * mismatch; now it silently succeeds, so a mistyped `gateRecordPath` lands a
+ * delivery in the wrong repository's comparison set instead of erroring.
  */
 export const SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX = "shadow-milestone-gate-record/1";
 
