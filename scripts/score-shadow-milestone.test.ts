@@ -181,6 +181,17 @@ describe("the frozen baseline is characterized before anything is scored against
     expect(verdict.shadow).toBeNull();
   });
 
+  it("treats a baseline whose deliveries member is not a list as incomplete rather than crashing", () => {
+    // The baseline-side twin of the gate-record case: deleting the key leaves
+    // a correct and a lax implementation answering identically, so only a
+    // present non-array separates them.
+    const malformed = { ...reachableBaseline, deliveries: { "baseline-0": { score: {} } } };
+    const verdict = scoreShadowMilestone(malformed, fullSet([{}, {}, {}]));
+    expect(verdict.incomplete.map((note) => note.code)).toContain("baseline_unrecognized");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
   it("treats a baseline recording no delivery as incomplete, never as a gate the shadow set lost", () => {
     // Without this, the baseline's figures reduce to NaN, every `<=` against
     // them is false, and an absent baseline emits `blocked_share_regressed` —
@@ -648,6 +659,13 @@ describe("the gate can be lost", () => {
     // criterion that always reported `met` would still look right wherever the
     // gate happened to be cleared.
     expect(row.met).toBe(false);
+    // And the interventions are still reported on a set that LOSES. Every
+    // other reporting assertion runs on a set that clears the share criterion,
+    // so without this a scorer could go quiet on exactly the runs where the
+    // gate is lost — which is when the figures matter most.
+    const note = verdict.observations.find((row) => row.code === "interventions_reported_not_gated");
+    expect(note).toBeDefined();
+    expect(note!.message).toContain("median operator-intervention count is 0 against the baseline's 2");
   });
 
   it("clears the share criterion on an exactly equal share, which is a no-regression bar", () => {
