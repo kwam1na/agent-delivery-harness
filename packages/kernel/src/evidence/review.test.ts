@@ -17,9 +17,12 @@ import {
   type RecordedSensorResult,
 } from "./review.ts";
 
+const OUTCOME_PERSONA = "a".repeat(64);
+const TESTING_PERSONA = "b".repeat(64);
+
 const LENSES = [
-  { lensId: "lens.outcome-correctness", category: "outcome-correctness" },
-  { lensId: "lens.testing-policy", category: "testing-policy" },
+  { lensId: "lens.outcome-correctness", category: "outcome-correctness", personaDigest: OUTCOME_PERSONA },
+  { lensId: "lens.testing-policy", category: "testing-policy", personaDigest: TESTING_PERSONA },
 ] as const;
 
 const candidateTreeSha = "1".repeat(40);
@@ -31,6 +34,7 @@ const attempt = (overrides: Partial<RecordedReviewAttempt>): RecordedReviewAttem
   artifactDigest: digestCanonical({ artifact: "outcome" }),
   verdict: "approved",
   candidateTreeSha,
+  personaDigest: OUTCOME_PERSONA,
   ...overrides,
 });
 
@@ -42,6 +46,7 @@ describe("checkReviewFloor", () => {
       lensId: "lens.testing-policy",
       contextDigest: digestCanonical({ context: "testing" }),
       artifactDigest: digestCanonical({ artifact: "testing" }),
+      personaDigest: TESTING_PERSONA,
     }),
   ];
 
@@ -93,6 +98,42 @@ describe("checkReviewFloor", () => {
     expect(verdict.ok, JSON.stringify(verdict)).toBe(true);
   });
 
+  it("refuses an attempt bound to a charter its lens declaration does not reference, whatever the attempt claims", () => {
+    const verdict = checkReviewFloor({
+      attempts: [goodAttempts[0]!, { ...goodAttempts[1]!, personaDigest: "c".repeat(64) }],
+      lenses: LENSES,
+      candidateTreeSha,
+    });
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.rejections.map((rejection) => rejection.code)).toContain("persona_digest_mismatch");
+  });
+
+  it("strands attempts bound to a superseded charter generation — the reviews are redone, not admitted", () => {
+    const advanced = [
+      { ...LENSES[0], personaDigest: "d".repeat(64) },
+      { ...LENSES[1], personaDigest: "e".repeat(64) },
+    ];
+    const stranded = checkReviewFloor({ attempts: goodAttempts, lenses: advanced, candidateTreeSha });
+    expect(stranded.ok).toBe(false);
+    if (!stranded.ok) expect(stranded.rejections.map((rejection) => rejection.code)).toContain("persona_digest_mismatch");
+
+    const redone = checkReviewFloor({
+      attempts: [
+        ...goodAttempts,
+        attempt({ attemptId: "attempt-3", contextDigest: digestCanonical({ context: "outcome-redone" }), personaDigest: "d".repeat(64) }),
+        attempt({
+          attemptId: "attempt-4",
+          lensId: "lens.testing-policy",
+          contextDigest: digestCanonical({ context: "testing-redone" }),
+          personaDigest: "e".repeat(64),
+        }),
+      ],
+      lenses: advanced,
+      candidateTreeSha,
+    });
+    expect(redone.ok, JSON.stringify(redone)).toBe(true);
+  });
+
   it("ignores attempts bound to a superseded candidate — an aligned final review is per candidate", () => {
     const verdict = checkReviewFloor({
       attempts: [goodAttempts[0]!, { ...goodAttempts[1]!, candidateTreeSha: "2".repeat(40) }],
@@ -130,6 +171,7 @@ describe("composeOutcomeVerification", () => {
       attemptId: "attempt-2",
       lensId: "lens.testing-policy",
       contextDigest: digestCanonical({ context: "testing" }),
+      personaDigest: TESTING_PERSONA,
     }),
   ];
 
@@ -143,6 +185,7 @@ describe("composeOutcomeVerification", () => {
     expect(outcome.criteria).toHaveLength(1);
     expect(outcome.criteria[0]?.disposition).toBe("passed");
     expect(outcome.reviewAttempts).toHaveLength(2);
+    expect(outcome.reviewAttempts.map((entry) => entry.personaDigest)).toEqual([OUTCOME_PERSONA, TESTING_PERSONA]);
   });
 
   it("marks a criterion blocked when its sensor failed — a green-but-unrelated change fails criterion mapping", () => {

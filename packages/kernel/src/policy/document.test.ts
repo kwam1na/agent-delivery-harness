@@ -81,6 +81,65 @@ describe("the repository policy document grammar", () => {
     );
   });
 
+  it("accepts a lens referencing its reviewer charter by identity alone", () => {
+    expect(codesOf(policyDocumentFixture())).toEqual([]);
+  });
+
+  it("accepts a lens referencing a repository-owned charter by identity and digest", () => {
+    const document = policyDocumentFixture({
+      reviewLenses: [
+        {
+          lensId: "lens.outcome-correctness",
+          category: "outcome-correctness",
+          personaId: "persona.outcome-correctness",
+          personaDigest: "c".repeat(64),
+        },
+        { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+      ],
+    });
+    expect(codesOf(document)).toEqual([]);
+  });
+
+  it("rejects a lens that names no reviewer charter — a category label is not a charter", () => {
+    const document = policyDocumentFixture({
+      reviewLenses: [
+        { lensId: "lens.outcome-correctness", category: "outcome-correctness" },
+        { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+      ],
+    });
+    expect(codesOf(document)).toContain("missing_member");
+  });
+
+  it("rejects a charter digest outside the digest grammar", () => {
+    const document = policyDocumentFixture({
+      reviewLenses: [
+        {
+          lensId: "lens.outcome-correctness",
+          category: "outcome-correctness",
+          personaId: "persona.outcome-correctness",
+          personaDigest: "not-a-digest",
+        },
+        { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+      ],
+    });
+    expect(codesOf(document)).toContain("malformed_member");
+  });
+
+  it("rejects inline charter prose in a lens declaration — policy is a place prose cannot be spelled", () => {
+    const document = policyDocumentFixture({
+      reviewLenses: [
+        {
+          lensId: "lens.outcome-correctness",
+          category: "outcome-correctness",
+          personaId: "persona.outcome-correctness",
+          charter: "be adversarial and thorough",
+        },
+        { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+      ],
+    });
+    expect(codesOf(document)).toContain("unknown_member");
+  });
+
   it("rejects an unknown checkpoint stage id", () => {
     const document = policyDocumentFixture({
       checkpoints: [

@@ -12,12 +12,18 @@
 import { describe, expect, it } from "vitest";
 import { validateHarnessConfig, type HarnessConfigInput } from "../config.ts";
 import { compileRepositoryPolicy } from "./compile.ts";
-import { admissionFixture, policyDocumentFixture, repositoryAdapterSetFixture } from "./fixtures.ts";
+import {
+  admissionFixture,
+  compositionPersonaSetFixture,
+  policyDocumentFixture,
+  repositoryAdapterSetFixture,
+} from "./fixtures.ts";
 
 const compile = (document: unknown) =>
   compileRepositoryPolicy({
     document,
     adapters: repositoryAdapterSetFixture(),
+    personas: compositionPersonaSetFixture(),
     productTrustRevocationEpoch: 0,
     repositoryAuthorityRevocationEpoch: 0,
   });

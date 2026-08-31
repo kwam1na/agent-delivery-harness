@@ -55,6 +55,19 @@ try {
 }
 `;
 
+/**
+ * The reviewer charters the disposable repository owns, tracked at the base
+ * commit under the path its policy pins. Deliberately minimal: what these
+ * fixtures prove is that the charter a reviewer was handed is bound into the
+ * evidence, not what any particular charter says.
+ */
+export const PERSONA_MARKDOWN: Readonly<Record<string, string>> = Object.freeze({
+  "delivery/personas/outcome-correctness.md":
+    "# Outcome correctness\n\nJudge whether the candidate achieves the contracted outcome. A finding names a concrete failure against an acceptance criterion; anything else is a note.\n",
+  "delivery/personas/testing-policy.md":
+    "# Testing and policy\n\nJudge whether the delivered sensors falsify the contracted outcome. A finding names a scenario the suite cannot fail on; anything else is a note.\n",
+});
+
 export const GREET_RIGHT = `export function greet() {\n  return "hello, skeleton";\n}\n`;
 export const GREET_WRONG = `export function greet() {\n  return "hello, world";\n}\n`;
 
@@ -213,6 +226,11 @@ export function buildDisposableRepository(repoDir: string): DisposableRepository
   writeFileSync(path.join(repoDir, "harness.config.ts"), HARNESS_CONFIG_TS);
   mkdirSync(path.join(repoDir, "tools"), { recursive: true });
   writeFileSync(path.join(repoDir, "tools", "sensor.mjs"), SENSOR_MJS);
+  for (const [relative, contents] of Object.entries(PERSONA_MARKDOWN)) {
+    const target = path.join(repoDir, ...relative.split("/"));
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, contents);
+  }
   mkdirSync(path.join(repoDir, "src"), { recursive: true });
   writeFileSync(path.join(repoDir, "src", "README.md"), "the contracted module lands here\n");
 

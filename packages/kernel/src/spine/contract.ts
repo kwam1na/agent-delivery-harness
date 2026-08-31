@@ -118,6 +118,7 @@ const REVIEW_ATTEMPT_RULES: readonly MemberRule[] = [
   { name: "attemptId", check: spineId },
   { name: "lensId", check: spineId },
   { name: "contextDigest", check: sha256 },
+  { name: "personaDigest", check: sha256 },
   { name: "verdict", check: oneOf(REVIEW_VERDICTS) },
 ];
 
@@ -150,6 +151,7 @@ export interface OutcomeVerification {
     readonly attemptId: string;
     readonly lensId: string;
     readonly contextDigest: string;
+    readonly personaDigest: string;
     readonly verdict: (typeof REVIEW_VERDICTS)[number];
   }[];
 }

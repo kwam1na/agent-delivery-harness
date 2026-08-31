@@ -335,6 +335,7 @@
               "attemptId": "attempt-1",
               "lensId": "outcome-correctness",
               "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "personaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }
           }
@@ -747,14 +748,18 @@
               "action": "delete",
               "subjectDeliveryId": "delivery-1",
               "artifactDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "preservedAuditRecords": ["audit/delivery-1.json"]
+              "preservedAuditRecords": [
+                "audit/delivery-1.json"
+              ]
             }
           }
         },
         {
           "name": "a retention action outside the frozen vocabulary",
           "verdict": "reject",
-          "codes": ["malformed_member"],
+          "codes": [
+            "malformed_member"
+          ],
           "value": {
             "spec": "journal-entry/1",
             "journal": "maintenance",
@@ -811,7 +816,9 @@
         {
           "name": "an amendment reusing the superseded contract identity",
           "verdict": "reject",
-          "codes": ["unsupported_combination"],
+          "codes": [
+            "unsupported_combination"
+          ],
           "value": {
             "spec": "journal-entry/1",
             "journal": "delivery",
@@ -850,7 +857,9 @@
         {
           "name": "an unverified descendant teardown claiming same-workspace resume",
           "verdict": "reject",
-          "codes": ["unsupported_combination"],
+          "codes": [
+            "unsupported_combination"
+          ],
           "value": {
             "spec": "journal-entry/1",
             "journal": "delivery",
@@ -870,7 +879,9 @@
         {
           "name": "a crash-provenance claim the vocabulary cannot express",
           "verdict": "reject",
-          "codes": ["malformed_member"],
+          "codes": [
+            "malformed_member"
+          ],
           "value": {
             "spec": "journal-entry/1",
             "journal": "delivery",
@@ -1127,6 +1138,7 @@
                 "attemptId": "attempt-1",
                 "lensId": "outcome-correctness",
                 "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "personaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "verdict": "approved"
               }
             ]
@@ -1159,6 +1171,7 @@
                 "attemptId": "attempt-1",
                 "lensId": "outcome-correctness",
                 "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "personaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "verdict": "approved"
               }
             ]
@@ -1200,7 +1213,7 @@
           "verdict": "accept",
           "value": {
             "spec": "policy-snapshot/1",
-            "policyDigest": "5a96508688f3243118d4fb1a3849fa73532459979065b0f98ffd1fe3a535e4c8",
+            "policyDigest": "fbe991665073a5828554fa48a15fdf722bce6df10c294e749c5f1bbff1ae92c4",
             "repositoryId": "repo-1",
             "productTrustRevocationEpoch": 0,
             "repositoryAuthorityRevocationEpoch": 4,
@@ -1213,11 +1226,15 @@
             "reviewLenses": [
               {
                 "lensId": "outcome-correctness",
-                "category": "outcome-correctness"
+                "category": "outcome-correctness",
+                "personaId": "persona.outcome-correctness",
+                "personaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
               },
               {
                 "lensId": "testing-policy",
-                "category": "testing-policy"
+                "category": "testing-policy",
+                "personaId": "persona.testing-policy",
+                "personaDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
               }
             ],
             "obligations": [
@@ -1246,7 +1263,9 @@
             "reviewLenses": [
               {
                 "lensId": "outcome-correctness",
-                "category": "outcome-correctness"
+                "category": "outcome-correctness",
+                "personaId": "persona.outcome-correctness",
+                "personaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
               }
             ],
             "obligations": [
@@ -1255,6 +1274,35 @@
               }
             ],
             "proseAuthority": "trust me"
+          }
+        },
+        {
+          "name": "a lens with no bound charter \u2014 a category label alone does not qualify a review",
+          "verdict": "reject",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "spec": "policy-snapshot/1",
+            "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "repositoryId": "repo-1",
+            "productTrustRevocationEpoch": 0,
+            "repositoryAuthorityRevocationEpoch": 4,
+            "grantedFinishLines": [
+              "merge-ready"
+            ],
+            "grantedAuthority": [],
+            "reviewLenses": [
+              {
+                "lensId": "outcome-correctness",
+                "category": "outcome-correctness"
+              }
+            ],
+            "obligations": [
+              {
+                "obligationId": "review.green"
+              }
+            ]
           }
         }
       ]
@@ -1320,6 +1368,7 @@
             "deliveryId": "delivery-1",
             "lensId": "outcome-correctness",
             "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "personaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "verdict": "approved"
           }
         },
@@ -1334,6 +1383,21 @@
             "attemptId": "attempt-1",
             "deliveryId": "delivery-1",
             "lensId": "outcome-correctness",
+            "verdict": "approved"
+          }
+        },
+        {
+          "name": "a missing persona digest \u2014 the charter the reviewer was handed must be bound",
+          "verdict": "reject",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "spec": "reviewer-attempt/1",
+            "attemptId": "attempt-1",
+            "deliveryId": "delivery-1",
+            "lensId": "outcome-correctness",
+            "contextDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "verdict": "approved"
           }
         }

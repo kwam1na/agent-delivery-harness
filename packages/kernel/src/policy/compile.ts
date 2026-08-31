@@ -4,7 +4,8 @@
  * ONE immutable digest-bound compiled snapshot before a run is accepted.
  *
  * Everything a checkpoint later consults is inside the compiled value: the
- * frozen spine snapshot (finish lines, authority, lenses, obligations, both
+ * frozen spine snapshot (finish lines, authority, lenses with the digest of
+ * each lens's resolved reviewer charter, obligations, both
  * revocation epochs), one execution-grant envelope per model-driven stage,
  * the bound capability set, approval boundaries, the tracker posture, and —
  * when the repository declares one — the harness admission configuration,
@@ -48,6 +49,7 @@ export const POLICY_COMPILE_CODES = Object.freeze([
   "duplicate_review_lens",
   "duplicate_checkpoint",
   "mandatory_lens_missing",
+  "persona_unresolvable",
   "capability_unavailable",
   "capability_version_mismatch",
   "capability_contract_mismatch",
@@ -126,9 +128,24 @@ export interface CompiledPolicy {
   readonly admission?: HarnessConfig;
 }
 
+/**
+ * One reviewer charter the compiler can resolve a lens declaration against,
+ * already materialized from its trusted pre-run source: the pinned
+ * composition for a shipped charter, the digest-bound read-only policy copy
+ * for a repository-owned one. The compiler never reads charter prose — it
+ * binds the digest and nothing else.
+ */
+export interface AvailablePersona {
+  readonly personaId: string;
+  readonly digest: string;
+  readonly origin: "composition" | "adopter";
+}
+
 export interface CompileRepositoryPolicyInput {
   readonly document: unknown;
   readonly adapters: readonly unknown[];
+  /** Charters available to this compilation; a lens resolving to none rejects. */
+  readonly personas?: readonly AvailablePersona[];
   readonly productTrustRevocationEpoch: number;
   readonly repositoryAuthorityRevocationEpoch: number;
 }
@@ -206,6 +223,43 @@ export function compileRepositoryPolicy(input: CompileRepositoryPolicyInput): Co
     }
     lensIds.add(lens.lensId);
   });
+
+  // ── Each lens's reviewer charter ─────────────────────────────────────────
+  // The two reference forms are resolved against DIFFERENT sources, and that
+  // asymmetry is what closes shadowing structurally: identity alone reaches
+  // only the authenticated composition, so a repository file can never
+  // intercept it, and a repository's same-identity charter is selected only
+  // where the owner-approved document pins its digest. An unresolvable
+  // reference rejects here, before mutation, rather than at first review.
+  const personas = input.personas ?? [];
+  const resolvedLenses: { lensId: string; category: string; personaId: string; personaDigest: string }[] = [];
+  document.reviewLenses.forEach((lens, index) => {
+    const at = `/document/reviewLenses/${index}`;
+    const resolved =
+      lens.personaDigest === undefined
+        ? personas.find((persona) => persona.origin === "composition" && persona.personaId === lens.personaId)
+        : personas.find(
+            (persona) =>
+              persona.origin === "adopter" && persona.personaId === lens.personaId && persona.digest === lens.personaDigest,
+          );
+    if (resolved === undefined) {
+      collector.emit(
+        "persona_unresolvable",
+        at,
+        lens.personaDigest === undefined
+          ? `lens ${lens.lensId} references reviewer charter ${lens.personaId} by identity, and the pinned composition ships no such charter`
+          : `lens ${lens.lensId} references repository-owned reviewer charter ${lens.personaId} at ${lens.personaDigest}, and no charter at the repository's protected path carries those bytes`,
+      );
+      return;
+    }
+    resolvedLenses.push({
+      lensId: lens.lensId,
+      category: lens.category,
+      personaId: resolved.personaId,
+      personaDigest: resolved.digest,
+    });
+  });
+
   const categories = new Set(document.reviewLenses.map((lens) => lens.category));
   for (const category of MANDATORY_LENS_CATEGORIES) {
     if (!categories.has(category)) {
@@ -336,7 +390,7 @@ export function compileRepositoryPolicy(input: CompileRepositoryPolicyInput): Co
     repositoryAuthorityRevocationEpoch: input.repositoryAuthorityRevocationEpoch,
     grantedFinishLines: [...document.grantedFinishLines],
     grantedAuthority: [...document.grantedAuthority],
-    reviewLenses: document.reviewLenses.map((lens) => ({ ...lens })),
+    reviewLenses: resolvedLenses.map((lens) => ({ ...lens })),
     obligations: document.obligations.map((obligation) => ({ ...obligation })),
   };
   const snapshot = { ...snapshotBody, policyDigest: digestCanonical(snapshotBody) } as PolicySnapshot;

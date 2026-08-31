@@ -25,8 +25,10 @@ import {
   checkBoundPolicy,
   compileRepositoryPolicy,
   verifyCompiledPolicy,
+  type AvailablePersona,
 } from "./compile.ts";
 import {
+  compositionPersonaSetFixture,
   deployAdapterFixture,
   mergeAdapterFixture,
   mergeAuthorityDocumentFixture,
@@ -36,10 +38,15 @@ import {
   trackerAdapterFixture,
 } from "./fixtures.ts";
 
-const compile = (document: unknown, adapters: readonly Record<string, unknown>[] = repositoryAdapterSetFixture()) =>
+const compile = (
+  document: unknown,
+  adapters: readonly Record<string, unknown>[] = repositoryAdapterSetFixture(),
+  personas: readonly AvailablePersona[] = compositionPersonaSetFixture(),
+) =>
   compileRepositoryPolicy({
     document,
     adapters,
+    personas,
     productTrustRevocationEpoch: 0,
     repositoryAuthorityRevocationEpoch: 0,
   });
@@ -114,7 +121,7 @@ describe("the compiled snapshot", () => {
 });
 
 /** Filled from the first green run; the CI matrix (Node 22/24, Bun) re-derives it. */
-const REFERENCE_COMPILED_DIGEST = "708cd87e3b26e1cf48b1c27e614d65b67046247fdd88dbd4640ed5d026c5dc4e";
+const REFERENCE_COMPILED_DIGEST = "f456b46f2b869dfe58e3d16ef8a4e842470467a0efd8a241aa68bf8def977a81";
 
 describe("the rejection corpus — every defect rejects before mutation", () => {
   const rows: readonly { readonly name: string; readonly code: string; readonly run: () => ReturnType<typeof compile> }[] = [
@@ -160,8 +167,8 @@ describe("the rejection corpus — every defect rejects before mutation", () => 
         compile(
           policyDocumentFixture({
             reviewLenses: [
-              { lensId: "lens.outcome-correctness", category: "outcome-correctness" },
-              { lensId: "lens.outcome-correctness", category: "testing-policy" },
+              { lensId: "lens.outcome-correctness", category: "outcome-correctness", personaId: "persona.outcome-correctness" },
+              { lensId: "lens.outcome-correctness", category: "testing-policy", personaId: "persona.testing-policy" },
             ],
           }),
         ),
@@ -169,7 +176,25 @@ describe("the rejection corpus — every defect rejects before mutation", () => 
     {
       name: "mandatory review lens category missing — the review floor is not lowered",
       code: "mandatory_lens_missing",
-      run: () => compile(policyDocumentFixture({ reviewLenses: [{ lensId: "lens.outcome-correctness", category: "outcome-correctness" }] })),
+      run: () =>
+        compile(
+          policyDocumentFixture({
+            reviewLenses: [{ lensId: "lens.outcome-correctness", category: "outcome-correctness", personaId: "persona.outcome-correctness" }],
+          }),
+        ),
+    },
+    {
+      name: "lens naming a reviewer charter nothing resolves — rejected at compilation, not at first review",
+      code: "persona_unresolvable",
+      run: () =>
+        compile(
+          policyDocumentFixture({
+            reviewLenses: [
+              { lensId: "lens.outcome-correctness", category: "outcome-correctness", personaId: "persona.absent" },
+              { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+            ],
+          }),
+        ),
     },
     {
       name: "missing required sensor capability",
@@ -274,6 +299,125 @@ describe("the rejection corpus — every defect rejects before mutation", () => 
       if (code === "policy_tamper") continue; // proven below, not in the table
       expect(produced.has(code), `${code} is never produced by a corpus row`).toBe(true);
     }
+  });
+});
+
+describe("the reviewer charter a lens hands its reviewer", () => {
+  const adopterPersona = { personaId: "persona.house-style", digest: "c".repeat(64), origin: "adopter" as const };
+
+  const adopterLensDocument = (digest: string) =>
+    policyDocumentFixture({
+      reviewLenses: [
+        {
+          lensId: "lens.outcome-correctness",
+          category: "outcome-correctness",
+          personaId: adopterPersona.personaId,
+          personaDigest: digest,
+        },
+        { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+      ],
+    });
+
+  it("binds each lens's charter digest into the compiled snapshot, so the delivery judges against bytes rather than a label", () => {
+    const compiled = compiledFixture();
+    expect(compiled.snapshot.reviewLenses).toEqual([
+      {
+        lensId: "lens.outcome-correctness",
+        category: "outcome-correctness",
+        personaId: "persona.outcome-correctness",
+        personaDigest: "a".repeat(64),
+      },
+      {
+        lensId: "lens.testing-policy",
+        category: "testing-policy",
+        personaId: "persona.testing-policy",
+        personaDigest: "b".repeat(64),
+      },
+    ]);
+  });
+
+  it("advances the shipped charter set without any edit to the repository's document", () => {
+    const document = policyDocumentFixture();
+    const advanced = compile(document, repositoryAdapterSetFixture(), [
+      { personaId: "persona.outcome-correctness", digest: "d".repeat(64), origin: "composition" },
+      { personaId: "persona.testing-policy", digest: "e".repeat(64), origin: "composition" },
+    ]);
+    expect(advanced.ok, JSON.stringify(advanced)).toBe(true);
+    if (!advanced.ok) return;
+    expect(advanced.compiled.snapshot.reviewLenses[0]?.personaDigest).toBe("d".repeat(64));
+    expect(advanced.compiled.compiledDigest).not.toBe(compiledFixture().compiledDigest);
+  });
+
+  it("resolves a repository-owned charter from the digest the document pins", () => {
+    const result = compile(adopterLensDocument(adopterPersona.digest), repositoryAdapterSetFixture(), [
+      ...compositionPersonaSetFixture(),
+      adopterPersona,
+    ]);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.snapshot.reviewLenses[0]?.personaDigest).toBe(adopterPersona.digest);
+  });
+
+  it("rejects a lens naming a charter absent from the composition and from the repository's protected path", () => {
+    const document = policyDocumentFixture({
+      reviewLenses: [
+        { lensId: "lens.outcome-correctness", category: "outcome-correctness", personaId: "persona.invented" },
+        { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+      ],
+    });
+    expect(codesOf(compile(document))).toContain("persona_unresolvable");
+  });
+
+  it("rejects a repository-owned reference whose pinned digest matches no available charter", () => {
+    const result = compile(adopterLensDocument("f".repeat(64)), repositoryAdapterSetFixture(), [
+      ...compositionPersonaSetFixture(),
+      adopterPersona,
+    ]);
+    expect(codesOf(result)).toContain("persona_unresolvable");
+  });
+
+  it("keeps a repository file from intercepting a shipped identity — identity alone resolves only in the composition", () => {
+    const shadowed = compile(policyDocumentFixture(), repositoryAdapterSetFixture(), [
+      ...compositionPersonaSetFixture(),
+      { personaId: "persona.outcome-correctness", digest: "9".repeat(64), origin: "adopter" },
+    ]);
+    expect(shadowed.ok, JSON.stringify(shadowed)).toBe(true);
+    if (!shadowed.ok) return;
+    expect(shadowed.compiled.snapshot.reviewLenses[0]?.personaDigest).toBe("a".repeat(64));
+  });
+
+  it("selects the repository's same-identity charter only where the owner-approved document names its digest", () => {
+    const document = policyDocumentFixture({
+      reviewLenses: [
+        {
+          lensId: "lens.outcome-correctness",
+          category: "outcome-correctness",
+          personaId: "persona.outcome-correctness",
+          personaDigest: "9".repeat(64),
+        },
+        { lensId: "lens.testing-policy", category: "testing-policy", personaId: "persona.testing-policy" },
+      ],
+    });
+    const result = compile(document, repositoryAdapterSetFixture(), [
+      ...compositionPersonaSetFixture(),
+      { personaId: "persona.outcome-correctness", digest: "9".repeat(64), origin: "adopter" },
+    ]);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.snapshot.reviewLenses[0]?.personaDigest).toBe("9".repeat(64));
+  });
+
+  it("refuses a compiled policy whose bound charter digest was swapped — the trusted pre-run copy governs", () => {
+    const bound = compiledFixture();
+    const swapped = compile(policyDocumentFixture(), repositoryAdapterSetFixture(), [
+      { personaId: "persona.outcome-correctness", digest: "1".repeat(64), origin: "composition" },
+      { personaId: "persona.testing-policy", digest: "b".repeat(64), origin: "composition" },
+    ]);
+    expect(swapped.ok).toBe(true);
+    if (!swapped.ok) return;
+    const verdict = checkBoundPolicy(bound.compiledDigest, swapped.compiled);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) expect(verdict.rejections.map((rejection) => rejection.code)).toContain("policy_tamper");
   });
 });
 

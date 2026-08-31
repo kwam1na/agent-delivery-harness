@@ -61,7 +61,14 @@ const policyOf = (over: Partial<PolicySnapshot> = {}): PolicySnapshot => {
     repositoryAuthorityRevocationEpoch: 0,
     grantedFinishLines: ["merge-ready"],
     grantedAuthority: [],
-    reviewLenses: [{ lensId: "lens.outcome-correctness", category: "outcome-correctness" }],
+    reviewLenses: [
+      {
+        lensId: "lens.outcome-correctness",
+        category: "outcome-correctness",
+        personaId: "persona.outcome-correctness",
+        personaDigest: "b".repeat(64),
+      },
+    ],
     obligations: [{ obligationId: "review-green" }],
     ...over,
   };
@@ -76,7 +83,13 @@ const outcomeOf = (disposition: "passed" | "blocked" = "passed"): OutcomeVerific
     { criterionId: "greeting-behavior", disposition, evidence: { kind: "sensor", reference: "sensor.acceptance" } },
   ],
   reviewAttempts: [
-    { attemptId: "attempt-1", lensId: "lens.outcome-correctness", contextDigest: "a".repeat(64), verdict: "approved" },
+    {
+      attemptId: "attempt-1",
+      lensId: "lens.outcome-correctness",
+      contextDigest: "a".repeat(64),
+      personaDigest: "b".repeat(64),
+      verdict: "approved",
+    },
   ],
 });
 

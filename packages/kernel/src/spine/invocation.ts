@@ -66,6 +66,7 @@ const ATTEMPT_RULES: readonly MemberRule[] = [
   { name: "deliveryId", check: spineId },
   { name: "lensId", check: spineId },
   { name: "contextDigest", check: sha256 },
+  { name: "personaDigest", check: sha256 },
   { name: "verdict", check: oneOf(REVIEW_VERDICTS) },
 ];
 
