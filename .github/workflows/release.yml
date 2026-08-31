@@ -116,3 +116,16 @@ jobs:
       # what lets it run before anything is published.
       - name: Standalone-install smoke
         run: npm run sensor:standalone
+
+      # The release-level product gate. Standalone-install proves each tarball
+      # can be installed and imported; this proves the thing you get by
+      # installing them DELIVERS — the composed product driving two clean
+      # disposable repositories with different policies to merge-ready, loaded
+      # from an installed generation root rather than from this checkout.
+      # Same reason it lives here rather than in `npm run check`: five packs,
+      # five composition packs and two full deliveries are tens of seconds. The
+      # rules it decides on are pure and ARE in the default suite, in
+      # scripts/qualify-product.test.ts, and the record it produces is held
+      # honest there too.
+      - name: Product qualification (disposable repositories)
+        run: npm run qualify:product

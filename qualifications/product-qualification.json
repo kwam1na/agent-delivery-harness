@@ -1,0 +1,212 @@
+{
+  "schemaVersion": "product-qualification/1",
+  "description": "The release-level product qualification: the composed product installed into clean disposable repositories from PACKED ARTIFACTS ONLY, driving scoped intake through the full checkpoint path to merge-ready under two distinct repository policies. Every claim below names the leg that proved it. The packed leg is re-executable — `npm run qualify:product` reproduces it end to end — and the fixture leg names in-process sensors that exist and run on every CI leg. Claims that neither leg establishes are listed under notProvenHere rather than implied by silence.",
+  "recordedAt": "2026-08-31T05:05:00Z",
+  "platform": "macOS 15.6.1 arm64",
+  "gateVerdict": {
+    "decision": "proceed",
+    "criteria": [
+      {
+        "id": "packed-artifacts-only",
+        "statement": "the product that delivered the work was loaded from an installed, digest-addressed generation root, never from the source checkout",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "the five workspace packages were npm-packed and installed into an isolated tree outside the repository; that tree's installer packed and installed a composition generation; and the kernel that drove both deliveries was imported from inside the read-only generation root. The loaded entry is an inventory member of the installed composition manifest and its bytes re-hash to the manifest's recorded sha256, so the claim binds to the digest rather than to the driver's intent."
+      },
+      {
+        "id": "full-happy-path",
+        "statement": "an already-scoped contract reaches merge-ready through plan, implement, trusted sensor, two-lens review, compound, admission, neutral tracked record, and finish line",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "both disposable repositories completed the frozen checkpoint path and reported state `completed`, with a non-empty discharged-obligation set and an operator-intervention counter of zero"
+      },
+      {
+        "id": "outcome-only-iterative-scoping",
+        "statement": "an outcome-only work request is scoped iteratively by a product-owned turn and reaches merge-ready through the same single operator confirmation",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "disposable-beta hands over a work request carrying no contract; the lane runs openIntake under the read-only intake grant, one clarification exchange, a retained draft, and presentDraft — converging on the SAME binding-owned confirmation channel the already-scoped lane uses, and then through the identical checkpoint path to merge-ready. disposable-alpha takes the already-scoped lane, so both intake entries are exercised from packed artifacts rather than one being deferred to a source-importing sensor."
+      },
+      {
+        "id": "tracker-absent-and-no-control-plane",
+        "statement": "both deliveries complete with no tracker and no control plane configured",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "no tracker and no control plane exist anywhere in this installation — the composition pin's control-plane contract version is the reserved placeholder — and the compiled disposable policy's tracker-absence fallback is proceed-without-tracker. Both deliveries reached `completed` with a non-empty discharged-obligation set and zero operator interventions, so trackerless and control-plane-free completeness is what the lane actually ran rather than a separate probe. Stated as the honest shape it is: these are properties of every run here, not an isolated scenario."
+      },
+      {
+        "id": "second-repository-changes-policy",
+        "statement": "a second repository changes policy without forking workflows or harness semantics",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "disposable-alpha and disposable-beta differ in gate id, identity token, review-neutral set, record-neutral set, delivery-record location, source layout, test classification, contracted outcome, and intake lane — beta declares a consumer-owned `beta-tree/v1` token because `deliverable-tree/v1` pins its own narration set. What differs is the tracked GATE CONFIGURATION, which is what an adopter controls at this layer; the product's compiled repository policy for a disposable repository is a fixed document parameterized by repository id and charter digests, and the record does not claim otherwise. Both repositories were served by ONE installed generation — the same installation path and active pointer, observed once and reused — and each tracked record landed in its own policy-declared neutral tree, so the record location came from policy rather than from a product-wide constant."
+      },
+      {
+        "id": "no-agent-process-no-workspace-lifecycle",
+        "statement": "the product launches no coding-agent runtime and owns no workspace lifecycle",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "every process the product ran through its INJECTED EXEC PORT during both deliveries was inventoried, per repository rather than across the run, and each lane's inventory is non-empty. The complete inventory is `git` and `node`. The host — here the qualification driver standing in for it — created every worktree; the product only bound them. Scoped deliberately to port-routed processes: see knownLimitations for the modules that reach node:child_process directly and what that does and does not leave open."
+      },
+      {
+        "id": "qualification-profile-both-directions",
+        "statement": "the qualification fixture profile is use-time bound in both temporal directions",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "a fixture manifest refuses to activate without the operator-supplied qualification flag (`qualification_flag_required`); the same flag is refused on a production manifest (`qualification_flag_refused`); and a flagged installation refuses to register a delivery in a repository its receipt does not list (`disposable_repository_refused`) while both listed repositories completed through that same installation"
+      },
+      {
+        "id": "update-and-offline-rollback",
+        "statement": "two contract-changing updates leave every superseded generation retained and resumable, and rollback reaches a retained non-revoked target",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "sequences 2 and 3 were packed and activated through the maintenance lane; all three generations remained in the installation inventory; the original pinned generation still loaded through `loadPinnedGeneration`, which is the resume path's precondition; and an offline pointer rollback to the retained middle generation succeeded"
+      },
+      {
+        "id": "revocation-fences-and-refuses-rollback",
+        "statement": "revoking a pinned generation fences live work into security_blocked, and a revoked generation is not a rollback target",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "a delivery registered successfully against the generation (the control half), the generation was then revoked through the maintenance lane, the next mutation-capable operation was refused, and the delivery's state read `security_blocked` — a refusal without the fenced state would leave it resumable. Rollback to that same revoked generation was refused with `generation_revoked`."
+      },
+      {
+        "id": "anti-vacuity",
+        "statement": "every claimed sensor is mutated red, and a comment-only no-op is not",
+        "outcome": "met",
+        "leg": "fixture",
+        "evidence": "the lane's judgements are pure functions falsified in both directions by scripts/qualify-product.test.ts, its COMPOSITION is falsified (dropping either half of the observation verdict is caught directly, because the wiring test's degenerate input can only ever witness the vacuity half), and its WIRING is falsified too — the lane is driven for real on an input that cannot get past its first step and required to return the vacuity findings rather than an empty list. Thirteen rule mutations each produced a named failing test: the agent-runtime rule never reporting AND always reporting; policy-independence never firing; anti-vacuity dropping its enumeration; the two repositories converging; path containment becoming a prefix test; the refusal detector ignoring an allowed result; the per-lane inventory collapsing into one shared counter; the second intake lane disappearing; either half of the observation verdict dropped; and the exit ceasing to call it. A comment-only edit left all 40 green — 31 in the lane's own suite and 9 in the record checker, counted rather than apportioned."
+      }
+    ]
+  },
+  "packedLeg": {
+    "statement": "the composed product installed from packed artifacts into clean disposable repositories and driven to merge-ready. Re-executable: `npm run qualify:product`.",
+    "driver": "scripts/qualify-product.ts",
+    "sourceAccess": "the driver imports nothing from packages/. It reaches the product twice, both times through an artifact: the npm-packed tarball install tree supplies the operator-facing installer, and the installed generation root supplies the product that drives the deliveries.",
+    "observed": {
+      "generationDigest": "4745a372fce1584afc90bf41a579802353da48dd95b352dce78eaf8447af20a5",
+      "installationId": "install-f783172afab8a3638ed6a013711cfff1",
+      "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+      "compositionProfile": "confirmation-fixture",
+      "repositoriesDelivered": [
+        "disposable-alpha",
+        "disposable-beta"
+      ],
+      "productProcessInventory": [
+        "git",
+        "node"
+      ],
+      "negativeProbesSatisfied": [
+        "receipt-listed-repository-refusal",
+        "qualification-flag-required",
+        "qualification-flag-refused-on-production",
+        "revoked-generation-fences-live-work",
+        "revoked-rollback-target-rejected"
+      ],
+      "lifecycleStepsProven": [
+        "update-1",
+        "update-2",
+        "resume-through-pinned-generation",
+        "rollback-to-retained-generation"
+      ],
+      "findings": 0,
+      "distinctGateConfigDigests": 2,
+      "perRepositoryProcessInventory": {
+        "disposable-alpha": [
+          "git",
+          "node"
+        ],
+        "disposable-beta": [
+          "git",
+          "node"
+        ]
+      },
+      "repositoryPolicies": [
+        {
+          "repositoryId": "disposable-alpha",
+          "gateId": "alpha.pr-admission",
+          "identityVersion": "deliverable-tree/v1",
+          "deliveryRecordDir": "telemetry/delivery-runs/",
+          "intakeMode": "already-scoped"
+        },
+        {
+          "repositoryId": "disposable-beta",
+          "gateId": "beta.merge-admission",
+          "identityVersion": "beta-tree/v1",
+          "deliveryRecordDir": "audit/runs/",
+          "intakeMode": "outcome-only"
+        }
+      ],
+      "retainedGenerations": [
+        "4745a372fce1584afc90bf41a579802353da48dd95b352dce78eaf8447af20a5",
+        "955ea80023ecb88ca3c4b185c3828445ae3982e4fadb6061f0a8bdfbb0ef8119",
+        "9886d8f1da134e3f947fd4524e2d2b596019122cfe215f0092c4fe1a5f7333ad"
+      ]
+    },
+    "crossPlatform": "the same lane runs as a release-workflow step on ubuntu-latest. Confirmed for THIS candidate rather than assumed: that run reported `qualify-product: clean (2 repositories to merge-ready; 5 negative probes; 4 lifecycle steps)` and the generation digest 4745a372fce1584afc90bf41a579802353da48dd95b352dce78eaf8447af20a5 — byte-identical to the macOS observations recorded here. That is the cross-platform pack-and-install evidence this gate requires. Nothing in the lane itself compares the two digests; the comparison is the operator's, and this is its record.",
+    "hostVersion": "2.1.97 (the graded version, not the installed one — see hostVersionCurrency)",
+    "hostLane": "in-process. The driver stands in for the host task the way the walking skeleton's scenario sensor does: it creates the worktrees and submits the typed stage results a host would. The product launches nothing either way, which is what the process inventory above records.",
+    "hostVersionCurrency": "The value above is the version qualifications/host-admission-capabilities.json grades, and it is what this lane passes to the facade. The Claude Code CLI installed on the recording machine is 2.1.251 — four releases newer — so any Claude Code capability read through that graded record is a claim about 2.1.97 and not about the installed CLI. This lane asserts NO live Claude Code capability: it launches no host session and drives the facade in-process, so the version is a parameter it passes rather than a surface it probed. The currency gap itself is tracked separately as V26-1506 and is not addressed here."
+  },
+  "packedSurfaceFindings": [
+    {
+      "observation": "the installer's internal generation-closure verifier is not reachable through the package's single `exports` entry, so an adopter auditing an installation has the three published primitives instead: the manifest file name, the generation digest function, and the content hash",
+      "disposition": "recorded",
+      "consequence": "the packed leg re-derives closure over the entry it actually loaded — manifest self-digest, inventory membership, and byte hash — rather than reaching around the exports map, which would be the source-shaped dependency this unit forbids"
+    }
+  ],
+  "fixtureLeg": {
+    "statement": "properties the packed leg does not itself exercise, proven in-process by sensors that run on every CI leg. Named here so the record's coverage is checkable, never copied. NOT a claim that the packed leg could not reach them: most are ordinary exported facade surfaces and the packed leg simply does not drive them — the honest reason is scope, not unreachability.",
+    "sensors": [
+      {
+        "property": "the lane's own rules hold in both directions, and the required probe and lifecycle sets are non-empty and enumerated",
+        "sensor": "scripts/qualify-product.test.ts"
+      },
+      {
+        "property": "planted implementation, sensor-rewrite, and reviewer failures loop through remediation; interruption and fresh-task takeover replay no accepted work; model-minted confirmations are refused",
+        "sensor": "packages/kernel/src/facade/walking-skeleton.scenario.test.ts"
+      },
+      {
+        "property": "revocation before resume and during active work, explicit compatible migration, re-preparation and evidence invalidation, profile-mismatched rebinding refusal, and installation identity mismatch fencing",
+        "sensor": "packages/kernel/src/facade/security-lifecycle.scenario.test.ts"
+      },
+      {
+        "property": "the binding attests grant, workspace, fence, and projection before any tool is visible; stale and sibling attestations open nothing; the product never launches Claude Code and manages no host agents or workspaces",
+        "sensor": "packages/kernel/src/facade/claude-code-integration.scenario.test.ts"
+      },
+      {
+        "property": "outcome-only iterative scoping and tracker-absent completeness",
+        "sensor": "packages/kernel/src/facade/workflow-intake.scenario.test.ts"
+      },
+      {
+        "property": "sensor contradiction and evidence admission through the existing harness boundary",
+        "sensor": "packages/kernel/src/facade/evidence-admission.scenario.test.ts"
+      },
+      {
+        "property": "host interruption and fresh-task resume across checkpoints",
+        "sensor": "packages/kernel/src/facade/checkpoint-recovery.scenario.test.ts"
+      },
+      {
+        "property": "each tarball installs alone outside the workspace and its entry point imports and runs",
+        "sensor": "scripts/check-standalone-install.ts"
+      }
+    ]
+  },
+  "notProvenHere": [
+    "A LIVE authenticated host lane driving these disposable repositories on any host. The Claude Code host integration is separately qualified against a real session in qualifications/claude-code-integration.json at Tier 2 against host version 2.1.97; this lane drives the same facade in-process and re-establishes none of those live probes.",
+    "A Codex delivery lane, of any kind. Codex CAPABILITIES are graded in qualifications/host-admission-capabilities.json (codex-cli, Tier 1 mutation floor live-probed model-free; Tier 2 lifecycle and Tier 3 descendant teardown provisional), so the Codex surface is not unknown. What does not exist in this repository is a Codex host-binding module or a qualified Codex delivery integration to drive a lane with — that is V26-1478, which this ticket lists as a blocker and which is still open. The second-host half of the release claim therefore belongs to V26-1478 and was deliberately not attempted here; the ticket's own carve-out (a sub-Tier-1 second host runs as capability verification only) does not create a delivery lane where no binding exists.",
+    "Advancing the shipped reviewer persona set alone through the agent-skills corpus validation and release build. That advance happens in the agent-skills repository, and its effect here is the three re-stamped composition digest constants — inherent to a digest-pinned composition, not per-persona coupling.",
+    "Replacing one host integration alone, and the planted duplicated-workflow coupling that must fail. Both need a second host integration to replace or duplicate against.",
+    "A control-plane-absent lane as a distinct scenario. No control plane is configured anywhere in this repository, so every lane above already runs without one; that is an absence rather than a probe, and it is recorded as such rather than claimed as coverage.",
+    "Native subagent delegation inside a qualified session. The product neither supervises nor observes it by design; what the packed leg proves is that no agent process was launched at all.",
+    "The production interactive confirmation channel and the OS-native assertion source. The packed leg runs the confirmation-fixture profile and the qualification-fixture assertion source, which the installer production-rejects — that rejection is itself one of the probes above.",
+    "Windows packing and installation. The packed leg ran on the macOS platform recorded above and again on ubuntu-latest as a release-workflow step, resolving the same generation digest on both; no claim is made about Windows."
+  ],
+  "knownLimitations": [
+    "The facade computes its model-external hook command from a path relative to the kernel module, which resolves inside a source checkout and does not resolve inside an installed generation root. Observed, not inferred: the packed composition stages the harness packages and three root files and no node_modules, so the tsx binary that command names is absent from the generation. The packed leg never launches a host session, so it never executes that command and both deliveries complete regardless; a LIVE host lane driven from a packed install would need that path resolved first. Recorded here rather than repaired, because repairing it belongs to the host-integration module and not to a qualification record.",
+    "The two disposable repositories are driven by one process in sequence, so the lane proves that one release serves two policies and not that two installations serve them concurrently.",
+    "The no-agent-process evidence is scoped to processes routed through the injected exec port. Every record-storage and candidate-capture git call on the delivery path is so routed, which is what makes the claim meaningful; but candidate.ts, records.ts, substrate/assertion-source.ts and substrate/preflight.ts import node:child_process directly, so a runtime launched from one of those would not appear in the inventory. The deny predicate also matches on the executable basename and the first argument, so `git -C <dir> worktree add` or a runtime launched as `node <path>` would not be classified — the current product does neither. This is a port-routed observation, not a process-table sweep.",
+    "Each disposable repository's tracked harness.config.ts resolves defineHarnessConfig from the npm-tarball tree rather than the generation root, so the config object crossing into the generation-root facade is minted by a second kernel module instance. That is the adopter's real shape — an adopter installs the package and imports it from node_modules — but it means the config-construction half of the product is exercised only through the tarball.",
+    "The product half of 'packed artifacts only' is a composition generation packed from the source checkout and imported by a checkout-shaped path inside the generation root. The kernel's npm `exports` map and `files` list are therefore exercised for the INSTALLER half but not for the product half; `sensor:standalone` is what covers those for every package, and this lane does not duplicate it.",
+    "Two judgements inside the heavy lane are not extracted and so are not falsifiable by the fast suite: the three-generations-distinct check in the lifecycle step, and the internals of the outcome-only scoping turn. Both are reachable only from a full `npm run qualify:product` run, which is the pre-existing posture for everything inside driveRepository; the checked-in record — zero findings, with beta recorded under intakeMode outcome-only — is the evidence that they ran."
+  ]
+}
