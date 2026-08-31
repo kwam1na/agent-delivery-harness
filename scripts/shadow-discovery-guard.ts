@@ -115,6 +115,94 @@ export type ShadowGuardResult = {
   countedDeliveryIds: string[];
 };
 
+/**
+ * Whether one gate-record entry carries an affirmative binding-sourced
+ * consumption record, and if not, whether that is a defect or an honest
+ * exclusion.
+ *
+ * A record whose source is not the binding is REJECTED AND REPORTED: an
+ * agent-supplied claim is a finding, not merely an uncounted delivery. A
+ * record that affirmatively says the run consumed nothing is an honest
+ * negative — excluded with no defect, because "it did not happen" is exactly
+ * what the field is for.
+ *
+ * Exported because the milestone scorer must admit precisely the set this
+ * guard admits.
+ */
+export type ConsumptionAdmission =
+  | { readonly admissible: true }
+  | { readonly admissible: false; readonly defect?: { code: ShadowGuardFindingCode; message: string } };
+
+export function classifyConsumptionRecord(delivery: any): ConsumptionAdmission {
+  const id = String(delivery?.id ?? "<unnamed>");
+  const record = delivery?.projectionConsumption;
+  const reject = (code: ShadowGuardFindingCode, message: string): ConsumptionAdmission => ({
+    admissible: false,
+    defect: { code, message },
+  });
+
+  if (record === undefined || record === null) {
+    return reject(
+      "consumption_record_missing",
+      `delivery ${id} carries no projection-consumption record, so it cannot count toward the comparison set`,
+    );
+  }
+  if (record.source !== "binding") {
+    return reject(
+      "agent_supplied_consumption_claim",
+      `delivery ${id} carries a projection-consumption record sourced from ${JSON.stringify(
+        record.source,
+      )}; only the binding's own per-run marker is accepted, so the claim is rejected and the delivery is excluded`,
+    );
+  }
+  if (record.affirmative === false) {
+    // An honest negative: the run did not consume the run-pinned projection.
+    // Excluded from the comparison set, and not a defect.
+    return { admissible: false };
+  }
+  if (record.affirmative !== true) {
+    return reject(
+      "consumption_record_shape",
+      `delivery ${id} has a projection-consumption record whose affirmative flag is ${JSON.stringify(
+        record.affirmative,
+      )}; it must be an explicit boolean`,
+    );
+  }
+  if (!isHex64(record.projectionDigest)) {
+    return reject(
+      "consumption_record_shape",
+      `delivery ${id} affirms consumption without the projection digest the binding receipted at materialization`,
+    );
+  }
+  if (typeof delivery?.id !== "string" || delivery.id.length === 0) {
+    return reject(
+      "consumption_record_shape",
+      "a gate-record entry with no delivery id cannot be tied to any run, so its marker proves nothing",
+    );
+  }
+  if (record.marker?.deliveryId !== delivery.id) {
+    return reject(
+      "consumption_record_shape",
+      `delivery ${id} carries a marker naming ${JSON.stringify(
+        record.marker?.deliveryId,
+      )}; a marker from another run proves nothing about this one`,
+    );
+  }
+  if (typeof record.marker?.fence !== "number") {
+    return reject(
+      "consumption_record_shape",
+      `delivery ${id} carries a marker without the numeric invocation fence that binds it to this run`,
+    );
+  }
+  if (typeof record.marker?.consumed !== "string" || record.marker.consumed.length === 0) {
+    return reject(
+      "consumption_record_shape",
+      `delivery ${id} carries a marker that names no consumed workflow source`,
+    );
+  }
+  return { admissible: true };
+}
+
 /** What the guard was able to see about the tree it is judging. */
 export type ObservedWorktree = {
   dir: string;
@@ -429,6 +517,10 @@ async function evaluateShadowArtifacts(input: {
   }
 
   // ── Binding-sourced projection-consumption records ─────────────────────────
+  // Admission itself lives in `classifyConsumptionRecord`, which the milestone
+  // scorer also calls. One rule, one implementation: a scorer with its own
+  // copy could admit a delivery this guard rejects, and the comparison set
+  // would then be scored on a claim the guard had already refused.
   const requirement = gateRecord.comparisonSetRequirement ?? {};
   const requiredMix: Record<string, number> = requirement.mix ?? {};
   const deliveries: any[] = Array.isArray(gateRecord.deliveries) ? gateRecord.deliveries : [];
@@ -436,60 +528,10 @@ async function evaluateShadowArtifacts(input: {
 
   for (const delivery of deliveries) {
     const id = String(delivery?.id ?? "<unnamed>");
-    const record = delivery?.projectionConsumption;
-    let admissible = false;
-
-    if (record === undefined || record === null) {
-      emit(
-        "consumption_record_missing",
-        `delivery ${id} carries no projection-consumption record, so it cannot count toward the comparison set`,
-      );
-    } else if (record.source !== "binding") {
-      emit(
-        "agent_supplied_consumption_claim",
-        `delivery ${id} carries a projection-consumption record sourced from ${JSON.stringify(
-          record.source,
-        )}; only the binding's own per-run marker is accepted, so the claim is rejected and the delivery is excluded`,
-      );
-    } else if (record.affirmative === false) {
-      // An honest negative: the run did not consume the run-pinned projection.
-      // Excluded from the comparison set, and not a defect.
-    } else if (record.affirmative !== true) {
-      emit(
-        "consumption_record_shape",
-        `delivery ${id} has a projection-consumption record whose affirmative flag is ${JSON.stringify(
-          record.affirmative,
-        )}; it must be an explicit boolean`,
-      );
-    } else if (!isHex64(record.projectionDigest)) {
-      emit(
-        "consumption_record_shape",
-        `delivery ${id} affirms consumption without the projection digest the binding receipted at materialization`,
-      );
-    } else if (typeof delivery?.id !== "string" || delivery.id.length === 0) {
-      emit(
-        "consumption_record_shape",
-        "a gate-record entry with no delivery id cannot be tied to any run, so its marker proves nothing",
-      );
-    } else if (record.marker?.deliveryId !== delivery.id) {
-      emit(
-        "consumption_record_shape",
-        `delivery ${id} carries a marker naming ${JSON.stringify(
-          record.marker?.deliveryId,
-        )}; a marker from another run proves nothing about this one`,
-      );
-    } else if (typeof record.marker?.fence !== "number") {
-      emit(
-        "consumption_record_shape",
-        `delivery ${id} carries a marker without the numeric invocation fence that binds it to this run`,
-      );
-    } else if (typeof record.marker?.consumed !== "string" || record.marker.consumed.length === 0) {
-      emit(
-        "consumption_record_shape",
-        `delivery ${id} carries a marker that names no consumed workflow source`,
-      );
-    } else {
-      admissible = true;
+    const admission = classifyConsumptionRecord(delivery);
+    const admissible = admission.admissible;
+    if (!admission.admissible && admission.defect !== undefined) {
+      emit(admission.defect.code, admission.defect.message);
     }
 
     if (delivery?.countedInComparisonSet === true) {
