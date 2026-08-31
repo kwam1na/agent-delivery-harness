@@ -1,0 +1,117 @@
+[
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.test-suite",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.typecheck",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.import-boundaries",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.cli-inventory",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.conformance-kit",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.standalone-install",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.provider-rail-qualification",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.release-checks",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "sensor.delivery-record-gate",
+    "kind": "sensor",
+    "version": "1",
+    "resultSpec": "sensor-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "stage.delivery-preparation",
+    "kind": "mutation-stage",
+    "version": "1",
+    "resultSpec": "operation-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "stage.delivery-record-write",
+    "kind": "mutation-stage",
+    "version": "1",
+    "resultSpec": "operation-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "stage.conformance-kit-regeneration",
+    "kind": "mutation-stage",
+    "version": "1",
+    "resultSpec": "operation-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "status.hosted-checks",
+    "kind": "status-reconciliation",
+    "version": "1",
+    "resultSpec": "operation-result/1"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "operation.pr-creation",
+    "kind": "pr-creation",
+    "version": "1",
+    "resultSpec": "operation-result/1",
+    "credentialId": "credential.pr-creation"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "operation.merge",
+    "kind": "merge",
+    "version": "1",
+    "resultSpec": "operation-result/1",
+    "credentialId": "credential.merge"
+  },
+  {
+    "spec": "adapter-capability/1",
+    "capabilityId": "operation.deploy",
+    "kind": "deploy",
+    "version": "1",
+    "resultSpec": "operation-result/1",
+    "credentialId": "credential.deploy"
+  }
+]

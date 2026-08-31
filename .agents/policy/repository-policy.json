@@ -1,0 +1,91 @@
+{
+  "spec": "repository-policy-document/1",
+  "repositoryId": "agent-delivery-harness",
+  "policyGeneration": 1,
+  "grantedFinishLines": ["merge-ready"],
+  "grantedAuthority": ["pr-creation"],
+  "forbiddenAuthority": ["merge", "deploy"],
+  "reviewLenses": [
+    {
+      "lensId": "lens.outcome-correctness",
+      "category": "outcome-correctness",
+      "personaId": "persona.outcome-correctness",
+      "personaDigest": "1acaa491ecdd8f94bd4ee34956626dc3b6135ba55e91c806d737f3ea73ca9984"
+    },
+    {
+      "lensId": "lens.adversarial-testing",
+      "category": "testing-policy",
+      "personaId": "persona.testing-policy",
+      "personaDigest": "47afafdc8605c0f739b6e7bd12d675d31a315e153063bc3560ef86926c102656"
+    }
+  ],
+  "obligations": [{ "obligationId": "review.green" }],
+  "requiredCapabilities": [
+    { "capabilityId": "sensor.test-suite", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.typecheck", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.import-boundaries", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.cli-inventory", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.conformance-kit", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.standalone-install", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.provider-rail-qualification", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.release-checks", "kind": "sensor", "version": "1" },
+    { "capabilityId": "sensor.delivery-record-gate", "kind": "sensor", "version": "1" },
+    { "capabilityId": "stage.delivery-preparation", "kind": "mutation-stage", "version": "1" },
+    { "capabilityId": "stage.delivery-record-write", "kind": "mutation-stage", "version": "1" },
+    { "capabilityId": "stage.conformance-kit-regeneration", "kind": "mutation-stage", "version": "1" },
+    { "capabilityId": "status.hosted-checks", "kind": "status-reconciliation", "version": "1" },
+    { "capabilityId": "operation.pr-creation", "kind": "pr-creation", "version": "1" }
+  ],
+  "approvals": [],
+  "trackerAbsenceFallback": "proceed-without-tracker",
+  "checkpoints": [
+    {
+      "stageId": "plan",
+      "allowedCapabilities": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Task", "TodoWrite"],
+      "writablePaths": ["docs"],
+      "credentials": [],
+      "additionalProtectedPaths": [
+        ".agents",
+        "delivery",
+        "qualifications",
+        "packages/conformance/vectors"
+      ],
+      "additionalForbiddenOperations": []
+    },
+    {
+      "stageId": "implement",
+      "allowedCapabilities": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Task", "TodoWrite"],
+      "writablePaths": [
+        "packages",
+        "scripts",
+        "docs",
+        ".github",
+        "README.md",
+        "package.json",
+        "package-lock.json",
+        "harness.config.ts"
+      ],
+      "credentials": [],
+      "additionalProtectedPaths": [
+        ".agents",
+        "delivery",
+        "qualifications",
+        "packages/conformance/vectors"
+      ],
+      "additionalForbiddenOperations": []
+    },
+    {
+      "stageId": "compound",
+      "allowedCapabilities": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Task", "TodoWrite"],
+      "writablePaths": ["docs"],
+      "credentials": [],
+      "additionalProtectedPaths": [
+        ".agents",
+        "delivery",
+        "qualifications",
+        "packages/conformance/vectors"
+      ],
+      "additionalForbiddenOperations": []
+    }
+  ]
+}

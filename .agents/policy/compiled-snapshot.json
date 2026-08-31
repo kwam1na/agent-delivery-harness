@@ -1,0 +1,285 @@
+{
+  "schemaVersion": "delivery-harness-compiled-policy-snapshot/1",
+  "compiledWith": {
+    "repository": "agent-delivery-harness",
+    "commit": "9371d97029cbf1bbd58c06059c079623f76791a9",
+    "module": "packages/kernel/src/policy/compile.ts",
+    "productTrustRevocationEpoch": 0,
+    "repositoryAuthorityRevocationEpoch": 0
+  },
+  "inputDigests": {
+    "repository-policy.json": "5493d8704105325e452fca8cc2050f299e5c4b9fb0136e235724b33f8c30e044",
+    "adapters.json": "73101bb8787e69995eddd81780f4a360a9dce2c6b821bd65cff79027ce8c2e61"
+  },
+  "compiled": {
+    "spec": "compiled-repository-policy/1",
+    "policyGeneration": 1,
+    "snapshot": {
+      "spec": "policy-snapshot/1",
+      "repositoryId": "agent-delivery-harness",
+      "productTrustRevocationEpoch": 0,
+      "repositoryAuthorityRevocationEpoch": 0,
+      "grantedFinishLines": [
+        "merge-ready"
+      ],
+      "grantedAuthority": [
+        "pr-creation"
+      ],
+      "reviewLenses": [
+        {
+          "lensId": "lens.outcome-correctness",
+          "category": "outcome-correctness",
+          "personaId": "persona.outcome-correctness",
+          "personaDigest": "1acaa491ecdd8f94bd4ee34956626dc3b6135ba55e91c806d737f3ea73ca9984"
+        },
+        {
+          "lensId": "lens.adversarial-testing",
+          "category": "testing-policy",
+          "personaId": "persona.testing-policy",
+          "personaDigest": "47afafdc8605c0f739b6e7bd12d675d31a315e153063bc3560ef86926c102656"
+        }
+      ],
+      "obligations": [
+        {
+          "obligationId": "review.green"
+        }
+      ],
+      "policyDigest": "985f09682805ade3a128acf66e6e4d9caf342be33a63967b6e3d9db1d2229074"
+    },
+    "capabilities": [
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.test-suite",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.typecheck",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.import-boundaries",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.cli-inventory",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.conformance-kit",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.standalone-install",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.provider-rail-qualification",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.release-checks",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "sensor.delivery-record-gate",
+        "kind": "sensor",
+        "version": "1",
+        "resultSpec": "sensor-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "stage.delivery-preparation",
+        "kind": "mutation-stage",
+        "version": "1",
+        "resultSpec": "operation-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "stage.delivery-record-write",
+        "kind": "mutation-stage",
+        "version": "1",
+        "resultSpec": "operation-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "stage.conformance-kit-regeneration",
+        "kind": "mutation-stage",
+        "version": "1",
+        "resultSpec": "operation-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "status.hosted-checks",
+        "kind": "status-reconciliation",
+        "version": "1",
+        "resultSpec": "operation-result/1"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "operation.pr-creation",
+        "kind": "pr-creation",
+        "version": "1",
+        "resultSpec": "operation-result/1",
+        "credentialId": "credential.pr-creation"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "operation.merge",
+        "kind": "merge",
+        "version": "1",
+        "resultSpec": "operation-result/1",
+        "credentialId": "credential.merge"
+      },
+      {
+        "spec": "adapter-capability/1",
+        "capabilityId": "operation.deploy",
+        "kind": "deploy",
+        "version": "1",
+        "resultSpec": "operation-result/1",
+        "credentialId": "credential.deploy"
+      }
+    ],
+    "checkpointGrants": [
+      {
+        "stageId": "plan",
+        "grant": {
+          "spec": "execution-grant/1",
+          "profile": "checkpoint",
+          "allowedCapabilities": [
+            "Bash",
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Task",
+            "TodoWrite"
+          ],
+          "writablePaths": [
+            "docs"
+          ],
+          "protectedPaths": [
+            ".git",
+            ".managed-projection",
+            ".claude",
+            ".agents",
+            "delivery",
+            "qualifications",
+            "packages/conformance/vectors"
+          ],
+          "forbiddenOperations": [
+            "git.push",
+            "merge",
+            "deploy"
+          ]
+        },
+        "credentials": []
+      },
+      {
+        "stageId": "implement",
+        "grant": {
+          "spec": "execution-grant/1",
+          "profile": "checkpoint",
+          "allowedCapabilities": [
+            "Bash",
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Task",
+            "TodoWrite"
+          ],
+          "writablePaths": [
+            "packages",
+            "scripts",
+            "docs",
+            ".github",
+            "README.md",
+            "package.json",
+            "package-lock.json",
+            "harness.config.ts"
+          ],
+          "protectedPaths": [
+            ".git",
+            ".managed-projection",
+            ".claude",
+            ".agents",
+            "delivery",
+            "qualifications",
+            "packages/conformance/vectors"
+          ],
+          "forbiddenOperations": [
+            "git.push",
+            "merge",
+            "deploy"
+          ]
+        },
+        "credentials": []
+      },
+      {
+        "stageId": "compound",
+        "grant": {
+          "spec": "execution-grant/1",
+          "profile": "checkpoint",
+          "allowedCapabilities": [
+            "Bash",
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "Task",
+            "TodoWrite"
+          ],
+          "writablePaths": [
+            "docs"
+          ],
+          "protectedPaths": [
+            ".git",
+            ".managed-projection",
+            ".claude",
+            ".agents",
+            "delivery",
+            "qualifications",
+            "packages/conformance/vectors"
+          ],
+          "forbiddenOperations": [
+            "git.push",
+            "merge",
+            "deploy"
+          ]
+        },
+        "credentials": []
+      }
+    ],
+    "approvals": [],
+    "tracker": "absent",
+    "trackerAbsenceFallback": "proceed-without-tracker",
+    "compiledDigest": "1b5593f4e8e296b548d456c4f83b347531012e0cac8ed7cdd372dc11157a70fd"
+  }
+}
