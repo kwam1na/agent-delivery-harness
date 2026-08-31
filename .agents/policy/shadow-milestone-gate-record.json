@@ -1,8 +1,8 @@
 {
   "spec": "delivery-harness-shadow-milestone-gate-record/1",
   "repositoryId": "agent-delivery-harness",
-  "purpose": "The shadow milestone's measurement artifact for this repository: one entry per shadow delivery, carrying the binding-sourced projection-consumption record alongside the intervention and blocked-share measurements the milestone gate compares against the frozen manual-choreography baseline. A measurement artifact, not a journal. Entries are to be written by the product's binding — that writer is not present at the product's pinned commit, so no entry has an admissible producer yet and this list is correctly empty. Its location is already outside every execution grant's writable paths: .agents is an additionally protected path in all three checkpoint grants of .agents/policy/repository-policy.json, so no session may author an entry.",
-  "recordedAt": "2026-08-31T04:40:00Z",
+  "purpose": "The shadow milestone's measurement artifact for this repository: one entry per shadow delivery, carrying the binding-sourced projection-consumption record alongside the intervention and blocked-share measurements the milestone gate compares against the frozen manual-choreography baseline. A measurement artifact, not a journal. Entries are written by the product's binding, which ships at the product's pinned commit; this list is empty because no shadow delivery has run yet, not because no producer exists. Its location is already outside every execution grant's writable paths: .agents is an additionally protected path in all three checkpoint grants of .agents/policy/repository-policy.json, so no session may author an entry.",
+  "recordedAt": "2026-08-31T06:40:00Z",
   "status": "awaiting-shadow-deliveries",
   "baseline": {
     "repository": "agent-delivery-harness",
