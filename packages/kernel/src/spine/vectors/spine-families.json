@@ -491,7 +491,7 @@
             "subjectId": "delivery-1",
             "expectedRevision": 0,
             "idempotencyKey": "dk-9",
-            "kind": "contract.amended"
+            "kind": "action.intent.recorded"
           }
         },
         {
@@ -714,6 +714,45 @@
               "provenance": "graceful",
               "descendantTeardown": "verified",
               "resumeEligibility": "same-workspace"
+            }
+          }
+        },
+        {
+          "name": "a confirmed outcome amendment creating a new contract identity",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 7,
+            "idempotencyKey": "dk-amend-1",
+            "kind": "contract.amended",
+            "payload": {
+              "previousContractId": "contract-1",
+              "contractId": "contract-2",
+              "contractDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "criterionId": "greeting-behavior",
+              "assertionNonce": "nonce-waiver-1"
+            }
+          }
+        },
+        {
+          "name": "an amendment reusing the superseded contract identity",
+          "verdict": "reject",
+          "codes": ["unsupported_combination"],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 7,
+            "idempotencyKey": "dk-amend-2",
+            "kind": "contract.amended",
+            "payload": {
+              "previousContractId": "contract-1",
+              "contractId": "contract-1",
+              "contractDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "criterionId": "greeting-behavior",
+              "assertionNonce": "nonce-waiver-1"
             }
           }
         },

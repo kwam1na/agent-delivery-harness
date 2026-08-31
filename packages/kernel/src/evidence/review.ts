@@ -148,24 +148,55 @@ export function checkReviewFloor(input: {
   return rejections.length === 0 ? { ok: true } : { ok: false, rejections };
 }
 
+/** One criterion whose waiver was CONSUMED — never merely proposed. */
+export interface ConsumedWaiver {
+  readonly criterionId: string;
+  /** The approval this disposition rests on, named in the claim. */
+  readonly reference: string;
+}
+
 /**
  * Composes the outcome-verification claim: each acceptance criterion mapped
  * to the trusted sensor's exact-candidate evidence and one disposition.
  * Composition never invents a pass — an unproven criterion is `blocked`.
+ *
+ * `amended-waived` appears ONLY where a waiver was consumed under the
+ * sensitive-approval lane, and only where the criterion would otherwise have
+ * blocked: a waiver is a way past missing evidence, never a way to relabel
+ * evidence that exists.
+ *
+ * HOW FAR THAT REACHES TODAY, HONESTLY. The disposition is composed here, but
+ * whether it can carry a delivery to success depends on the criterion-to-
+ * evidence mapping the compiled policy supplies. Under the fixed
+ * one-sensor disposable policy every criterion resolves to the SAME sensor
+ * result, so criteria pass or block together and a waiver can only turn one
+ * refusal into another — it never converts a refused admission into an
+ * admitted one. A policy mapping criteria to distinct sensors is what makes
+ * the lane productive; the doctrine above is what keeps it honest when it is.
  */
 export function composeOutcomeVerification(input: {
   readonly contract: AcceptedContract;
   readonly candidate: { readonly treeSha: string; readonly deliverableDigest: string };
   readonly sensorResults: readonly RecordedSensorResult[];
   readonly attempts: readonly RecordedReviewAttempt[];
+  readonly waivedCriteria?: readonly ConsumedWaiver[];
 }): OutcomeVerification {
-  const criteria = input.contract.acceptanceCriteria.map((criterion) => {
+  const waived = new Map((input.waivedCriteria ?? []).map((entry) => [entry.criterionId, entry.reference]));
+  const criteria: OutcomeVerification["criteria"][number][] = input.contract.acceptanceCriteria.map((criterion) => {
     // The skeleton's fixed policy carries one trusted sensor; every criterion
     // binds to its latest result. The result must name the exact candidate.
     const latest = [...input.sensorResults]
       .reverse()
       .find((result) => result.candidateTreeSha === input.candidate.treeSha);
     const passed = latest !== undefined && latest.outcome === "passed";
+    const waiver = waived.get(criterion.criterionId);
+    if (!passed && waiver !== undefined) {
+      return {
+        criterionId: criterion.criterionId,
+        disposition: "amended-waived" as const,
+        evidence: { kind: "review" as const, reference: waiver },
+      };
+    }
     return {
       criterionId: criterion.criterionId,
       disposition: (passed ? "passed" : "blocked") as "passed" | "blocked",

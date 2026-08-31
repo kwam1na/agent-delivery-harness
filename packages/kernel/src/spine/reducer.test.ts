@@ -398,6 +398,61 @@ describe("approval request discipline", () => {
   });
 });
 
+const amendment = (revision: number, previousContractId: string, contractId: string): Entry =>
+  deliveryEntry(revision, "contract.amended", {
+    previousContractId,
+    contractId,
+    contractDigest: DIGEST,
+    criterionId: "greeting-behavior",
+    assertionNonce: `nonce-${contractId}`,
+  });
+
+describe("confirmed outcome amendments", () => {
+  it("records a new contract identity and carries it forward as the delivery's contract", () => {
+    const entries = toState("reviewing");
+    const outcome = reduceDeliveryJournal([...entries, amendment(entries.length, "contract-1", "contract-2")]);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.state.contractId).toBe("contract-2");
+    // The amendment itself never moves the delivery; the forced re-evaluation
+    // is a separate, ordinary transition.
+    expect(outcome.state.state).toBe("reviewing");
+  });
+
+  it("chains: a second amendment must supersede the first, never the original", () => {
+    const entries = toState("reviewing");
+    const chained = [
+      ...entries,
+      amendment(entries.length, "contract-1", "contract-2"),
+      amendment(entries.length + 1, "contract-2", "contract-3"),
+    ];
+    const outcome = reduceDeliveryJournal(chained);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    if (outcome.ok) expect(outcome.state.contractId).toBe("contract-3");
+
+    expect(
+      reduceCodes([
+        ...entries,
+        amendment(entries.length, "contract-1", "contract-2"),
+        amendment(entries.length + 1, "contract-1", "contract-3"),
+      ]),
+    ).toContain("subject_mismatch");
+  });
+
+  it("is journaled only where a waiver is consumable — reviewing, remediating, admitting", () => {
+    for (const state of ["reviewing", "remediating", "admitting"] as const) {
+      const entries = toState(state);
+      expect(reduceDeliveryJournal([...entries, amendment(entries.length, "contract-1", "contract-2")]).ok, state).toBe(true);
+    }
+    for (const state of ["implementing", "validating"] as const) {
+      const entries = toState(state);
+      expect(reduceCodes([...entries, amendment(entries.length, "contract-1", "contract-2")]), state).toContain(
+        "invalid_transition",
+      );
+    }
+  });
+});
+
 describe("the remediating zero-mutation watch-item", () => {
   // The state table's only exit from `remediating` is a checkpointed candidate
   // mutation. A finding discharged with zero mutation (a pending waiver) has

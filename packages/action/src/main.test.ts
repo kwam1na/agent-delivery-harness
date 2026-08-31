@@ -638,6 +638,27 @@ describe("record selection", () => {
   });
 });
 
+// ── Delivery-owned paths in the candidate tree ───────────────────────────────
+
+describe("the external verifier rejects delivery-owned paths on the tree's own evidence", () => {
+  it("refuses a head tree carrying a projection or discovery-configuration path", TIMEOUT, async () => {
+    for (const planted of [".managed-projection/workflows/delivery-v1.json", ".claude/settings.json"]) {
+      const dir = await initRepo();
+      const config = makeConfig();
+      await writeAt(dir, planted, "{}\n");
+      await commit(dir, "plant a delivery-owned path");
+      const digest = await identityOf(dir, config, "HEAD");
+      await commitRecord(dir, config, digest, await buildRecord(dir, config, digest));
+
+      const { runtime } = await driveRuntime(dir, { config });
+      const result = await runAction(runtime);
+
+      expect(result.ok, planted).toBe(false);
+      expect(codesOf(result.blockers), planted).toContain("record_protected_authority_path");
+    }
+  });
+});
+
 // ── Cross-worktree ───────────────────────────────────────────────────────────
 
 describe("cross-worktree verification", () => {

@@ -476,6 +476,8 @@ interface DiscoveredRecords {
   /** Parse failures. Findings, never skips — see below. */
   readonly blockers: readonly Blocker[];
   readonly trackedCount: number;
+  /** Every tracked path in the head tree, for the protected-path check. */
+  readonly allPaths: readonly string[];
 }
 
 /**
@@ -508,6 +510,7 @@ async function readTrackedRecords(git: GitPort, headSha: string, config: Harness
     return {
       files: [],
       trackedCount: 0,
+      allPaths: [],
       blockers: [
         actionBlocker({
           code: "tracked_tree_unreadable",
@@ -525,7 +528,8 @@ async function readTrackedRecords(git: GitPort, headSha: string, config: Harness
     };
   }
 
-  const paths = listing.stdout.split(NUL).filter((entry) => entry.length > 0 && isRecordPath(entry, shape));
+  const allPaths = listing.stdout.split(NUL).filter((entry) => entry.length > 0);
+  const paths = allPaths.filter((entry) => isRecordPath(entry, shape));
   const files: DeliveryRecordFile[] = [];
   const blockers: Blocker[] = [];
   for (const recordPath of paths.sort()) {
@@ -548,7 +552,7 @@ async function readTrackedRecords(git: GitPort, headSha: string, config: Harness
     }
     files.push({ path: recordPath, record: parsed.record });
   }
-  return { files, blockers, trackedCount: paths.length };
+  return { files, blockers, trackedCount: paths.length, allPaths };
 }
 
 // ── The summary ──────────────────────────────────────────────────────────────
@@ -949,7 +953,7 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
     }
 
     recordPath = selected.path;
-    check = verifyDeliveryRecord(config, selected.record, identity, base);
+    check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths });
     blockers.push(...check.blockers);
     return await settle();
   } catch (error) {

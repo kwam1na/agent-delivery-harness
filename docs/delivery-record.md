@@ -114,4 +114,16 @@ relaxed under any policy.
 4. `delivery-harness verify` locally, and the Action on the PR head, recompute
    the deliverable identity and check the record keyed to it: version, gate,
    attestation level, identity token, identity equality, base movement per
-   policy, no blocked claim, and every configured obligation covered.
+   policy, no blocked claim, every configured obligation covered, and no
+   delivery-owned path in the candidate tree.
+
+## Delivery-owned paths are never committed
+
+Two path sets belong to the managed delivery, not to the candidate: the
+receipted run-pinned workflow projection (`.managed-projection/`) and the
+binding-written host discovery configuration (`.claude/`). Inside a run the
+compiled execution grant protects them. In the committed tree they are a
+protected-authority-path violation, and the verification core rejects a
+candidate tree carrying one on the tree's own evidence — no product state
+consulted, so a reviewer and a CI job reach the same verdict. Membership is by
+path segment: `src/managed-projection-notes.md` merely names one of them.

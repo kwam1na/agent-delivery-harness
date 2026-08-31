@@ -20,9 +20,11 @@ import {
   deliveryRecordPathFor,
   parseDeliveryRecord,
   selectDeliveryRecordForIdentity,
+  DELIVERY_OWNED_TREE_PREFIXES,
   verifyDeliveryRecord,
   type DeliveryRecord,
 } from "./delivery-record.ts";
+import { PORTABLE_STAGE_GRANT } from "./policy/compile.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -318,6 +320,48 @@ describe("verifyDeliveryRecord", () => {
     );
     expect(check.ok).toBe(false);
     expect(check.blockers.map((b) => b.code)).toContain("deliverable_identity_changed");
+  });
+
+  it("independently rejects a candidate tree carrying a projection or discovery-configuration path", () => {
+    for (const planted of [
+      `${DELIVERY_OWNED_TREE_PREFIXES[0]}/workflows/delivery-v1.json`,
+      `${DELIVERY_OWNED_TREE_PREFIXES[1]}/settings.json`,
+    ]) {
+      const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, {
+        candidateTreePaths: ["src/index.ts", planted],
+      });
+      expect(check.ok, planted).toBe(false);
+      expect(check.blockers.map((b) => b.code)).toContain("record_protected_authority_path");
+    }
+  });
+
+  it("rejects a delivery-owned path aliased by case or committed as a bare symlink", () => {
+    // Two shapes the in-run deny side already folds for: a case alias that
+    // resolves to the protected path on a case-insensitive checkout, and the
+    // prefix committed as a single entry (a symlink) with nothing under it.
+    for (const planted of [".Claude/settings.json", ".MANAGED-PROJECTION/x.json", ".claude", ".managed-projection"]) {
+      const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, {
+        candidateTreePaths: [planted],
+      });
+      expect(check.ok, planted).toBe(false);
+      expect(check.blockers.map((b) => b.code), planted).toContain("record_protected_authority_path");
+    }
+  });
+
+  it("passes a candidate tree that merely NAMES a prefix without being inside it", () => {
+    const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, {
+      candidateTreePaths: ["src/managed-projection-notes.md", "docs/.claudette/readme.md", ".claudette", "a.claude/b"],
+    });
+    expect(check.ok, JSON.stringify(check.blockers)).toBe(true);
+  });
+
+  it("keeps its closed path set identical to the portable grant's delivery-owned protections", () => {
+    // Two lists, one meaning: the grant protects them inside the run, the
+    // external verifier rejects them in the committed tree. Drift between the
+    // two would open exactly the gap this check exists to close.
+    expect([...DELIVERY_OWNED_TREE_PREFIXES].sort()).toEqual(
+      PORTABLE_STAGE_GRANT.protectedPaths.filter((path) => path !== ".git").slice().sort(),
+    );
   });
 
   it("fails on an identity token the config does not accept", () => {
