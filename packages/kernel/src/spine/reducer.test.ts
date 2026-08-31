@@ -856,6 +856,71 @@ describe("the finish line and the post-action states", () => {
     expect(codes).toContain("invalid_transition");
   });
 
+  it("judges the terminal edge on the LAST result, never on an earlier action that passed", () => {
+    // `acting -> acting` is an enumerated row, so a delivery can carry several
+    // actions. A merge whose verification failed must not reach completion on
+    // the strength of a pull-request creation that passed before it.
+    const twoActions = (lastVerification: string): Entry[] => [
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", { ...intent, intentId: "intent-pr", action: "pr-creation" }),
+      deliveryEntry(16, "action.result.recorded", actionResult({ intentId: "intent-pr", action: "pr-creation" })),
+      deliveryEntry(17, "transition.committed", { from: "acting", to: "acting" }),
+      deliveryEntry(18, "action.intent.recorded", { ...intent, intentId: "intent-merge" }),
+      deliveryEntry(19, "action.result.recorded", actionResult({ intentId: "intent-merge", verification: lastVerification })),
+      deliveryEntry(20, "transition.committed", { from: "acting", to: "completed" }),
+    ];
+    expect(reduceCodes(twoActions("failed"))).toContain("invalid_transition");
+    const verified = reduceDeliveryJournal(twoActions("passed"));
+    expect(verified.ok, JSON.stringify(verified)).toBe(true);
+  });
+
+  it("refuses terminal success while the last authorized action has no observed result at all", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "transition.committed", { from: "acting", to: "completed" }),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  it("refuses a result that observes a different action than its intent", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult({ action: "deploy" })),
+    ]);
+    expect(codes).toContain("unsupported_combination");
+  });
+
+  it("refuses a finish-line result composed for another delivery", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "finish.line.recorded", { result: { ...mergeReadyResult, deliveryId: "delivery-2" } }),
+    ]);
+    expect(codes).toContain("subject_mismatch");
+  });
+
+  it("voids a recorded result once the delivery leaves ready for anything but success", () => {
+    // The result was composed over the candidate that stood at `ready`. Leaving
+    // for re-validation and returning means it stands for nothing.
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "finish.line.recorded", { result: mergeReadyResult }),
+      deliveryEntry(15, "transition.committed", { from: "ready", to: "awaiting_approval" }),
+      deliveryEntry(16, "transition.committed", { from: "awaiting_approval", to: "validating" }),
+      deliveryEntry(17, "transition.committed", { from: "validating", to: "reviewing" }),
+      deliveryEntry(18, "transition.committed", { from: "reviewing", to: "compounding" }),
+      deliveryEntry(19, "transition.committed", { from: "compounding", to: "admitting" }),
+      deliveryEntry(20, "transition.committed", { from: "admitting", to: "recording" }),
+      deliveryEntry(21, "transition.committed", { from: "recording", to: "ready" }),
+      deliveryEntry(22, "transition.committed", { from: "ready", to: "completed" }),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
   it("enters action_succeeded_verification_failed on exactly that observed pair", () => {
     const failed = reduceDeliveryJournal([
       ...toReady(),

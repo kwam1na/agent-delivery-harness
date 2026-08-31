@@ -160,7 +160,11 @@ export interface FinishLineInput {
   readonly contract: AcceptedContract;
   readonly policy: PolicySnapshot;
   readonly outcome: OutcomeVerification;
-  /** What the tracked-record `recording` transition bound. */
+  /**
+   * The recorded delivery: the candidate recaptured at the `recording`
+   * transition, the base tip the tracked record itself binds, and the record's
+   * digest.
+   */
   readonly record: { readonly treeSha: string; readonly baseTipSha: string; readonly digest: string };
   /** The same two values observed now: terminal success is a canonical recheck site. */
   readonly observed: { readonly treeSha: string; readonly baseTipSha: string };
@@ -178,21 +182,10 @@ export type FinishLineDecision =
   | { readonly kind: "blocked"; readonly refusals: readonly FinishLineRefusal[] };
 
 export function decideFinishLine(input: FinishLineInput): FinishLineDecision {
-  const requested = input.contract.requestedFinishLine;
-
-  // A finish line beyond merge-ready never terminates here: it is authorized
-  // into its post-action state and stops, because no action is invocable.
-  const action = FINISH_LINE_ACTIONS[requested];
-  if (action !== undefined) {
-    const authorized = authorizeFinishLineAction({
-      action,
-      contract: input.contract,
-      policy: input.policy,
-      ...(input.approvalRequiredActions === undefined ? {} : { approvalRequiredActions: input.approvalRequiredActions }),
-    });
-    return authorized.ok ? { kind: authorized.nextState, action } : { kind: "blocked", refusals: authorized.refusals };
-  }
-
+  // THE EVIDENCE COMES FIRST, WHATEVER THE FINISH LINE. Every finish line
+  // stands on the same readiness: admission, an unmoved candidate and base,
+  // the completed obligations, and the external verifier. A delivery that
+  // cannot terminate at merge-ready is certainly not authorized to act.
   const refusals: FinishLineRefusal[] = [];
 
   const withinPolicy = checkContractWithinPolicy(input.contract, input.policy);
@@ -210,8 +203,8 @@ export function decideFinishLine(input: FinishLineInput): FinishLineDecision {
     });
   }
 
-  // Base and candidate movement invalidates readiness. The recording
-  // transition bound both; terminal success rebinds them.
+  // Base and candidate movement invalidates readiness: recording bound both,
+  // and terminal success rebinds them against what is observed now.
   if (input.observed.treeSha !== input.record.treeSha) {
     refusals.push({
       code: "candidate_moved",
@@ -223,7 +216,7 @@ export function decideFinishLine(input: FinishLineInput): FinishLineDecision {
     refusals.push({
       code: "base_moved",
       pointer: "/observed/baseTipSha",
-      message: `the base tip is at ${input.observed.baseTipSha}; the recording transition bound ${input.record.baseTipSha}`,
+      message: `the base tip is at ${input.observed.baseTipSha}; the tracked record binds ${input.record.baseTipSha}`,
     });
   }
 
@@ -258,6 +251,19 @@ export function decideFinishLine(input: FinishLineInput): FinishLineDecision {
   }
 
   if (refusals.length > 0) return { kind: "blocked", refusals };
+
+  // A finish line beyond merge-ready never terminates here: it is authorized
+  // into its post-action state and stops, because no action is invocable.
+  const action = FINISH_LINE_ACTIONS[input.contract.requestedFinishLine];
+  if (action !== undefined) {
+    const authorized = authorizeFinishLineAction({
+      action,
+      contract: input.contract,
+      policy: input.policy,
+      ...(input.approvalRequiredActions === undefined ? {} : { approvalRequiredActions: input.approvalRequiredActions }),
+    });
+    return authorized.ok ? { kind: authorized.nextState, action } : { kind: "blocked", refusals: authorized.refusals };
+  }
 
   const result = {
     spec: "finish-line-result/1",

@@ -2958,12 +2958,15 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // only says which obligations were ACTIVATED. The facade completes
       // `outcome.verification` itself — criterion mapping plus the
       // positive-criterion rule above — and the admission gate completes the
-      // rest; a blocked or never-activated obligation completed nothing.
+      // rest. Only a BLOCKED resolution completed nothing: `not_applicable` is
+      // the ordinary answer for an obligation this candidate never activated,
+      // and treating it as incomplete would deadlock the finish line on work
+      // nothing was ever supposed to run.
       const completedObligations = [
         ...new Set([
           "outcome.verification",
           ...(admission.decision?.resolutions ?? [])
-            .filter((resolution) => resolution.kind !== "blocked" && resolution.kind !== "not_applicable")
+            .filter((resolution) => resolution.kind !== "blocked")
             .map((resolution) => resolution.obligationId),
         ]),
       ].sort();
@@ -3155,20 +3158,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuse("outcome_missing", "No outcome verification is on file for this delivery.", "Admit the delivery first.");
       }
       const completed = await readJson<{ completedObligations: readonly string[] }>(path.join(dir, "admission.json"));
-      if (completed === undefined) {
-        return refuse("admission_missing", "No admission result is on file for this delivery.", "Admit the delivery first.");
+      if (completed === undefined || !Array.isArray(completed.completedObligations)) {
+        return refuse("admission_missing", "No readable admission result is on file for this delivery.", "Admit the delivery first.");
       }
 
-      // What the `recording` transition bound: the tracked record's digest and
-      // the candidate recaptured at that edge, plus the base this delivery is
-      // being made mergeable onto.
+      // The tracked record's digest, as journaled on the `recording` edge, and
+      // the candidate recaptured there.
       const recordingTransition = [...guarded.views]
         .reverse()
         .find((view) => view.kind === "transition.committed" && view.payload["trackedRecord"] !== undefined);
       const trackedRecord = recordingTransition?.payload["trackedRecord"] as { path: string; sha256: string } | undefined;
       const recordedCandidate = currentCandidateOf(guarded.views);
-      const bound = lastOf(guarded.views, "workspace.bound");
-      if (trackedRecord === undefined || recordedCandidate === undefined || bound === undefined) {
+      if (trackedRecord === undefined || recordedCandidate === undefined) {
         return refuse("record_missing", "No tracked-record transition is journaled for this delivery.", "Record the delivery first.");
       }
 
@@ -3181,29 +3182,35 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
 
-      let externalVerification: ExternalVerification = "unavailable";
+      // The record is read BEFORE the decision: it carries the base coordinates
+      // it was written against, observed through the same capture path as the
+      // base observed now, so the two are comparable values rather than two
+      // refs resolved by different rules at different moments.
       const relativePath = deliveryRecordPathFor(input.config, captured.deliverable.digest);
-      let recordText: string | undefined;
+      let recordText: string;
       try {
         recordText = await readFile(path.join(rootDir, relativePath), "utf8");
       } catch {
-        recordText = undefined;
+        return refuse("record_missing", `No tracked record at ${relativePath}.`, "Record the delivery first, then complete the finish line.");
       }
-      if (recordText !== undefined) {
-        const parsed = parseDeliveryRecord(recordText);
-        if (parsed.ok) {
-          const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
-          const check = verifyDeliveryRecord(
-            input.config,
-            parsed.record,
-            { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
-            { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
-            { candidateTreePaths: listed.out.split("\u0000").filter((entry) => entry.length > 0) },
-          );
-          externalVerification = check.ok ? "passed" : "failed";
-        } else {
-          externalVerification = "failed";
-        }
+      const parsed = parseDeliveryRecord(recordText);
+      if (!parsed.ok) return refuseWith(parsed.blockers);
+
+      const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
+      let externalVerification: ExternalVerification;
+      if (listed.code !== 0) {
+        // The verifier's protected-authority-path rule does not run over a tree
+        // it could not list, and half a verification is not a passing one.
+        externalVerification = "unavailable";
+      } else {
+        const check = verifyDeliveryRecord(
+          input.config,
+          parsed.record,
+          { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
+          { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
+          { candidateTreePaths: listed.out.split("\u0000").filter((entry) => entry.length > 0) },
+        );
+        externalVerification = check.ok ? "passed" : "failed";
       }
 
       // The declared product-trust level, read verbatim from the pinned
@@ -3221,7 +3228,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         contract: guarded.meta.contract,
         policy: guarded.meta.policy,
         outcome,
-        record: { treeSha: recordedCandidate.treeSha, baseTipSha: bound.payload["baseTipSha"] as string, digest: trackedRecord.sha256 },
+        record: { treeSha: recordedCandidate.treeSha, baseTipSha: parsed.record.candidateBinding.baseTipSha, digest: trackedRecord.sha256 },
         observed: { treeSha: captured.treeSha, baseTipSha: captured.base.tipSha },
         admission: { admitted: true, completedObligations: completed.completedObligations },
         externalVerification,

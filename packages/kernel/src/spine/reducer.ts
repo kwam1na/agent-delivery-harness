@@ -152,7 +152,14 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
   let finishLineRecorded = false;
   const idempotencyKeys = new Set<string>();
   /** Recorded action intents, and the verification each one's result observed. */
-  const actionIntents = new Map<string, string | undefined>();
+  const actionIntents = new Map<string, { readonly action: string; verification?: string }>();
+  /**
+   * The verification of the MOST RECENT observed result. `acting -> acting` is
+   * an enumerated row, so a delivery can carry several actions; the terminal
+   * edge is about the action just taken, never about any action that passed
+   * earlier in the sequence.
+   */
+  let lastActionVerification: string | undefined;
 
   entries.forEach((value, index) => {
     const at = `/${index}`;
@@ -289,6 +296,16 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           );
           return;
         }
+        // The result is another delivery's evidence unless it names this one.
+        const result = payload["result"];
+        if (isSpineRecord(result) && result["deliveryId"] !== deliveryId) {
+          collector.emit(
+            "subject_mismatch",
+            `${at}/payload/result/deliveryId`,
+            `the result names delivery ${String(result["deliveryId"])}; this journal belongs to ${deliveryId}`,
+          );
+          return;
+        }
         finishLineRecorded = true;
         break;
       }
@@ -304,7 +321,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           collector.emit("unsupported_combination", `${at}/payload/intentId`, `intent ${intentId} was already recorded`);
           return;
         }
-        actionIntents.set(intentId, undefined);
+        actionIntents.set(intentId, { action: payload["action"] as string });
         break;
       }
       case "action.result.recorded": {
@@ -313,7 +330,8 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           collector.emit("invalid_transition", at, `an action result is recorded while acting; the delivery is in ${state}`);
           return;
         }
-        if (!actionIntents.has(intentId)) {
+        const intent = actionIntents.get(intentId);
+        if (intent === undefined) {
           collector.emit(
             "invalid_transition",
             `${at}/payload/intentId`,
@@ -321,7 +339,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           );
           return;
         }
-        if (actionIntents.get(intentId) !== undefined) {
+        if (intent.verification !== undefined) {
           // The irreversible action must never be repeated, so its observed
           // result is written exactly once.
           collector.emit(
@@ -331,7 +349,16 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           );
           return;
         }
-        actionIntents.set(intentId, payload["verification"] as string);
+        if (intent.action !== payload["action"]) {
+          collector.emit(
+            "unsupported_combination",
+            `${at}/payload/action`,
+            `intent ${intentId} was recorded for ${intent.action}; a result cannot observe a different action`,
+          );
+          return;
+        }
+        intent.verification = payload["verification"] as string;
+        lastActionVerification = intent.verification;
         break;
       }
       case "transition.committed": {
@@ -354,13 +381,12 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           return;
         }
         if (from === "acting" && (to === "completed" || to === "action_succeeded_verification_failed")) {
-          const verifications = [...actionIntents.values()];
           const wanted = to === "completed" ? "passed" : "failed";
-          if (!verifications.includes(wanted)) {
+          if (lastActionVerification !== wanted) {
             collector.emit(
               "invalid_transition",
               `${at}/payload/to`,
-              `acting -> ${to} requires an observed action result whose verification is ${wanted}`,
+              `acting -> ${to} requires the LAST observed action result's verification to be ${wanted}; it is ${lastActionVerification ?? "unobserved"}`,
             );
             return;
           }
@@ -376,6 +402,10 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           );
           return;
         }
+        // A finish-line result is composed over one candidate. A delivery that
+        // leaves `ready` for anything but success may return with a different
+        // candidate, so the earlier result stops standing for anything.
+        if (from === "ready" && to !== "completed") finishLineRecorded = false;
         if (!isSuspended(state) && !isTerminal(state)) lastActiveState = state;
         state = to;
         break;

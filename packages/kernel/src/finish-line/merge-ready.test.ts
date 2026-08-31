@@ -243,6 +243,22 @@ describe("the authority and request matrix", () => {
     });
   }
 
+  it("blocks a merge finish line on the SAME readiness a merge-ready one needs", () => {
+    // The stronger state is never handed out on weaker evidence: a delivery
+    // that cannot terminate at merge-ready is not authorized to act either.
+    const decision = decideFinishLine(
+      inputOf({
+        contract: contractOf({ requestedFinishLine: "merge", requestedAuthority: ["merge"] }),
+        policy: policyOf({ grantedFinishLines: ["merge-ready", "merge"], grantedAuthority: ["merge"] }),
+        observed: { treeSha: "4".repeat(40), baseTipSha: BASE_TIP },
+        externalVerification: "failed",
+      }),
+    );
+    expect(decision.kind).toBe("blocked");
+    expect(codesOf(decision)).toContain("candidate_moved");
+    expect(codesOf(decision)).toContain("external_verification_missing");
+  });
+
   it("never reaches a merge-ready RESULT on a merge or deploy finish line", () => {
     for (const finishLine of ["merge", "deploy"] as const) {
       const decision = decideFinishLine(
