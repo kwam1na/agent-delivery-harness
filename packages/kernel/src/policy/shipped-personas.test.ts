@@ -198,13 +198,49 @@ describe("projecting the pinned archive into charter receipts", () => {
     expect(result.rejections.map((rejection) => rejection.code)).toEqual(["persona_manifest_malformed"]);
   });
 
-  it("fails closed when the manifest names a charter the archive does not carry", () => {
-    const removed = manifest.personas[0]!.path;
-    const result = projectShippedPersonas(readerOver(archiveWith({ [removed]: null })));
+  it("fails closed when the manifest names a charter the archive does not carry, reporting every one", () => {
+    // Two defects in one archive, because the module claims it reports every
+    // defect rather than the first. One planted defect cannot tell those apart.
+    const first = manifest.personas[0]!.path;
+    const second = manifest.personas[1]!.path;
+    const result = projectShippedPersonas(readerOver(archiveWith({ [first]: null, [second]: null })));
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.rejections.map((rejection) => rejection.code)).toContain("persona_charter_absent");
-    expect(result.rejections.map((rejection) => rejection.message).join(" ")).toContain(removed);
+    expect(result.rejections.filter((rejection) => rejection.code === "persona_charter_absent")).toHaveLength(2);
+    const messages = result.rejections.map((rejection) => rejection.message).join(" ");
+    expect(messages).toContain(first);
+    expect(messages).toContain(second);
+  });
+
+  it("fails closed when a charter's bytes are not bound by the archive's digest listing at all", () => {
+    // The charter is present and its bytes are intact, but the archive never
+    // recorded a digest for it — so nothing binds what was read. Distinct from
+    // a drifted digest, and the branch that catches it needs its own falsifier.
+    const target = manifest.personas[0]!;
+    const unlisted = archiveWith({
+      [ARCHIVE_RELEASE_MANIFEST_ENTRY]: JSON.stringify(
+        (() => {
+          const document = JSON.parse(entryText(ARCHIVE_RELEASE_MANIFEST_ENTRY));
+          document.files = document.files.filter((file: { path: string }) => file.path !== target.path);
+          return document;
+        })(),
+      ),
+    });
+    const result = projectShippedPersonas(readerOver(unlisted));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.rejections.map((rejection) => rejection.code)).toContain("persona_charter_digest_mismatch");
+    const message = result.rejections.map((rejection) => rejection.message).join(" ");
+    expect(message).toContain(target.path);
+    expect(message).toContain("unbound");
+  });
+
+  it("tells an unparseable manifest apart from an absent one", () => {
+    const truncated = archiveWith({ [PERSONA_MANIFEST_ENTRY]: '{"schemaVersion": "reviewer-persona-manif' });
+    const result = projectShippedPersonas(readerOver(truncated));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.rejections.map((rejection) => rejection.code)).toEqual(["persona_manifest_malformed"]);
   });
 
   it("fails closed when a charter's bytes disagree with the archive's own digest listing", () => {

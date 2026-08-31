@@ -48,10 +48,10 @@ export const PRODUCT_TRUST_LABEL = "local-digest / operator-pinned";
 export const PINNED_AGENT_SKILLS = Object.freeze({
   releaseId: "core-v1",
   profile: "core",
-  archiveSha256: "bffec8f3d149f709b3607678b4e521ed333a2c65e488625b33c0ef4a99573751",
-  metadataSha256: "50b1e8fba7864508e64756a4133967a730ce9c13c7f9f6de3c7fa7fa0bd4b592",
+  archiveSha256: "9ce12f12c4096e346154ef377fc89187c9168944d6e59b9d6596feb98e57d2ed",
+  metadataSha256: "b2b008cb5a87f2bd83696cb43e908badb305b750a0b013a8c89d118bf16f9007",
   workflowGraphSha256: "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
-  provenanceLockSha256: "725e56e08f161645ab8200a6a5f987e5643976e8cee55f032ddf85c61059f164",
+  provenanceLockSha256: "0872fab0e891c7304f5c6ab9c19298902b386935d69f9296e28106c730192bfa",
   protocolVersion: "delivery-provider-rails/1",
 } as const);
 

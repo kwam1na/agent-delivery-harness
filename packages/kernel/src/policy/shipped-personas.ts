@@ -27,11 +27,10 @@
  * satisfied.
  *
  * PURITY. Pure over a byte reader. Both the filesystem edge and the archive
- * decoding belong to the caller — the facade reads the archive out of the
- * run-pinned generation root and hands this module a reader over its entries,
- * exactly as it does for the workflow graph. This module is in the policy
- * layer, whose purity rule admits no fs, process, or decompression edge, and
- * the port is what keeps it there.
+ * decoding belong to the caller, which supplies a reader over the pinned
+ * archive's entries. This module is in the policy layer, whose purity rule
+ * admits no fs, process, or decompression edge, and the port is what keeps it
+ * there.
  *
  * PROVENANCE. Authorship, licence, and attribution for every charter live in
  * the archive's own `provenance.lock.json`, where the archive's manifest
@@ -110,8 +109,11 @@ const recordedDigests = (read: ArchiveEntryReader): ReadonlyMap<string, string> 
  * did not ship at all.
  */
 export function projectShippedPersonas(read: ArchiveEntryReader): ProjectShippedPersonasResult {
-  const manifest = parseJson(parseJsonEntry(read, PERSONA_MANIFEST_ENTRY));
-  if (manifest === undefined) {
+  // Absent and unparseable are distinct diagnoses: an operator told the
+  // manifest is missing goes looking at packaging, which is the wrong place to
+  // look when the entry is present and truncated.
+  const manifestText = parseJsonEntry(read, PERSONA_MANIFEST_ENTRY);
+  if (manifestText === undefined) {
     return {
       ok: false,
       rejections: [
@@ -123,6 +125,7 @@ export function projectShippedPersonas(read: ArchiveEntryReader): ProjectShipped
       ],
     };
   }
+  const manifest = parseJson(manifestText);
   if (!isRecord(manifest) || manifest["schemaVersion"] !== PERSONA_MANIFEST_SPEC || !Array.isArray(manifest["personas"])) {
     return {
       ok: false,
