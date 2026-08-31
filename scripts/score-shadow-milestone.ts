@@ -326,12 +326,22 @@ export function scoreShadowMilestone(baseline: any, gateRecord: any): ShadowMile
       )} rather than ${MANUAL_CHOREOGRAPHY_BASELINE_SPEC}; the scorer compares against the frozen manual-choreography baseline and nothing else`,
     });
   }
+  // BOTH SIDES MUST NAME A HOST. An undeclared host used to be tolerated, and
+  // a record that simply omitted the field then scored as like-for-like
+  // against a baseline captured on another host — an unestablished fact
+  // reading as a satisfied one, which is the failure this module is built
+  // around. Silence about the host is not agreement about it.
   const recordBaseline = gateRecord?.baseline ?? {};
-  if (
-    baseline?.provingHost !== undefined &&
-    recordBaseline.provingHost !== undefined &&
-    baseline.provingHost !== recordBaseline.provingHost
-  ) {
+  if (baseline?.provingHost === undefined || recordBaseline.provingHost === undefined) {
+    incomplete.push({
+      code: "baseline_host_mismatch",
+      message: `like-for-like cannot be established: the baseline names ${JSON.stringify(
+        baseline?.provingHost,
+      )} as its proving host and the gate record names ${JSON.stringify(
+        recordBaseline.provingHost,
+      )}; both must say which host their deliveries ran on`,
+    });
+  } else if (baseline.provingHost !== recordBaseline.provingHost) {
     incomplete.push({
       code: "baseline_host_mismatch",
       message: `the gate record measures deliveries on ${JSON.stringify(

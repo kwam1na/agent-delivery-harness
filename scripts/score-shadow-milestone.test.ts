@@ -204,6 +204,36 @@ describe("the frozen baseline is characterized before anything is scored against
     expect(verdict.status).toBe("incomplete");
   });
 
+  it("refuses to call a comparison like-for-like when either side names no host", () => {
+    // Silence about the host is not agreement about it. Tolerating an absent
+    // field let a record that simply omitted it pass as like-for-like against
+    // a baseline captured somewhere else.
+    // Each silent side is checked by its own MESSAGE, not merely by the code:
+    // a rule that required only one of the two would fall through to the
+    // cross-host branch and emit the same code for the wrong reason. And the
+    // both-silent case is the one no fall-through can catch — `undefined !==
+    // undefined` is false, so a tolerant rule scores it as agreement.
+    const recordSilent = fullSet([{}, {}, {}]);
+    delete (recordSilent["baseline"] as Record<string, unknown>)["provingHost"];
+    const baselineSilent = { ...reachableBaseline };
+    delete (baselineSilent as Record<string, unknown>)["provingHost"];
+
+    const cases: [string, any, any][] = [
+      ["the record is silent", reachableBaseline, recordSilent],
+      ["the baseline is silent", baselineSilent, fullSet([{}, {}, {}])],
+      ["both are silent", baselineSilent, recordSilent],
+    ];
+    for (const [, side, record] of cases) {
+      const verdict = scoreShadowMilestone(side, record);
+      const note = verdict.incomplete.find((row) => row.code === "baseline_host_mismatch");
+      expect(note).toBeDefined();
+      expect(note!.message).toContain("both must say which host their deliveries ran on");
+      expect(verdict.status).toBe("incomplete");
+      expect(verdict.failures).toEqual([]);
+      expect(verdict.shadow).toBeNull();
+    }
+  });
+
   it("compares like-for-like when the hosts agree", () => {
     const verdict = scoreShadowMilestone(reachableBaseline, fullSet([{}, {}, {}]));
     expect(verdict.incomplete.map((note) => note.code)).not.toContain("baseline_host_mismatch");
@@ -286,6 +316,19 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
     const note = verdict.incomplete.find((row) => row.code === "comparison_set_mix_mismatch")!;
     expect(note.message).toContain("infra");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
+  it("refuses an entry that names no category at all, rather than letting it fill a mix slot", () => {
+    // The absent-category sibling of the case above. Uncategorised is not a
+    // category the baseline mix includes, so the entry must not silently
+    // occupy the operations slot it was never shown to belong in.
+    const uncategorised = entry("shadow-operations", "operations", { interventionCount: 99 });
+    delete uncategorised["category"];
+    const record = gateRecord([entry("shadow-code", "code"), entry("shadow-docs", "docs"), uncategorised]);
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+    expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
     expect(verdict.status).toBe("incomplete");
     expect(verdict.shadow).toBeNull();
   });
