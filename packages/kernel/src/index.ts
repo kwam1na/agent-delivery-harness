@@ -767,6 +767,7 @@ export {
 export {
   CONSUMPTION_GATE_RECORD_BLOCKER_CODES,
   SHADOW_MILESTONE_GATE_RECORD_SPEC,
+  SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX,
   emitProjectionConsumptionRecord,
   projectionConsumptionObservationFile,
   type ConsumptionGateRecordBlockerCode,

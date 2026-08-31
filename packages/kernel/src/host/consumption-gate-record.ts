@@ -105,8 +105,31 @@ export interface ProjectionConsumptionObservation {
 export const projectionConsumptionObservationFile = (fence: number): string =>
   `projection-consumption-${fence}.json`;
 
-/** The consuming repository's gate-record artifact spec, matched exactly. */
-export const SHADOW_MILESTONE_GATE_RECORD_SPEC = "athena-shadow-milestone-gate-record/1";
+/**
+ * The gate-record artifact spec, matched by SUFFIX.
+ *
+ * Every consumer owns its own copy of this artifact and names the spec after
+ * itself — `athena-shadow-milestone-gate-record/1` in Athena, and
+ * `delivery-harness-shadow-milestone-gate-record/1` in this repository's own
+ * shadow window — while the record contract inside is identical. Pinning one
+ * consumer's full string would make the product able to record consumption for
+ * exactly one repository, which is the opposite of what a product-side writer
+ * is for; it refused this repository's own artifact until this was widened.
+ *
+ * The suffix still carries the version, so a `/2` artifact is refused rather
+ * than written into with `/1` semantics. This is a shape guard, not an
+ * authorization: what the writer may edit is decided by the path its caller
+ * supplies.
+ */
+export const SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX = "shadow-milestone-gate-record/1";
+
+/** Athena's spelling of it — the first consumer, kept for callers that name it. */
+export const SHADOW_MILESTONE_GATE_RECORD_SPEC = `athena-${SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX}`;
+
+const isGateRecordSpec = (value: unknown): boolean =>
+  typeof value === "string" &&
+  value.endsWith(SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX) &&
+  value.length > SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX.length;
 
 /**
  * The record the guard admits: source, affirmation, the digest the binding
@@ -307,12 +330,12 @@ async function writeEntry(
   if (
     typeof document !== "object" ||
     document === null ||
-    document["spec"] !== SHADOW_MILESTONE_GATE_RECORD_SPEC ||
+    !isGateRecordSpec(document["spec"]) ||
     !Array.isArray(document["deliveries"])
   ) {
     return fail(
       "gate_record_unrecognized",
-      `${input.gateRecordPath} does not declare ${SHADOW_MILESTONE_GATE_RECORD_SPEC} with a deliveries list; the writer edits the milestone gate record and nothing else`,
+      `${input.gateRecordPath} does not declare a <consumer>-${SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX} spec with a deliveries list; the writer edits a milestone gate record and nothing else`,
     );
   }
 

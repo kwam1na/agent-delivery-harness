@@ -507,6 +507,83 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(entries[0].operatorInterventions).toBe(2);
   });
 
+  it("records into any consumer's gate record, not just the first consumer's", async () => {
+    // Each consumer names the spec after itself while the record contract
+    // inside is identical. Pinning one consumer's full string made the product
+    // able to record for exactly one repository — and refused THIS
+    // repository's own shadow artifact, which is the case that caught it.
+    const bench = await workbench("other-consumer");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-shadow-harness",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-shadow-harness", 1);
+
+    const dir = await mkdtemp(path.join(scratch, "other-consumer-policy-"));
+    const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
+    writeFileSync(
+      gateRecordPath,
+      `${JSON.stringify(
+        {
+          spec: "delivery-harness-shadow-milestone-gate-record/1",
+          repositoryId: "agent-delivery-harness",
+          deliveries: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const emitted = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-harness",
+      fence: 1,
+      category: "code",
+    });
+    expect(emitted.ok && emitted.emitted, JSON.stringify(emitted)).toBe(true);
+    expect(deliveriesIn(gateRecordPath).map((entry) => entry.id)).toEqual(["dlv-shadow-harness"]);
+  });
+
+  it("refuses a gate record of another version, and anything that is not one", async () => {
+    // The suffix carries the version, so a /2 artifact is refused rather than
+    // written into with /1 semantics — and the bare suffix with no consumer
+    // prefix is not a consumer's artifact either.
+    const bench = await workbench("version-guard");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-shadow-version",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-shadow-version", 1);
+
+    for (const spec of ["athena-shadow-milestone-gate-record/2", "shadow-milestone-gate-record/1", "notes/1"]) {
+      const dir = await mkdtemp(path.join(scratch, "version-guard-policy-"));
+      const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
+      writeFileSync(gateRecordPath, `${JSON.stringify({ spec, deliveries: [] }, null, 2)}\n`);
+      const emitted = await emitProjectionConsumptionRecord({
+        gateRecordPath,
+        worktreeDir: bench.worktreeDir,
+        bindingDir: bench.bindingDir,
+        deliveryId: "dlv-shadow-version",
+        fence: 1,
+        category: "code",
+      });
+      expect(emitted.ok, `spec ${spec} was accepted`).toBe(false);
+      if (emitted.ok) continue;
+      expect(emitted.blockers.map((blocker) => blocker.code)).toEqual(["gate_record_unrecognized"]);
+    }
+  });
+
   it("refuses an artifact that is not the milestone gate record", async () => {
     const bench = await workbench("wrong-artifact");
     const materialized = await materializeProjection({
