@@ -163,6 +163,26 @@ describe("the record's legs", () => {
     expect(stated.join(" ")).toMatch(/unsupported/u);
   });
 
+  it("does not carry the host's tier forward on a superseded version in either record alone", () => {
+    // Both records grade this host at the same key, so a re-verification in one
+    // and silence in the other would leave a reader of the quiet one with the
+    // stale claim and no sign of it. The two blocks have to name the same
+    // installed version and reach the same outcome about the tier.
+    const graded = (admissionRecord.hosts as any[]).find((host) => host.hostId === record.host.hostId);
+    const here = record.host.reverification;
+    const there = graded.grade.reverification;
+    expect(here, "the integration record re-verifies its host").toBeDefined();
+    expect(there, "the graded record re-verifies the same host's tier").toBeDefined();
+    expect(here.hostVersion, "both records name the same installed version").toBe(there.hostVersion);
+    expect(here.hostVersion, "and it is not the version the entry is keyed at").not.toBe(record.host.hostVersion);
+    expect(here.outcome).toBe(there.outcome);
+    // The tier was not re-observed, so both must say why rather than restate it.
+    expect(here.outcome).toBe("unverified");
+    expect(here.reason.length, "the integration record names why the tier went unreached").toBeGreaterThan(0);
+    expect(here.observedAt, "an observation cannot postdate the record carrying it").toMatch(SPINE_INSTANT);
+    expect(here.observedAt <= record.recordedAt).toBe(true);
+  });
+
   it("meets every acceptance criterion with a named leg and evidence", () => {
     expect(record.acceptanceCriteria.length).toBe(3);
     for (const criterion of record.acceptanceCriteria as any[]) {

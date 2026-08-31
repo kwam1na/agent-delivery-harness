@@ -1,13 +1,23 @@
 {
   "schemaVersion": "claude-code-integration/1",
   "description": "Qualification record for the Claude Code-native delivery integration's two layers: the trusted model-external binding that applies and attests the grant, workspace, fence, and run-pinned projection BEFORE admission, and the in-session projection that reads checkpoints, consumes immutable context, and submits normalized results AFTER it. Live legs were driven against a real authenticated Claude Code session by the qualification harness, never by the product. Product-owned properties are proven by in-process sensors named here. Nothing is claimed beyond what ran.",
-  "recordedAt": "2026-08-30T19:20:00Z",
+  "recordedAt": "2026-08-31T15:45:00Z",
   "platform": "macOS 15.6.1 arm64",
   "host": {
     "hostId": "claude-code",
     "hostVersion": "2.1.97",
     "tier": 2,
-    "admissionSurface": "session-scoped --settings composed by the binding (grant-derived permission allow rules, model-external PreToolUse interceptor, SessionEnd lifecycle hook) with --setting-sources set to the empty selection, so every ambient scope is excluded and the binding's digest-bound settings file is the session's only settings source"
+    "admissionSurface": "session-scoped --settings composed by the binding (grant-derived permission allow rules, model-external PreToolUse interceptor, SessionEnd lifecycle hook) with --setting-sources set to the empty selection, so every ambient scope is excluded and the binding's digest-bound settings file is the session's only settings source",
+    "reverification": {
+      "kind": "recorded-observation",
+      "hostVersion": "2.1.251",
+      "outcome": "unverified",
+      "surface": "claude --help and claude plugin list at 2.1.251 for the flags and the discovery inventory, and claude --settings <file> doctor for the hook events, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
+      "method": "the admission surface this record composes is intact at 2.1.251: --settings, --setting-sources (still exactly user, project and local, still accepting the empty selection this binding admits with) and --plugin-dir are all in --help, the PreToolUse and SessionEnd hook events are still recognized by the settings validator (which is where they were read — --help names no hook event), and the scope selection was observed neutralizing a candidate-planted project-scope settings file with the un-neutralized control alongside it. THE TIER VERDICT WAS NOT RE-OBSERVED, AND NEITHER WERE THE LIVE PROBES BELOW. Every live leg in this record — the deny-until-attested legs included — was driven through a real authenticated session, and re-driving them would mean launching an authenticated host, which this product must never do; there is no model-free execution surface on this host to substitute for one. They all stand on their 2.1.97 observations and are stated as standing on them, rather than being deflected to the graded record, which carries no re-verification for them either. What the graded record does carry is the per-claim outcomes for the claims that were re-observed, including the one probe answer that changed at 2.1.251.",
+      "observedAt": "2026-08-31T15:40:00Z",
+      "reason": "the live legs are only reachable by launching an authenticated host session, which is an operator-only lane",
+      "scope": "the host tier verdict and the admission surface it was taken on. This record's own live probes are covered by the same unreached outcome; the graded capability record carries per-capability outcomes for the four claims re-observed there, and names the entries it left unexamined."
+    }
   },
   "terminationProvenance": {
     "eventKind": "termination.provenance.recorded",
