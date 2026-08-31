@@ -1676,6 +1676,19 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     }
     const charters = await trustedBaseCharters(meta.contract.repository.baseRef);
     if (!("personaBytes" in charters)) return charters;
+    // The charter digests were pinned into the policy at presentation, so a
+    // base whose charters moved since then no longer matches what this
+    // delivery would judge against. Caught HERE, where a refusal is
+    // retryable, rather than registering a delivery whose read-only copy can
+    // never satisfy its own pinned policy.
+    for (const lens of meta.policy.reviewLenses) {
+      if (sha256Hex(charters.personaBytes[lens.personaId] ?? "") === lens.personaDigest) continue;
+      return refuse(
+        "reviewer_charter_moved",
+        `The trusted pre-run base no longer carries the reviewer charter ${lens.personaId} that this draft's policy pinned.`,
+        "Re-present the contract so the policy pins the charters the base carries now.",
+      );
+    }
     return { binding, sensorBytes: shown.stdout, personaBytes: charters.personaBytes, trust };
   };
 

@@ -4,13 +4,18 @@
  * green-but-unrelated change from passing.
  *
  * REVIEW QUALITY IS QUALIFIED, NOT ASSERTED. Every attempt also binds the
- * digest of the reviewer charter its reviewer was handed, written by the
- * product from the compiled lens declaration and that charter's trusted
- * pre-run materialization. An attempt bound to any other charter does not
- * satisfy that lens, so two attempts sharing a category label are no longer
+ * digest of the reviewer charter its lens declares, written by the product
+ * from the compiled lens declaration and that charter's trusted pre-run
+ * materialization. An attempt bound to any other charter does not satisfy
+ * that lens, so two attempts sharing a category label are no longer
  * interchangeable. The digest is never read back from a submission: every
  * charter is readable, so an echoed digest would prove read access rather
  * than that the charter reached the reviewer.
+ *
+ * WHAT THIS DOES AND DOES NOT PROVE, HONESTLY. It binds WHICH charter governs
+ * a lens and makes a substitution detectable. Handing that charter's prose to
+ * the reviewing agent is the host's act, and no surface here performs it —
+ * so this qualifies the lens, it does not yet witness the reading.
  *
  * INDEPENDENCE IS FALSIFIABLE. Every attempt binds a context digest; two
  * attempts carrying the same digest are the same review invoked twice, and
