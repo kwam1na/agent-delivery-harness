@@ -104,6 +104,70 @@ const expectVerification = (verification: any, context: string): void => {
   }
 };
 
+const REVERIFICATION_OUTCOMES = ["holds", "withdrawn", "unverified"] as const;
+
+/**
+ * Every place in the record a `reverification` may hang, walked off the
+ * RECORD'S OWN host list rather than off host ids written here. A host added to
+ * the record is walked whether or not anyone remembered to name it, which is the
+ * only way the coverage rule below can fail on a silent addition.
+ *
+ * A re-verification supersedes a grading, so it needs the instant of the grading
+ * it supersedes to be bounded against. Capability and probe entries carry their
+ * own; a host grade does not, so it is anchored on the newest dated observation
+ * beneath it — a tier verdict cannot be re-taken before the latest evidence it
+ * rests on, and that includes the RE-verifications beneath it, or the tier could
+ * be re-taken before the very probes it summarizes and nothing would say so.
+ *
+ * What the rules below DO catch, and what they do not, stated so nobody credits
+ * them with the wrong thing. Every Claude Code outcome is pinned by name below,
+ * so changing one in either direction fails — an unreached claim cannot be
+ * promoted to a holding one, and a holding one cannot be quietly demoted. An
+ * `unverified` entry must also carry its reason and may not claim the live-probe
+ * kind. What no rule here reads is the METHOD TEXT: whether the observation a
+ * block describes was actually made, and whether the reason it gives for not
+ * making one is real, is a question about prose. That is the review's job, and
+ * pinning the outcome only guarantees that changing the answer is a deliberate,
+ * visible act rather than a quiet one.
+ */
+type ReverifiedSlot = { context: string; host: any; entry: any; gradedInstant: string };
+
+const datedInstants = (host: any): string[] =>
+  [...Object.values<any>(host.capabilities), ...Object.values<any>(host.probes)]
+    .flatMap((entry) => [entry.verification?.observedAt, entry.reverification?.observedAt])
+    .filter((instant): instant is string => typeof instant === "string");
+
+const slotsOn = (host: any): ReverifiedSlot[] => {
+  const slots: ReverifiedSlot[] = [];
+  for (const [group, entries] of [
+    ["capabilities", host.capabilities],
+    ["probes", host.probes],
+  ] as const) {
+    for (const [name, entry] of Object.entries<any>(entries)) {
+      if (entry.reverification === undefined) continue;
+      slots.push({
+        context: `${host.hostId}.${group}.${name} reverification`,
+        host,
+        entry,
+        gradedInstant: entry.verification.observedAt,
+      });
+    }
+  }
+  if (host.grade.reverification !== undefined) {
+    const beneath = datedInstants(host);
+    expect(beneath.length, `${host.hostId} grade has dated evidence to be bounded against`).toBeGreaterThan(0);
+    slots.push({
+      context: `${host.hostId}.grade reverification`,
+      host,
+      entry: host.grade,
+      gradedInstant: beneath.reduce((latest, instant) => (instant > latest ? instant : latest)),
+    });
+  }
+  return slots;
+};
+
+const reverifiedSlots = (): ReverifiedSlot[] => hosts.flatMap(slotsOn);
+
 describe("host-admission capability record document", () => {
   it("declares its version, the exact host versions, and a graded tier per host", () => {
     expect(record.schemaVersion).toBe("host-admission-capabilities/1");
@@ -157,31 +221,94 @@ describe("host-admission capability record document", () => {
     }
   });
 
-  it("re-verifies a capability claim rather than carrying a stale grading forward", () => {
+  it("re-verifies a claim rather than carrying a stale grading forward", () => {
     // A `reverification` exists precisely because the entry's own key names a
     // version the claim was NOT re-observed on. It therefore has to name the
     // version it WAS observed on, that version has to differ from the entry's,
     // and the observation has to postdate the grading it is standing in for.
     // Anything less is the original grading wearing a newer label.
-    let seen = 0;
-    for (const host of hosts) {
-      for (const [name, capability] of Object.entries<any>(host.capabilities)) {
-        const reverification = capability.reverification;
-        if (reverification === undefined) continue;
-        seen += 1;
-        const context = `${host.hostId}.${name} reverification`;
-        expectVerification(reverification, context);
-        expect(typeof reverification.hostVersion, `${context} names the version probed`).toBe("string");
-        expect(reverification.hostVersion, `${context} must not restate the entry's own version`).not.toBe(host.hostVersion);
-        expect(["holds", "withdrawn"], `${context} outcome`).toContain(reverification.outcome);
-        expect(reverification.observedAt > capability.verification.observedAt, `${context} postdates the grading`).toBe(true);
-        expect(reverification.observedAt <= record.gradedAt, `${context} postdates the record`).toBe(true);
-        if (reverification.outcome === "withdrawn") {
-          expect(capability.status, `${context} withdrew the claim, so it cannot still be supported`).not.toBe("supported");
-        }
+    const slots = reverifiedSlots();
+    for (const { context, host, entry, gradedInstant } of slots) {
+      const reverification = entry.reverification;
+      expectVerification(reverification, context);
+      expect(typeof reverification.hostVersion, `${context} names the version probed`).toBe("string");
+      expect(reverification.hostVersion, `${context} must not restate the entry's own version`).not.toBe(host.hostVersion);
+      expect(REVERIFICATION_OUTCOMES, `${context} outcome`).toContain(reverification.outcome);
+      expect(reverification.observedAt > gradedInstant, `${context} predates the grading it supersedes`).toBe(true);
+      expect(reverification.observedAt <= record.gradedAt, `${context} postdates the record that carries it`).toBe(true);
+      if (reverification.outcome === "withdrawn") {
+        expect(entry.status, `${context} withdrew the claim, so it cannot still be supported`).not.toBe("supported");
       }
     }
-    expect(seen, "at least one capability carries a re-verification").toBeGreaterThan(0);
+    expect(slots.length, "at least one entry carries a re-verification").toBeGreaterThan(0);
+  });
+
+  it("says which claims it could not reach instead of hedging them into an outcome", () => {
+    // `unverified` is the honest result when the evidence never arrives, and it
+    // is only worth having if it cannot be dressed up as evidence. It must name
+    // why the observation was unreachable, and it must not claim the live probe
+    // it did not run. Softening is how a claim nobody observed survives review.
+    const unreached = reverifiedSlots().filter((slot) => slot.entry.reverification.outcome === "unverified");
+    expect(unreached.length, "the record admits at least one claim it could not re-observe").toBeGreaterThan(0);
+    for (const { context, entry } of unreached) {
+      const reverification = entry.reverification;
+      expect(typeof reverification.reason, `${context} names why it went unreached`).toBe("string");
+      expect(reverification.reason.length, `${context} reason`).toBeGreaterThan(0);
+      expect(reverification.kind, `${context} cannot claim the probe it did not run`).not.toBe("live-probe");
+    }
+  });
+
+  it("carries a re-verification for every host it grades, with none left standing only on its own key", () => {
+    // The trap this is built against: a rule of the form "every graded host
+    // carries one" passes for free the moment the mechanism enumerating graded
+    // hosts stops finding any. So the membership is pinned from both ends —
+    // a floor on how many hosts were read, the exact set that carries one, and
+    // one named member that must be in it.
+    expect(hosts.length, "the record grades at least two hosts").toBeGreaterThanOrEqual(2);
+    const covered = hosts.filter((host) => slotsOn(host).length > 0).map((host) => host.hostId);
+    expect(covered, "every graded host carries at least one re-verification").toEqual(hosts.map((host) => host.hostId));
+    expect(covered).toContain("claude-code");
+  });
+
+  it("re-observes each Claude Code claim the stale grading was carrying, or says it could not", () => {
+    // The proving host's entry is keyed at a version four minor releases behind
+    // the installed CLI, so these are the claims that were being asserted at a
+    // remove. Each one carries an outcome now, and the SET IS PINNED WITH ITS
+    // OUTCOMES, not just its names: a block quietly dropped fails here, and so
+    // does an unreached claim promoted to a holding one. Names alone would leave
+    // the promotion silent, which is the direction that actually costs
+    // something — the tier verdict is not re-observed, because reaching it means
+    // launching an authenticated host, and quietly restating the old tier
+    // against the new version is precisely the defect this record exists to
+    // stop. Re-stating an outcome here is a deliberate act, which is the point.
+    const cc = hostById.get("claude-code");
+    const outcomes = new Map<string, string>(
+      slotsOn(cc).map((slot) => [slot.context.replace(`${cc.hostId}.`, "").replace(" reverification", ""), slot.entry.reverification.outcome]),
+    );
+    expect([...outcomes.entries()].sort()).toEqual([
+      ["capabilities.commonGitAuthorityPathProtected", "holds"],
+      ["capabilities.gracefulLifecycleEvents", "unverified"],
+      ["capabilities.grantIntegrityAgainstCandidatePlantedSettings", "holds"],
+      ["capabilities.terminationProvenanceWithDescendantTeardown", "unverified"],
+      ["grade", "unverified"],
+      ["probes.discoveryScopingExclusivity", "withdrawn"],
+      ["probes.gracefulTeardown", "unverified"],
+    ]);
+    expect(cc.grade.reverification.hostVersion).not.toBe(cc.hostVersion);
+  });
+
+  it("keeps the Claude Code exclusivity answer keyed where it was graded while recording that it moved", () => {
+    const probe = hostById.get("claude-code").probes.discoveryScopingExclusivity;
+    // Characterization first: the 2.1.97 answer stays exactly where it is. The
+    // re-grade that acts on the change belongs to the integration unit.
+    expect(probe.result).toBe("exclusivity-ungraded");
+    expect(probe.reverification.outcome).toBe("withdrawn");
+    expect(probe.reverification.kind).toBe("live-probe");
+    // Both sides of the control, and the negative control that keeps the
+    // exclusion attributable to the flag rather than to passing any flag.
+    expect(probe.reverification.method).toMatch(/additive/iu);
+    expect(probe.reverification.method).toMatch(/--restricted/u);
+    expect(probe.reverification.method).toMatch(/--disable-slash-commands/u);
   });
 
   it("does not stand the Codex common-Git authority claim on its superseded grading", () => {

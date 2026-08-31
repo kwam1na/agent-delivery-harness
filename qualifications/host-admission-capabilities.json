@@ -1,7 +1,7 @@
 {
   "schemaVersion": "host-admission-capabilities/1",
   "description": "Graded capability record for trusted host-control admission, per exact host version, against the capability ladder: Tier 0 read-only inspection only; Tier 1 mutation floor (deny-until-attested grant enforcement, worktree-materialized digest-receipted projection, binding attestation, isolated operator-confirmation channel, fence-revocation cancellation, fresh-worktree-only resume); Tier 2 trusted graceful lifecycle events; Tier 3 graceful termination provenance with verified descendant teardown, enabling same-worktree resume. Facts probed on a real host carry live-probe or recorded-observation provenance; properties the product binding owns on any host are proven by the frozen fixtures in fixtures/host-admission-fixtures.json against the model-external admission validator.",
-  "gradedAt": "2026-08-31T06:56:00Z",
+  "gradedAt": "2026-08-31T15:45:00Z",
   "platform": "macOS 15.6.1 arm64",
   "verificationKinds": [
     "live-probe",
@@ -15,7 +15,17 @@
       "admissionSurface": "trusted plugin/hook/session-admission path: session-scoped settings (--settings JSON, --setting-sources scope selection), permission allow/deny rules, PreToolUse/SessionEnd/Stop hooks, per-session plugin roots (--plugin-dir), worktree checkouts read their own project settings",
       "grade": {
         "tier": 2,
-        "reason": "Tier 1 mutation floor: host-enforceable and live-probed (deny-until-attested interceptor; candidate-scope exclusion at admission); Tier 2: SessionEnd lifecycle hook live-probed firing on clean non-interactive end; Tier 3: refused \u2014 a detached background child survived a clean host end, so descendant teardown is unverified and same-worktree resume stays closed."
+        "reason": "Tier 1 mutation floor: host-enforceable and live-probed (deny-until-attested interceptor; candidate-scope exclusion at admission); Tier 2: SessionEnd lifecycle hook live-probed firing on clean non-interactive end; Tier 3: refused \u2014 a detached background child survived a clean host end, so descendant teardown is unverified and same-worktree resume stays closed.",
+        "reverification": {
+          "kind": "recorded-observation",
+          "hostVersion": "2.1.251",
+          "outcome": "unverified",
+          "surface": "claude --help and the claude subcommand surface at 2.1.251 for the admission flags, and claude --settings <file> doctor for the hook events, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
+          "method": "the admission surface was re-enumerated at 2.1.251 and every part this grade names is still present. The flags are in --help. The hook events are NOT — --help names neither PreToolUse nor SessionEnd — so they were read off a different surface: a settings file carrying an unknown hook event is rejected by name and the rejection enumerates the valid events, both of these among them, while a well-formed PreToolUse hook in the same position is accepted. The TIER VERDICT ITSELF WAS NOT RE-OBSERVED. Both legs that decide it \u2014 a SessionEnd hook firing on a clean non-interactive end, and a detached background child's liveness after that end \u2014 require a real session turn, and this host offers no model-free execution surface: there is no counterpart to the sandbox subcommand that let the Codex claim be re-driven without a model. Driving them would mean launching an authenticated host, which this product must never do. The tier therefore stands on its 2.1.97 observation and is stated as standing on it.",
+          "observedAt": "2026-08-31T15:40:00Z",
+          "reason": "the deciding legs are only reachable by launching an authenticated host session, which is an operator-only lane",
+          "scope": "the tier verdict and the two lifecycle legs beneath it. Four capability entries below carry their own outcome — the two lifecycle legs, the candidate-planted-settings entry, and the common-Git authority position. THE REMAINING ENTRIES WERE NOT RE-OBSERVED AT ALL and stand on the version this host entry is keyed at: readOnlyInspection, denyUntilAttestedGrant, worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume, sameWorktreeResume, and the approvalAssertionSource probe. That is a deliberate boundary on this re-verification, not a claim about them: the fixture-verified ones are product properties no host version moves, and the rest belong to the re-grade this observation is a baseline for."
+        }
       },
       "capabilities": {
         "readOnlyInspection": {
@@ -46,6 +56,15 @@
             "surface": "claude -p in a directory carrying a planted .claude/settings.json allow rule",
             "method": "planted allow rule was honored when the project scope loaded (tool ran) and was inert under --setting-sources user (tool denied, no side effect)",
             "observedAt": "2026-08-30T12:08:00Z"
+          },
+          "reverification": {
+            "kind": "live-probe",
+            "hostVersion": "2.1.251",
+            "outcome": "holds",
+            "surface": "claude plugin list in a disposable git repository carrying a planted project-scope .claude/settings.json, with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
+            "method": "model-free command execution, re-run because the grading above was taken on 2.1.97 and must not be carried forward on it. The candidate-planted project-scope settings file WAS honored under default admission — it disabled a user-scope plugin, which the host reported as disabled — and was INERT under --setting-sources user, where that same plugin loaded normally. Both sides are needed: a scope selection that suppressed the file's effect by suppressing everything would show the same denial. --setting-sources still accepts exactly user, project and local (a bogus scope is rejected by name), and still accepts the empty selection the binding admits with, under which no ambient scope loaded at all. What was observed is the SETTINGS-SCOPE loading and precedence through the enabledPlugins member, not a permission allow-list: the resolved permission set is not readable from any model-free surface, so the merge of permission allow-lists specifically was not re-driven. The mitigation this entry requires — admit with candidate-writable scopes excluded, and the planted file stops mattering — is what the observation covers, and it holds.",
+            "observedAt": "2026-08-31T15:22:00Z",
+            "scope": "this one capability only, and within it the settings-scope loading and precedence half. The rest of this host entry remains graded at the version its own key names."
           }
         },
         "worktreeMaterializedProjection": {
@@ -115,6 +134,15 @@
             "surface": "the shipped interceptor's write-path member map (packages/kernel/src/host/hook-main.ts) and the shipped mutation-stage grant's allowed capabilities (packages/kernel/src/policy/compile.ts); claude --help and settings/permissions documentation (v2.1.97) for the absence of an OS-level session sandbox",
             "method": "source and CLI surface enumeration: the write-path map names only the file-writing tools, the shipped stage grant lists the shell capability, and the host exposes no admission parameter placing an admitted session under an OS filesystem sandbox. No probe is claimed — the exposure follows from the shipped configuration, not from an observation of a host defence failing.",
             "observedAt": "2026-08-31T06:56:00Z"
+          },
+          "reverification": {
+            "kind": "recorded-observation",
+            "hostVersion": "2.1.251",
+            "outcome": "holds",
+            "surface": "the shipped interceptor's write-path member map (packages/kernel/src/host/hook-main.ts) and the shipped mutation-stage grant's allowed capabilities (packages/kernel/src/policy/compile.ts) at this candidate's base; claude --help at 2.1.251, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
+            "method": "source and CLI surface re-enumeration, re-run because the grading above was reasoned from the shipped grant at 2.1.97 and must not be carried forward on it. Every leg still holds: the write-path map still names only Write, Edit, MultiEdit and NotebookEdit, none of which a shell invocation carries; the shipped stage grant still allows the shell capability; and 2.1.251 still exposes no admission parameter placing an admitted session under an OS filesystem sandbox — the flag naming one is rejected as an unknown option, alongside the control that a real flag with a bad value is rejected by name instead, so the parser is not simply refusing everything. WHAT DID CHANGE, and is recorded here rather than acted on: 2.1.251 ships a --restricted admission flag whose documented behaviour confines the file tools to the working directories and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files. That is a host-side path boundary the 2.1.97 surface did not offer. Whether it actually denies a shell write to the common-Git authority path is NOT known: deciding it requires a real session turn, which is an operator-only lane on this host. The status stands unsupported because the admission surface this product ships does not pass --restricted, not because the flag was probed and found wanting.",
+            "observedAt": "2026-08-31T15:19:00Z",
+            "scope": "this one capability only, against the admission surface the product currently ships. The --restricted lane named above is unexamined, not refuted."
           }
         },
         "gracefulLifecycleEvents": {
@@ -125,6 +153,16 @@
             "surface": "claude -p with a SessionEnd hook writing a marker",
             "method": "marker file present after clean exit",
             "observedAt": "2026-08-30T12:08:00Z"
+          },
+          "reverification": {
+            "kind": "recorded-observation",
+            "hostVersion": "2.1.251",
+            "outcome": "unverified",
+            "surface": "claude --settings <file> doctor at 2.1.251, with a settings file carrying an unknown hook event and, as the control, one carrying a well-formed PreToolUse hook; run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
+            "method": "the hook event this claim rests on is still a recognized one at 2.1.251, and that is ALL that was observed. It is not in --help, which names no hook event at all; it was read off the settings validator instead, which rejects an unknown event by name and enumerates the valid ones — SessionEnd among them — while accepting the well-formed control in the same position. That the event EXISTS is not that it FIRES. A SessionEnd hook only fires when a session ends, and a session only starts with a model turn against an authenticated host — there is no model-free execution surface on this host to fire it from. The claim is therefore standing on its 2.1.97 observation, and this block exists to say so rather than to let the entry's version key imply otherwise.",
+            "observedAt": "2026-08-31T15:35:00Z",
+            "reason": "firing a lifecycle hook requires launching an authenticated host session, which is an operator-only lane",
+            "scope": "this one capability only."
           }
         },
         "terminationProvenanceWithDescendantTeardown": {
@@ -135,6 +173,16 @@
             "surface": "claude -p session whose Bash tool detached a nohup child recording its pid",
             "method": "child process was still alive after the clean host end (kill -0 succeeded); probe child then reaped",
             "observedAt": "2026-08-30T12:08:00Z"
+          },
+          "reverification": {
+            "kind": "recorded-observation",
+            "hostVersion": "2.1.251",
+            "outcome": "unverified",
+            "surface": "claude --help and the claude subcommand surface at 2.1.251, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
+            "method": "the surface moved and the behaviour did not get observed. 2.1.251 adds a background-session lane the 2.1.97 surface did not have — --background, and the attach, logs, stop, respawn and rm subcommands that manage it — so a session's descendants are now something the host itself has a vocabulary for. Whether a detached child still survives a clean end is exactly the question that vocabulary bears on, and it is exactly the question a model-free surface cannot answer: the child has to be detached by a session, and a session needs a model turn against an authenticated host. Recorded as unverified with the surface change named, rather than reasoned forward from a help text. The status stays unsupported, which is the conservative direction: it narrows resume eligibility.",
+            "observedAt": "2026-08-31T15:19:00Z",
+            "reason": "detaching a child from a session requires launching an authenticated host session, which is an operator-only lane",
+            "scope": "this one capability only. The new background-session lane is named as a re-grading target, not graded here."
           }
         },
         "sameWorktreeResume": {
@@ -158,6 +206,16 @@
             "surface": "claude -p (v2.1.97), Bash tool, disposable directory",
             "method": "child pid recorded by the session, liveness checked after host exit",
             "observedAt": "2026-08-30T12:08:00Z"
+          },
+          "reverification": {
+            "kind": "recorded-observation",
+            "hostVersion": "2.1.251",
+            "outcome": "unverified",
+            "surface": "claude --help and the claude subcommand surface at 2.1.251, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
+            "method": "the same lane as the capability entry it answers: detaching a child needs a session, a session needs a model turn against an authenticated host, and this host offers no model-free execution surface to substitute for one. The 2.1.251 background-session lane (--background, attach, logs, stop, respawn, rm) is new since this answer was taken and bears directly on it, which is a reason to re-probe rather than a re-probe.",
+            "observedAt": "2026-08-31T15:19:00Z",
+            "reason": "answering the question requires launching an authenticated host session, which is an operator-only lane",
+            "scope": "this probe answer only."
           }
         },
         "approvalAssertionSource": {
@@ -180,6 +238,16 @@
             "surface": "claude --help (v2.1.97); settings and plugin documentation",
             "method": "CLI surface enumeration and documentation review",
             "observedAt": "2026-08-30T12:05:00Z"
+          },
+          "reverification": {
+            "kind": "live-probe",
+            "hostVersion": "2.1.251",
+            "outcome": "withdrawn",
+            "surface": "claude plugin list — the host's own report of the plugin and skills-directory set it loaded for a session — in a disposable trusted git repository carrying a repo-tracked project-scope skills directory, with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories holding a user-scope skills directory, and a third pinned directory outside both",
+            "method": "model-free command execution, re-run because the answer above was taken on 2.1.97 and must not be carried forward on it. THE ANSWER HAS CHANGED. With the workspace trusted, so that ambient discovery genuinely loads, --plugin-dir on its own is still additive exactly as graded: the pinned directory loads ALONGSIDE both the user-scope and the repo-tracked project-scope directory. Adding --restricted to that same invocation yields the pinned directory and NOTHING ELSE — both ambient scopes gone, the pinned one kept. --safe-mode and --bare do the same, and adding --tools Bash to the --restricted arm does not change the pinned-only result. That last one is a scoping observation ONLY: whether the shell capability the mutation lane needs is actually available under --restricted was not observed, because the resolved tool set is not readable from any model-free surface. So a supported configuration now exists that scopes discovery to one pinned root, which is precisely what 2.1.97 had none of. Three controls make the result mean something. The allow side and the deny side differ by one flag against one fixture, so the exclusion is attributable to the flag. --restricted WITHOUT a pinned directory reports nothing at all, so the flag is not merely emptying the inventory it is asked about — it keeps what --plugin-dir pins. And --disable-slash-commands, a session flag that should not scope discovery, leaves all three loaded, so the exclusion is not an artifact of passing any extra flag. The workspace-trust gate is the trap here: before the workspace was trusted the project-scope directory was skipped in EVERY arm including the default one, which would have read as exclusivity and was not.",
+            "observedAt": "2026-08-31T15:22:00Z",
+            "reason": "the exclusivity question was re-observed with a different answer at 2.1.251; the result field above records the 2.1.97 grading and is deliberately left keyed there",
+            "scope": "this probe answer only, and only for this host. The re-grade that acts on it — and the shadow activation's exclusivity position, which cites this grading and is protected policy this record does not write — belong to the Claude Code integration and cutover units."
           }
         }
       },
