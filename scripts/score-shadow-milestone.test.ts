@@ -285,6 +285,35 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     expect(verdict.status).toBe("incomplete");
   });
 
+  it("treats a deliveries member that is present but not a list the same way", () => {
+    // Deleting the key leaves both a correct and a `?? []` implementation
+    // answering the same way. A present non-array separates them: the lax one
+    // tries to iterate an object and the scorer crashes instead of reporting.
+    const record = gateRecord([]);
+    record["deliveries"] = { "shadow-code": entry("shadow-code", "code") };
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+    expect(verdict.incomplete.map((note) => note.code)).toContain("gate_record_unrecognized");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
+  it("treats a record declaring no comparison-set requirement as incomplete rather than crashing", () => {
+    // Neither the requirement block nor its mix may be assumed present: a
+    // record without them must still yield an honest incomplete result.
+    const record = fullSet([{}, {}, {}]);
+    delete record["comparisonSetRequirement"];
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+    expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_incomplete");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+
+    const noMix = fullSet([{}, {}, {}]);
+    delete (noMix["comparisonSetRequirement"] as Record<string, unknown>)["mix"];
+    const withoutMix = scoreShadowMilestone(reachableBaseline, noMix);
+    expect(withoutMix.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
+    expect(withoutMix.status).toBe("incomplete");
+  });
+
   it("treats an undeclared required total as incomplete, not as a size every set clears", () => {
     // The size check is written as a negated `>=` so an unparseable total
     // falls to the incomplete side. Written the natural way round, a record
@@ -615,6 +644,10 @@ describe("the gate can be lost", () => {
     const row = verdict.criteria.find((entry) => entry.id === "blockedVersusProgressingShare")!;
     expect(row.baselineValue).toBe(0.5);
     expect(row.shadowValue).toBeCloseTo(0.9, 10);
+    // The row's own verdict, in the direction the other test cannot reach: a
+    // criterion that always reported `met` would still look right wherever the
+    // gate happened to be cleared.
+    expect(row.met).toBe(false);
   });
 
   it("clears the share criterion on an exactly equal share, which is a no-regression bar", () => {

@@ -72,7 +72,6 @@
  * `fail` and the unmet criterion is named. A gate that cannot fail is not a
  * gate.
  */
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -557,10 +556,6 @@ export function renderVerdict(verdict: ShadowMilestoneVerdict): string {
 export function readVerdictInputs(repoRoot: string): { baseline: any; gateRecord: any } {
   const read = (relative: string): any => JSON.parse(readFileSync(path.join(repoRoot, relative), "utf8"));
   return { baseline: read(BASELINE_PATH), gateRecord: read(GATE_RECORD_PATH) };
-}
-
-export function digestOf(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
 }
 
 function main(): void {
