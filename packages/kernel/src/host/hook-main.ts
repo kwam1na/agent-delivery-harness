@@ -74,19 +74,33 @@ function writesOf(state: HookBindingState, toolName: string, toolInput: Record<s
 }
 
 /**
- * The projection entry an invocation names, if it names one.
+ * The projection path an invocation names, if it names one.
  *
- * This is the ONE thing about a run that the binding can observe rather than
- * assume: the interceptor is model-external code the HOST invokes with the
- * invocation's own arguments, so a path resolving inside the run-pinned
- * projection is the run reaching into that subtree — not a claim the session
- * made about itself, and not a fact that was already true when the projection
- * was materialized.
+ * WHAT THIS CERTIFIES, EXACTLY: that an allowed invocation of this run named a
+ * path under the run-pinned projection subtree. Not that the run read the
+ * file, and not that the run resolved its workflow from the projection. The
+ * interceptor is model-external code the HOST invokes with the invocation's
+ * own arguments, so what it reports is a fact about the run rather than a
+ * claim the session made about itself — but the fact is the naming, and the
+ * record built on it must say so in those words.
  *
- * Every string argument is considered, because the member that carries a path
- * differs per tool and an allowlist of members would silently under-observe
- * the next tool that reads a file. A value outside the subtree, and the
- * subtree root itself, name no entry.
+ * Every string argument is considered, and no member allowlist is applied: the
+ * member that carries a path differs per tool, and guessing at tool semantics
+ * would silently drop the next tool that reads a file while buying nothing
+ * against a session that wants to steer the observation — a session can put a
+ * path in whichever member the allowlist happens to trust. What keeps a
+ * FABRICATED path out is containment: the writer admits an observation only
+ * when the named entry is one the materialization receipt lists, so an
+ * invented or nonexistent path names nothing that can be affirmed.
+ *
+ * WHAT IT DELIBERATELY DOES NOT SEE, and what it cannot rule out: a read the
+ * host performs internally without routing a path through its tool surface is
+ * invisible here, so a genuinely consuming delivery can go unobserved; and a
+ * single deliberate mention of a receipted path by a run that resolved
+ * everything from ambient discovery is indistinguishable from an honest one.
+ * The first fails safe — no observation, no entry, never an unobserved
+ * affirmation. The second is why the claim is worded as naming rather than
+ * consumption. Closing either needs a binding capability that does not exist.
  */
 export function projectionEntryTouched(
   workspaceRoot: string,

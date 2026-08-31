@@ -375,6 +375,53 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(deliveriesIn(gateRecordPath)).toEqual([]);
   });
 
+  it("writes no entry for an observation naming a path the receipt does not list", async () => {
+    const bench = await workbench("uncontained");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-shadow-uncontained",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const gateRecordPath = await gateRecordFile("uncontained");
+
+    // The interceptor reports what an invocation NAMED, without judging
+    // whether those bytes exist — a session can put any string in its
+    // arguments. Containment against the materialization receipt is where an
+    // invented path stops: the binding never materialized it, so nothing
+    // could have been read from it.
+    for (const entry of ["skills/invented.md", "../escape.md", "workflows"]) {
+      observeConsumption(bench, "dlv-shadow-uncontained", 1, entry);
+      const emitted = await emitProjectionConsumptionRecord({
+        gateRecordPath,
+        worktreeDir: bench.worktreeDir,
+        bindingDir: bench.bindingDir,
+        deliveryId: "dlv-shadow-uncontained",
+        fence: 1,
+        category: "code",
+      });
+      if (!emitted.ok || emitted.emitted) throw new Error(`unexpected emission for ${entry}: ${JSON.stringify(emitted)}`);
+      expect(emitted.reason).toBe("projection-not-consumed");
+      expect(deliveriesIn(gateRecordPath)).toEqual([]);
+    }
+
+    // And a receipted entry does record — so the check above is containment,
+    // not a blanket refusal.
+    observeConsumption(bench, "dlv-shadow-uncontained", 1, "consumption.json");
+    const admitted = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-uncontained",
+      fence: 1,
+      category: "code",
+    });
+    expect(admitted.ok && admitted.emitted, JSON.stringify(admitted)).toBe(true);
+  });
+
   it("loses no entry when two deliveries are emitted concurrently against one artifact", async () => {
     const gateRecordPath = await gateRecordFile("concurrent");
     const benches = [];
@@ -415,6 +462,9 @@ describe("emitProjectionConsumptionRecord", () => {
     // caller refused the lock reports a blocker rather than a silent loss.
     const written = results.filter((result) => result.ok && result.emitted).length;
     const refused = results.filter((result) => !result.ok).length;
+    // Progress as well as safety: a lock that refused BOTH callers would
+    // satisfy the accounting below while making the writer useless.
+    expect(written).toBeGreaterThanOrEqual(1);
     expect(written + refused).toBe(2);
     expect(deliveriesIn(gateRecordPath)).toHaveLength(written);
     for (const result of results) {

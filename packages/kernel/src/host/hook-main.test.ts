@@ -143,10 +143,12 @@ describe("renderHookDecision", () => {
 describe("projectionEntryTouched", () => {
   const root = "/work/tree";
 
-  it("names the projection entry an invocation reaches into, by any argument", () => {
-    // The member carrying a path differs per tool, so every string argument is
-    // considered — a read is what the binding is trying to observe, and the
-    // read tools do not share one member name.
+  it("names the projection path an invocation names, in whichever argument carries it", () => {
+    // No member allowlist: the member carrying a path differs per tool, and
+    // trusting a fixed set would drop the next tool that reads a file while
+    // buying nothing — a session willing to steer the observation would just
+    // use a trusted member. What a NAMED path is worth is settled downstream,
+    // where the writer requires it to be a receipted entry.
     expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection/skills/core/SKILL.md" })).toBe(
       "skills/core/SKILL.md",
     );
@@ -161,8 +163,9 @@ describe("projectionEntryTouched", () => {
   it("names nothing for anything outside the projection subtree", () => {
     // The negative half, asserted as specifically as the positive: a sibling
     // whose name merely starts with the subtree's, a traversal back out, the
-    // ambient vendored generation, and the subtree root itself all name no
-    // entry — otherwise ordinary work would read as consumption.
+    // ambient vendored generation, another tree's projection, the subtree root
+    // itself, and non-string arguments all name no entry — otherwise ordinary
+    // work would read as a projection touch.
     expect(projectionEntryTouched(root, { file_path: "/work/tree/src/greet.mjs" })).toBeUndefined();
     expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection-notes/x.md" })).toBeUndefined();
     expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection/../src/a.ts" })).toBeUndefined();
@@ -170,5 +173,23 @@ describe("projectionEntryTouched", () => {
     expect(projectionEntryTouched(root, { file_path: "/work/tree/.managed-projection" })).toBeUndefined();
     expect(projectionEntryTouched(root, { file_path: "/elsewhere/.managed-projection/a.md" })).toBeUndefined();
     expect(projectionEntryTouched(root, { count: 3, enabled: true, empty: "" })).toBeUndefined();
+  });
+
+  it("sees nothing when the run reaches its workflow without naming a path", () => {
+    // THE KNOWN UNDER-OBSERVATION, pinned so it cannot be forgotten or
+    // quietly claimed away. A skill invocation names a skill, not a file, and
+    // a shell command carrying arguments does not resolve as a path — so a
+    // run that reaches its workflow source either way is invisible to this
+    // predicate and its delivery is EXCLUDED from the comparison set rather
+    // than affirmed. That is the safe direction, and it is also why the
+    // milestone may stay unscoreable until the binding can observe the host's
+    // own skill resolution.
+    expect(projectionEntryTouched(root, { skill: "deliver-work", args: "execute" })).toBeUndefined();
+    expect(projectionEntryTouched(root, { command: "cat .managed-projection/workflows/delivery-v1.json" })).toBeUndefined();
+
+    // And the converse boundary: this function reports NAMING, not reading or
+    // admissibility. A bare mention resolves, and the writer's receipt
+    // containment is what separates a receipted entry from anything else.
+    expect(projectionEntryTouched(root, { description: ".managed-projection/invented.md" })).toBe("invented.md");
   });
 });

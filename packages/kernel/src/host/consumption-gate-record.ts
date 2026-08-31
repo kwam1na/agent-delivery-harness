@@ -19,17 +19,28 @@
  *   - the projection digest, from the materialization receipt in the binding's
  *     own directory, re-verified against the worktree bytes;
  *   - the marker, read back out of the receipted projection subtree; and
- *   - the model-external interceptor's observation that THIS run reached into
- *     the projection subtree.
+ *   - the model-external interceptor's observation that an allowed invocation
+ *     of THIS run named a receipted path under the projection subtree.
  *
- * THE THIRD FACT IS WHAT MAKES THE RECORD A CONSUMPTION CLAIM. The first two
- * are both true the instant materialization returns: the receipt matches the
- * bytes the binding just wrote, and the marker is a file the binding itself
- * put there. A record resting on those alone would affirm that a projection
- * was MATERIALIZED, and the milestone would then score deliveries that
- * resolved everything from ambient discovery and never opened the run-pinned
- * subtree. The interceptor's observation is the only fact here that requires
- * the run to have done something, so it is required.
+ * THE THIRD FACT IS THE ONLY ONE ABOUT THE RUN. The first two are both true
+ * the instant materialization returns: the receipt matches the bytes the
+ * binding just wrote, and the marker is a file the binding itself put there.
+ * A record resting on those alone would affirm that a projection was
+ * MATERIALIZED, and the milestone would then score deliveries that resolved
+ * everything from ambient discovery and never opened the run-pinned subtree.
+ *
+ * WHAT THE RECORD THEREFORE CERTIFIES, IN PLAIN WORDS: that an allowed
+ * invocation of this run named a path under the run-pinned subtree which the
+ * materialization receipt lists. NOT that the run read that file, and NOT
+ * that the run resolved its workflow from the projection. Two gaps are open
+ * and neither is closable from inside this module: a read the host performs
+ * internally, without routing a path through its tool surface, is invisible —
+ * a genuinely consuming delivery can go unobserved and is then excluded; and
+ * a single deliberate mention of a receipted path, by a run that resolved
+ * everything from the ambient discovery the shadow window permits to coexist,
+ * is indistinguishable from an honest one. The first fails safe. The second is
+ * why this comment, the operation's own documentation, and anything reporting
+ * on the milestone must say "named" and not "consumed".
  *
  * A caller supplies only WHICH run it is asking about (delivery and fence) and
  * which baseline category the delivery is measured under. If the binding's own
@@ -41,6 +52,18 @@
  * the gate's own work. This module owns one field of one entry — the
  * consumption record — plus the identity and admission flag that record
  * justifies, and preserves every other byte of the artifact it finds.
+ *
+ * WHAT IS HOST-NEUTRAL HERE, AND WHAT IS NOT. The record contract the
+ * consuming guard reads knows nothing about hosts, and neither does this
+ * writer: it names no tool, no tool-input member, and no host vocabulary. The
+ * per-binding half is the observation PRODUCER — the surface on which a
+ * binding notices that a run named a projection entry — and it reaches this
+ * module only through the observation contract below, which any binding can
+ * write. The receipt and marker readers this module imports from the Claude
+ * Code binding are host-neutral in substance (they read the product's own
+ * projection layout and receipt, and reference nothing host-specific); they
+ * live in that module for historical reasons only, and a second host
+ * integration should relocate them rather than duplicate this writer.
  */
 import { open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -48,18 +71,33 @@ import path from "node:path";
 import { readConsumptionMarker, verifyProjection } from "./claude-code.ts";
 
 /**
- * The interceptor's per-fence projection-consumption observation, in the
- * binding's own directory. Written by the model-external hook, never by a
- * session: the worktree is session-writable, this directory is not.
+ * THE BINDING-TO-WRITER OBSERVATION CONTRACT.
+ *
+ * One file per fence in the binding's own directory, written by the binding's
+ * model-external surface and never by a session: the worktree is
+ * session-writable, this directory is not.
+ *
+ * This shape, not the mechanism that produces it, is what the writer depends
+ * on. HOW a run is observed to name a projection entry is per-binding and
+ * host-specific — the Claude Code binding reads its PreToolUse interceptor's
+ * arguments; another host's binding will have a different surface, and the
+ * plan's rule is that host differences surface as graded capabilities rather
+ * than divergent contracts. A second binding satisfies this by writing this
+ * same file from whatever surface it has. Nothing here names a tool, a member,
+ * or anything else from a host's vocabulary, and the writer's containment
+ * check compares against the product's own receipt entries for the same
+ * reason.
  */
-export const projectionConsumptionObservationFile = (fence: number): string =>
-  `projection-consumption-${fence}.json`;
-
-interface ProjectionConsumptionObservation {
+export interface ProjectionConsumptionObservation {
   readonly deliveryId?: string;
   readonly fence?: number;
+  /** The projection-relative entry an allowed invocation of this run named. */
   readonly entry?: string;
+  readonly observedAt?: string;
 }
+
+export const projectionConsumptionObservationFile = (fence: number): string =>
+  `projection-consumption-${fence}.json`;
 
 /** The consuming repository's gate-record artifact spec, matched exactly. */
 export const SHADOW_MILESTONE_GATE_RECORD_SPEC = "athena-shadow-milestone-gate-record/1";
@@ -170,7 +208,14 @@ export async function emitProjectionConsumptionRecord(
     observation.deliveryId !== input.deliveryId ||
     observation.fence !== input.fence ||
     typeof observation.entry !== "string" ||
-    observation.entry.length === 0
+    observation.entry.length === 0 ||
+    // CONTAINMENT. The named entry must be one the materialization receipt
+    // lists — the receipt whose every byte was just re-verified above. The
+    // interceptor reports what an invocation named, without judging whether
+    // the bytes exist; this is where an invented or nonexistent path stops,
+    // because a path the binding never materialized names nothing that could
+    // have been read.
+    !projection.entries.includes(observation.entry)
   ) {
     return unobserved("projection-not-consumed");
   }

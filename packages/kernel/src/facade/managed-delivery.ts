@@ -818,16 +818,24 @@ export interface ManagedDeliveryFacade {
   >;
 
   /**
-   * Turns the binding's observed projection consumption into a durable entry
-   * in the shadow milestone's gate-record artifact.
+   * Turns the binding's own observation into a durable entry in the shadow
+   * milestone's gate-record artifact.
    *
    * The caller names the delivery, the artifact, and the baseline category the
-   * delivery is measured under — never the consumption itself. The delivery
+   * delivery is measured under — never the observation itself. The delivery
    * and fence the record binds come from the binding's own workspace record,
-   * and the record's contents are re-derived from the materialization receipt
-   * and the marker in the worktree, so no caller can claim a consumption the
-   * binding did not observe. When it did not, nothing is written and the
-   * delivery stays out of the comparison set.
+   * and the record's contents are re-derived from the materialization receipt,
+   * the marker in the worktree, and the model-external interceptor's record of
+   * this run's invocations, so no caller can assert what the binding did not
+   * observe. When it did not, nothing is written and the delivery stays out of
+   * the comparison set.
+   *
+   * WHAT AN EMITTED ENTRY CERTIFIES: that an allowed invocation of this run
+   * NAMED a receipted path under the run-pinned projection subtree. Not that
+   * the run read that file, and not that it resolved its workflow from the
+   * projection. A read the host performs internally, without routing a path
+   * through its tool surface, is not observed at all — such a delivery is
+   * excluded rather than affirmed.
    */
   recordProjectionConsumption(input: {
     readonly deliveryId: string;
