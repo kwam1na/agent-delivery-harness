@@ -163,13 +163,15 @@ and in the CLI's usage text to match in both directions.
 [`docs/docs-references.test.ts`](docs/docs-references.test.ts) resolves every
 relative link in this README and the top-level guides, and checks the computable
 counts those documents state — the facade's operation inventory, the delivery
-state vocabulary, the CLI command count, the conformance kit's vector count, the
-frozen trust label, and the reviewer charter set the pinned composition ships —
-by interpolating the value the tree computes into the sentence the document must
-contain. So advancing one of those and forgetting the prose is a failing test
-rather than a stale sentence, and the sentence is what has to be re-stamped. Its
-link enumeration is guarded from both ends, because an existence claim over a
-set that turned out empty would otherwise pass silently.
+and intake state vocabularies, the CLI command count, the conformance kit's
+vector count, the frozen trust label, and the reviewer charter set the pinned
+composition ships. Each of those is checked by agreement rather than by
+presence: every sentence stating the count, in every document the sensor scans,
+must carry the value the tree computes. Stating it in a new guide is covered the
+moment the guide exists, and re-stamping one mention while leaving another stale
+is a failure rather than a pass. Both the link enumeration and the count
+patterns are guarded against matching nothing, because a claim over a set that
+turned out empty would otherwise pass silently.
 
 ## This repository's own standing
 

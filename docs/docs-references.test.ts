@@ -25,14 +25,15 @@
  * can recompute — the size of a frozen inventory, the number of CLI command
  * modules, the vector count the conformance kit declares.
  *
- * These are checked by interpolating the computed value into the phrase the
- * document must contain, never by comparing the tree against a literal written
- * here. The difference is the whole point. A literal pin catches the tree
- * moving, but its failure message points at this file, so the repair that
- * suggests itself is to bump the literal — leaving the documented sentence
- * stale and now unguarded, with the suite green. Pinning the *sentence* means
- * the prose is what has to be re-stamped, which is the drift actually worth
- * catching in a documentation sensor.
+ * These are checked by agreement: the value the tree computes is compared
+ * against every sentence stating it, in every document this sensor scans,
+ * rather than against a literal written here. The difference is the whole
+ * point. A literal pin catches the tree moving, but its failure message points
+ * at this file, so the repair that suggests itself is to bump the literal —
+ * leaving the documented sentence stale and now unguarded, with the suite
+ * green. Checking the *sentences* means the prose is what has to be
+ * re-stamped, and checking all of them means re-stamping one mention while
+ * another goes stale is a failure too.
  *
  * Numbers that are *judgements* rather than computations are deliberately not
  * pinned: there is nothing to recompute them against, and a pin over a
@@ -47,6 +48,7 @@ import {
   FACADE_OPERATIONS,
   FACADE_SURFACES,
   DELIVERY_STATES,
+  INTAKE_STATES,
   PRODUCT_TRUST_LABEL,
   projectShippedPersonas,
   readArchiveEntry,
@@ -151,33 +153,92 @@ describe("the documentation's references", () => {
 
 const textOf = (document: string): string => readFileSync(path.join(REPO_ROOT, document), "utf8");
 
+/** How the guides spell a small count in prose. Only values actually stated. */
+const NUMBER_WORDS: Readonly<Record<number, string>> = Object.freeze({
+  6: "six",
+  7: "seven",
+  9: "nine",
+  10: "ten",
+  17: "seventeen",
+  20: "twenty",
+});
+
 /**
- * Asserts that a documented sentence carries the value the tree computes.
- *
- * The direction matters, and it is the reason this helper exists rather than a
- * bare numeric literal. A pin written as `expect(computed).toBe(37)` moves the
- * staleness into this file: advancing the tree turns it red, the failure points
- * at the literal, and the natural repair is to bump the literal and leave the
- * prose saying thirty-seven forever. Interpolating the computed value into the
- * phrase the document must contain closes that loop — the sentence itself is
- * what has to be re-stamped, so prose that drifts from the tree is the failure
- * rather than the survivor.
+ * The prose spelling of a computed count, or a legible failure. Without this
+ * the missing case surfaces as `expected 'nine' to be undefined`, which points
+ * a reader at the document rather than at the table that needs a new row.
  */
+const numberWord = (value: number): string => {
+  const word = NUMBER_WORDS[value];
+  expect(word, `no prose spelling is registered for ${value}; add it to NUMBER_WORDS`).toBeDefined();
+  return word!;
+};
+
+/**
+ * Asserts that EVERY sentence stating a count, in EVERY document this sensor
+ * scans, carries the value the tree computes.
+ *
+ * Two properties matter here, and a weaker helper misses both.
+ *
+ * AGREEMENT, NOT PRESENCE. Asserting that some document contains the right
+ * phrase leaves every other statement of the same count unguarded: the kit's
+ * vector count is stated in five documents, so a check that finds it in two is
+ * satisfied while three sentences go stale — including, in that instance, the
+ * document that is *about* the kit. So the pattern is matched everywhere and
+ * every captured value must agree.
+ *
+ * EVERY DOCUMENT, NOT A HAND-PICKED LIST. The document set comes from
+ * `scannedDocuments()`, so a new guide is covered the moment it exists rather
+ * than when someone remembers to add it to a list here. A hardcoded pair is a
+ * second thing to maintain, and the whole point of this file is to stop
+ * maintaining numbers by hand in two places.
+ *
+ * The capture is a number token rather than a fixed string, which also closes a
+ * substring hole: matching the literal `9-vector` would be satisfied by the text
+ * `89-vector`, whereas capturing the digits reads `89` and compares it.
+ */
+const everyStatementAgrees = (label: string, pattern: RegExp, computed: string): void => {
+  const stated = scannedDocuments().flatMap((document) =>
+    [...textOf(document).matchAll(pattern)].map((match) => ({ document, value: match[1]! })),
+  );
+  // Anti-vacuity: a pattern that stopped matching would otherwise satisfy the
+  // agreement loop below by having nothing to disagree with.
+  expect(stated.length, `no scanned document states ${label}`).toBeGreaterThan(0);
+  for (const statement of stated) {
+    expect(statement.value, `${statement.document} states ${label} as ${statement.value}, tree computes ${computed}`).toBe(
+      computed,
+    );
+  }
+};
+
+/** Asserts a document quotes a frozen string verbatim. */
 const documentStates = (document: string, phrase: string): void => {
   expect(textOf(document), `${document} no longer states: ${phrase}`).toContain(phrase);
 };
 
 describe("the computable counts the documentation states", () => {
   it("states the managed-delivery facade's operation inventory", () => {
-    expect(FACADE_CAPABILITY_CLASSES.length).toBe(6);
-    expect(FACADE_SURFACES.length).toBe(5);
-    documentStates("docs/managed-delivery.md", `Each of the **${FACADE_OPERATIONS.length}** operations`);
-    documentStates("README.md", `${FACADE_OPERATIONS.length}-operation inventory`);
+    everyStatementAgrees("the facade operation count", /\*\*(\d+)\*\* operations/g, String(FACADE_OPERATIONS.length));
+    everyStatementAgrees("the facade operation count", /(\d+)-operation inventory/g, String(FACADE_OPERATIONS.length));
   });
 
-  it("states the delivery state vocabulary", () => {
-    documentStates("docs/managed-delivery.md", `**${DELIVERY_STATES.length}** delivery states`);
-    documentStates("README.md", `${DELIVERY_STATES.length} delivery states`);
+  it("names every capability class and surface the facade declares", () => {
+    // The guide presents these as tables of names rather than as a number, so
+    // agreement means the names themselves, and a class added to the frozen
+    // inventory without reaching the table is the failure.
+    const guide = textOf("docs/managed-delivery.md");
+    for (const capabilityClass of FACADE_CAPABILITY_CLASSES) {
+      expect(guide, `the guide does not name capability class ${capabilityClass}`).toContain(`\`${capabilityClass}\``);
+    }
+    for (const surface of FACADE_SURFACES) {
+      expect(guide, `the guide does not name surface ${surface}`).toContain(`\`${surface}\``);
+    }
+  });
+
+  it("states the delivery and intake state vocabularies", () => {
+    everyStatementAgrees("the delivery state count", /\*\*(\d+)\*\* delivery states/g, String(DELIVERY_STATES.length));
+    everyStatementAgrees("the delivery state count", /(\d+) delivery states,/g, String(DELIVERY_STATES.length));
+    everyStatementAgrees("the intake state count", /(\d+) intake states/g, String(INTAKE_STATES.length));
   });
 
   it("quotes the frozen product-trust label verbatim", () => {
@@ -190,20 +251,20 @@ describe("the computable counts the documentation states", () => {
     const commands = readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands")).filter(
       (entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"),
     );
-    expect(commands.length).toBe(9);
-    // Spelled as a word in the prose, which is why the phrase is pinned rather
-    // than the digits: the sentence a reader actually meets is the claim.
-    documentStates("README.md", "nine-command operator surface");
-    documentStates("docs/agent-guide.md", "the nine-command operator surface");
+    // Spelled as a word in the prose, so the computed count is mapped to its
+    // word and that is what every statement must agree with — the digits are
+    // never written down here.
+    everyStatementAgrees("the CLI command count", /(\w+)-command operator surface/g, numberWord(commands.length));
   });
 
   it("states the conformance kit's vector count", () => {
     const kit = JSON.parse(readFileSync(path.join(REPO_ROOT, "packages/conformance/vectors/kit.json"), "utf8")) as {
       vectors: readonly unknown[];
     };
-    for (const document of ["README.md", "docs/agent-guide.md"]) {
-      documentStates(document, `${kit.vectors.length}-vector`);
-    }
+    everyStatementAgrees("the conformance vector count", /(\d+)-vector/g, String(kit.vectors.length));
+    everyStatementAgrees("the conformance vector count", /\*\*(\d+) golden/g, String(kit.vectors.length));
+    everyStatementAgrees("the conformance vector count", /All (\d+) are decided/g, String(kit.vectors.length));
+    everyStatementAgrees("the conformance vector count", /total: (\d+)/g, String(kit.vectors.length));
   });
 
   it("states the reviewer charter set the pinned composition ships", () => {
@@ -221,6 +282,6 @@ describe("the computable counts the documentation states", () => {
     });
     expect(projected.ok).toBe(true);
     if (!projected.ok) return;
-    documentStates("docs/managed-delivery.md", `ships **${projected.personas.length}** reviewer charters`);
+    everyStatementAgrees("the shipped charter count", /ships \*\*(\d+)\*\* reviewer charters/g, String(projected.personas.length));
   });
 });

@@ -75,7 +75,7 @@ change that touches policy, the shadow window, or packaging.
 | `scripts/policy-projection-check.ts` | This repository's own policy projection, its typed leaf adapters, the compiled snapshot, and a digest-pinned pre-cutover oracle, against the routing the repository actually performs. |
 | `scripts/shadow-discovery-guard.ts` | The five shadow-window positions: shadow posture, a pinned product commit that resolves, the empty ambient-discovery layout, projection scope, and binding-sourced consumption records only. |
 | `docs/docs-examples.test.ts` | Executes the getting-started guide verbatim. Its `sh` blocks are one shell session; its `ts` blocks become files. Flag tokens must match the CLI's usage text in **both** directions. |
-| `docs/docs-references.test.ts` | Every relative link in the README and the top-level guides resolves, and each computable count those documents state is checked by interpolating the tree's own value into the sentence the document must contain. |
+| `docs/docs-references.test.ts` | Every relative link in the README and the top-level guides resolves, and every sentence stating a computable count — in every document it scans — carries the value the tree computes. |
 
 ### Sensors that bite on a documentation-only change
 
