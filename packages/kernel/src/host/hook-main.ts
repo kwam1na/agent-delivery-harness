@@ -17,7 +17,7 @@
  * clock and stdin inside `main`, while every decision it takes is the pure
  * `decideHookInvocation` below.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -79,15 +79,46 @@ function writesOf(state: HookBindingState, toolName: string, toolInput: Record<s
 }
 
 /**
- * The tool-input members that NAME a file an invocation reads. The write
- * members above have their own list for the same reason: the member is what
- * makes a string a path, and a string that merely mentions one is not.
+ * The tool-input members that NAME A PATH. Deliberately not "members an
+ * invocation reads": `file_path` is also Write's and Edit's write member, and
+ * `path` is Glob's and Grep's directory member. Neither is harmless because of
+ * anything in this list — a write is harmless because the grant denies it in
+ * the projection, and a directory is harmless because containment lists files
+ * only. Reading a read-guarantee into this set would be reading in something
+ * it does not carry.
+ *
+ * What the set DOES carry is that the string arrived in a member whose job is
+ * to name a path, rather than in free text a session controls. It is also
+ * flat rather than tool-keyed, unlike WRITE_PATH_MEMBERS above, so a `path`
+ * member on any tool — an MCP tool included — counts; that stays bounded by
+ * containment and inside what the record claims.
  *
  * Naming Claude Code's members here is not a coupling problem, because this
  * file IS the Claude Code binding — its whole job is that host's tool surface.
  * The host-neutral writer stays free of them.
  */
 const READ_PATH_MEMBERS = Object.freeze(["file_path", "path", "notebook_path"] as const);
+
+/**
+ * Canonicalized, because the host reports paths in resolved form while the
+ * workspace root arrives as the operator wrote it. On macOS a delivery
+ * worktree under the system temp root is reached as `/var/folders/...` while
+ * every tool argument comes back as `/private/var/folders/...`, and a purely
+ * lexical comparison makes each genuine read look like an escape out of the
+ * subtree. That silently observed NOTHING — the failure is invisible, because
+ * an unobserved consumption is spelled the same as an honest absence.
+ *
+ * A path that cannot be resolved keeps its lexical form; containment then
+ * rejects it, which is the same fail-safe direction as before. This mirrors
+ * the run-root rule in `artifacts.ts`, which resolves for exactly this reason.
+ */
+const canonical = (value: string): string => {
+  try {
+    return realpathSync(value);
+  } catch {
+    return value;
+  }
+};
 
 /**
  * The projection entry an invocation names, if it names a receipted one.
@@ -134,11 +165,11 @@ export function projectionEntryTouched(
   toolInput: Record<string, unknown>,
   receiptedEntries: readonly string[],
 ): string | undefined {
-  const root = path.resolve(workspaceRoot, PROJECTION_DIR);
+  const root = canonical(path.resolve(workspaceRoot, PROJECTION_DIR));
   for (const member of READ_PATH_MEMBERS) {
     const value = toolInput[member];
     if (typeof value !== "string" || value.length === 0) continue;
-    const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceRoot, value);
+    const absolute = canonical(path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceRoot, value));
     const relative = path.relative(root, absolute);
     if (relative.length === 0 || relative.startsWith("..") || path.isAbsolute(relative)) continue;
     const entry = relative.split(path.sep).join("/");

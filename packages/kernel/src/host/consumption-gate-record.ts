@@ -215,13 +215,21 @@ export async function emitProjectionConsumptionRecord(
     observation.fence !== input.fence ||
     typeof observation.entry !== "string" ||
     observation.entry.length === 0 ||
-    // CONTAINMENT, as defense in depth. The binding checks this before it
-    // records anything — it must, because the observation is one-shot per
-    // fence and an unadmissible name would lock out the honest read that
-    // follows. Checking again here costs nothing and keeps the writer's own
-    // admissibility rule stated in the writer: an entry the materialization
-    // receipt does not list, in the receipt whose every byte was just
-    // re-verified above, names nothing that could have been read.
+    // CONTAINMENT. DO NOT DELETE THIS AS A DUPLICATE OF THE BINDING'S CHECK —
+    // it is the same question asked of differently trusted state.
+    //
+    // The binding checks containment before recording, and must: the
+    // observation is one-shot per fence, so an unadmissible name would lock
+    // out the honest read that follows. But it reads the receipt as plain
+    // JSON — no self-binding digest check, no byte verification — because at
+    // interception time that is all it can afford. The check HERE runs
+    // against `verifyProjection`'s entries, which come from a receipt that
+    // binds its own digest and whose every byte was re-hashed against the
+    // worktree moments ago.
+    //
+    // So the binding's check is about slot economy against an unvalidated
+    // receipt; this one is the admissibility rule, against a validated one.
+    // Removing either brings back a defect the other does not cover.
     !projection.entries.includes(observation.entry)
   ) {
     return unobserved("projection-not-consumed");

@@ -6,8 +6,12 @@
  *
  * Written RED before `hook-main.ts` existed.
  */
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { digestCanonical } from "../digest.ts";
+import { PROJECTION_DIR } from "./claude-code.ts";
 import {
   decideHookInvocation,
   projectionEntryTouched,
@@ -212,6 +216,41 @@ describe("projectionEntryTouched", () => {
     // binding can observe the host's own skill resolution.
     expect(touched({ skill: "deliver-work", args: "execute" })).toBeUndefined();
     expect(touched({ command: "cat .managed-projection/workflows/delivery-v1.json" })).toBeUndefined();
+  });
+
+  it("names the entry when the host reports the path through a symlinked root", () => {
+    // REGRESSION, found by a live host probe and invisible to every fixture
+    // that came before it: the host reports paths in resolved form while the
+    // workspace root arrives as the operator wrote it. Under a symlinked
+    // parent — the macOS system temp root is one, `/var` -> `/private/var` —
+    // a lexical comparison turns every genuine read into an apparent escape
+    // and observes NOTHING. That failure is silent by construction, because
+    // an unobserved consumption is spelled exactly like an honest absence.
+    const real = mkdtempSync(path.join(realpathSync(tmpdir()), "projection-symlink-"));
+    const link = `${real}-link`;
+    mkdirSync(path.join(real, PROJECTION_DIR, "workflows"), { recursive: true });
+    writeFileSync(path.join(real, PROJECTION_DIR, "workflows", "delivery-v1.json"), "{}\n");
+    symlinkSync(real, link);
+    try {
+      // Workspace root reached through the link; the host names the resolved
+      // path, exactly as it did in the probe.
+      expect(
+        projectionEntryTouched(link, { file_path: path.join(real, PROJECTION_DIR, "workflows", "delivery-v1.json") }, [
+          "workflows/delivery-v1.json",
+        ]),
+      ).toBe("workflows/delivery-v1.json");
+      // And the converse pairing, so neither direction regresses.
+      expect(
+        projectionEntryTouched(real, { file_path: path.join(link, PROJECTION_DIR, "workflows", "delivery-v1.json") }, [
+          "workflows/delivery-v1.json",
+        ]),
+      ).toBe("workflows/delivery-v1.json");
+      // Resolving must not smuggle in a path outside the subtree.
+      expect(projectionEntryTouched(link, { file_path: path.join(real, "elsewhere.md") }, ["elsewhere.md"])).toBeUndefined();
+    } finally {
+      unlinkSync(link);
+      rmSync(real, { recursive: true, force: true });
+    }
   });
 
   it("names nothing when the receipt is unavailable", () => {
