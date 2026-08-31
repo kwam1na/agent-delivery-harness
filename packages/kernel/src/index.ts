@@ -691,8 +691,18 @@ export {
   type CompiledCheckpointGrant,
   type CompiledPolicy,
   type CompileRepositoryPolicyInput,
+  type AvailablePersona,
   type CompileRepositoryPolicyResult,
 } from "./policy/compile.ts";
+export {
+  ARCHIVE_RELEASE_MANIFEST_ENTRY,
+  PERSONA_MANIFEST_ENTRY,
+  PERSONA_MANIFEST_SPEC,
+  projectShippedPersonas,
+  type ProjectShippedPersonasResult,
+  type ShippedPersonaRejection,
+  type ShippedPersonaRejectionCode,
+} from "./policy/shipped-personas.ts";
 export {
   AUTHORITY_REVOCATION_SPEC,
   checkActionAuthorization,

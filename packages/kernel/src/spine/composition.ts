@@ -38,17 +38,20 @@ export const PRODUCT_TRUST_STATE_SPEC = "product-trust-state/1";
 export const PRODUCT_TRUST_LABEL = "local-digest / operator-pinned";
 
 /**
- * The exact qualified `agent-skills` release the composition exposes, from
- * `qualifications/composition-baseline.json` (agent-skills commit
- * 0de253bc3c5a6837590602b42194b9a7de2b3296). Pinned, not re-authored.
+ * The exact qualified `agent-skills` release the composition exposes.
+ * Pinned, not re-authored: these identities are read off a built release,
+ * never edited by hand. Advancing them is a new composition — which is
+ * exactly what advancing the shipped reviewer charter set produces, since the
+ * charters are archive content and the `workflowGraphSha256` below is
+ * unchanged across that advance.
  */
 export const PINNED_AGENT_SKILLS = Object.freeze({
   releaseId: "core-v1",
   profile: "core",
-  archiveSha256: "25dd462a818cf2134c08be27181ba123adfa74bf2c367884a411b8b664523fc6",
-  metadataSha256: "e3b4904148b45df90937f2f383f1ef1e5cb0ba60a27291602edf89609c3a3ffa",
+  archiveSha256: "9ce12f12c4096e346154ef377fc89187c9168944d6e59b9d6596feb98e57d2ed",
+  metadataSha256: "b2b008cb5a87f2bd83696cb43e908badb305b750a0b013a8c89d118bf16f9007",
   workflowGraphSha256: "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
-  provenanceLockSha256: "12cebfaf0848f102931d6f1794cce5f79de58533678b9bcd6c8347dee5cb09ff",
+  provenanceLockSha256: "0872fab0e891c7304f5c6ab9c19298902b386935d69f9296e28106c730192bfa",
   protocolVersion: "delivery-provider-rails/1",
 } as const);
 
