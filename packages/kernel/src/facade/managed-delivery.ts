@@ -3186,31 +3186,41 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // it was written against, observed through the same capture path as the
       // base observed now, so the two are comparable values rather than two
       // refs resolved by different rules at different moments.
+      //
+      // The record path is keyed on the CURRENT deliverable digest, so a moved
+      // candidate has no record at it. That is not reported as a missing
+      // record: the verifier is simply unavailable, which blocks on its own,
+      // and the decision below names the movement that actually happened. With
+      // no record there is no recorded base to compare, so the observed one
+      // stands in — it can never turn the blocked decision into a pass.
+      let externalVerification: ExternalVerification = "unavailable";
+      let recordedBaseTipSha = captured.base.tipSha;
       const relativePath = deliveryRecordPathFor(input.config, captured.deliverable.digest);
-      let recordText: string;
+      let recordText: string | undefined;
       try {
         recordText = await readFile(path.join(rootDir, relativePath), "utf8");
       } catch {
-        return refuse("record_missing", `No tracked record at ${relativePath}.`, "Record the delivery first, then complete the finish line.");
+        recordText = undefined;
       }
-      const parsed = parseDeliveryRecord(recordText);
-      if (!parsed.ok) return refuseWith(parsed.blockers);
-
-      const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
-      let externalVerification: ExternalVerification;
-      if (listed.code !== 0) {
-        // The verifier's protected-authority-path rule does not run over a tree
-        // it could not list, and half a verification is not a passing one.
-        externalVerification = "unavailable";
-      } else {
-        const check = verifyDeliveryRecord(
-          input.config,
-          parsed.record,
-          { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
-          { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
-          { candidateTreePaths: listed.out.split("\u0000").filter((entry) => entry.length > 0) },
-        );
-        externalVerification = check.ok ? "passed" : "failed";
+      if (recordText !== undefined) {
+        // A record the verifier cannot read is a finding, never a skip.
+        const parsed = parseDeliveryRecord(recordText);
+        if (!parsed.ok) return refuseWith(parsed.blockers);
+        recordedBaseTipSha = parsed.record.candidateBinding.baseTipSha;
+        const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
+        if (listed.code === 0) {
+          // The verifier's protected-authority-path rule does not run over a
+          // tree it could not list, and half a verification is not a pass — so
+          // a failed listing leaves the verification unavailable.
+          const check = verifyDeliveryRecord(
+            input.config,
+            parsed.record,
+            { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
+            { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
+            { candidateTreePaths: listed.out.split("\u0000").filter((entry) => entry.length > 0) },
+          );
+          externalVerification = check.ok ? "passed" : "failed";
+        }
       }
 
       // The declared product-trust level, read verbatim from the pinned
@@ -3228,7 +3238,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         contract: guarded.meta.contract,
         policy: guarded.meta.policy,
         outcome,
-        record: { treeSha: recordedCandidate.treeSha, baseTipSha: parsed.record.candidateBinding.baseTipSha, digest: trackedRecord.sha256 },
+        record: { treeSha: recordedCandidate.treeSha, baseTipSha: recordedBaseTipSha, digest: trackedRecord.sha256 },
         observed: { treeSha: captured.treeSha, baseTipSha: captured.base.tipSha },
         admission: { admitted: true, completedObligations: completed.completedObligations },
         externalVerification,

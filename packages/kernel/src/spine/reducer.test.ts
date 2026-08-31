@@ -856,23 +856,61 @@ describe("the finish line and the post-action states", () => {
     expect(codes).toContain("invalid_transition");
   });
 
+  /**
+   * A multi-action delivery in BOTH orders. `acting -> acting` is an
+   * enumerated row, so several actions in one delivery is a designed shape,
+   * and no action's verification may ever stand in for another's.
+   */
+  const twoActions = (
+    first: Record<string, unknown>,
+    second: readonly Record<string, unknown>[],
+    to: string,
+  ): Entry[] => [
+    ...toReady(),
+    deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+    deliveryEntry(15, "action.intent.recorded", { ...intent, intentId: "intent-a", action: first["action"] }),
+    deliveryEntry(16, "action.result.recorded", { ...actionResult({ intentId: "intent-a" }), ...first }),
+    deliveryEntry(17, "transition.committed", { from: "acting", to: "acting" }),
+    ...second.map((payload, index) =>
+      index === 0
+        ? deliveryEntry(18, "action.intent.recorded", { ...intent, intentId: "intent-b", action: payload["action"] })
+        : deliveryEntry(19, "action.result.recorded", { ...actionResult({ intentId: "intent-b" }), ...payload }),
+    ),
+    deliveryEntry(18 + second.length, "transition.committed", { from: "acting", to: to }),
+  ];
+
   it("judges the terminal edge on the LAST result, never on an earlier action that passed", () => {
-    // `acting -> acting` is an enumerated row, so a delivery can carry several
-    // actions. A merge whose verification failed must not reach completion on
-    // the strength of a pull-request creation that passed before it.
-    const twoActions = (lastVerification: string): Entry[] => [
-      ...toReady(),
-      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
-      deliveryEntry(15, "action.intent.recorded", { ...intent, intentId: "intent-pr", action: "pr-creation" }),
-      deliveryEntry(16, "action.result.recorded", actionResult({ intentId: "intent-pr", action: "pr-creation" })),
-      deliveryEntry(17, "transition.committed", { from: "acting", to: "acting" }),
-      deliveryEntry(18, "action.intent.recorded", { ...intent, intentId: "intent-merge" }),
-      deliveryEntry(19, "action.result.recorded", actionResult({ intentId: "intent-merge", verification: lastVerification })),
-      deliveryEntry(20, "transition.committed", { from: "acting", to: "completed" }),
-    ];
-    expect(reduceCodes(twoActions("failed"))).toContain("invalid_transition");
-    const verified = reduceDeliveryJournal(twoActions("passed"));
+    const passed = { action: "pr-creation", outcome: "succeeded", verification: "passed" };
+    const failedLast = [{ action: "merge" }, { action: "merge", outcome: "succeeded", verification: "failed" }];
+    expect(reduceCodes(twoActions(passed, failedLast, "completed"))).toContain("invalid_transition");
+
+    const passedLast = [{ action: "merge" }, { action: "merge", outcome: "succeeded", verification: "passed" }];
+    const verified = reduceDeliveryJournal(twoActions(passed, passedLast, "completed"));
     expect(verified.ok, JSON.stringify(verified)).toBe(true);
+  });
+
+  it("refuses to begin the next action while the previous one stands unreconciled", () => {
+    // The reverse ordering of the case above: a failed or indeterminate action
+    // followed by a trivially passing one must not complete on the newcomer.
+    for (const unreconciled of [
+      { action: "merge", outcome: "succeeded", verification: "failed" },
+      { action: "merge", outcome: "indeterminate", verification: "not-attempted" },
+    ]) {
+      const trivialPass = [
+        { action: "pr-creation" },
+        { action: "pr-creation", outcome: "succeeded", verification: "passed" },
+      ];
+      expect(reduceCodes(twoActions(unreconciled, trivialPass, "completed")), JSON.stringify(unreconciled)).toContain(
+        "invalid_transition",
+      );
+    }
+  });
+
+  it("refuses terminal success for an in-flight action on the PREVIOUS action's pass", () => {
+    // A durably recorded intent whose result was never observed — the
+    // lost-response case — is not a delivery that succeeded.
+    const passed = { action: "pr-creation", outcome: "succeeded", verification: "passed" };
+    expect(reduceCodes(twoActions(passed, [{ action: "merge" }], "completed"))).toContain("invalid_transition");
   });
 
   it("refuses terminal success while the last authorized action has no observed result at all", () => {

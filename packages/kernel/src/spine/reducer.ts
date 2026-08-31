@@ -321,7 +321,23 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           collector.emit("unsupported_combination", `${at}/payload/intentId`, `intent ${intentId} was already recorded`);
           return;
         }
+        // The matrix takes the next acting step only once the previous action
+        // IS RECONCILED. An unreconciled predecessor — failed, indeterminate,
+        // or never observed — is the delivery's business before any further
+        // action begins, and letting one start would let its own verification
+        // stand in for the predecessor's.
+        if (lastActionVerification !== undefined && lastActionVerification !== "passed") {
+          collector.emit(
+            "invalid_transition",
+            at,
+            `the previous action's verification is ${lastActionVerification}; the next acting step begins only once the previous action is reconciled`,
+          );
+          return;
+        }
         actionIntents.set(intentId, { action: payload["action"] as string });
+        // A newly recorded intent has no observed result, so the previous
+        // action's pass stops standing for anything.
+        lastActionVerification = undefined;
         break;
       }
       case "action.result.recorded": {

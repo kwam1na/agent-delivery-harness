@@ -259,6 +259,33 @@ describe("the authority and request matrix", () => {
     expect(codesOf(decision)).toContain("external_verification_missing");
   });
 
+  it("blocks a merge finish line on the criteria rules merge-ready is blocked on", () => {
+    // The blanket-waiver and unresolved-criterion rules are stated once,
+    // ahead of the action dispatch — a stronger state is never reached on an
+    // outcome merge-ready itself refuses.
+    const blanketWaived = {
+      ...outcomeOf(),
+      criteria: [
+        {
+          criterionId: "greeting-behavior",
+          disposition: "amended-waived" as const,
+          evidence: { kind: "review" as const, reference: "waiver-1" },
+        },
+      ],
+    };
+    for (const outcome of [outcomeOf("blocked"), blanketWaived]) {
+      const decision = decideFinishLine(
+        inputOf({
+          contract: contractOf({ requestedFinishLine: "merge", requestedAuthority: ["merge"] }),
+          policy: policyOf({ grantedFinishLines: ["merge-ready", "merge"], grantedAuthority: ["merge"] }),
+          outcome,
+        }),
+      );
+      expect(decision.kind, JSON.stringify(decision)).toBe("blocked");
+      expect(codesOf(decision)).toContain("criterion_unverified");
+    }
+  });
+
   it("never reaches a merge-ready RESULT on a merge or deploy finish line", () => {
     for (const finishLine of ["merge", "deploy"] as const) {
       const decision = decideFinishLine(

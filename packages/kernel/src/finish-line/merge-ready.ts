@@ -252,19 +252,6 @@ export function decideFinishLine(input: FinishLineInput): FinishLineDecision {
 
   if (refusals.length > 0) return { kind: "blocked", refusals };
 
-  // A finish line beyond merge-ready never terminates here: it is authorized
-  // into its post-action state and stops, because no action is invocable.
-  const action = FINISH_LINE_ACTIONS[input.contract.requestedFinishLine];
-  if (action !== undefined) {
-    const authorized = authorizeFinishLineAction({
-      action,
-      contract: input.contract,
-      policy: input.policy,
-      ...(input.approvalRequiredActions === undefined ? {} : { approvalRequiredActions: input.approvalRequiredActions }),
-    });
-    return authorized.ok ? { kind: authorized.nextState, action } : { kind: "blocked", refusals: authorized.refusals };
-  }
-
   const result = {
     spec: "finish-line-result/1",
     finishLine: "merge-ready",
@@ -283,7 +270,10 @@ export function decideFinishLine(input: FinishLineInput): FinishLineDecision {
   // The composed result is re-checked through the spine's own rules before it
   // is handed out: a result the spine would refuse is never journaled. This is
   // also where a product-trust level the substrate did not declare rejects —
-  // the grammar admits exactly one spelling.
+  // the grammar admits exactly one spelling — and where the criteria rules
+  // (every criterion resolved, at least one positive pass) are stated ONCE,
+  // ahead of the action dispatch, so a merge or deploy contract cannot be
+  // handed the stronger post-action state on an outcome merge-ready refuses.
   const shape = validateFinishLineResult(result);
   if (!shape.ok) {
     return { kind: "blocked", refusals: shape.rejections.map((rejection) => ({ ...rejection })) };
@@ -291,6 +281,19 @@ export function decideFinishLine(input: FinishLineInput): FinishLineDecision {
   const cross = checkMergeReadyAgainstOutcome(result, input.outcome);
   if (!cross.ok) {
     return { kind: "blocked", refusals: cross.rejections.map((rejection) => ({ ...rejection })) };
+  }
+
+  // A finish line beyond merge-ready never terminates here: it is authorized
+  // into its post-action state and stops, because no action is invocable.
+  const action = FINISH_LINE_ACTIONS[input.contract.requestedFinishLine];
+  if (action !== undefined) {
+    const authorized = authorizeFinishLineAction({
+      action,
+      contract: input.contract,
+      policy: input.policy,
+      ...(input.approvalRequiredActions === undefined ? {} : { approvalRequiredActions: input.approvalRequiredActions }),
+    });
+    return authorized.ok ? { kind: authorized.nextState, action } : { kind: "blocked", refusals: authorized.refusals };
   }
   return { kind: "completed", result };
 }
