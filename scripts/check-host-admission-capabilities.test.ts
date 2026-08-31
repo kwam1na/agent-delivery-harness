@@ -357,19 +357,43 @@ describe("host-admission capability record document", () => {
 
   it("names the entries it did not re-observe instead of letting silence cover them", () => {
     // An unexamined entry and a checked one read identically to a sensor, so
-    // the grade's scope has to name the ones nobody looked at. Both hosts owe
-    // this, and the enumeration is off the record's own hosts — a host added
-    // with a grade re-verification that names nothing fails here.
+    // the grade's scope has to name the ones nobody looked at. BOTH ENTRY
+    // KINDS ARE WALKED. Capabilities alone would leave a probe free to carry
+    // no re-verification and go unnamed, and the slot enumeration cannot cover
+    // that gap either, because it only ever visits entries that HAVE one — an
+    // entry with none is invisible to it by construction.
+    let unnamedFloor = 0;
     for (const host of hosts) {
       if (host.grade.reverification === undefined) continue;
       const scope = host.grade.reverification.scope;
       expect(typeof scope, `${host.hostId} grade scope`).toBe("string");
-      const unreobserved = Object.entries<any>(host.capabilities)
+      const unreobserved = [
+        ...Object.entries<any>(host.capabilities),
+        ...Object.entries<any>(host.probes),
+      ]
         .filter(([, entry]) => entry.reverification === undefined)
         .map(([name]) => name);
+      unnamedFloor += unreobserved.length;
       for (const name of unreobserved) {
         expect(scope, `${host.hostId} grade scope must name un-re-observed ${name}`).toContain(name);
       }
+    }
+    // Without a floor the whole rule evaporates the moment the enumeration
+    // stops finding anything, and a record that re-observed nothing would pass
+    // it exactly as cleanly as one that named everything honestly.
+    expect(unnamedFloor, "the record has entries it did not re-observe, which is what makes naming them meaningful").toBeGreaterThan(0);
+  });
+
+  it("bounds every re-verification with the scope its own convention requires", () => {
+    // Every block in this record says how far its re-observation reaches; a
+    // block without one silently invites its outcome to be read across the
+    // whole entry. This is the field that carries the deployment boundary on
+    // the Codex workspace-scoping result, so an absent one is not cosmetic.
+    const slots = reverifiedSlots();
+    expect(slots.length, "there are re-verifications to bound").toBeGreaterThan(0);
+    for (const { context, entry } of slots) {
+      expect(typeof entry.reverification.scope, `${context} states its scope`).toBe("string");
+      expect(entry.reverification.scope.length, `${context} scope`).toBeGreaterThan(0);
     }
   });
 
@@ -402,6 +426,12 @@ describe("host-admission capability record document", () => {
     expect(claim.reverification.method).toMatch(/temporary directory/iu);
     // The control that makes the out-of-workspace denial mean anything.
     expect(claim.reverification.method).toMatch(/unsandboxed control/iu);
+    // And the boundary has to reach the TIER VERDICT, not sit only in the
+    // entry beneath it. The verdict is the slot a consumer reads to decide
+    // whether the mutation floor holds; a caveat one level down is a caveat
+    // that will not be read by whoever acts on the tier.
+    const grade = hostById.get("codex-cli").grade.reverification;
+    expect(grade.method, "the tier verdict carries the boundary its floor was re-established under").toMatch(/temporary directory/iu);
   });
 
   it("cannot grade Tier 3 over a surviving background child", () => {
@@ -584,6 +614,10 @@ describe("the delivery-lane binding position", () => {
     const cc = hostById.get("claude-code");
     expect(cc.deliveryLaneBinding.status).toBe("present");
     expect(cc.deliveryLaneBinding.module).toMatch(/host\/claude-code\.ts$/u);
+    // Asserted here too, not only in the enumeration above: a test that
+    // promises existence in its name and checks only the shape of a string is
+    // the kind that reads as covered while covering nothing.
+    expect(existsSync(path.join(repoRoot, cc.deliveryLaneBinding.module))).toBe(true);
   });
 });
 
