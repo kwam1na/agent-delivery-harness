@@ -354,50 +354,69 @@ function consumedAssertionNoncesOf(views: readonly JournalEntryView[]): Set<stri
   return nonces;
 }
 
+/** A consumed waiver, bound to the candidate it was approved against. */
+interface LedgerWaiver extends ConsumedWaiver {
+  readonly candidateTreeSha: string;
+}
+
 interface WaiverLedger {
   /** Proposals still awaiting an approval, oldest first. */
   readonly pending: readonly WaiverProposal[];
   /** Criteria whose waiver was CONSUMED, in journal order. */
-  readonly consumed: readonly ConsumedWaiver[];
+  readonly consumed: readonly LedgerWaiver[];
 }
 
 /**
  * The waiver ledger, derived from the journal alone — no second authority.
  * A proposal is pending from its `approval.request.recorded` until a waiver
- * consumption answers it or a typed voiding blocker retires it, and each
- * consumption is paired with the proposal it answers by journal order, which
- * is the same order the facade consumes them in.
+ * consumption answers it or a typed voiding blocker retires it.
+ *
+ * PAIRING IS FIFO, AND THAT IS THE WHOLE POINT. A consumption's human
+ * evaluation is a window in which the journal can grow: the facade reads the
+ * pending proposal, discloses its criterion to the operator, and only then
+ * appends the consumption. Answering the NEWEST pending proposal would let a
+ * proposal appended during that window inherit an approval the operator gave
+ * for a different criterion. The oldest pending proposal is fixed before the
+ * window opens, so it cannot be displaced; and if the window's appends voided
+ * it instead, the consumption answers nothing and no waiver is recorded.
+ *
+ * The candidate a proposal binds is read the way admission reads it — the
+ * last recaptured candidate, falling back to the fence's — so a proposal is
+ * never stamped with a tree the checkpoint does not stand on.
  */
 function waiverLedgerOf(views: readonly JournalEntryView[]): WaiverLedger {
   const pendingStack: WaiverProposal[] = [];
-  const consumed: ConsumedWaiver[] = [];
-  let candidate = "";
+  const consumed: LedgerWaiver[] = [];
+  let fencedCandidate = "";
+  let recapturedCandidate: string | undefined;
   for (const view of views) {
+    const candidate = recapturedCandidate ?? fencedCandidate;
     switch (view.kind) {
       case "invocation.fenced":
-        candidate = view.payload["candidateTreeSha"] as string;
+        fencedCandidate = view.payload["candidateTreeSha"] as string;
         break;
       case "candidate.recaptured":
-        candidate = view.payload["treeSha"] as string;
+        recapturedCandidate = view.payload["treeSha"] as string;
         break;
       case "approval.request.recorded":
         pendingStack.push({
           requestKind: view.payload["requestKind"] as "waiver" | "amendment",
           criterionId: view.payload["criterionId"] as string,
           actorId: view.payload["actorId"] as string,
-          candidateTreeSha: candidate,
+          candidateTreeSha: recapturedCandidate ?? fencedCandidate,
         });
         break;
       case "blocker.recorded":
-        if (view.payload["code"] === "approval.proposal-voided") pendingStack.pop();
+        if (view.payload["code"] === "approval.proposal-voided") pendingStack.shift();
         break;
       case "approval.assertion.consumed": {
         const assertion = view.payload["assertion"] as Record<string, unknown> | undefined;
         const origin = String(assertion?.["origin"] ?? "");
         if (!origin.startsWith(WAIVER_APPROVAL_ORIGIN_PREFIX)) break;
-        const answered = pendingStack.pop();
+        const answered = pendingStack.shift();
         if (answered !== undefined) {
           consumed.push({
+            candidateTreeSha: candidate,
             criterionId: answered.criterionId,
             reference: `${String(assertion?.["action"])} by ${origin.slice(WAIVER_APPROVAL_ORIGIN_PREFIX.length)} (${String(assertion?.["nonce"])})`,
           });
@@ -2765,8 +2784,29 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         candidate: { treeSha: current.treeSha, deliverableDigest: captured.deliverable.digest },
         sensorResults: sensorResultsOf(guarded.views),
         attempts,
-        waivedCriteria: waiverLedgerOf(guarded.views).consumed,
+        // A waiver is candidate-bound evidence: one approved against an
+        // earlier candidate says nothing about this one.
+        waivedCriteria: waiverLedgerOf(guarded.views).consumed.filter(
+          (waiver) => waiver.candidateTreeSha === current.treeSha,
+        ),
       });
+
+      const unresolved = outcome.criteria.filter((criterion) => criterion.disposition === "blocked");
+      if (unresolved.length > 0) {
+        await recordBlockerAndTransition(
+          guarded.store,
+          deliveryId,
+          guarded.state,
+          "outcome.criterion-unverified",
+          `criterion mapping failed: ${unresolved.map((criterion) => `${criterion.criterionId} (${criterion.evidence.reference})`).join("; ")}`.slice(0, 1900),
+          "blocked",
+        );
+        return refuse(
+          "criterion_unverified",
+          "An acceptance criterion carries no passing exact-candidate evidence; a green-but-unrelated change fails criterion mapping.",
+          "Satisfy the criterion's sensor on the exact candidate, then re-validate.",
+        );
+      }
 
       // The blanket-waiver rule, stated at admission as well as at the finish
       // line: waiving every criterion is not a delivery that succeeded.
@@ -2784,23 +2824,6 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           "blanket_waiver",
           "No acceptance criterion passed; a blanket waiver cannot produce delivery success.",
           "Rescope or cancel the delivery; at least one positive criterion must actually pass.",
-        );
-      }
-
-      const unresolved = outcome.criteria.filter((criterion) => criterion.disposition === "blocked");
-      if (unresolved.length > 0) {
-        await recordBlockerAndTransition(
-          guarded.store,
-          deliveryId,
-          guarded.state,
-          "outcome.criterion-unverified",
-          `criterion mapping failed: ${unresolved.map((criterion) => `${criterion.criterionId} (${criterion.evidence.reference})`).join("; ")}`.slice(0, 1900),
-          "blocked",
-        );
-        return refuse(
-          "criterion_unverified",
-          "An acceptance criterion carries no passing exact-candidate evidence; a green-but-unrelated change fails criterion mapping.",
-          "Satisfy the criterion's sensor on the exact candidate, then re-validate.",
         );
       }
 
@@ -2988,6 +3011,29 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
 
+      /**
+       * The return-to-validation leg. The recording commit already moved the
+       * tree, so the candidate is RECAPTURED before the transition — exactly
+       * as the success leg does. Without that, the fresh aligned review the
+       * frozen matrix demands would bind to a candidate the worktree no
+       * longer has, and admission could never accept it again.
+       */
+      const returnToValidation = async (code: string, summary: string): Promise<{ ok: true } | FacadeFailure> => {
+        const recordedBlocker = await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+          code,
+          summary: summary.slice(0, 1900),
+        });
+        if (!recordedBlocker.ok) return recordedBlocker;
+        const movedTree = (await git(rootDir, "rev-parse", "HEAD^{tree}")).out;
+        const movedBranch = (await git(rootDir, "rev-parse", `refs/heads/${workspace.branchRef}`)).out;
+        const recaptured = await appendEntry(guarded.store, deliveryId, "candidate.recaptured", {
+          treeSha: movedTree,
+          branchRefValue: movedBranch,
+        });
+        if (!recaptured.ok) return recaptured;
+        return appendEntry(guarded.store, deliveryId, "transition.committed", { from: "recording", to: "validating" });
+      };
+
       // The delivery-owned path sets, first: a committed projection or
       // discovery-configuration path is a protected-authority-path violation
       // no record can excuse, and it is caught here as well as by the
@@ -3000,11 +3046,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const candidateTreePaths = listed.out.split("\u0000").filter((entry) => entry.length > 0);
       const owned = candidateTreePaths.filter(isDeliveryOwnedTreePath);
       if (owned.length > 0) {
-        await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
-          code: "record.protected-authority-path",
-          summary: `the candidate tree carries delivery-owned paths: ${owned.join(", ")}`.slice(0, 1900),
-        });
-        const returned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "recording", to: "validating" });
+        const returned = await returnToValidation(
+          "record.protected-authority-path",
+          `the candidate tree carries delivery-owned paths: ${owned.join(", ")}`,
+        );
         if (!returned.ok) return returned;
         return refuse(
           "record_protected_authority_path",
@@ -3030,11 +3075,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           // The frozen matrix has a direct edge for exactly this: any
           // non-neutral byte or identity change returns to validation, and
           // from there to a fresh aligned final review.
-          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
-            code: "record.non-neutral-change",
-            summary: `the recording commit changed non-neutral paths: ${nonNeutral.join(", ")}`.slice(0, 1900),
-          });
-          const returned = await appendEntry(guarded.store, deliveryId, "transition.committed", { from: "recording", to: "validating" });
+          const returned = await returnToValidation(
+            "record.non-neutral-change",
+            `the recording commit changed non-neutral paths: ${nonNeutral.join(", ")}`,
+          );
           if (!returned.ok) return returned;
           return refuse(
             "record_non_neutral",
@@ -3263,7 +3307,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
 
       const ledger = waiverLedgerOf(guarded.views);
-      const pendingProposal = ledger.pending[ledger.pending.length - 1];
+      const pendingProposal = ledger.pending[0];
       const action = outcomeChanging ? "confirm-outcome-amendment" : "waive-criterion";
       const evaluation = await source.evaluate({
         action,

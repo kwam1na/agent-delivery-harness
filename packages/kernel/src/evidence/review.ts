@@ -164,6 +164,15 @@ export interface ConsumedWaiver {
  * sensitive-approval lane, and only where the criterion would otherwise have
  * blocked: a waiver is a way past missing evidence, never a way to relabel
  * evidence that exists.
+ *
+ * HOW FAR THAT REACHES TODAY, HONESTLY. The disposition is composed here, but
+ * whether it can carry a delivery to success depends on the criterion-to-
+ * evidence mapping the compiled policy supplies. Under the fixed
+ * one-sensor disposable policy every criterion resolves to the SAME sensor
+ * result, so criteria pass or block together and a waiver can only turn one
+ * refusal into another — it never converts a refused admission into an
+ * admitted one. A policy mapping criteria to distinct sensors is what makes
+ * the lane productive; the doctrine above is what keeps it honest when it is.
  */
 export function composeOutcomeVerification(input: {
   readonly contract: AcceptedContract;

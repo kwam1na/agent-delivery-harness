@@ -66,6 +66,11 @@ describe("the inventory sensor", () => {
     for (const match of source.matchAll(/"blocker\.recorded",\s*\{\s*\n?\s*code:\s*"([a-z][a-z.-]+)"/g)) {
       journaled.add(match[1] as string);
     }
+    // A code assembled from a stage status is invisible to a literal scan, so
+    // the closed status vocabulary is expanded here rather than trusted.
+    for (const match of source.matchAll(/code:\s*`([a-z][a-z.-]*)\$\{[^}]*result\.status[^}]*\}`/g)) {
+      for (const status of ["blocked", "failed", "indeterminate"]) journaled.add(`${match[1] as string}${status}`);
+    }
     expect(journaled.size).toBeGreaterThan(5);
     const uncovered = [...journaled].filter((code) => DELIVERY_BLOCKER_REMEDIATIONS[code] === undefined).sort();
     expect(uncovered, "these journaled blocker codes carry no declared remediation").toEqual([]);
@@ -73,7 +78,9 @@ describe("the inventory sensor", () => {
 
   it("registers no remediation for a code nothing can journal", () => {
     const source = readFileSync(path.join(HERE, "..", "facade", "managed-delivery.ts"), "utf8");
-    const orphans = Object.keys(DELIVERY_BLOCKER_REMEDIATIONS).filter((code) => !source.includes(`"${code}"`)).sort();
+    const orphans = Object.keys(DELIVERY_BLOCKER_REMEDIATIONS)
+      .filter((code) => !source.includes(`"${code}"`) && !code.startsWith("workflow.stage-"))
+      .sort();
     expect(orphans, "these declared remediations name codes nothing journals").toEqual([]);
   });
 });

@@ -327,6 +327,45 @@ describe("the waiver doctrine", () => {
     expect(voided[0]?.remediation).toContain("re-propose");
   });
 
+  it("answers the OLDEST pending proposal, so a later proposal cannot inherit the approval", async () => {
+    // The consumption's human evaluation is a window in which the journal can
+    // grow. Pairing with the newest pending proposal would let one appended
+    // during that window inherit an approval given for a different criterion.
+    // Two proposals, distinguishable by whether their criterion is real:
+    await facade.recordApprovalRequest({
+      deliveryId,
+      requestKind: "waiver",
+      criterionId: "smuggled-criterion",
+      actorId: PROPOSER,
+      reason: "proposed first",
+      fence,
+    });
+    await facade.recordApprovalRequest({
+      deliveryId,
+      requestKind: "waiver",
+      criterionId: "greeting-behavior",
+      actorId: PROPOSER,
+      reason: "proposed second, against a real criterion",
+      fence,
+    });
+    // FIFO answers the first — whose criterion the contract never named — and
+    // refuses. Newest-first would have answered the second and succeeded.
+    const answered = await facade.consumeWaiver({ deliveryId, approverId: OPERATOR, outcomeChanging: false, fence, now: NOW });
+    expect(codesOf(answered)).toContain("waiver_criterion_unknown");
+
+    // Clear both by moving the candidate, and return to remediation.
+    writeFileSync(path.join(worktree, "src", "greet.mjs"), `// another wrong revision\n${GREET_WRONG}`);
+    commitAll(worktree, "move the candidate to retire the pending proposals");
+    const checkpointed = await facade.checkpointCandidate({
+      deliveryId,
+      resultBytes: typedStageResultBytes({ stageId: "implement", deliveryId, outputKind: "delivery-candidate", candidate: treeOf(worktree) }),
+      fence,
+    });
+    expect(checkpointed.ok, JSON.stringify(checkpointed)).toBe(true);
+    const red = await facade.runSensor({ deliveryId, fence });
+    expect(red.ok && red.state === "remediating", JSON.stringify(red)).toBe(true);
+  });
+
   it("lets only a policy-declared outcome authority amend the outcome, creating a new contract identity", async () => {
     await facade.recordApprovalRequest({
       deliveryId,
@@ -441,6 +480,18 @@ describe("the recording discipline", () => {
     expect(entry, JSON.stringify(inventory.entries)).toBeDefined();
     expect(entry?.summary).toContain("src/extra.mjs");
     expect(entry?.remediation).toContain("review-neutral");
+
+    // AND THE RETURN IS LIVE, not a dead end: the candidate was recaptured at
+    // the moved tree, so the smuggled byte goes through validation and a fresh
+    // aligned final review — and admission accepts the reviewed candidate.
+    await driveToRecording(deliveryId, worktree, fence, "n2");
+    const reprepared = await facade.prepareTrackedRecord({ deliveryId, env: { CLAUDECODE: "1" }, fence });
+    expect(reprepared.ok, JSON.stringify(reprepared)).toBe(true);
+    commitAll(worktree, "tracked delivery record for the reviewed candidate");
+    const recorded = await facade.confirmTrackedRecord({ deliveryId, fence });
+    expect(recorded.ok && recorded.state === "ready", JSON.stringify(recorded)).toBe(true);
+    const finished = await facade.completeFinishLine({ deliveryId, fence });
+    expect(finished.ok && finished.state === "completed", JSON.stringify(finished)).toBe(true);
   });
 
   it("records a both-neutral commit and completes", { timeout: 240_000 }, async () => {

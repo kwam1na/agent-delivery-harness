@@ -83,7 +83,11 @@ export type DeliveryRecordDriftClass = (typeof DELIVERY_RECORD_DRIFT_CLASSES)[nu
  * evidence. The two lists are held identical by a sensor in the test suite.
  *
  * Membership is by path SEGMENT, never by string prefix: `src/managed-
- * projection-notes.md` names one of these and is nothing to do with it.
+ * projection-notes.md` names one of these and is nothing to do with it. It is
+ * also CASE-FOLDED, and the prefix itself counts — the same two rules the
+ * in-run deny side applies, because on a case-insensitive checkout a case
+ * alias still lands inside the protected path, and the prefix committed as a
+ * single entry is a symlink pointing wherever its author chose.
  */
 export const DELIVERY_OWNED_TREE_PREFIXES: readonly string[] = Object.freeze([".managed-projection", ".claude"]);
 
@@ -428,10 +432,10 @@ export interface VerifyDeliveryRecordOptions {
   readonly candidateTreePaths?: readonly string[];
 }
 
-/** True when the path lies INSIDE one of the delivery-owned sets. */
+/** True when the path IS one of the delivery-owned sets, or lies inside one. */
 export function isDeliveryOwnedTreePath(repoPath: string): boolean {
-  const segments = repoPath.split("/");
-  return segments.length > 1 && DELIVERY_OWNED_TREE_PREFIXES.includes(segments[0] as string);
+  const folded = repoPath.toLowerCase();
+  return DELIVERY_OWNED_TREE_PREFIXES.some((prefix) => folded === prefix || folded.startsWith(`${prefix}/`));
 }
 
 export function verifyDeliveryRecord(

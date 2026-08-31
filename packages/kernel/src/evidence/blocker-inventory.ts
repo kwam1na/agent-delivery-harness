@@ -29,6 +29,12 @@ export const DELIVERY_BLOCKER_REMEDIATIONS: Readonly<Record<string, string>> = O
     "Quarantine the workspace and resume through an operator-authorized takeover into a fresh worktree.",
   "projection.consumption-marker-mismatch":
     "Only the projection this invocation materialized may carry its outputs; quarantine the workspace and take over into a fresh worktree.",
+  "workflow.stage-blocked":
+    "The workflow stage reported a typed blocker; read its recorded next step, resolve it, and re-submit the stage result.",
+  "workflow.stage-failed":
+    "The workflow stage failed; read its recorded next step, resolve it, and re-submit the stage result.",
+  "workflow.stage-indeterminate":
+    "The workflow stage could not decide; read its recorded next step, resolve the ambiguity, and re-submit the stage result.",
   "workspace.branch-collision":
     "Create the host worktree on the branch the delivery is bound to, or take over onto a fresh takeover branch.",
   "approval.proposal-voided":
