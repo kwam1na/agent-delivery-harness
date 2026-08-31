@@ -381,14 +381,31 @@ describe("host-admission capability record document", () => {
     // Without a floor the whole rule evaporates the moment the enumeration
     // stops finding anything, and a record that re-observed nothing would pass
     // it exactly as cleanly as one that named everything honestly.
+    //
+    // TWO LIMITS OF THIS RULE, STATED SO NOBODY CREDITS IT WITH MORE THAN IT
+    // HAS. The floor is record-wide, not per-host, so one host with unnamed
+    // entries satisfies it for both; that is deliberate, because a host that
+    // genuinely re-observed everything SHOULD pass, and a per-host floor would
+    // fail it for being thorough. And the match is on the bare entry name, so
+    // an entry named anywhere in the scope prose satisfies it — including in a
+    // roster of entries that WERE re-observed. Both gaps are covered in a full
+    // run by the per-host outcome maps, which pin the re-observed set exactly;
+    // neither is load-bearing on its own.
     expect(unnamedFloor, "the record has entries it did not re-observe, which is what makes naming them meaningful").toBeGreaterThan(0);
   });
 
   it("bounds every re-verification with the scope its own convention requires", () => {
     // Every block in this record says how far its re-observation reaches; a
     // block without one silently invites its outcome to be read across the
-    // whole entry. This is the field that carries the deployment boundary on
-    // the Codex workspace-scoping result, so an absent one is not cosmetic.
+    // whole entry.
+    //
+    // THIS RULE IS SHAPE-ONLY AND THAT IS THE WHOLE OF IT: it holds every
+    // block to HAVING a scope, and reads none of them. It cannot tell a bound
+    // that says something from one gutted to a placeholder. Where the content
+    // of a scope actually carries a consequence — the Codex workspace-scoping
+    // boundary — the clause is asserted by the test that owns that result,
+    // not here, because a shape rule that claimed to check content would be
+    // the more dangerous of the two failures.
     const slots = reverifiedSlots();
     expect(slots.length, "there are re-verifications to bound").toBeGreaterThan(0);
     for (const { context, entry } of slots) {
@@ -413,6 +430,11 @@ describe("host-admission capability record document", () => {
     // And the reason that moved is named, not quietly rephrased.
     expect(probe.reverification.method).toMatch(/runtimeWorkspaceRoots/u);
     expect(probe.reverification.method).toMatch(/selectedCapabilityRoots/u);
+    // The arm count is pinned because it was CORRECTED once already: an eighth
+    // invocation was rejected by the CLI before it ran, and a rejected
+    // invocation is not an arm. Pinning it makes the next change to that
+    // number a deliberate act instead of a silent one.
+    expect(probe.reverification.surface).toMatch(/seven arms/u);
   });
 
   it("records the ambient-grant confound that nearly produced a false workspace-scoping result", () => {
@@ -426,6 +448,13 @@ describe("host-admission capability record document", () => {
     expect(claim.reverification.method).toMatch(/temporary directory/iu);
     // The control that makes the out-of-workspace denial mean anything.
     expect(claim.reverification.method).toMatch(/unsandboxed control/iu);
+    // The BOUNDARY, on the field that bounds the entry. The scope rule below
+    // is shape-only by design — it holds every block in the record to having
+    // one — so without this the clause that says where the denial stops
+    // applying could be gutted while a non-empty scope kept the rule green.
+    expect(claim.reverification.scope, "the scope states where this result stops applying").toMatch(
+      /OUTSIDE the system temporary directory/u,
+    );
     // And the boundary has to reach the TIER VERDICT, not sit only in the
     // entry beneath it. The verdict is the slot a consumer reads to decide
     // whether the mutation floor holds; a caveat one level down is a caveat
