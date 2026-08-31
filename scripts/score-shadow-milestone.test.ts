@@ -103,6 +103,11 @@ describe("reduction arithmetic", () => {
     expect(median([5, 1, 3])).toBe(3);
     expect(median([2, 0, 0])).toBe(0);
     expect(median([4, 1, 3, 2])).toBe(2.5);
+    // Two-digit values, so a default lexicographic sort is visible: it would
+    // order [2, 10, 3] as [10, 2, 3] and answer 2. Counts of ten and up are
+    // ordinary under a rubric whose own limitations call them lower bounds.
+    expect(median([10, 2, 3])).toBe(3);
+    expect(median([1, 2, 10, 3])).toBe(2.5);
   });
 
   it("aggregates blocked share over the whole window rather than averaging per-delivery shares", () => {
@@ -162,6 +167,28 @@ describe("the frozen baseline is characterized before anything is scored against
   it("pins the baseline figure the decision rests on: a median already at the floor", () => {
     const verdict = scoreShadowMilestone(baseline, gateRecord([]));
     expect(verdict.baseline.medianOperatorInterventions).toBe(0);
+  });
+
+  it("refuses to score against a baseline delivery whose own measurement is malformed", () => {
+    // The baseline is half of the comparison, and the same rule governs it: a
+    // verdict computed over the two baseline deliveries that happened to be
+    // well-formed is a verdict against a baseline nobody froze.
+    const malformed = syntheticBaseline([{}, {}, {}]);
+    delete ((malformed["deliveries"] as any[])[2].score as Record<string, unknown>)["blockedSeconds"];
+    const verdict = scoreShadowMilestone(malformed, fullSet([{}, {}, {}]));
+    expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_shape");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
+  it("treats a baseline recording no delivery as incomplete, never as a gate the shadow set lost", () => {
+    // Without this, the baseline's figures reduce to NaN, every `<=` against
+    // them is false, and an absent baseline emits `blocked_share_regressed` —
+    // an unmeasured comparison spelled exactly like a lost one.
+    const verdict = scoreShadowMilestone({ ...reachableBaseline, deliveries: [] }, fullSet([{}, {}, {}]));
+    expect(verdict.incomplete.map((note) => note.code)).toContain("baseline_unrecognized");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.failures).toEqual([]);
   });
 
   it("refuses a baseline that is not the frozen manual-choreography artifact", () => {
@@ -244,6 +271,24 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
     expect(verdict.status).toBe("incomplete");
   });
+
+  it("refuses a category the baseline mix does not name at all", () => {
+    // The other half of the mix rule. Two `code` entries trip only the
+    // over-the-cap branch; a category the baseline never heard of reaches the
+    // unrecognised branch, and a set of the right total size could otherwise
+    // pass while measuring work the baseline never sampled.
+    const record = gateRecord([
+      entry("shadow-code", "code"),
+      entry("shadow-docs", "docs"),
+      entry("shadow-infra", "infra"),
+    ]);
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+    expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
+    const note = verdict.incomplete.find((row) => row.code === "comparison_set_mix_mismatch")!;
+    expect(note.message).toContain("infra");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
 });
 
 describe("admission: only an affirmative binding-sourced record counts", () => {
@@ -297,6 +342,24 @@ describe("admission: only an affirmative binding-sourced record counts", () => {
     const verdict = scoreShadowMilestone(reachableBaseline, withThirdEntry(excluded));
     expect(verdict.inputs.gateRecord.countedDeliveryIds).not.toContain("shadow-operations");
     expect(verdict.status).toBe("incomplete");
+    // The exclusion must reach the ledger, not merely skip the set: a delivery
+    // that vanishes silently is indistinguishable from one that was never
+    // submitted.
+    const row = verdict.inputs.gateRecord.excludedDeliveries.find((entry) => entry.id === "shadow-operations");
+    expect(row).toBeDefined();
+    expect(row!.reason).toContain("explicitly excluded");
+  });
+
+  it("counts only an explicit inclusion flag, so an entry that never states one stays out", () => {
+    // Absent is not the same as true. An entry carrying an affirmative binding
+    // record but no flag at all would otherwise walk into the set — and here it
+    // carries a measurement loud enough to move the figures if it did.
+    const unflagged = entry("shadow-operations", "operations", { interventionCount: 99 });
+    delete unflagged["countedInComparisonSet"];
+    const verdict = scoreShadowMilestone(reachableBaseline, withThirdEntry(unflagged));
+    expect(verdict.inputs.gateRecord.countedDeliveryIds).not.toContain("shadow-operations");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
   });
 
   it("counts one run once however many times it appears", () => {
@@ -462,6 +525,12 @@ describe("the gate can be lost", () => {
     );
     expect(verdict.status).toBe("fail");
     expect(verdict.failures.map((note) => note.code)).toEqual(["blocked_share_regressed"]);
+    // The criterion row is what a reader re-derives the decision from, so the
+    // two sides must be recorded the right way round. `met: false` looks
+    // identical whether or not they were swapped.
+    const row = verdict.criteria.find((entry) => entry.id === "blockedVersusProgressingShare")!;
+    expect(row.baselineValue).toBe(0.5);
+    expect(row.shadowValue).toBeCloseTo(0.9, 10);
   });
 
   it("clears the share criterion on an exactly equal share, which is a no-regression bar", () => {
