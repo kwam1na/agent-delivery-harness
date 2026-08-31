@@ -1,0 +1,88 @@
+{
+  "spec": "shadow-milestone-gate-verdict/1",
+  "status": "incomplete",
+  "summary": "the M1 shadow gate is not scorable: no_observed_consumption",
+  "incomplete": [
+    {
+      "code": "no_observed_consumption",
+      "message": "no delivery has been observed consuming a projection, so there is no comparison set to score; this is the absence of a measurement, not a measured absence"
+    }
+  ],
+  "failures": [],
+  "observations": [],
+  "inputs": {
+    "baseline": {
+      "path": "qualifications/manual-choreography-baseline.json",
+      "schemaVersion": "manual-choreography-baseline/1",
+      "capturedAt": "2026-08-30T11:05:00Z",
+      "provingHost": "claude-code",
+      "operatorInterventionRubricSha256": "b269d39f3308ba176d11231e206c105ca8e96102fa486cc0222692621a53f38a",
+      "deliveryIds": [
+        "athena-pr-783-harness-blockers",
+        "athena-pr-784-pos-sync-review-convergence",
+        "athena-pr-782-review-scope-doctrine"
+      ]
+    },
+    "gateRecord": {
+      "path": ".agents/policy/shadow-milestone-gate-record.json",
+      "countedDeliveryIds": [],
+      "excludedDeliveries": [],
+      "perDeliveryScores": []
+    }
+  },
+  "baseline": {
+    "deliveryCount": 3,
+    "interventionCounts": [
+      2,
+      0,
+      0
+    ],
+    "medianOperatorInterventions": 0,
+    "totalOperatorInterventions": 2,
+    "policyRequiredInterruptionCount": 0,
+    "blockedSeconds": 8933,
+    "progressingSeconds": 27081,
+    "blockedShare": 0.24804242794468817
+  },
+  "shadow": null,
+  "criteria": [],
+  "interventionReporting": {
+    "status": "reported-not-gated",
+    "gatingCriterion": "blockedVersusProgressingShare",
+    "reason": [
+      "The baseline's own intervention counts are [2, 0, 0] — a median of 0, which is the floor of the metric. No non-negative count can be strictly lower, so a baseline sitting at the floor cannot demonstrate improvement in either direction.",
+      "The baseline's limitations block concedes the counts are lower bounds: transcripts do not record silently granted host permission prompts, so the figure it reports is admittedly incomplete.",
+      "Relaxing the comparison to 'not higher' was rejected. Tying a self-declared lower bound proves close to nothing.",
+      "Blocked share has real room to move and is measured from the same transcripts under the same rubric, so it carries the gate alone."
+    ],
+    "stillCounted": "Every orchestrator step-in the baseline's rubric counts is still counted and still reported — nudging a stalled agent, relaying a verdict that could not reach its recipient, correcting a tracker state, resuming after a limit, re-dispatching lost work. Ceasing to gate on the figure is not licence to stop measuring it.",
+    "policyRequiredInterruptions": "Still tracked separately and still counted into neither figure. A product that blocks correctly must not improve its own score by asking the operator to press a key.",
+    "howItBecomesGatingAgain": "Re-record the baseline under a rubric wide enough to have headroom — which is what its own reRecordTriggers anticipate — and restore the comparison against the re-recorded figure.",
+    "supersedes": "The gate record's gateMetrics still reads 'medianOperatorInterventionsAfterAcceptance: must be strictly lower than the baseline's'. That line is superseded by this block and is applied by nothing: the scorer's only gating criterion is blockedVersusProgressingShare. The record lives under .agents, a protected path in every checkpoint grant, so no session may edit it; correcting the line is an operator act."
+  },
+  "measurementContract": {
+    "scoredBy": "operator",
+    "againstRubric": "the baseline's operatorInterventionRubric, by the baseline's own method.scoring steps",
+    "members": [
+      {
+        "name": "interventionCount",
+        "source": "host session transcript",
+        "note": "operator inputs the delivery could not proceed without while the host had stopped; inputs made while the host was progressing are steering, not interventions"
+      },
+      {
+        "name": "policyRequiredInterruptionCount",
+        "source": "the delivery journal, cross-checked against the transcript",
+        "note": "admission-grant prompts, the contract confirmation, takeover authorizations and sensitive approvals; recorded beside the interventions and counted into neither figure"
+      },
+      {
+        "name": "blockedSeconds / progressingSeconds",
+        "source": "host session transcript",
+        "note": "blocked is the sum over interventions of the idle gap from the host's last event to the operator input that restarted it; all remaining window time is progressing"
+      }
+    ],
+    "preconditions": [
+      "The host session transcript must survive the session. A disposable host configuration directory takes the transcript with it when it is removed, and the two wall-clock figures become unrecoverable — the delivery can then never be counted, whatever the binding observed.",
+      "The delivery window's start and end must be identifiable in the transcript: the operator's scoped handoff message opens it, the merge closes it."
+    ]
+  }
+}
