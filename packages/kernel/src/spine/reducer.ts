@@ -160,6 +160,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
    * earlier in the sequence.
    */
   let lastActionVerification: string | undefined;
+  let lastActionOutcome: string | undefined;
 
   entries.forEach((value, index) => {
     const at = `/${index}`;
@@ -344,6 +345,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
         // A newly recorded intent has no observed result, so the previous
         // action's pass stops standing for anything.
         lastActionVerification = undefined;
+        lastActionOutcome = undefined;
         break;
       }
       case "action.result.recorded": {
@@ -381,6 +383,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
         }
         intent.outcome = payload["outcome"] as string;
         intent.verification = payload["verification"] as string;
+        lastActionOutcome = intent.outcome;
         lastActionVerification = intent.verification;
         break;
       }
@@ -403,13 +406,18 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
           );
           return;
         }
+        // Both terminal-ish edges out of `acting` are about the action just
+        // taken, and both require it to have SUCCEEDED: the difference between
+        // them is only whether its required verification passed. A failed or
+        // indeterminate action enters neither — its name would assert a
+        // success that did not happen — and leaves through `blocked`.
         if (from === "acting" && (to === "completed" || to === "action_succeeded_verification_failed")) {
           const wanted = to === "completed" ? "passed" : "failed";
-          if (lastActionVerification !== wanted) {
+          if (lastActionOutcome !== "succeeded" || lastActionVerification !== wanted) {
             collector.emit(
               "invalid_transition",
               `${at}/payload/to`,
-              `acting -> ${to} requires the LAST observed action result's verification to be ${wanted}; it is ${lastActionVerification ?? "unobserved"}`,
+              `acting -> ${to} requires the LAST observed action result to be succeeded/${wanted}; it is ${lastActionOutcome ?? "unobserved"}/${lastActionVerification ?? "unobserved"}`,
             );
             return;
           }

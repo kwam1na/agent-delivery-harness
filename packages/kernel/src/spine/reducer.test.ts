@@ -976,6 +976,73 @@ describe("the finish line and the post-action states", () => {
     expect(blocked.state.state).toBe("blocked");
   });
 
+  it("refuses terminal success while the last authorized action has no observed result at all", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "transition.committed", { from: "acting", to: "completed" }),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  it("refuses a result that observes a different action than its intent", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "transition.committed", { from: "ready", to: "acting" }),
+      deliveryEntry(15, "action.intent.recorded", intent),
+      deliveryEntry(16, "action.result.recorded", actionResult({ action: "deploy" })),
+    ]);
+    expect(codes).toContain("unsupported_combination");
+  });
+
+  it("refuses a finish-line result composed for another delivery", () => {
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "finish.line.recorded", { result: { ...mergeReadyResult, deliveryId: "delivery-2" } }),
+    ]);
+    expect(codes).toContain("subject_mismatch");
+  });
+
+  it("voids a recorded result once the delivery leaves ready for anything but success", () => {
+    // The result was composed over the candidate that stood at `ready`. Leaving
+    // for re-validation and returning means it stands for nothing.
+    const codes = reduceCodes([
+      ...toReady(),
+      deliveryEntry(14, "finish.line.recorded", { result: mergeReadyResult }),
+      deliveryEntry(15, "transition.committed", { from: "ready", to: "awaiting_approval" }),
+      deliveryEntry(16, "transition.committed", { from: "awaiting_approval", to: "validating" }),
+      deliveryEntry(17, "transition.committed", { from: "validating", to: "reviewing" }),
+      deliveryEntry(18, "transition.committed", { from: "reviewing", to: "compounding" }),
+      deliveryEntry(19, "transition.committed", { from: "compounding", to: "admitting" }),
+      deliveryEntry(20, "transition.committed", { from: "admitting", to: "recording" }),
+      deliveryEntry(21, "transition.committed", { from: "recording", to: "ready" }),
+      deliveryEntry(22, "transition.committed", { from: "ready", to: "completed" }),
+    ]);
+    expect(codes).toContain("invalid_transition");
+  });
+
+  it("keeps action_succeeded_verification_failed to actions that actually succeeded", () => {
+    // The state's name and its matrix condition both assert that the external
+    // action SUCCEEDED. An action that failed or came back indeterminate did
+    // not, whatever its verification says, and leaves through `blocked`.
+    for (const observed of [
+      { outcome: "failed", verification: "failed" },
+      { outcome: "indeterminate", verification: "failed" },
+    ]) {
+      expect(
+        reduceCodes(
+          acting(
+            ["action.intent.recorded", intentFor("intent-merge", "merge")],
+            ["action.result.recorded", resultFor("intent-merge", "merge", observed)],
+            ["transition.committed", { from: "acting", to: "action_succeeded_verification_failed" }],
+          ),
+        ),
+        JSON.stringify(observed),
+      ).toContain("invalid_transition");
+    }
+  });
+
   it("enters action_succeeded_verification_failed on exactly that observed pair", () => {
     const failed = reduceDeliveryJournal([
       ...toReady(),
