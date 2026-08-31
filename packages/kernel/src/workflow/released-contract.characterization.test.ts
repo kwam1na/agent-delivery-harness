@@ -45,6 +45,47 @@ const RELEASED_CONTRACT_ARTIFACTS = Object.freeze({
 const readJsonEntry = (entry: string): unknown =>
   JSON.parse(Buffer.from(readArchiveEntry(archiveBytes, entry)).toString("utf8"));
 
+describe("the released reviewer charter set, pinned", () => {
+  it("carries the charter manifest and its adjudication, and lists every charter at the digest the release recorded", () => {
+    const manifest = readJsonEntry("personas/manifest.json") as {
+      schemaVersion: string;
+      sourceAdjudication: string;
+      personas: readonly { personaId: string; path: string }[];
+    };
+    expect(manifest.schemaVersion).toBe("reviewer-persona-manifest/1");
+    expect(manifest.sourceAdjudication).toBe("personas/source-adjudication.json");
+
+    const listed = new Map(
+      (readJsonEntry("release-manifest.json") as { files: { path: string; sha256: string }[] }).files.map((file) => [
+        file.path,
+        file.sha256,
+      ]),
+    );
+    for (const persona of manifest.personas) {
+      expect(sha256Hex(readArchiveEntry(archiveBytes, persona.path)), persona.personaId).toBe(listed.get(persona.path));
+    }
+    // Named members, so a release that shipped an empty set would go red here
+    // rather than passing the sweep above for free.
+    const ids = manifest.personas.map((persona) => persona.personaId);
+    expect(ids).toContain("persona.outcome-correctness");
+    expect(ids).toContain("persona.testing-policy");
+    expect(ids.length).toBe(17);
+  });
+
+  it("records an include or exclude decision for every source file the set was drawn from", () => {
+    const adjudication = readJsonEntry("personas/source-adjudication.json") as {
+      schemaVersion: string;
+      source: { observedFileCount: number };
+      adjudications: readonly { sourceFile: string; disposition: string }[];
+    };
+    expect(adjudication.schemaVersion).toBe("reviewer-persona-source-adjudication/1");
+    expect(adjudication.adjudications.length).toBe(adjudication.source.observedFileCount);
+    expect(adjudication.adjudications.length).toBe(51);
+    const dispositions = new Set(adjudication.adjudications.map((row) => row.disposition));
+    expect([...dispositions].sort()).toEqual(["adapted", "excluded", "merged"]);
+  });
+});
+
 describe("the released workflow contract, pinned", () => {
   it("carries the graph, both schemas, and the result templates at their frozen digests", () => {
     expect(sha256Hex(readArchiveEntry(archiveBytes, WORKFLOW_GRAPH_ENTRY))).toBe(PINNED_AGENT_SKILLS.workflowGraphSha256);

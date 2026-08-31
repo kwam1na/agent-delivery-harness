@@ -76,6 +76,10 @@ describe("composition pin and product-trust state", () => {
     );
   });
 
+  // Advancing the shipped reviewer charter set is an archive-content change,
+  // so it moves the archive, metadata, and provenance identities and leaves
+  // the workflow-graph identity exactly where it was. That asymmetry is the
+  // evidence that the charter set advances alone, and it is pinned here.
   it("pin the agent-skills schemas by digest, matching the composition baseline", () => {
     expect(PINNED_AGENT_SKILLS.releaseId).toBe("core-v1");
     expect(PINNED_AGENT_SKILLS.profile).toBe("core");
@@ -83,13 +87,13 @@ describe("composition pin and product-trust state", () => {
       "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
     );
     expect(PINNED_AGENT_SKILLS.archiveSha256).toBe(
-      "25dd462a818cf2134c08be27181ba123adfa74bf2c367884a411b8b664523fc6",
+      "bffec8f3d149f709b3607678b4e521ed333a2c65e488625b33c0ef4a99573751",
     );
     expect(PINNED_AGENT_SKILLS.metadataSha256).toBe(
-      "e3b4904148b45df90937f2f383f1ef1e5cb0ba60a27291602edf89609c3a3ffa",
+      "50b1e8fba7864508e64756a4133967a730ce9c13c7f9f6de3c7fa7fa0bd4b592",
     );
     expect(PINNED_AGENT_SKILLS.provenanceLockSha256).toBe(
-      "12cebfaf0848f102931d6f1794cce5f79de58533678b9bcd6c8347dee5cb09ff",
+      "725e56e08f161645ab8200a6a5f987e5643976e8cee55f032ddf85c61059f164",
     );
     expect(PINNED_AGENT_SKILLS.protocolVersion).toBe("delivery-provider-rails/1");
     expect(Object.isFrozen(PINNED_AGENT_SKILLS)).toBe(true);
