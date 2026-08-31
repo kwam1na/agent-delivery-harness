@@ -21,6 +21,7 @@ import { execFile } from "node:child_process";
 import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
+  FACADE_OPERATIONS,
   createManagedDeliveryFacade,
   type ManagedDeliveryFacade,
 } from "@agent-delivery-harness/kernel";
@@ -28,6 +29,31 @@ import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
 const SOURCE_ID = "delivery-harness.cli.managed";
+
+/** Every operation this command answers, in the order its usage lists them. */
+const MANAGED_OPERATIONS: readonly string[] = Object.freeze([
+  "status",
+  "next",
+  "operations",
+  "blockers",
+  "explain-blocker",
+  "submit-plan",
+  "checkpoint",
+  "run-sensor",
+  "submit-review",
+  "reduce-review",
+  "compound",
+  "admit",
+  "prepare-record",
+  "confirm-record",
+  "finish",
+  "propose-approval",
+  "request-cancellation",
+  "finalize-cancellation",
+  "recover",
+  "export",
+  "delete",
+]);
 
 const blocked = (code: string, summary: string, remediation: string): CommandResult => ({
   kind: "blocked",
@@ -162,9 +188,26 @@ export const managedCommand: CommandDescriptor = {
       return {
         kind: "usage",
         message:
-          "managed requires an operation: status | next | submit-plan | checkpoint | run-sensor | submit-review | reduce-review | compound | admit | prepare-record | confirm-record | finish | explain-blocker",
+          `managed requires an operation: ${MANAGED_OPERATIONS.join(" | ")}`,
       };
     }
+    // An unknown operation is a usage error about the CALL, and it is answered
+    // before anything about the repository is consulted: a typo answered with
+    // "this is not a repository" sends a reader to fix the wrong thing.
+    if (!MANAGED_OPERATIONS.includes(operation)) {
+      return { kind: "usage", message: `Unknown managed operation: ${operation}.` };
+    }
+
+    // The inspectable contract: every operation, what it costs, whether it
+    // binds the fence, and which surfaces reach it. It describes the product,
+    // not a delivery, so it answers before any delivery has to resolve —
+    // otherwise the one operation that explains the surface would be
+    // unavailable exactly when a reader most needs it.
+    if (operation === "operations") {
+      context.write(`${JSON.stringify(FACADE_OPERATIONS, null, 2)}\n`);
+      return { kind: "ok", summary: `${FACADE_OPERATIONS.length} facade operations` };
+    }
+
     const resolved = await resolveManaged(context);
     if (isCommandResult(resolved)) return resolved;
     const { facade, deliveryId, fence } = resolved;
@@ -201,8 +244,75 @@ export const managedCommand: CommandDescriptor = {
       case "status": {
         const status = await facade.status({ deliveryId, observedAt: nowInstant() });
         if (!status.ok) return { kind: "blocked", blockers: [...status.blockers] };
-        emit({ deliveryId, ...status });
-        return { kind: "ok", summary: `state ${status.state}; next ${status.nextCheckpoint.kind}` };
+        emit(status.status);
+        return {
+          kind: "ok",
+          summary: `state ${status.status.delivery.state}; host ${status.status.hostActivity}; next ${status.status.nextCheckpoint.kind}`,
+        };
+      }
+      case "blockers": {
+        const inventory = await facade.blockerInventory({ deliveryId });
+        if (!inventory.ok) return { kind: "blocked", blockers: [...inventory.blockers] };
+        emit(inventory.entries);
+        return { kind: "ok", summary: `${inventory.entries.length} blocker(s) journaled` };
+      }
+      case "propose-approval": {
+        const requestKind = flag(rest, "--kind");
+        const criterionId = flag(rest, "--criterion");
+        const actorId = flag(rest, "--actor");
+        const reason = flag(rest, "--reason");
+        if ((requestKind !== "waiver" && requestKind !== "amendment") || criterionId === undefined || actorId === undefined || reason === undefined) {
+          return {
+            kind: "usage",
+            message: "propose-approval requires --kind <waiver|amendment> --criterion <id> --actor <id> --reason <text>.",
+          };
+        }
+        const invokingFence = requireFence();
+        if (typeof invokingFence !== "number") return invokingFence;
+        // Proposing is all this does. The approval half is the sensitive lane's
+        // and needs a fresh assertion the proposer cannot mint.
+        const proposed = await facade.recordApprovalRequest({
+          deliveryId,
+          requestKind,
+          criterionId,
+          actorId,
+          reason,
+          fence: invokingFence,
+        });
+        if (!proposed.ok) return { kind: "blocked", blockers: [...proposed.blockers] };
+        return { kind: "ok", summary: `${requestKind} proposed for ${criterionId}; delivery is ${proposed.state}` };
+      }
+      case "request-cancellation": {
+        const requested = await facade.requestCancellation({ deliveryId });
+        if (!requested.ok) return { kind: "blocked", blockers: [...requested.blockers] };
+        return { kind: "ok", summary: `cancellation requested; delivery is ${requested.state}` };
+      }
+      case "finalize-cancellation": {
+        const finalized = await facade.finalizeCancellation({ deliveryId });
+        if (!finalized.ok) return { kind: "blocked", blockers: [...finalized.blockers] };
+        return { kind: "ok", summary: `prior workspace quarantined; delivery is ${finalized.state}` };
+      }
+      case "export": {
+        const exported = await facade.exportDelivery({ deliveryId });
+        if (!exported.ok) return { kind: "blocked", blockers: [...exported.blockers] };
+        emit({ exportPath: exported.exportPath, artifactDigest: exported.artifactDigest });
+        return { kind: "ok", summary: `exported to ${exported.exportPath}` };
+      }
+      case "delete": {
+        const deleted = await facade.deleteDelivery({ deliveryId });
+        if (!deleted.ok) return { kind: "blocked", blockers: [...deleted.blockers] };
+        emit({ preservedAuditRecords: deleted.preservedAuditRecords });
+        return { kind: "ok", summary: `deleted; ${deleted.preservedAuditRecords.length} audit record(s) preserved` };
+      }
+      case "recover": {
+        const target = flag(rest, "--generation");
+        const recovered = await facade.recoverSecurityBlocked({
+          deliveryId,
+          now: nowInstant(),
+          ...(target === undefined ? {} : { targetGenerationDigest: target }),
+        });
+        if (!recovered.ok) return { kind: "blocked", blockers: [...recovered.blockers] };
+        return { kind: "ok", summary: `${recovered.mode}; delivery is ${recovered.state}` };
       }
       case "next": {
         const next = await facade.nextCheckpoint({ deliveryId });
@@ -318,6 +428,9 @@ export const managedCommand: CommandDescriptor = {
         return { kind: "ok", summary: explained.blocker === undefined ? "no blocker recorded" : `blocker ${explained.blocker.code}` };
       }
       default:
+        // Unreachable: the operation was checked against MANAGED_OPERATIONS
+        // before the delivery resolved. Kept so adding a name to that list
+        // without a case here fails loudly rather than silently doing nothing.
         return { kind: "usage", message: `Unknown managed operation: ${operation}.` };
     }
   },

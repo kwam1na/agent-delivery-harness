@@ -447,7 +447,7 @@ describe("the recording discipline", () => {
     expect(codesOf(rejected)).toContain("record_protected_authority_path");
 
     const status = await facade.status({ deliveryId, observedAt: NOW });
-    expect(status.ok && status.state === "validating", JSON.stringify(status)).toBe(true);
+    expect(status.ok && status.status.delivery.state === "validating", JSON.stringify(status)).toBe(true);
 
     const inventory = await facade.blockerInventory({ deliveryId });
     expect(inventory.ok, JSON.stringify(inventory)).toBe(true);
@@ -474,7 +474,7 @@ describe("the recording discipline", () => {
     expect(codesOf(rejected)).toContain("record_non_neutral");
 
     const status = await facade.status({ deliveryId, observedAt: NOW });
-    expect(status.ok && status.state === "validating", JSON.stringify(status)).toBe(true);
+    expect(status.ok && status.status.delivery.state === "validating", JSON.stringify(status)).toBe(true);
 
     const inventory = await facade.blockerInventory({ deliveryId });
     expect(inventory.ok, JSON.stringify(inventory)).toBe(true);

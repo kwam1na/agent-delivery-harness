@@ -365,9 +365,9 @@ describe("session end, before and after mutation", () => {
 
     const status = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
     must(status, "status");
-    expect(status.resume).toBe("takeover-required");
+    expect(status.status.resume).toBe("takeover-required");
     // The delivery checkpoint itself did not move.
-    expect(status.state).toBe("planning");
+    expect(status.status.delivery.state).toBe("planning");
   });
 
   it("records the same honest provenance AFTER a mutation, preserving the last trusted candidate", async () => {
@@ -382,8 +382,8 @@ describe("session end, before and after mutation", () => {
 
     const after = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
     must(after, "status after");
-    expect(after.state).toBe(before.state);
-    expect(after.resume).toBe("takeover-required");
+    expect(after.status.delivery.state).toBe(before.status.delivery.state);
+    expect(after.status.resume).toBe("takeover-required");
     // The candidate the mutation produced is still the delivery's candidate.
     const entries = await journalEntries(session.deliveryId);
     expect(entries.some((entry) => entry.kind === "candidate.recaptured")).toBe(true);
@@ -412,7 +412,7 @@ describe("session end, before and after mutation", () => {
 
     const status = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
     must(status, "status");
-    expect(status.resume).toBe("takeover-required");
+    expect(status.status.resume).toBe("takeover-required");
   });
 
   it("maps a Tier 3 provenance record onto same-workspace resume, so the gate is the grade and not a refusal", async () => {
@@ -448,7 +448,7 @@ describe("session end, before and after mutation", () => {
 
     const status = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
     must(status, "status");
-    expect(status.resume).toBe("same-workspace");
+    expect(status.status.resume).toBe("same-workspace");
   });
 
   it("records provenance once per invocation, so a retrying lifecycle integration cannot void a pending takeover", async () => {
@@ -609,7 +609,7 @@ describe("a stale session and a fresh one", () => {
     // The fresh session continues from the last trustworthy checkpoint.
     const status = await facade.status({ deliveryId: session.deliveryId, observedAt: LATER });
     must(status, "status");
-    expect(status.fence).toBe(rebound.fence);
+    expect(status.status.delivery.fence).toBe(rebound.fence);
     const sensed = await facade.runSensor({ deliveryId: session.deliveryId, fence: rebound.fence });
     must(sensed, "runSensor");
     expect(sensed.outcome).toBe("passed");

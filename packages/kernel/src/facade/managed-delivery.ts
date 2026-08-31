@@ -37,6 +37,7 @@ import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/pr
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  assertionLaneAvailability,
   evaluateConfirmationEcho,
   evaluateHostAdmission,
   type CheckpointAdmissionExpectation,
@@ -115,22 +116,45 @@ import {
   verifyProjection,
 } from "../host/claude-code.ts";
 import { createExecPort, type ExecPort } from "../host/exec-port.ts";
-import { PINNED_AGENT_SKILLS, type ProductTrustState } from "../spine/composition.ts";
+import {
+  PINNED_AGENT_SKILLS,
+  PRODUCT_TRUST_LABEL,
+  localDigestTrustPredicate,
+  type ProductTrustState,
+} from "../spine/composition.ts";
 import { checkContractWithinPolicy, validateAcceptedContract, type AcceptedContract, type OutcomeVerification } from "../spine/contract.ts";
 import { validateSensorResult } from "../spine/capability.ts";
 import type { PolicySnapshot } from "../spine/policy.ts";
-import type { DeliveryState } from "../spine/vocabulary.ts";
+import type { DeliveryState, IntakeState } from "../spine/vocabulary.ts";
 import {
   assertionSourceForKind,
   loadPinnedGeneration,
   registrationBinding,
   resolveActiveGeneration,
   trustStorePathFor,
+  type SubstrateBlocker,
 } from "../substrate/installer.ts";
 import { loadAssertionProviderConfig, type AssertionSourcePort } from "../substrate/assertion-source.ts";
 import { SENSITIVE_APPROVAL_ASSERTION_SPEC, SECURITY_BLOCKED_MIGRATION_ACTION } from "../spine/assertion.ts";
 import { evaluateMigrationConsumption } from "./migration.ts";
+import {
+  composeManagedStatus,
+  type AssertionSourceView,
+  type ManagedCheckpoint,
+  type ManagedDeliveryStatus,
+  type ManagedStatusInput,
+  type ProductTrustView,
+  type RegistrationMismatch,
+  type WorkspaceDisposition,
+} from "./status.ts";
 import { parseTrustState } from "../substrate/trust-store.ts";
+import {
+  maintainTrustState,
+  rollbackComposition,
+  updateComposition,
+  type MaintainTrustStateInput,
+  type UpdateCompositionInput,
+} from "../substrate/lifecycle.ts";
 import {
   loadBundledWorkflowGraph,
   workflowStageBindingFor,
@@ -166,6 +190,29 @@ const refuse = (code: string, summary: string, remediation: string): FacadeFailu
 });
 
 const refuseWith = (blockers: readonly Blocker[]): FacadeFailure => ({ ok: false, blockers });
+
+/**
+ * A maintenance-lane refusal, reported with the substrate's own code and
+ * message. The lane already decided why it failed closed; restating that
+ * decision here is how two vocabularies for one refusal appear.
+ */
+const substrateRefusal = (blockers: readonly SubstrateBlocker[]): FacadeFailure =>
+  refuseWith(
+    blockers.map((blocker) =>
+      createBlocker({
+        code: blocker.code,
+        source: SOURCE,
+        summary: blocker.message,
+        remediations: [
+          {
+            id: "maintenance-lane-remediation",
+            kind: "manual_action",
+            summary: "Resolve the reported maintenance-lane condition and repeat the operation with a fresh assertion.",
+          },
+        ],
+      }),
+    ),
+  );
 
 // ── Durable layout ─────────────────────────────────────────────────────────
 
@@ -536,21 +583,19 @@ export interface ManagedDeliveryFacade {
     | FacadeFailure
   >;
 
+  /**
+   * The one typed status model. Every operator-facing surface renders this
+   * result without re-deriving anything from the journal, so the CLI, the MCP
+   * tool, and any later projection cannot disagree about whether a delivery may
+   * be resumed, migrated, or retried.
+   *
+   * Host disappearance is reported LAZILY and here: a graceful lifecycle event
+   * reports `paused`, while an activity observation aged past the fence's
+   * declared lifetime reports `unknown` on this observation. Timeout never
+   * proves termination.
+   */
   status(input: { readonly deliveryId: string; readonly observedAt: string }): Promise<
-    | {
-        readonly ok: true;
-        readonly state: DeliveryState;
-        readonly activity: "active" | "paused" | "unknown" | "cancellation_pending";
-        readonly expectedRevision: number;
-        readonly fence: number;
-        readonly nextCheckpoint: ManagedCheckpoint;
-        readonly policyRequiredInterruptions: number;
-        readonly operatorInterventions: number;
-        /** `same-workspace` only under Tier 3 termination provenance for the current fence. */
-        readonly resume: "none" | "takeover-required" | "same-workspace";
-        readonly blockers: readonly { readonly code: string; readonly summary: string }[];
-      }
-    | FacadeFailure
+    { readonly ok: true; readonly status: ManagedDeliveryStatus } | FacadeFailure
   >;
 
   nextCheckpoint(input: { readonly deliveryId: string }): Promise<{ readonly ok: true; readonly checkpoint: ManagedCheckpoint } | FacadeFailure>;
@@ -778,6 +823,38 @@ export interface ManagedDeliveryFacade {
    * being rebound to a different registering installation, additionally
    * consumes the security-blocked migration assertion — without re-fencing.
    */
+  /**
+   * The installation-scoped maintenance lane, reached through the one facade
+   * rather than through a second entrypoint. Each of these consumes a
+   * maintenance-lane sensitive assertion bound to the target installation and
+   * generation identities — not to a delivery, candidate, or fence — and each
+   * fails closed when no assertion source can evaluate one. They write the
+   * installation's maintenance journal, never a delivery journal, so no
+   * delivery's expected revision moves.
+   *
+   * The generation of every paused delivery is retained across an update: the
+   * pin lives in each delivery's own record, and updating the installation
+   * neither reads nor rewrites it.
+   */
+  updateComposition(input: Omit<UpdateCompositionInput, "installationPath" | "receiptDir">): Promise<
+    { readonly ok: true; readonly generationDigest: string; readonly priorGenerationDigest: string; readonly noOp: boolean } | FacadeFailure
+  >;
+
+  /** Restores a previously accepted, still-eligible generation. A revoked one can never be restored. */
+  rollbackComposition(input: {
+    readonly targetGenerationDigest: string;
+    readonly assertionSource?: AssertionSourcePort;
+    readonly now: string;
+  }): Promise<{ readonly ok: true; readonly generationDigest: string } | FacadeFailure>;
+
+  /** Pin, revoke, un-revoke, or advance the trust high-water mark. */
+  maintainTrustState(
+    input: { readonly assertionSource?: AssertionSourcePort; readonly now: string } & (
+      | { readonly operation: "pin" | "revoke" | "unrevoke"; readonly generationDigest: string }
+      | { readonly operation: "advance-high-water-mark"; readonly highWaterMark: number }
+    ),
+  ): Promise<{ readonly ok: true; readonly state: ProductTrustState } | FacadeFailure>;
+
   recoverSecurityBlocked(input: {
     readonly deliveryId: string;
     /** Defaults to the delivery's recorded generation pin. */
@@ -795,16 +872,7 @@ export interface ManagedDeliveryFacade {
   >;
 }
 
-export type ManagedCheckpoint =
-  | { readonly kind: "bind-workspace" }
-  | { readonly kind: "workflow-stage"; readonly stageId: string; readonly remediation: boolean; readonly grantDigest: string }
-  | { readonly kind: "repository-sensor"; readonly capabilityId: string }
-  | { readonly kind: "review"; readonly stageId: string; readonly lenses: readonly string[] }
-  | { readonly kind: "admission" }
-  | { readonly kind: "tracked-record" }
-  | { readonly kind: "finish-line" }
-  | { readonly kind: "complete" }
-  | { readonly kind: "blocked"; readonly code: string; readonly summary: string };
+export type { ManagedCheckpoint } from "./status.ts";
 
 /**
  * Voids the attestation in every binding state file for a fence BELOW the
@@ -1405,6 +1473,22 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     path.join(await namespaceDir(), "intake", `${intakeId}${suffix}`);
   const intakeStoreFor = async (intakeId: string): Promise<IntakeJournalStore> =>
     createIntakeJournalStore(await intakePath(intakeId, ".jsonl"));
+
+  /**
+   * The intake half of the status model. A delivery whose intake journal is
+   * gone or unreducible reports no intake rather than inventing one — the
+   * delivery journal is the authority for everything after registration.
+   */
+  const intakeProjectionOf = async (
+    intakeId: string,
+  ): Promise<{ readonly state: IntakeState; readonly expectedRevision: number } | undefined> => {
+    try {
+      const reduced = await (await intakeStoreFor(intakeId)).state();
+      return reduced.ok ? { state: reduced.state.state, expectedRevision: reduced.state.expectedRevision } : undefined;
+    } catch {
+      return undefined;
+    }
+  };
 
   /** Appends one intake-journal entry under the frozen reducer's discipline. */
   const appendIntake = async (
@@ -2419,18 +2503,116 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
               .map((view) => ({ code: view.payload["code"] as string, summary: view.payload["summary"] as string }))
           : [];
 
-      return {
-        ok: true,
-        state: reduced.state.state,
-        activity,
-        expectedRevision: reduced.state.expectedRevision,
-        fence: reduced.state.lastFence,
+      // The registration binding, compared to the installation observed NOW.
+      // Identity and profile are kept apart here on purpose: only an
+      // identity mismatch on a matching profile has a migration path, and
+      // collapsing the two is exactly what would offer a migration that is
+      // guaranteed to refuse.
+      const recordedBinding = recordedBindingOf(views);
+      const observedBinding = await registrationBinding({
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+      });
+      const currentBinding = observedBinding.ok
+        ? {
+            registeringInstallationId: observedBinding.registeringInstallationId,
+            activeCompositionProfile: observedBinding.activeCompositionProfile as string,
+          }
+        : undefined;
+      let mismatch: RegistrationMismatch;
+      if (recordedBinding === undefined || currentBinding === undefined) {
+        mismatch = "unresolved";
+      } else if (recordedBinding.activeCompositionProfile !== currentBinding.activeCompositionProfile) {
+        mismatch = "profile";
+      } else if (recordedBinding.registeringInstallationId !== currentBinding.registeringInstallationId) {
+        mismatch = "identity";
+      } else {
+        mismatch = "none";
+      }
+
+      // Product trust, read verbatim from the substrate; an unreadable store
+      // reports itself rather than defaulting to eligible.
+      const trust = await readTrust();
+      const pinnedGenerationDigest = meta.generationDigest;
+      const generation: ProductTrustView["generation"] =
+        trust === undefined
+          ? "unreadable"
+          : (() => {
+              const decision = localDigestTrustPredicate.evaluate(pinnedGenerationDigest, trust);
+              return decision.eligible ? "eligible" : decision.reason;
+            })();
+
+      // Assertion-source availability, probed through the configured provider.
+      const providerConfig = await loadAssertionProviderConfig(input.installation.installationPath);
+      let assertionView: AssertionSourceView;
+      if (!providerConfig.ok) {
+        assertionView = {
+          availability: "unconfigured",
+          detail: `assertion provider configuration is ${providerConfig.reason}`,
+          lanes: assertionLaneAvailability({ hostNative: false, osNative: false }),
+        };
+      } else {
+        const probe = await assertionSourceForKind(providerConfig.config.sourceKind).probe();
+        assertionView = probe.available
+          ? {
+              availability: "available",
+              detail: probe.detail,
+              lanes: assertionLaneAvailability({
+                hostNative: probe.sourceKind === "host-native",
+                osNative: probe.sourceKind !== "host-native",
+              }),
+            }
+          : {
+              availability: "unavailable",
+              detail: probe.detail,
+              lanes: assertionLaneAvailability({ hostNative: false, osNative: false }),
+            };
+      }
+
+      const dispositions = views.filter((view) => view.kind === "workspace.disposition.recorded");
+      const quarantinedWorkspaces = [
+        ...new Set(
+          dispositions
+            .filter((view) => view.payload["disposition"] === "quarantined")
+            .map((view) => view.payload["workspaceId"] as string),
+        ),
+      ];
+      const lastDisposition = dispositions[dispositions.length - 1]?.payload["disposition"] as WorkspaceDisposition | undefined;
+
+      const admission = await readJson<{ completedObligations?: readonly string[] }>(path.join(dir, "admission.json"));
+      const intakeState = await intakeProjectionOf(meta.intakeId);
+
+      const composed: ManagedStatusInput = {
+        deliveryId,
+        intake: intakeState,
+        delivery: { state: reduced.state.state, expectedRevision: reduced.state.expectedRevision, fence: reduced.state.lastFence },
+        hostActivity: activity,
+        completedObligations: admission?.completedObligations ?? [],
+        productTrust: {
+          label: PRODUCT_TRUST_LABEL,
+          pinnedGenerationDigest,
+          revocationEpoch: trust?.revocationEpoch ?? 0,
+          generation,
+        },
+        assertionSource: assertionView,
+        quarantinedWorkspaces,
+        candidate: currentCandidateOf(views),
+        pendingDecision: waiverLedgerOf(views).pending[0],
+        registrationBinding: { recorded: recordedBinding, current: currentBinding, mismatch },
+        lastWorkspaceDisposition: lastDisposition,
+        terminationVerifiedAtCurrentFence:
+          provenance !== undefined &&
+          provenance.payload["fence"] === reduced.state.lastFence &&
+          provenance.payload["descendantTeardown"] === "verified",
+        workspaceBound: workspace !== undefined,
         nextCheckpoint: nextCheckpointOf(reduced.state.state, views),
-        policyRequiredInterruptions: confirmations + 1, // + the intake contract confirmation
-        operatorInterventions: interventions,
         resume,
         blockers,
+        policyRequiredInterruptions: confirmations + 1, // + the intake contract confirmation
+        operatorInterventions: interventions,
       };
+
+      return { ok: true, status: composeManagedStatus(composed) };
     },
 
     async nextCheckpoint({ deliveryId }) {
@@ -3870,6 +4052,41 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
               ? "Complete both mandatory review lenses on the exact candidate, then re-admit."
               : "Read the summary; the journal carries the full typed record.";
       return { ok: true, blocker: { code, summary: blocker.payload["summary"] as string, remediation } };
+    },
+
+    async updateComposition(maintenance) {
+      const outcome = await updateComposition({
+        ...maintenance,
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+      });
+      if (!outcome.ok) return substrateRefusal(outcome.blockers);
+      return {
+        ok: true,
+        generationDigest: outcome.generationDigest,
+        priorGenerationDigest: outcome.priorGenerationDigest,
+        noOp: outcome.noOp,
+      };
+    },
+
+    async rollbackComposition(maintenance) {
+      const outcome = await rollbackComposition({
+        ...maintenance,
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+      });
+      if (!outcome.ok) return substrateRefusal(outcome.blockers);
+      return { ok: true, generationDigest: outcome.generationDigest };
+    },
+
+    async maintainTrustState(maintenance) {
+      const outcome = await maintainTrustState({
+        ...maintenance,
+        installationPath: input.installation.installationPath,
+        receiptDir: input.installation.receiptDir,
+      } as MaintainTrustStateInput);
+      if (!outcome.ok) return substrateRefusal(outcome.blockers);
+      return { ok: true, state: outcome.state };
     },
 
     async recoverSecurityBlocked({ deliveryId, targetGenerationDigest, assertionSource, now }) {

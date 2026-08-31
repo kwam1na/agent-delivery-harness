@@ -65,15 +65,21 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the eight-command operator surface and
+- **`@agent-delivery-harness/cli`** — the nine-command operator surface and
   opt-in `delivery-provider-rails/1` stdio adapter:
   `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
-  `check`, and `managed` (the managed-delivery facade's host-facing checkpoint
-  surface).
-- **`@agent-delivery-harness/mcp`** — MCP server exposing `review-context` and
-  `submit-evidence` to agent frameworks over stdio, at strict CLI parity across
-  the four protocol revisions it speaks (`2026-07-28`, `2025-11-25`,
-  `2025-06-18`, `2024-11-05`).
+  `check`, `managed` (the managed-delivery facade's host-facing checkpoint and
+  status surface), and `maintain` (the installation-scoped maintenance lane:
+  update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark).
+  `managed operations` prints the facade's own operation contract — each
+  operation's capability class, invocation-fence rule, expected journal
+  revision, and the surfaces that may reach it.
+- **`@agent-delivery-harness/mcp`** — MCP server exposing `review-context`,
+  `submit-evidence`, and the read-only `managed` projection to agent frameworks
+  over stdio, at strict CLI parity across the four protocol revisions it speaks
+  (`2026-07-28`, `2025-11-25`, `2025-06-18`, `2024-11-05`). The tool surface is
+  read-only by construction: it inspects a delivery, and the host it is running
+  inside keeps ownership of how work is delegated and sequenced.
 - **`@agent-delivery-harness/action`** — GitHub Action verifying the tracked
   delivery record on pull requests, against the PR head, never the synthetic
   merge commit.

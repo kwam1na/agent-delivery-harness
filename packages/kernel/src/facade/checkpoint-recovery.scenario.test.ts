@@ -322,7 +322,7 @@ async function takeoverResume(driven: Driven): Promise<void> {
 const stateOf = async (deliveryId: string): Promise<DeliveryState> => {
   const status = await facade.status({ deliveryId, observedAt: LATER });
   must(status, "status");
-  return status.state;
+  return status.status.delivery.state;
 };
 
 let completedDeliveryId: string;
@@ -497,7 +497,7 @@ describe("durable checkpoints and host-driven recovery", () => {
     expect(requested.state).toBe("cancellation_requested");
     const status = await facade.status({ deliveryId: before.deliveryId, observedAt: LATER });
     must(status, "status");
-    expect(status.activity).toBe("cancellation_pending");
+    expect(status.status.hostActivity).toBe("cancellation_pending");
     // The fence is revoked for the interceptor: the voided attestation
     // re-denies every tool, including a late subagent's.
     // The binding state is fence-scoped, so a rebind writes a new file rather
