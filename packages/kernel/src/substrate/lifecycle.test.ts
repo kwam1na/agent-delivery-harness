@@ -165,6 +165,22 @@ describe("activation preflights", () => {
     expect(await activeOf(target)).toBe(packed[1].generationDigest);
   });
 
+  it("refuses a Node runtime below the MINOR the emitted hook command needs, and admits the one at it", async () => {
+    // The floor is 22.6, not 22, because the managed facade's hook command
+    // carries `--experimental-strip-types` and earlier 22.x rejects it — the
+    // interceptor would not start, which is a deny-until-attested boundary
+    // failing open. Both directions: a major-only check passes 22.5, and a
+    // check that refused all of 22.x would satisfy the deny half alone.
+    const target = await installGen1();
+    expect(codesOf(await updateTo(target, 2, { preflight: { nodeVersion: "v22.5.0" } }))).toContain("preflight_failed");
+    // The admit half asserts NO blocker at all, not merely the absence of this
+    // one: `not.toContain("preflight_failed")` is satisfied by an update that
+    // failed for some other reason, which would let a floor refusing all of
+    // 22.x still read as "admits the one at it".
+    const admitted = await updateTo(target, 2, { preflight: { nodeVersion: "v22.6.0" } });
+    expect(codesOf(admitted), JSON.stringify(admitted)).toEqual([]);
+  });
+
   it("refuses a missing or unsupported Python runtime before any mutation", async () => {
     const target = await installGen1();
     expect(codesOf(await updateTo(target, 2, { preflight: { pythonVersion: undefined } }))).toContain("preflight_failed");

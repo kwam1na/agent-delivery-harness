@@ -123,7 +123,7 @@ the plant written for its neighbour and leave the intended one deletable.
 
 ## Conventions
 
-- **ESM throughout, Node ≥ 22.** All process control goes through
+- **ESM throughout, Node ≥ 22.6.** All process control goes through
   `node:child_process`; `Bun.*` APIs are banned by static sensor.
 - **Zero runtime dependencies.** The published packages depend on nothing at
   runtime, and the ZIP reader, canonical JSON, and digest helpers are in-tree

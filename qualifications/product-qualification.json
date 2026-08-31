@@ -1,7 +1,7 @@
 {
   "schemaVersion": "product-qualification/1",
   "description": "The release-level product qualification: the composed product installed into clean disposable repositories from PACKED ARTIFACTS ONLY, driving scoped intake through the full checkpoint path to merge-ready under two distinct repository policies. Every claim below names the leg that proved it. The packed leg is re-executable — `npm run qualify:product` reproduces it end to end — and the fixture leg names in-process sensors that exist and run on every CI leg. Claims that neither leg establishes are listed under notProvenHere rather than implied by silence.",
-  "recordedAt": "2026-08-31T05:05:00Z",
+  "recordedAt": "2026-08-31T11:30:00Z",
   "platform": "macOS 15.6.1 arm64",
   "gateVerdict": {
     "decision": "proceed",
@@ -70,21 +70,28 @@
         "evidence": "a delivery registered successfully against the generation (the control half), the generation was then revoked through the maintenance lane, the next mutation-capable operation was refused, and the delivery's state read `security_blocked` — a refusal without the fenced state would leave it resumable. Rollback to that same revoked generation was refused with `generation_revoked`."
       },
       {
+        "id": "packed-surface-reachable-and-resolvable",
+        "statement": "the closure verifier is invocable from an installed package, and the emitted hook command resolves against a real staged path in an installed generation",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "Both halves are proven from a tarball install outside the repository, never from a source import — which is the whole point, since a source-importing suite cannot see either defect by construction. The verifier is reached through the package's `exports` map (resolved, not path-joined) and CALLED against the generation the installer just installed, which a name check alone would not establish. The hook command is read back off the composed settings file the host actually reads, decided against the composition manifest's staged inventory — launcher, containment, and staging membership, so neither the command string nor the staged path can carry the claim alone — and then executed against the installed generation, where it produces the interceptor's own deny for an unattested session. The negative is proven too: a copy of the generation with the staged entry removed is refused by the published verifier with `closure_digest_mismatch`, and a separate installation, corrupted after install, refuses to bind a workspace at all — the delivery's pinned-generation trust check, which is where a root missing a staged file is caught before any command is composed. Both refusals carry a control: the two deliveries bound sessions against the intact generation, and the corrupted installation registered its delivery successfully while the entry was still there."
+      },
+      {
         "id": "anti-vacuity",
         "statement": "every claimed sensor is mutated red, and a comment-only no-op is not",
         "outcome": "met",
         "leg": "fixture",
-        "evidence": "the lane's judgements are pure functions falsified in both directions by scripts/qualify-product.test.ts, its COMPOSITION is falsified (dropping either half of the observation verdict is caught directly, because the wiring test's degenerate input can only ever witness the vacuity half), and its WIRING is falsified too — the lane is driven for real on an input that cannot get past its first step and required to return the vacuity findings rather than an empty list. Thirteen rule mutations each produced a named failing test: the agent-runtime rule never reporting AND always reporting; policy-independence never firing; anti-vacuity dropping its enumeration; the two repositories converging; path containment becoming a prefix test; the refusal detector ignoring an allowed result; the per-lane inventory collapsing into one shared counter; the second intake lane disappearing; either half of the observation verdict dropped; and the exit ceasing to call it. A comment-only edit left all 40 green — 31 in the lane's own suite and 9 in the record checker, counted rather than apportioned."
+        "evidence": "the lane's judgements are pure functions falsified in both directions by scripts/qualify-product.test.ts, its COMPOSITION is falsified (dropping either half of the observation verdict is caught directly, because the wiring test's degenerate input can only ever witness the vacuity half), and its WIRING is falsified too — the lane is driven for real on an input that cannot get past its first step and required to return the vacuity findings rather than an empty list. The pre-existing rules' mutations each produced a named failing test — deliberately enumerated rather than counted, because the numeral is the part nobody checks: the agent-runtime rule never reporting AND always reporting; policy-independence never firing; anti-vacuity dropping its enumeration; the two repositories converging; path containment becoming a prefix test; the refusal detector ignoring an allowed result; the per-lane inventory collapsing into one shared counter; the second intake lane disappearing; either half of the observation verdict dropped; and the exit ceasing to call it. ELEVEN FURTHER mutations on the packed-surface rules, likewise each naming a failing test: the resolved-name enumeration ceasing to report emptiness; the membership loop never reporting; the required-name set emptied; the launcher check dropped; the staging check weakened to a path-only sensor AND to a command-string-only sensor — the pair an incomplete sensor passes, since a check on the command string alone survives an absent path and a check on the staged path alone survives a command pointing elsewhere; containment dropped; the empty-command, empty-inventory and no-path-member guards dropped; and the command-line parser degraded to a whitespace split. Weakening the shared path-containment helper to a prefix comparison is counted ONCE, above: it is the same one-line edit, and it now reddens a named test in both families rather than surviving in this one. FOUR PRODUCT mutations were falsified against the packed lane itself rather than against a pure rule, because the two defects this candidate closes live in the product: removing the verifier's re-export, restoring the tsx launcher, staging the entry while pointing the command elsewhere, and emitting the entry's unresolved spelling each turned the lane red with a named finding, the last one only because the lane EXECUTES the emitted command rather than reading it. A comment-only edit left all 56 green — 47 in the lane's own suite and 9 in the record checker, counted rather than apportioned — and a comment-only edit in the facade left the packed lane clean."
       }
     ]
   },
   "packedLeg": {
     "statement": "the composed product installed from packed artifacts into clean disposable repositories and driven to merge-ready. Re-executable: `npm run qualify:product`.",
     "driver": "scripts/qualify-product.ts",
-    "sourceAccess": "the driver imports nothing from packages/. It reaches the product twice, both times through an artifact: the npm-packed tarball install tree supplies the operator-facing installer, and the installed generation root supplies the product that drives the deliveries.",
+    "sourceAccess": "the driver imports nothing from packages/. It reaches the product twice, both times through an artifact: the npm-packed tarball install tree supplies the operator-facing installer — resolved through the package's own `exports` map rather than by joining a path into its src/, so what the lane drives is the published surface and not merely the shipped layout — and the installed generation root supplies the product that drives the deliveries.",
     "observed": {
-      "generationDigest": "4745a372fce1584afc90bf41a579802353da48dd95b352dce78eaf8447af20a5",
-      "installationId": "install-f783172afab8a3638ed6a013711cfff1",
+      "generationDigest": "616af8ce4bb692bbc8c9ea61b6a68d0d225c1a913bf7bf90cfbdf0444c8b9d85",
+      "installationId": "install-7ddd848e70798366f39f6d256b0f90f9",
       "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
       "compositionProfile": "confirmation-fixture",
       "repositoriesDelivered": [
@@ -97,6 +104,8 @@
       ],
       "negativeProbesSatisfied": [
         "receipt-listed-repository-refusal",
+        "closure-detects-missing-staged-hook-entry",
+        "bind-refuses-generation-missing-staged-hook-entry",
         "qualification-flag-required",
         "qualification-flag-refused-on-production",
         "revoked-generation-fences-live-work",
@@ -137,21 +146,31 @@
         }
       ],
       "retainedGenerations": [
-        "4745a372fce1584afc90bf41a579802353da48dd95b352dce78eaf8447af20a5",
-        "955ea80023ecb88ca3c4b185c3828445ae3982e4fadb6061f0a8bdfbb0ef8119",
-        "9886d8f1da134e3f947fd4524e2d2b596019122cfe215f0092c4fe1a5f7333ad"
+        "616af8ce4bb692bbc8c9ea61b6a68d0d225c1a913bf7bf90cfbdf0444c8b9d85",
+        "5e7d3bdf8343c78f9cad91c3b2bcf45c534dd4adaf2839d01d4e6a8da906c92f",
+        "4ee1ce51d7984a22efd14e1b6c50fa8bd630dca2d5cb67b7451824dd9c2f3867"
       ]
     },
-    "crossPlatform": "the same lane runs as a release-workflow step on ubuntu-latest. Confirmed for THIS candidate rather than assumed: that run reported `qualify-product: clean (2 repositories to merge-ready; 5 negative probes; 4 lifecycle steps)` and the generation digest 4745a372fce1584afc90bf41a579802353da48dd95b352dce78eaf8447af20a5 — byte-identical to the macOS observations recorded here. That is the cross-platform pack-and-install evidence this gate requires. Nothing in the lane itself compares the two digests; the comparison is the operator's, and this is its record.",
+    "crossPlatform": "the same lane runs as a release-workflow step on ubuntu-latest, and that run is the cross-platform evidence this gate requires. PENDING FOR THIS RECORD: the Linux leg for this candidate had not reported when these observations were written, so the digest above is the macOS one only and no second platform is claimed here. Nothing in the lane compares the two digests; the comparison is the operator's, and this field is where it lands.",
     "hostVersion": "2.1.97 (the graded version, not the installed one — see hostVersionCurrency)",
     "hostLane": "in-process. The driver stands in for the host task the way the walking skeleton's scenario sensor does: it creates the worktrees and submits the typed stage results a host would. The product launches nothing either way, which is what the process inventory above records.",
     "hostVersionCurrency": "The value above is the version qualifications/host-admission-capabilities.json grades, and it is what this lane passes to the facade. The Claude Code CLI installed on the recording machine is 2.1.251 — four releases newer — so any Claude Code capability read through that graded record is a claim about 2.1.97 and not about the installed CLI. This lane asserts NO live Claude Code capability: it launches no host session and drives the facade in-process, so the version is a parameter it passes rather than a surface it probed. The currency gap itself is tracked separately as V26-1506 and is not addressed here."
   },
   "packedSurfaceFindings": [
     {
-      "observation": "the installer's internal generation-closure verifier is not reachable through the package's single `exports` entry, so an adopter auditing an installation has the three published primitives instead: the manifest file name, the generation digest function, and the content hash",
-      "disposition": "recorded",
-      "consequence": "the packed leg re-derives closure over the entry it actually loaded — manifest self-digest, inventory membership, and byte hash — rather than reaching around the exports map, which would be the source-shaped dependency this unit forbids"
+      "observation": "the installer's internal generation-closure verifier was not reachable through the package's single `exports` entry, so an adopter installing the published package could not invoke the verification the installer exists to offer",
+      "disposition": "corrected",
+      "consequence": "`verifyGenerationClosure` is re-exported from the kernel's one published entry — the `exports` map itself is unchanged, since widening it was never what the verifier needed — and the packed leg now CALLS it through that entry against the generation it was just handed, so the claim is an invocation rather than a name check"
+    },
+    {
+      "observation": "the facade's model-external hook command named a `tsx` binary under a `node_modules` directory the packed composition never stages, so the command an installed generation emitted pointed at nothing",
+      "disposition": "corrected",
+      "consequence": "the command now runs on the running Node executable — this repository ships zero runtime dependencies and the emitted command holds to that too — and names the hook entry the composition actually stages, resolved through the filesystem so the entry recognizes the spelling as its own. The packed leg decides the vector against the composition manifest's staged set and then EXECUTES it against the installed generation, requiring the interceptor's own deny for an unattested session"
+    },
+    {
+      "observation": "a hook command naming an unresolved spelling of the staged entry — the default spelling of the temp root on some platforms, reached through a symlink — started the process and then ran nothing, because the entry recognizes direct invocation by comparing its argument vector against its symlink-resolved module URL",
+      "disposition": "corrected",
+      "consequence": "found by executing the emitted command rather than by reading it: the vector passed every staging assertion and produced empty output. The facade now emits the resolved spelling, and the packed leg requires the interceptor's deny on stdout rather than a clean exit, which is what distinguishes an interceptor that ran from one that silently did not"
     }
   ],
   "fixtureLeg": {
@@ -199,14 +218,15 @@
     "A control-plane-absent lane as a distinct scenario. No control plane is configured anywhere in this repository, so every lane above already runs without one; that is an absence rather than a probe, and it is recorded as such rather than claimed as coverage.",
     "Native subagent delegation inside a qualified session. The product neither supervises nor observes it by design; what the packed leg proves is that no agent process was launched at all.",
     "The production interactive confirmation channel and the OS-native assertion source. The packed leg runs the confirmation-fixture profile and the qualification-fixture assertion source, which the installer production-rejects — that rejection is itself one of the probes above.",
-    "Windows packing and installation. The packed leg ran on the macOS platform recorded above and again on ubuntu-latest as a release-workflow step, resolving the same generation digest on both; no claim is made about Windows."
+    "Windows packing and installation. The packed leg ran on the macOS platform recorded above; the Linux leg's status for this candidate is stated in crossPlatform rather than asserted here. No claim is made about Windows."
   ],
   "knownLimitations": [
-    "The facade computes its model-external hook command from a path relative to the kernel module, which resolves inside a source checkout and does not resolve inside an installed generation root. Observed, not inferred: the packed composition stages the harness packages and three root files and no node_modules, so the tsx binary that command names is absent from the generation. The packed leg never launches a host session, so it never executes that command and both deliveries complete regardless; a LIVE host lane driven from a packed install would need that path resolved first. Recorded here rather than repaired, because repairing it belongs to the host-integration module and not to a qualification record.",
     "The two disposable repositories are driven by one process in sequence, so the lane proves that one release serves two policies and not that two installations serve them concurrently.",
     "The no-agent-process evidence is scoped to processes routed through the injected exec port. Every record-storage and candidate-capture git call on the delivery path is so routed, which is what makes the claim meaningful; but candidate.ts, records.ts, substrate/assertion-source.ts and substrate/preflight.ts import node:child_process directly, so a runtime launched from one of those would not appear in the inventory. The deny predicate also matches on the executable basename and the first argument, so `git -C <dir> worktree add` or a runtime launched as `node <path>` would not be classified — the current product does neither. This is a port-routed observation, not a process-table sweep.",
     "Each disposable repository's tracked harness.config.ts resolves defineHarnessConfig from the npm-tarball tree rather than the generation root, so the config object crossing into the generation-root facade is minted by a second kernel module instance. That is the adopter's real shape — an adopter installs the package and imports it from node_modules — but it means the config-construction half of the product is exercised only through the tarball.",
     "The product half of 'packed artifacts only' is a composition generation packed from the source checkout and imported by a checkout-shaped path inside the generation root. The kernel's npm `exports` map and `files` list are therefore exercised for the INSTALLER half but not for the product half; `sensor:standalone` is what covers those for every package, and this lane does not duplicate it.",
-    "Two judgements inside the heavy lane are not extracted and so are not falsifiable by the fast suite: the three-generations-distinct check in the lifecycle step, and the internals of the outcome-only scoping turn. Both are reachable only from a full `npm run qualify:product` run, which is the pre-existing posture for everything inside driveRepository; the checked-in record — zero findings, with beta recorded under intakeMode outcome-only — is the evidence that they ran."
+    "Several judgements inside the heavy lane are not extracted and so are not falsifiable by the fast suite: the three-generations-distinct check in the lifecycle step, the internals of the outcome-only scoping turn, and the emitted-hook-command wrapper — reading the composed settings file, slicing the host's appended arguments off the vector, executing it, and the bind probe's control half. The RULE the wrapper feeds is extracted and falsified in both directions; its wiring is not. All of them are reachable only from a full `npm run qualify:product` run, which is the pre-existing posture for everything inside driveRepository; the checked-in record — zero findings, with beta recorded under intakeMode outcome-only and seven negative probes satisfied — is the evidence that they ran. Deliberately not counted: a numeral here is the part nobody checks.",
+    "The packed leg proves the emitted hook command runs the staged interceptor and denies an unattested session. It does not run a LIVE host session: no host process reads the composed settings file and invokes the command through its own hook machinery, so what is established is that the command an installed generation emits is executable and refuses, not that this host's hook plumbing invokes it as written.",
+    "The facade's own `hook_entry_missing` refusal is unexercised. Every guarded operation reloads the delivery's pinned generation and re-verifies its digest closure, so a generation missing the staged hook entry is already refused as `trust_ineligible` — which is what the bind probe pins, because it is what fires. The hook-entry branch keeps the resolution total for a race after that verification, and no sensor here reaches it."
   ]
 }

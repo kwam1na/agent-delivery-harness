@@ -322,7 +322,7 @@ export async function packComposition(input: PackCompositionInput): Promise<Pack
 
 // ── Closure verification ───────────────────────────────────────────────────
 
-interface VerifiedClosure {
+export interface VerifiedClosure {
   readonly ok: true;
   readonly generationDigest: string;
   readonly manifest: Record<string, unknown>;

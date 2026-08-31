@@ -63,7 +63,8 @@
  * falsifies its rules cheaply on every leg.
  */
 import { execFileSync, type StdioOptions } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -80,6 +81,7 @@ export type QualificationRule =
   | "no-agent-process"
   | "negative-probe"
   | "lifecycle"
+  | "packed-surface"
   | "anti-vacuity";
 
 export interface QualificationFinding {
@@ -141,6 +143,8 @@ export const REQUIRED_NEGATIVE_PROBES: readonly string[] = Object.freeze([
   "qualification-flag-refused-on-production",
   "revoked-generation-fences-live-work",
   "revoked-rollback-target-rejected",
+  "closure-detects-missing-staged-hook-entry",
+  "bind-refuses-generation-missing-staged-hook-entry",
 ]);
 
 /** The composition-lifecycle transitions the release claim rests on. */
@@ -234,6 +238,162 @@ export function refusalOutcome(
     };
   }
   return { satisfied: true };
+}
+
+// ── The packed surface: what an installed copy can reach, and what it names ──
+//
+// These two rules exist because every OTHER sensor in this repository reaches
+// the product by importing it out of `packages/`. That import sees the whole
+// source tree, so it cannot distinguish a module the package publishes from a
+// module the package merely contains, nor a path that exists in a checkout
+// from a path a composition stages. Both distinctions are invisible from
+// source by construction, and both are exactly what an adopter hits first.
+
+/**
+ * The names an installed copy must be able to reach through the package's
+ * single `exports` entry.
+ *
+ * Deliberately narrow. Every name here is a published commitment, so this set
+ * carries what an adopter cannot do without and nothing kept for symmetry:
+ * `verifyGenerationClosure` is the audit of an installation the adopter did
+ * NOT pack — the one question a consumer of a digest-addressed generation root
+ * has that the primitives around it cannot answer, since re-deriving closure
+ * by hand means re-implementing the rule the installer already owns.
+ */
+export const REQUIRED_PUBLISHED_NAMES: readonly string[] = Object.freeze(["verifyGenerationClosure"]);
+
+/**
+ * Where the composition must stage the model-external hook entry, spelled
+ * INDEPENDENTLY of the product rather than imported from it.
+ *
+ * This lane may not import the product, so the alternative would be to read
+ * the path back out of the emitted command — which would make the check
+ * circular: whatever the facade emitted would be, by definition, what the lane
+ * expected. Declaring it here means a product that relocates the entry has to
+ * come past this file.
+ */
+export const GENERATION_HOOK_ENTRY = "harness/packages/kernel/src/host/hook-main.ts";
+
+/**
+ * WHAT THE PACKAGE ACTUALLY PUBLISHES, DECIDED.
+ *
+ * THE ABSENCE-ASSERTION TRAP, HEAD ON. "every required name is reachable" is
+ * satisfied for free by an empty required set, and equally by an enumeration
+ * that resolved nothing — a failed resolve returning `{}` would make this rule
+ * silent about a package that publishes literally nothing. Both enumerating
+ * mechanisms are therefore pinned, in the two places that can actually
+ * falsify them: the resolved set is a finding here, above the membership loop,
+ * and the required set — a frozen constant no call site can empty — is pinned
+ * by a test over the constant itself. A finding for the constant would be a
+ * branch with no reachable input, which is the shape this comment exists to
+ * refuse.
+ */
+export function publishedSurfaceFindings(exportedNames: readonly string[]): readonly QualificationFinding[] {
+  const findings: QualificationFinding[] = [];
+  if (exportedNames.length === 0) {
+    findings.push({
+      rule: "packed-surface",
+      subject: "published-exports",
+      message:
+        "resolving the package through its `exports` map yielded no exported name at all; a membership check over an empty surface says nothing about what an adopter can reach",
+    });
+  }
+  for (const name of REQUIRED_PUBLISHED_NAMES) {
+    if (exportedNames.includes(name)) continue;
+    findings.push({
+      rule: "packed-surface",
+      subject: name,
+      message: `${name} is not reachable through the package's \`exports\` entry, so an adopter installing the published package cannot invoke it; the module exists in the source tree, which is why every source-importing suite sees it`,
+    });
+  }
+  return findings;
+}
+
+export interface HookCommandInput {
+  /** The runtime-and-entry vector the facade emitted, before the host's own arguments. */
+  readonly command: readonly string[];
+  /** The installed, digest-addressed generation root the command has to resolve against. */
+  readonly generationRoot: string;
+  /** Generation-relative paths the composition manifest actually stages. */
+  readonly stagedRelativePaths: readonly string[];
+  /** The Node executable the lane is running on — the only runtime an installed generation has. */
+  readonly nodeExecutable: string;
+}
+
+/**
+ * WHETHER THE EMITTED HOOK COMMAND NAMES SOMETHING THAT IS THERE.
+ *
+ * TWO HALVES, BOTH REQUIRED, NEITHER SUFFICIENT. A rule that only read the
+ * command string would pass a command naming a perfectly plausible path that
+ * the composition never staged — which is the defect this exists for. A rule
+ * that only checked the staged inventory would pass a generation staging the
+ * entry while the command pointed somewhere else entirely. So the command's
+ * own members are resolved AGAINST the inventory: the launcher must be the
+ * Node executable (a composition stages no `node_modules`, so a dependency
+ * binary is a path that cannot exist), and every path member must be inside
+ * the generation root AND a member of the manifest's staged set.
+ *
+ * The enumerating mechanisms are pinned too: an empty command names nothing
+ * and an empty staged set is not an installed generation, and either one would
+ * leave the loop below quantifying over nothing.
+ */
+export function hookCommandFindings(input: HookCommandInput): readonly QualificationFinding[] {
+  const findings: QualificationFinding[] = [];
+  if (input.command.length === 0) {
+    findings.push({
+      rule: "packed-surface",
+      subject: "hook-command",
+      message: "the facade emitted an empty hook command; a command that names nothing satisfies every path assertion below for free",
+    });
+    return findings;
+  }
+  if (input.stagedRelativePaths.length === 0) {
+    findings.push({
+      rule: "packed-surface",
+      subject: "staged-inventory",
+      message: "the installed generation stages no files at all, so 'the command names a staged path' is a claim about an empty set",
+    });
+  }
+  const staged = new Set(input.stagedRelativePaths);
+
+  // THE LAUNCHER. Named separately from the path members because it fails
+  // differently: `node_modules/.bin/tsx` is both the wrong runtime AND an
+  // unstaged path, and a fix that staged it would still be wrong — this
+  // repository ships zero runtime dependencies.
+  if (input.command[0] !== input.nodeExecutable) {
+    findings.push({
+      rule: "packed-surface",
+      subject: "hook-runtime",
+      message: `the hook command launches ${input.command[0]} rather than the running Node executable ${input.nodeExecutable}; an installed generation stages no node_modules, so a runtime resolved from a checkout layout names a binary the adopter does not have`,
+    });
+  }
+
+  const pathMembers = input.command.slice(1).filter((member) => path.isAbsolute(member));
+  if (pathMembers.length === 0) {
+    findings.push({
+      rule: "packed-surface",
+      subject: "hook-entry",
+      message: "the hook command names no absolute path, so it identifies no entry for the containment and staging checks below to resolve",
+    });
+  }
+  for (const member of pathMembers) {
+    if (!isInside(member, input.generationRoot)) {
+      findings.push({
+        rule: "packed-surface",
+        subject: "hook-entry",
+        message: `the hook command names ${member}, which is outside the installed generation root ${input.generationRoot}; an installed session would run a path belonging to some other tree`,
+      });
+      continue;
+    }
+    const relative = path.relative(input.generationRoot, member).split(path.sep).join("/");
+    if (staged.has(relative)) continue;
+    findings.push({
+      rule: "packed-surface",
+      subject: "hook-entry",
+      message: `the hook command names ${relative}, which the composition manifest does not stage; the command resolves in a source checkout and names nothing in an installed generation`,
+    });
+  }
+  return findings;
 }
 
 export interface PolicyIndependenceInput {
@@ -713,8 +873,17 @@ export async function runProductQualification(input: QualificationInput): Promis
     if (installTree === undefined) return finish();
 
     // The INSTALLER comes from the tarball tree — the operator-facing surface.
-    const installerModule = path.join(installTree, "node_modules", "@agent-delivery-harness", "kernel", "src", "index.ts");
+    //
+    // Resolved through the package's own `exports` map rather than by joining
+    // a path into its `src/`, because those are different surfaces and only
+    // one of them is published. Reaching into `src/` would load a module the
+    // package may not export at all, and the lane would then be qualifying a
+    // layout instead of a package.
+    const installerModule = createRequire(path.join(installTree, "resolve-from-here.cjs")).resolve(
+      "@agent-delivery-harness/kernel",
+    );
     const installer = (await import(pathToFileURL(installerModule).href)) as Record<string, any>;
+    findings.push(...publishedSurfaceFindings(Object.keys(installer)));
 
     // ── 2. Pack and install a composition generation ─────────────────────────
     const fixtures = path.join(input.sourceRoot, "qualifications", "fixtures");
@@ -780,12 +949,37 @@ export async function runProductQualification(input: QualificationInput): Promis
     // bytes re-hash to the inventory's recorded digest. A generation root
     // edited after installation fails that; a tautology would not.
     //
-    // The closure is re-derived here through the PUBLISHED surface only. The
-    // installer's own internal closure verifier is not exported from the
-    // package's single entry point, and reaching around the `exports` map for
-    // it would be exactly the source-shaped dependency this lane exists to
-    // avoid — so the three published primitives are used instead, which is
-    // what an adopter auditing an installation actually has.
+    // ── THE CLOSURE AUDIT, RUN FROM THE INSTALLED PACKAGE ────────────────────
+    //
+    // `installer` here is the module the tarball tree's `exports` map resolves
+    // to, so this call is the adopter's call: it proves the verifier is
+    // INVOCABLE from an installed copy, not merely present in a checkout. A
+    // named export that resolves to `undefined` is the shape this catches —
+    // the name check above sees a key, and only a call sees a function.
+    const closure = installer["verifyGenerationClosure"];
+    if (typeof closure !== "function") {
+      findings.push({
+        rule: "packed-surface",
+        subject: "verifyGenerationClosure",
+        message: "the name resolved through `exports` is not callable, so an installed copy cannot audit its own generation",
+      });
+    } else {
+      const verified = await closure(generationRoot, generationDigest);
+      if (verified?.ok !== true) {
+        findings.push({
+          rule: "packed-surface",
+          subject: "verifyGenerationClosure",
+          message: `the published closure verifier refused the generation it was just handed: ${JSON.stringify(verified)}`,
+        });
+      } else {
+        log(`published closure verifier accepted generation ${verified.generationDigest}`);
+      }
+    }
+
+    // The membership binding below is kept alongside it: closure says the root
+    // is internally consistent, and this says the ENTRY THIS LANE IMPORTED is
+    // one of its bound members — a different claim, and the one that makes
+    // "packed artifacts only" about the bytes that ran.
     const manifestPath = path.join(generationRoot, installer["COMPOSITION_MANIFEST_FILE"]);
     const manifestBytes = readFileSync(manifestPath, "utf8");
     if (installer["generationDigestOf"](manifestBytes) !== generationDigest) {
@@ -812,6 +1006,9 @@ export async function runProductQualification(input: QualificationInput): Promis
       });
     }
 
+    /** What the composition actually staged — the set every emitted path is resolved against. */
+    const stagedRelativePaths: readonly string[] = (manifest.inventory ?? []).map((item) => item.path);
+
     // ── 4. Drive both disposable repositories to merge-ready ─────────────────
     const installedKernelDir = path.join(installTree, "node_modules", "@agent-delivery-harness", "kernel");
     for (const spec of DISPOSABLE_SPECS) {
@@ -822,6 +1019,8 @@ export async function runProductQualification(input: QualificationInput): Promis
         installationPath,
         receiptDir,
         kernelDir: installedKernelDir,
+        generationRoot,
+        stagedRelativePaths,
         findings,
         processInventory: (perRepositoryProcessInventory[spec.repositoryId] ??= new Set<string>()),
         log,
@@ -842,6 +1041,8 @@ export async function runProductQualification(input: QualificationInput): Promis
       installationPath,
       receiptDir,
       kernelDir: installedKernelDir,
+      generationRoot,
+      generationDigest,
       findings,
       satisfied: negativeProbesSatisfied,
       log,
@@ -934,6 +1135,105 @@ async function installPackedPackages(
 
 // ── Step 4: one repository, handoff to merge-ready ───────────────────────────
 
+/**
+ * The host's own arguments, appended to the facade's runtime-and-entry vector
+ * when the session settings are composed: subcommand, state path, fence.
+ */
+const HOST_APPENDED_HOOK_ARGS = 3;
+
+/** One spelling of a path, or the member unchanged when it names nothing on disk. */
+const realpathOrSelf = (member: string): string => {
+  try {
+    return realpathSync(member);
+  } catch {
+    return member;
+  }
+};
+
+/** The JSON-quoted members of a composed hook command line, back as a vector. */
+export function parseHookCommandLine(line: string): readonly string[] {
+  return (line.match(/"(?:[^"\\]|\\.)*"/g) ?? []).map((token) => JSON.parse(token) as string);
+}
+
+interface EmittedHookInput {
+  readonly settingsPath: string;
+  readonly generationRoot: string;
+  readonly stagedRelativePaths: readonly string[];
+  readonly subject: string;
+  readonly findings: QualificationFinding[];
+  readonly log: (line: string) => void;
+}
+
+/**
+ * THE EMITTED HOOK COMMAND, CHECKED AND THEN RUN.
+ *
+ * Checking is not enough on its own and running is not enough on its own. A
+ * command can name a staged path and still fail to start, and a command can
+ * start under a runtime this lane happens to have while naming a path no
+ * installed generation carries. So the vector is decided by the pure rule
+ * first, and then EXECUTED against the installed generation with a state path
+ * that does not exist — deny-until-attested, so the interceptor's own refusal
+ * on stdout is proof the staged entry ran rather than proof of a decision.
+ */
+function checkEmittedHookCommand(input: EmittedHookInput): void {
+  const settings = JSON.parse(readFileSync(input.settingsPath, "utf8")) as {
+    hooks?: { PreToolUse?: { hooks?: { command?: string }[] }[] };
+  };
+  const line = settings.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command;
+  if (line === undefined) {
+    input.findings.push({
+      rule: "packed-surface",
+      subject: input.subject,
+      message: `the composed session settings at ${input.settingsPath} carry no PreToolUse hook command, so there is no emitted command to resolve`,
+    });
+    return;
+  }
+  const parsed = parseHookCommandLine(line);
+  const command = parsed.slice(0, Math.max(0, parsed.length - HOST_APPENDED_HOOK_ARGS));
+  input.findings.push(
+    ...hookCommandFindings({
+      // Both sides resolved through the real filesystem before they are
+      // compared. A containment rule fed one spelling of a directory and a
+      // symlinked spelling of the same directory reports a defect that is not
+      // there — and on this platform's temp root, that is the DEFAULT
+      // spelling, so an unresolved comparison would be red for a reason that
+      // has nothing to do with the packed surface.
+      command: command.map(realpathOrSelf),
+      generationRoot: realpathOrSelf(input.generationRoot),
+      stagedRelativePaths: input.stagedRelativePaths,
+      nodeExecutable: realpathOrSelf(process.execPath),
+    }).map((finding) => ({ ...finding, subject: `${input.subject}/${finding.subject}` })),
+  );
+  if (command.length === 0) return;
+
+  const absentState = path.join(path.dirname(input.settingsPath), "no-such-binding-state.json");
+  let stdout: string;
+  try {
+    stdout = execFileSync(command[0]!, [...command.slice(1), "pre-tool-use", absentState, "1"], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: {} }),
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: STEP_TIMEOUT_MS,
+    });
+  } catch (error) {
+    input.findings.push({
+      rule: "packed-surface",
+      subject: `${input.subject}/hook-execution`,
+      message: `the emitted hook command did not run against the installed generation: ${String((error as { stderr?: unknown })?.stderr ?? error)}`,
+    });
+    return;
+  }
+  if (!stdout.includes(`"permissionDecision":"deny"`)) {
+    input.findings.push({
+      rule: "packed-surface",
+      subject: `${input.subject}/hook-execution`,
+      message: `the emitted hook command ran but produced no deny decision for an unattested session: ${JSON.stringify(stdout)}`,
+    });
+    return;
+  }
+  input.log(`${input.subject}: the emitted hook command ran from the installed generation and denied`);
+}
+
 interface DriveInput {
   readonly spec: DisposableSpec;
   readonly scratch: string;
@@ -941,6 +1241,10 @@ interface DriveInput {
   readonly installationPath: string;
   readonly receiptDir: string;
   readonly kernelDir: string;
+  /** The installed generation root the bound session's hook command must resolve against. */
+  readonly generationRoot: string;
+  /** Generation-relative paths the composition manifest stages, for that resolution. */
+  readonly stagedRelativePaths: readonly string[];
   readonly findings: QualificationFinding[];
   readonly processInventory: Set<string>;
   readonly log: (line: string) => void;
@@ -1069,6 +1373,23 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
   });
   if (bound.ok !== true) return fail("bindWorkspace", bound);
   const fence: number = bound.fence;
+
+  // ── The session's model-external hook command, as an installed generation
+  //    would actually run it ──
+  //
+  // Read back off the composed settings file rather than from the facade's
+  // return value: the settings file is what the host reads, so a command that
+  // is correct in memory and wrong on disk is still wrong. The host appends
+  // its own three arguments, so the RUNTIME-AND-ENTRY prefix is what the
+  // staging rule resolves.
+  checkEmittedHookCommand({
+    settingsPath: bound.settingsPath,
+    generationRoot: input.generationRoot,
+    stagedRelativePaths: input.stagedRelativePaths,
+    subject: spec.repositoryId,
+    findings: input.findings,
+    log: input.log,
+  });
 
   const stageBytes = (stageId: string, outputKind: string, candidate?: string): string =>
     JSON.stringify({
@@ -1209,9 +1530,97 @@ interface NegativeInput {
   readonly installationPath: string;
   readonly receiptDir: string;
   readonly kernelDir: string;
+  readonly generationRoot: string;
+  readonly generationDigest: string;
   readonly findings: QualificationFinding[];
   readonly satisfied: string[];
   readonly log: (line: string) => void;
+}
+
+/**
+ * THE LOUD FAILURE, PROVEN LOUD. An installation whose generation root has
+ * lost the staged hook entry refuses to bind a workspace instead of composing
+ * a session around a command that names nothing.
+ *
+ * The ALLOW side is inside the probe rather than assumed from elsewhere: the
+ * SAME installation registers the delivery successfully while the entry is
+ * still there, so the refusal cannot be explained by an installation that
+ * refuses everything.
+ */
+async function probeBindRefusesMissingHookEntry(
+  input: NegativeInput,
+  expectRefusal: (probe: string, result: unknown, expectedCode: string) => boolean,
+): Promise<void> {
+  const probe = "bind-refuses-generation-missing-staged-hook-entry";
+  const fail = (message: string): void => {
+    input.findings.push({ rule: "packed-surface", subject: probe, message });
+  };
+
+  const packed = await input.pack(1, "confirmation-fixture", "missing-hook-entry");
+  if (packed.ok !== true) return fail(`the probe could not pack its own composition: ${JSON.stringify(packed)}`);
+
+  const installationPath = path.join(input.scratch, "installation-missing-hook-entry");
+  const receiptDir = path.join(input.scratch, "user-config-missing-hook-entry");
+  const spec: DisposableSpec = {
+    ...DISPOSABLE_SPECS[0]!,
+    repositoryId: "disposable-missing-hook-entry",
+    contractId: "contract-missing-hook-entry",
+  };
+  const installed = await input.installer["installComposition"]({
+    packedDir: packed.packedDir,
+    installationPath,
+    receiptDir,
+    qualification: { disposableRepositoryIds: [spec.repositoryId] },
+    assertionProvider: { sourceKind: "qualification-fixture" },
+  });
+  if (installed.ok !== true) return fail(`the probe could not install its own generation: ${JSON.stringify(installed)}`);
+
+  const repoDir = path.join(input.scratch, "repo-missing-hook-entry");
+  buildDisposableRepository(repoDir, spec, input.kernelDir);
+  const config = await import(pathToFileURL(path.join(repoDir, "harness.config.ts")).href);
+  const facade = input.product["createManagedDeliveryFacade"]({
+    repoDir,
+    config: config.default,
+    installation: { installationPath, receiptDir },
+    hostVersion: HOST_VERSION,
+  });
+
+  // THE CONTROL, taken while the generation is still intact.
+  const presented = await facade.presentContract({ contract: acceptedContract(spec), expiry: EXPIRY });
+  if (presented.ok !== true) return fail(`the control half failed at presentation: ${JSON.stringify(presented)}`);
+  const pending = JSON.parse(readFileSync(presented.channelPath, "utf8")) as { rendered: { challenge: unknown; channelId: unknown } };
+  const confirmed = await facade.confirmContract({
+    intakeId: presented.intakeId,
+    echo: {
+      presentedChallenge: pending.rendered.challenge,
+      presentedOnChannelId: pending.rendered.channelId,
+      observedAt: NOW,
+      viaModelVisibleSurface: false,
+      interactive: true,
+    },
+  });
+  if (confirmed.ok !== true) {
+    return fail(`the control half failed: the delivery could not register against an intact generation: ${JSON.stringify(confirmed)}`);
+  }
+
+  const stagedEntry = path.join(installed.root, ...GENERATION_HOOK_ENTRY.split("/"));
+  if (!existsSync(stagedEntry)) return fail(`the installed generation stages no ${GENERATION_HOOK_ENTRY} for this probe to remove`);
+  chmodSync(path.dirname(stagedEntry), 0o700);
+  rmSync(stagedEntry, { force: true });
+
+  const worktree = path.join(input.scratch, "worktree-missing-hook-entry");
+  git(repoDir, "worktree", "add", "--quiet", "-b", "delivery", worktree, "main");
+  expectRefusal(
+    probe,
+    await facade.bindWorkspace({
+      deliveryId: confirmed.deliveryId,
+      worktreeDir: worktree,
+      hostTaskId: "host-task-missing-hook-entry",
+      observedAt: NOW,
+      attestationExpiry: EXPIRY,
+    }),
+    "trust_ineligible",
+  );
 }
 
 async function runNegativeProbes(input: NegativeInput): Promise<void> {
@@ -1248,6 +1657,67 @@ async function runNegativeProbes(input: NegativeInput): Promise<void> {
     await strangerFacade.presentContract({ contract: acceptedContract(strangerSpec), expiry: EXPIRY }),
     "disposable_repository_refused",
   );
+
+  // ── A generation missing the staged hook entry is REFUSED, not silently
+  //    wired to a command that names nothing ──
+  //
+  // The ALLOW side is the two deliveries above: both bound a session against
+  // this same generation and both ran the emitted command, so this refusal
+  // cannot be explained by a verifier that refuses every root. The copy is
+  // mutilated rather than the installation, because the installed generation
+  // is the thing the deliveries are still using.
+  const publishedClosure = installer["verifyGenerationClosure"];
+  const mutilated = path.join(input.scratch, "generation-missing-hook-entry");
+  cpSync(input.generationRoot, mutilated, { recursive: true });
+  const stagedHookEntry = path.join(mutilated, ...GENERATION_HOOK_ENTRY.split("/"));
+  if (typeof publishedClosure !== "function") {
+    // The refusal this probe requires is only available to an adopter if the
+    // package publishes the verifier. An unreachable verifier does not make
+    // this probe pass quietly; it makes it a finding.
+    findings.push({
+      rule: "packed-surface",
+      subject: "closure-detects-missing-staged-hook-entry",
+      message:
+        "the installed package publishes no callable closure verifier, so nothing an adopter can reach refuses a generation missing the staged hook entry",
+    });
+  } else if (!existsSync(stagedHookEntry)) {
+    findings.push({
+      rule: "packed-surface",
+      subject: "closure-detects-missing-staged-hook-entry",
+      message: `the composition does not stage ${GENERATION_HOOK_ENTRY}, so the probe cannot remove it; the emitted hook command has nothing to resolve against`,
+    });
+  } else {
+    // The generation root is installed read-only, and the copy inherits that.
+    // Only the copy is relaxed, and only enough to remove one file.
+    chmodSync(path.dirname(stagedHookEntry), 0o700);
+    rmSync(stagedHookEntry, { force: true });
+    expectRefusal(
+      "closure-detects-missing-staged-hook-entry",
+      await publishedClosure(mutilated, input.generationDigest),
+      "closure_digest_mismatch",
+    );
+  }
+
+  // ── Binding a workspace REFUSES a generation missing the staged entry ──
+  //
+  // The half above says a broken generation is DETECTABLE by an adopter. This
+  // one says the PRODUCT refuses to proceed on one: the interceptor is the
+  // deny-until-attested boundary, and a session composed around a command that
+  // names nothing would be admitted with no admission recheck at all. That
+  // failure would be silent, so it is proven to be loud.
+  //
+  // The refusal it requires is the PINNED-GENERATION TRUST CHECK, not a
+  // dedicated hook-entry code: every guarded operation reloads the delivery's
+  // pinned generation and re-verifies its digest closure, and a root missing
+  // one staged file fails that before any command is composed. The expected code is pinned rather than
+  // "any refusal" for the usual reason — a refusal for some other reason is
+  // not this probe's evidence.
+  //
+  // Its own installation, corrupted AFTER install: install-time closure
+  // verification would refuse a mutilated PACKED directory long before any
+  // facade saw it, so a probe that mutilated the pack would re-prove the
+  // installer's rule rather than this one.
+  await probeBindRefusesMissingHookEntry(input, expectRefusal);
 
   // ── A fixture manifest cannot activate without the operator's flag ──
   expectRefusal(

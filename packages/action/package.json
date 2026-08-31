@@ -5,7 +5,7 @@
   "description": "GitHub Action verifying a tracked delivery record on pull requests",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.6.0"
   },
   "dependencies": {
     "@agent-delivery-harness/kernel": "0.1.0"

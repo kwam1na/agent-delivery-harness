@@ -564,6 +564,11 @@ export {
   registrationBinding,
   resolveActiveGeneration,
   trustStorePathFor,
+  // The closure audit an adopter runs against an installation they did not
+  // pack. It is reachable HERE because this entry is the package's only
+  // published one: a verifier the installer offers and the package does not
+  // export is a verifier no installed copy can call.
+  verifyGenerationClosure,
   type InstallCompositionInput,
   type InstallCompositionResult,
   type InstallReceipt,
@@ -578,6 +583,7 @@ export {
   type SubstrateBlockerCode,
   type SubstrateFailure,
   type TrustCheckInput,
+  type VerifiedClosure,
 } from "./substrate/installer.ts";
 export {
   ASSERTION_CLASSES,
@@ -623,7 +629,7 @@ export {
   type UpdateCompositionResult,
 } from "./substrate/lifecycle.ts";
 export {
-  MINIMUM_NODE_MAJOR,
+  MINIMUM_NODE,
   MINIMUM_PYTHON,
   SUPPORTED_PLATFORMS,
   livePreflightProbes,

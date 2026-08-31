@@ -1,6 +1,6 @@
 /**
  * Activation preflights: run before the active generation switches, on first
- * install and on every update. The product declares Node >=22 and Python
+ * install and on every update. The product declares Node >=22.6 and Python
  * >=3.11 as preflighted platform prerequisites rather than pretending to be a
  * hermetic single binary; platform support, an interactive assertion-source
  * context, and license/provenance presence are prerequisites of the same
@@ -14,7 +14,15 @@ import type { AssertionSourcePort } from "./assertion-source.ts";
 import { PINNED_AGENT_SKILLS } from "../spine/composition.ts";
 
 export const SUPPORTED_PLATFORMS = Object.freeze(["darwin", "linux", "win32"] as const);
-export const MINIMUM_NODE_MAJOR = 22;
+/**
+ * MAJOR AND MINOR, because the minor is load-bearing. The managed facade emits
+ * a hook command carrying `--experimental-strip-types`, which Node rejects
+ * outright before 22.6: the interceptor would not start, and a
+ * deny-until-attested boundary that does not start fails OPEN. `engines` is
+ * advisory — npm only warns — so this preflight is where the floor is actually
+ * enforced, and it has to be the floor the emitted command needs.
+ */
+export const MINIMUM_NODE = [22, 6] as const;
 export const MINIMUM_PYTHON = [3, 11] as const;
 
 export interface PreflightProbes {
@@ -56,11 +64,11 @@ const parseVersion = (value: string): number[] =>
 
 export function checkRuntimePreflight(probes: PreflightProbes): PreflightFailure[] {
   const failures: PreflightFailure[] = [];
-  const nodeMajor = parseVersion(probes.nodeVersion)[0] ?? 0;
-  if (nodeMajor < MINIMUM_NODE_MAJOR) {
+  const [nodeMajor = 0, nodeMinor = 0] = parseVersion(probes.nodeVersion);
+  if (nodeMajor < MINIMUM_NODE[0] || (nodeMajor === MINIMUM_NODE[0] && nodeMinor < MINIMUM_NODE[1])) {
     failures.push({
       requirement: "node",
-      message: `Node ${probes.nodeVersion} is below the preflighted prerequisite >=${MINIMUM_NODE_MAJOR}`,
+      message: `Node ${probes.nodeVersion} is below the preflighted prerequisite >=${MINIMUM_NODE.join(".")}`,
     });
   }
   if (probes.pythonVersion === undefined) {
