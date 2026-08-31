@@ -190,6 +190,8 @@ export const INTERVENTION_REPORTING = Object.freeze({
     "Still tracked separately and still counted into neither figure. A product that blocks correctly must not improve its own score by asking the operator to press a key.",
   howItBecomesGatingAgain:
     "Re-record the baseline under a rubric wide enough to have headroom — which is what its own reRecordTriggers anticipate — and restore the comparison against the re-recorded figure.",
+  supersedes:
+    "The gate record's gateMetrics still reads 'medianOperatorInterventionsAfterAcceptance: must be strictly lower than the baseline's'. That line is superseded by this block and is applied by nothing: the scorer's only gating criterion is blockedVersusProgressingShare. The record lives under .agents, a protected path in every checkpoint grant, so no session may edit it; correcting the line is an operator act.",
 });
 
 /**
