@@ -1,0 +1,429 @@
+{
+  "schemaVersion": "delivery-harness-pre-cutover-oracle/1",
+  "frozen": true,
+  "capturedAt": "2026-08-31",
+  "comparisonAuthority": "npm run check plus the delivery-harness gate loop (prepare, review-context, submit-evidence, gate, record, verify) and the hosted checks in .github/workflows",
+  "description": "Immutable pre-cutover truth for this repository's own policy projection: the phase order, per-candidate-class activation, and blocker vocabulary of the unchanged delivery authority, captured before any managed-policy comparison. scripts/policy-projection-check.ts pins this file's digest, so recharacterizing the pre-cutover truth is a deliberate two-place edit rather than a quiet drift.",
+  "selfApplication": {
+    "position": "This repository's policy governs deliveries into the repository that implements the policy compiler. The direction of authority is: the compiled policy that judges a delivery is the trusted pre-run copy bound at policy-bind time, and the compiler bytes that produced it are the pinned composition generation the product was installed from — never the candidate worktree. A candidate edit to .agents/policy/, to delivery/personas/, or to packages/kernel/src/policy/ is therefore a proposal for a future owner-approved policy generation.",
+    "enforcedBy": [
+      "packages/kernel/src/policy/compile.ts checkBoundPolicy - only the exact bytes whose digest was bound judge this delivery",
+      "packages/kernel/src/facade/managed-delivery.ts - reviewer charters and the trusted sensor are read from the base ref, not the candidate tree",
+      "packages/kernel/src/substrate/installer.ts - the composition generation root is digest-addressed and installed read-only outside the repository"
+    ],
+    "sensorPosture": "scripts/policy-projection-check.ts deliberately compiles through the CANDIDATE tree's compiler. It is a read-only comparison sensor, not delivery authority: recompiling in-tree is what makes a compiler change that alters this repository's compiled policy visible as a two-place edit instead of silent drift."
+  },
+  "phaseVector": {
+    "aggregateEntrypoints": ["check", "release-checks-workflow"],
+    "orderedPhases": [
+      { "phase": "prepare", "command": "delivery-harness prepare" },
+      { "phase": "review-context", "command": "delivery-harness review-context" },
+      { "phase": "submit-evidence", "command": "delivery-harness submit-evidence" },
+      { "phase": "gate", "command": "delivery-harness gate" },
+      { "phase": "record", "command": "delivery-harness record" },
+      { "phase": "verify", "command": "delivery-harness verify" }
+    ],
+    "standaloneCommands": ["check", "managed", "maintain"],
+    "checkSuiteConstituents": ["typecheck", "sensor", "sensor:cli", "test"],
+    "recordWrittenOnlyAfterGate": true
+  },
+  "activationVector": {
+    "gateId": "delivery-harness.pr-admission",
+    "authoritativeGateSetInvariant": "Every candidate class runs the identical ordered delivery-loop phases and the identical always-active sensor set; activation varies only in the release-surface sensors that the release-checks workflow's path filters select.",
+    "obligations": {
+      "review.green": {
+        "activation": "relevant_change",
+        "activationThreshold": 1,
+        "freshness": "exact_candidate",
+        "providerPolicy": "all",
+        "providers": ["claude-code.ce-code-review"],
+        "acceptedPayloadSpecs": ["review.green/1"],
+        "minimumAttestationLevel": "self",
+        "humanWaiverAllowed": true,
+        "ciDelegation": [],
+        "waivableCodes": [
+          "review_evidence_missing",
+          "stale_evidence",
+          "evidence_not_green",
+          "unresolved_actionable_findings"
+        ],
+        "nonWaivableCodes": [
+          "ambiguous_records",
+          "malformed_record",
+          "unknown_provider",
+          "live_provider_missing",
+          "ambiguous_live_provider",
+          "live_provider_failed",
+          "resolution_not_allowed"
+        ]
+      }
+    },
+    "sensorActivationClasses": {
+      "alwaysActive": [
+        "sensor.typecheck",
+        "sensor.import-boundaries",
+        "sensor.cli-inventory",
+        "sensor.test-suite",
+        "sensor.conformance-kit",
+        "sensor.delivery-record-gate"
+      ],
+      "releaseSurfaceActivated": ["sensor.release-checks", "sensor.standalone-install"],
+      "operatorInvoked": ["sensor.provider-rail-qualification"]
+    },
+    "releaseSurfacePathFilterSource": ".github/workflows/release.yml",
+    "activationProbes": {
+      "docs-only-change": ["docs/getting-started.md"],
+      "sensor-script-change": ["scripts/check-import-boundaries.ts"],
+      "release-sensor-change": ["scripts/check-release.ts"],
+      "kernel-source-change": ["packages/kernel/src/policy/compile.ts"],
+      "conformance-vector-change": ["packages/conformance/vectors/kit.json"],
+      "workflow-change": [".github/workflows/ci.yml"],
+      "delivery-record-change": ["delivery/records/record--0000000000000000000000000000000000000000000000000000000000000000.json"],
+      "root-manifest-change": ["package.json"],
+      "package-notice-change": ["packages/kernel/NOTICE"],
+      "policy-projection-change": [".agents/policy/repository-policy.json"]
+    },
+    "activationSelection": {
+      "docs-only-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "sensor-script-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "release-sensor-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.release-checks",
+        "sensor.standalone-install",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "kernel-source-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.release-checks",
+        "sensor.standalone-install",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "conformance-vector-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.release-checks",
+        "sensor.standalone-install",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "workflow-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "delivery-record-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "root-manifest-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.release-checks",
+        "sensor.standalone-install",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "package-notice-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.release-checks",
+        "sensor.standalone-install",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ],
+      "policy-projection-change": [
+        "sensor.conformance-kit",
+        "sensor.cli-inventory",
+        "sensor.delivery-record-gate",
+        "sensor.import-boundaries",
+        "sensor.test-suite",
+        "sensor.typecheck"
+      ]
+    }
+  },
+  "blockerVector": {
+    "preparationFailureClasses": ["missing", "invalid", "wiring_mismatch", "base_changed", "stale"],
+    "deliveryRecordDriftClasses": [
+      "deliverable_identity_changed",
+      "base_ref_changed",
+      "base_tip_moved",
+      "merge_base_moved"
+    ],
+    "seededFailingCandidates": [
+      {
+        "id": "preparation-receipt-missing",
+        "surface": "delivery-harness gate (preparation receipt evaluation)",
+        "expectedFailureClass": "missing"
+      },
+      {
+        "id": "harness-config-changed-after-preparation",
+        "surface": "delivery-harness gate (preparation receipt evaluation)",
+        "expectedFailureClass": "wiring_mismatch",
+        "note": "harness.config.ts is this repository's declared preparationWiringPaths entry, so editing the gate after preparing invalidates the receipt"
+      },
+      {
+        "id": "base-advanced-after-preparation",
+        "surface": "delivery-harness gate (preparation receipt evaluation)",
+        "expectedFailureClass": "base_changed"
+      },
+      {
+        "id": "candidate-changed-after-preparation",
+        "surface": "delivery-harness gate (preparation receipt evaluation)",
+        "expectedFailureClass": "stale"
+      },
+      {
+        "id": "review-evidence-missing",
+        "obligation": "review.green",
+        "expectedFindingCode": "review_evidence_missing",
+        "humanWaivable": true
+      },
+      {
+        "id": "review-evidence-bound-to-another-candidate",
+        "obligation": "review.green",
+        "expectedFindingCode": "stale_evidence",
+        "humanWaivable": true
+      },
+      {
+        "id": "review-evidence-not-green",
+        "obligation": "review.green",
+        "expectedFindingCode": "evidence_not_green",
+        "humanWaivable": true
+      },
+      {
+        "id": "evidence-record-malformed",
+        "obligation": "review.green",
+        "expectedFindingCode": "malformed_record",
+        "humanWaivable": false
+      },
+      {
+        "id": "evidence-from-unregistered-provider",
+        "obligation": "review.green",
+        "expectedFindingCode": "unknown_provider",
+        "humanWaivable": false
+      },
+      {
+        "id": "delivery-record-missing-on-pull-request",
+        "surface": ".github/workflows/gate.yml (packages/action verify mode)",
+        "expectedFailure": "fail-closed typed blocker naming the missing record"
+      },
+      {
+        "id": "delivery-record-bound-to-a-superseded-candidate",
+        "surface": ".github/workflows/gate.yml (packages/action verify mode)",
+        "expectedDriftClass": "deliverable_identity_changed"
+      },
+      {
+        "id": "base-moved-under-a-recorded-candidate",
+        "surface": ".github/workflows/gate.yml (packages/action verify mode)",
+        "expectedDriftClass": "base_tip_moved",
+        "note": "this repository's deliveryRecordVerification.baseMovement policy is stale"
+      },
+      {
+        "id": "conformance-kit-regenerates-differently",
+        "surface": ".github/workflows/ci.yml (bun leg: diff -r packages/conformance/vectors)",
+        "expectedFailure": "nonzero-exit",
+        "remediation": "npm run kit:generate"
+      },
+      {
+        "id": "unregistered-cli-command",
+        "surface": "npm run sensor:cli",
+        "expectedFailure": "nonzero-exit"
+      },
+      {
+        "id": "kernel-imports-the-cli",
+        "surface": "npm run sensor",
+        "expectedFailure": "nonzero-exit"
+      },
+      {
+        "id": "package-version-drift",
+        "surface": "scripts/check-release.ts",
+        "expectedFailure": "nonzero-exit"
+      },
+      {
+        "id": "published-package-imports-an-undeclared-sibling",
+        "surface": "npm run sensor:standalone",
+        "expectedFailure": "nonzero-exit"
+      }
+    ],
+    "plantedCompileRejections": {
+      "duplicate-obligation": ["duplicate_obligation"],
+      "merge-granted-and-forbidden": ["contradictory_authority"],
+      "merge-finish-line-without-authority": ["contradictory_finish_line"],
+      "required-capability-without-adapter": ["capability_unavailable"],
+      "privileged-credential-in-model-grant": ["privileged_credential_in_model_grant"],
+      "unknown-document-member": ["unknown_member"],
+      "duplicate-adapter": ["duplicate_capability"],
+      "charter-digest-not-in-the-tree": ["persona_unresolvable"],
+      "testing-policy-lens-dropped": ["mandatory_lens_missing"],
+      "authority-without-an-adapter": ["prose_only_authority"]
+    }
+  },
+  "leafMappings": [
+    {
+      "leaf": "test-suite",
+      "capabilityId": "sensor.test-suite",
+      "kind": "sensor",
+      "authority": ["npm run test (vitest run)"]
+    },
+    {
+      "leaf": "typecheck",
+      "capabilityId": "sensor.typecheck",
+      "kind": "sensor",
+      "authority": ["npm run typecheck (tsconfig.json and tsconfig.vendored.json)"]
+    },
+    {
+      "leaf": "import-boundaries",
+      "capabilityId": "sensor.import-boundaries",
+      "kind": "sensor",
+      "authority": ["npm run sensor (scripts/check-import-boundaries.ts)"]
+    },
+    {
+      "leaf": "cli-inventory",
+      "capabilityId": "sensor.cli-inventory",
+      "kind": "sensor",
+      "authority": ["npm run sensor:cli (scripts/check-cli-inventory.ts)"]
+    },
+    {
+      "leaf": "conformance-kit",
+      "capabilityId": "sensor.conformance-kit",
+      "kind": "sensor",
+      "authority": [
+        ".github/workflows/ci.yml bun leg: regenerate into a temp dir and diff against packages/conformance/vectors"
+      ],
+      "remediation": "npm run kit:generate"
+    },
+    {
+      "leaf": "standalone-install",
+      "capabilityId": "sensor.standalone-install",
+      "kind": "sensor",
+      "authority": ["npm run sensor:standalone (scripts/check-standalone-install.ts)"]
+    },
+    {
+      "leaf": "provider-rail-qualification",
+      "capabilityId": "sensor.provider-rail-qualification",
+      "kind": "sensor",
+      "authority": ["npm run qualify:provider (scripts/qualify-agent-skills-provider.ts)"],
+      "invocation": "operator-invoked; it records qualifications/agent-skills-provider-interoperability.json and is not selected by any pull-request path filter"
+    },
+    {
+      "leaf": "release-checks",
+      "capabilityId": "sensor.release-checks",
+      "kind": "sensor",
+      "authority": ["scripts/check-release.ts, run by .github/workflows/release.yml"]
+    },
+    {
+      "leaf": "delivery-record-gate",
+      "capabilityId": "sensor.delivery-record-gate",
+      "kind": "sensor",
+      "authority": [
+        "delivery-harness gate (local admission)",
+        ".github/workflows/gate.yml running packages/action in verify mode against the pull-request head"
+      ]
+    },
+    {
+      "leaf": "delivery-preparation",
+      "capabilityId": "stage.delivery-preparation",
+      "kind": "mutation-stage",
+      "authority": ["delivery-harness prepare (captures the candidate and publishes the preparation receipt)"]
+    },
+    {
+      "leaf": "delivery-record-write",
+      "capabilityId": "stage.delivery-record-write",
+      "kind": "mutation-stage",
+      "authority": ["delivery-harness record (the one write that crosses into delivery/records/)"]
+    },
+    {
+      "leaf": "conformance-kit-regeneration",
+      "capabilityId": "stage.conformance-kit-regeneration",
+      "kind": "mutation-stage",
+      "authority": ["npm run kit:generate (packages/conformance/src/generate.ts)"]
+    },
+    {
+      "leaf": "hosted-check-observation",
+      "capabilityId": "status.hosted-checks",
+      "kind": "status-reconciliation",
+      "authority": ["gh pr checks (CI matrix, Delivery gate, Release checks)"]
+    },
+    {
+      "leaf": "pr",
+      "capabilityId": "operation.pr-creation",
+      "kind": "pr-creation",
+      "authority": ["gh pr create"],
+      "granted": true
+    },
+    {
+      "leaf": "merge",
+      "capabilityId": "operation.merge",
+      "kind": "merge",
+      "authority": ["github pull-request merge, performed by the operator"],
+      "granted": false
+    },
+    {
+      "leaf": "deployment",
+      "capabilityId": "operation.deploy",
+      "kind": "deploy",
+      "authority": ["npm publish; nothing is published yet and the release workflow is dry-run only"],
+      "granted": false
+    }
+  ],
+  "aggregateExclusions": [
+    {
+      "entrypoint": "check",
+      "reason": "npm run check chains typecheck, the import-boundary sensor, the CLI-inventory sensor, and the test suite; each of those is a leaf, so registering the aggregate would count them twice and hide which one refused."
+    },
+    {
+      "entrypoint": "release-checks-workflow",
+      "reason": ".github/workflows/release.yml chains the static release sensor, five publish dry-runs, and the standalone-install sensor; it is the comparison authority for the release surface, never a leaf."
+    }
+  ],
+  "generatedArtifactOwnership": {
+    "repairStage": "stage.conformance-kit-regeneration",
+    "groups": [
+      {
+        "id": "conformance-vectors",
+        "generator": "npm run kit:generate",
+        "paths": ["packages/conformance/vectors"]
+      }
+    ],
+    "protectedAuthorityTrees": [
+      ".agents",
+      "delivery",
+      "qualifications",
+      "packages/conformance/vectors"
+    ]
+  }
+}

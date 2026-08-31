@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "delivery-harness-policy-comparison-report/1",
+  "comparedAt": "2026-08-31",
+  "comparisonAuthority": "npm run check plus the unchanged delivery-harness gate loop and the hosted checks in .github/workflows",
+  "mode": "read-only",
+  "inputs": {
+    "repository-policy.json": "5493d8704105325e452fca8cc2050f299e5c4b9fb0136e235724b33f8c30e044",
+    "adapters.json": "73101bb8787e69995eddd81780f4a360a9dce2c6b821bd65cff79027ce8c2e61",
+    "pre-cutover-oracle.json": "c754b5debe0689e35ff0e7a24000c379ab81ed4341331d8ba635381139e81289",
+    "compiled-snapshot.json": "9c75a842061ad0045252c4c735bfb6c24c4dbc37651bda6da6648824187c90a0",
+    "compiledDigest": "1b5593f4e8e296b548d456c4f83b347531012e0cac8ed7cdd372dc11157a70fd"
+  },
+  "results": {
+    "compile": "ok: the declarative document plus the sixteen typed adapters compile through this repository's own policy compiler with zero rejections, and the recorded snapshot is byte-equal to a fresh compile",
+    "phaseParity": "ok: the oracle's six delivery-loop phases plus its three standalone commands are exactly the live CLI command registry, and the check aggregate still chains typecheck, sensor, sensor:cli, and test",
+    "obligationParity": "ok: the one live gate obligation (review.green) is activated by the declarative document, and its activation kind, freshness, provider policy, attestation floor, waiver posture, provider set, payload specs, and waivable/non-waivable code partition all match the frozen oracle",
+    "blockerVocabulary": "ok: the oracle's preparation failure classes and delivery-record drift classes are the live kernel constants",
+    "leafMapping": "ok: each proposed leaf maps to exactly one adapter, no adapter is mapped twice, and neither the npm run check aggregate nor the release-checks workflow is registered as a leaf",
+    "activationScenarios": "ok: ten candidate classes select the same authoritative sensor set the release-checks workflow's live path filters select; the activation classes partition the sensor leaves exactly once each",
+    "authority": "ok: merge-ready is the only granted finish line, pr-creation the only granted authority, merge and deploy remain forbidden with their adapters registered discovery-only, and neither is a required capability",
+    "generatedArtifactOwnership": "ok: the conformance vector tree is the live gate's only generated classification and is owned by its regeneration stage, and all four protected authority trees appear in every compiled checkpoint grant",
+    "plantedCompileRejections": {
+      "duplicate-obligation": ["duplicate_obligation"],
+      "merge-granted-and-forbidden": ["contradictory_authority"],
+      "merge-finish-line-without-authority": ["contradictory_finish_line"],
+      "required-capability-without-adapter": ["capability_unavailable"],
+      "privileged-credential-in-model-grant": ["privileged_credential_in_model_grant"],
+      "unknown-document-member": ["unknown_member"],
+      "duplicate-adapter": ["duplicate_capability"],
+      "charter-digest-not-in-the-tree": ["persona_unresolvable"],
+      "testing-policy-lens-dropped": ["mandatory_lens_missing"],
+      "authority-without-an-adapter": ["prose_only_authority"]
+    }
+  },
+  "adjudications": [
+    {
+      "id": "compiler-lives-in-the-governed-repository",
+      "observed": "This repository implements the policy compiler that compiles this repository's policy, so a delivery can change the code that judges it.",
+      "projection": "The direction of authority is already closed by two rules that exist for other reasons and hold here unchanged: checkBoundPolicy admits only the exact compiled bytes bound at policy-bind time, and the installed composition generation those bytes were produced by is digest-addressed and read-only outside the repository, so the compiler that judges a delivery is never the candidate's copy. The facade applies the same rule to reviewer charters and the trusted sensor, reading both from the base ref. No new mechanism is introduced. The read-only projection sensor deliberately compiles through the candidate tree, which is the opposite choice and correct for a sensor: it is what makes a compiler change that alters this repository's compiled policy a visible two-place edit.",
+      "disposition": "accepted-projection",
+      "blocking": false
+    },
+    {
+      "id": "self-hosted-gate-verifies-with-in-tree-action",
+      "observed": ".github/workflows/gate.yml runs the Action from the pull request's own checkout, so a pull request can weaken the gate that verifies it. The workflow states this and declines the base-ref pinning mitigation on purpose.",
+      "projection": "The projection records the delivery-record gate as one sensor leaf and changes nothing about how it runs. This is a pre-existing, deliberately accepted property of a repository dogfooding its own tool, not a defect the projection introduces or is entitled to repair; a change of posture is a decision for the cutover, not for a read-only mapping.",
+      "disposition": "recorded",
+      "blocking": false
+    },
+    {
+      "id": "reviewer-charters-repository-owned",
+      "observed": "The document grammar requires a personaId on every review lens, and the compiler resolves identity-only references against charters shipped in the authenticated composition. The composition ships none today.",
+      "projection": "Both lenses reference repository-owned charters under delivery/personas/ with their bytes pinned by personaDigest, which is the reference form the compiler defines for adopter-owned charters and the path convention the facade already resolves from the trusted pre-run base. delivery is an additionally protected path in every checkpoint grant, so no model-driven stage can rewrite a charter it is judged against.",
+      "disposition": "accepted-projection",
+      "blocking": false
+    },
+    {
+      "id": "adversarial-lens-category",
+      "observed": "This repository's review runs an outcome-correctness lens and an adversarial lens; the compiled policy vocabulary has no adversarial category.",
+      "projection": "lens.adversarial-testing is declared under the mandatory testing-policy category, which is the category its probing satisfies. The charter it names is the adversarial one.",
+      "disposition": "accepted-projection",
+      "blocking": false
+    },
+    {
+      "id": "one-obligation-deliberately",
+      "observed": "harness.config.ts activates exactly one obligation, review.green, where the Athena projection activates seven.",
+      "projection": "The document activates exactly that one. A projection that added obligations the live gate does not enforce would grant the cutover authority the manual loop never had; the mapping records what the repository runs.",
+      "disposition": "recorded",
+      "blocking": false
+    },
+    {
+      "id": "delivery-record-write-outside-the-model-grant",
+      "observed": "The tracked delivery record under delivery/records/ is the one artifact that crosses from the git-private workspace into the tree, and delivery is a protected authority path in every checkpoint grant.",
+      "projection": "The write is a mutation-stage leaf, stage.delivery-record-write, performed by delivery-harness record outside every model-driven execution grant. Protecting the tree and registering the stage are the same statement made twice, once as a denial and once as a capability.",
+      "disposition": "recorded",
+      "blocking": false
+    },
+    {
+      "id": "provider-rail-qualification-operator-invoked",
+      "observed": "npm run qualify:provider is named by no workflow and by no path filter; an operator runs it and its output is recorded under qualifications/.",
+      "projection": "sensor.provider-rail-qualification is a leaf in the operator-invoked activation class. The class partition is asserted to cover the sensor leaves exactly, so a sensor cannot be dropped from activation by being left unclassified.",
+      "disposition": "recorded",
+      "blocking": false
+    },
+    {
+      "id": "root-wiring-writable-authority-unchanged",
+      "observed": "harness.config.ts and the root manifests are writable in the implement checkpoint, which means a model-driven stage can edit the gate configuration.",
+      "projection": "That matches today's authority and is not weakened by the projection: harness.config.ts is this repository's declared preparationWiringPaths entry, so editing it after preparing lands the candidate in the wiring_mismatch preparation failure class rather than passing quietly. The oracle seeds that candidate.",
+      "disposition": "accepted-projection",
+      "blocking": false
+    },
+    {
+      "id": "admission-config-projection-deferred",
+      "observed": "The optional admission member of the policy document can carry a HarnessConfig, and this repository has a real one at harness.config.ts.",
+      "projection": "The member is omitted. Embedding a second copy of the live gate configuration inside the policy document while harness.config.ts is still the authority would create two places to change and one to forget; it lands with the cutover, when the document becomes the authority.",
+      "disposition": "deferred",
+      "blocking": false
+    },
+    {
+      "id": "tracker-host-provided",
+      "observed": "Linear tracking is performed by the host session, not by any repository-owned command; no gate has a tracker dependency.",
+      "projection": "No tracker adapter is registered and trackerAbsenceFallback is proceed-without-tracker, so tracker absence never blocks delivery, matching current behaviour.",
+      "disposition": "accepted-projection",
+      "blocking": false
+    },
+    {
+      "id": "branch-push-outside-model-grant",
+      "observed": "Under the current authority the agent pushes its delivery branch itself after the gates pass.",
+      "projection": "The portable execution grant forbids git.push in every model-driven stage; in the managed model the push happens behind operation.pr-creation, outside the model grant. Current behaviour is unchanged until cutover; this difference is between projections, not a change to present authority.",
+      "disposition": "accepted-projection",
+      "blocking": false
+    }
+  ]
+}

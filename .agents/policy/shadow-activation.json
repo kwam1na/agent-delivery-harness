@@ -1,0 +1,105 @@
+{
+  "spec": "delivery-harness-shadow-activation/1",
+  "repositoryId": "agent-delivery-harness",
+  "recordedAt": "2026-08-31T04:40:00Z",
+  "purpose": "This repository's activation metadata for the read-only shadow window: the composed delivery product is installed in shadow mode and its run-pinned projection is materialized into managed delivery worktrees, while npm run check and the delivery-harness gate loop remain the repository's only delivery authority. The discovery-scoping mechanism is product-owned; this document carries only this repository's activation of it and the positions the exactly-one-discovery guard enforces.",
+  "installationMode": "shadow",
+  "deliveryAuthority": "none",
+  "comparisonAuthority": "npm run check plus the delivery-harness gate loop and the hosted checks in .github/workflows",
+  "selfApplicationNote": "The product being installed here is built from this repository. The installation is nonetheless a pinned, digest-addressed generation packed from a chosen source commit and installed read-only outside the working tree, so the bytes that would drive a shadow delivery are never the candidate's. That separation is what keeps the direction of authority unambiguous while the governed repository and the implementing repository are the same one.",
+  "product": {
+    "repository": "agent-delivery-harness",
+    "commit": "9371d97029cbf1bbd58c06059c079623f76791a9",
+    "compositionProfile": "production",
+    "compositionProfileNote": "the fixture profile registers deliveries only in the disposable repositories its install receipt names, so an installation serving this repository must carry the production profile; the read-only posture comes from this document's shadow installation mode, not from the profile",
+    "qualificationRecords": [
+      "qualifications/claude-code-integration.json",
+      "qualifications/host-admission-capabilities.json",
+      "qualifications/manual-choreography-baseline.json"
+    ],
+    "installationPaths": {
+      "rule": "disposable, operator-chosen directories created for the shadow window only",
+      "prohibited": [
+        "the operator's real Claude Code configuration directory",
+        "the operator's real Codex configuration directory",
+        "any path inside this repository's working tree"
+      ]
+    }
+  },
+  "projection": {
+    "root": ".managed-projection",
+    "owner": "the product's Claude Code binding (materialization, digest receipt, per-run consumption marker, teardown)",
+    "managedDeliveryWorktreeRoot": ".worktrees/managed",
+    "scopeRule": "the projection root may exist only inside a managed delivery worktree; the repository root and every non-managed worktree must not carry one",
+    "managedDeliveryWorktreePathShape": "the operator creates each managed delivery worktree at .worktrees/managed/<deliveryId> — a sibling path such as .worktrees/managed-<deliveryId> is not a managed delivery worktree and a projection there is a finding",
+    "mechanism": "model-external and byte-neutral — the binding writes its session settings and the worktree-scoped excludes file into its own directory outside the working tree, points the managed worktree's worktree-scoped git configuration at them, and enables worktree configuration once in the shared repository config; no tracked byte of the repository is moved or edited, and the configuration takes effect in the managed worktree alone",
+    "whatIsNotSuppressed": "nothing needs suppressing here: this repository carries no ambient agent discovery layout for the projection to compete with. The guard pins that emptiness rather than assuming it, so an ambient root introduced before the cutover is drift rather than a quiet second source of agent instructions."
+  },
+  "provingHost": "claude-code",
+  "hosts": [
+    {
+      "hostId": "claude-code",
+      "hostVersion": "2.1.97",
+      "exclusivityGrading": "exclusivity-ungraded",
+      "capability": "the host can only add skill roots; no supported configuration scopes discovery to the run-pinned projection",
+      "gradeSource": "qualifications/host-admission-capabilities.json (discoveryScopingExclusivity)"
+    },
+    {
+      "hostId": "codex-cli",
+      "hostVersion": "0.147.0",
+      "exclusivityGrading": "exclusivity-ungraded",
+      "capability": "additive extra roots only; listed so the downgrade position is not read as claude-code-specific",
+      "gradeSource": "qualifications/host-admission-capabilities.json (discoveryScopingExclusivity)"
+    }
+  ],
+  "exclusivityPosition": {
+    "duringShadowWindow": "non-blocking",
+    "reason": "both graded hosts are exclusivity-ungraded, and coexisting ambient discovery cannot corrupt authority while the shadow window holds none",
+    "becomesBlockingAt": "the cutover's removal gate",
+    "beforeThatGate": "no tracked byte of an ambient discovery root exists or may appear"
+  },
+  "consumptionRecord": {
+    "requiredSource": "binding",
+    "producedBy": "the per-run marker the binding injects at projection materialization and reads back from fence-bound submissions; the marker carries the delivery, the fence, and the consumed generation archive, and the gate record's entry carries those fields plus the receipted projection digest",
+    "agentSuppliedClaims": "rejected — a delivery carrying one is excluded from the comparison set and the guard reports a finding",
+    "absentOrNegative": "excluded from the comparison set",
+    "writtenInto": ".agents/policy/shadow-milestone-gate-record.json",
+    "whatTheGuardChecks": "the record's declared source and its shape — the guard reads the gate-record artifact and cannot itself verify that the bytes came from the binding",
+    "whatProvenanceRestsOn": "two things outside the guard: .agents is an additionally protected path in every checkpoint grant of .agents/policy/repository-policy.json, so no execution grant may write the gate record; and the binding-side writer that emits the entry. That writer is not present in the product at the pinned commit, so until it ships the entry has no admissible producer and the comparison set stays empty — which is the correct outcome, not a gap the guard papers over."
+  },
+  "ambientDiscoveryLayout": {
+    "owner": "scripts/shadow-discovery-guard.ts",
+    "note": "the guard owns the root set and its pinned digest; they are not duplicated here so there is one place to change and one place to review"
+  },
+  "characterization": {
+    "method": "a disposable shadow install of the composed product followed by one projection materialization into a managed delivery worktree, driven through the product's own installer and Claude Code binding. The repository under characterization was a disposable clone in a temp directory, so no byte and no git configuration of the real repository was touched, and no host configuration outside the disposable directories was written.",
+    "compositionProfile": "confirmation-fixture, with the disposable repository identity delivery-harness-shadow-characterization — the characterization ran in a scratch clone, so it used the qualification profile rather than the production profile the real installation carries",
+    "observedAt": "2026-08-31T04:32:00Z",
+    "observed": {
+      "generationDigest": "68c69f02807574afbfa6c102fdd6f886f70ed1e5a1f0447ad7901e9ace714bb6",
+      "installationId": "install-464b5f46c7bcecf35935cbd5f7a14c55",
+      "projectionDigest": "0614b0972c0941a836db55ee37ba9ad3cdb0d75e8df85a76c9b6e815182a6d4f",
+      "managedWorktree": {
+        "path": ".worktrees/managed/shadow-1",
+        "projectionPresent": true,
+        "gitStatusPorcelain": "",
+        "consumptionMarker": {
+          "deliveryId": "delivery-harness-shadow-characterization-1",
+          "fence": 1,
+          "consumed": "skills/agent-skills-core-v1.zip"
+        }
+      },
+      "repositoryRoot": {
+        "projectionPresent": false,
+        "consumptionMarkerRead": "consumption_marker_missing",
+        "trackedTreeUnchanged": true
+      },
+      "nonManagedWorktree": {
+        "path": ".worktrees/sibling",
+        "projectionPresent": false,
+        "consumptionMarkerRead": "consumption_marker_missing"
+      }
+    },
+    "conclusion": "the projection landed only in the managed delivery worktree, was invisible to git there, left the repository root and the non-managed worktree untouched, and produced a consumption record the binding — not the session — authored"
+  }
+}
