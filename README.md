@@ -30,6 +30,12 @@ the Action. Every pull request merged since then has carried its own delivery
 record, bound to its own candidate; the records accumulate in
 `delivery/records/` rather than replacing one another.
 
+The active GitHub ruleset for the default branch has no bypass actors: every
+update must arrive through a pull request with `node-22`, `node-24`,
+`bun-latest`, and `verify-delivery-record` green. It also blocks branch deletion
+and non-fast-forward updates. The path-filtered `release-checks` job is not a
+required check because it does not run for every candidate.
+
 **Three names, one thing.** The repository is `agent-delivery-harness`; the
 packages carry the `@agent-delivery-harness/*` npm scope; the command you type
 (and the git-private storage namespace it writes under) is the shorter
