@@ -475,14 +475,39 @@ export function scoreShadowMilestone(
   }
 
   const baselineDeliveries: any[] = Array.isArray(baseline?.deliveries) ? baseline.deliveries : [];
+  const baselineMix: Record<string, unknown> =
+    typeof baseline?.mix === "object" && baseline.mix !== null && !Array.isArray(baseline.mix) ? baseline.mix : {};
+  const derivedBaselineMix: Record<string, number> = { total: baselineDeliveries.length };
+  let baselineCategoriesRecognized = true;
   for (const delivery of baselineDeliveries) {
     const defect = scoreDefect(String(delivery?.id ?? "<unnamed>"), delivery?.score, delivery?.window);
     if (defect !== undefined) incomplete.push({ code: "measurement_shape", message: `baseline: ${defect}` });
+    if (!isNonEmptyText(delivery?.category)) {
+      baselineCategoriesRecognized = false;
+    } else {
+      derivedBaselineMix[delivery.category] = (derivedBaselineMix[delivery.category] ?? 0) + 1;
+    }
   }
   if (baselineDeliveries.length === 0) {
     incomplete.push({
       code: "baseline_unrecognized",
       message: "the baseline records no delivery, so it fixes no figure to compare against",
+    });
+  }
+  const baselineMixKeys = Object.keys(baselineMix).sort();
+  const derivedBaselineMixKeys = Object.keys(derivedBaselineMix).sort();
+  if (
+    !baselineCategoriesRecognized ||
+    baselineMixKeys.length !== derivedBaselineMixKeys.length ||
+    !baselineMixKeys.every(
+      (category, index) =>
+        category === derivedBaselineMixKeys[index] && baselineMix[category] === derivedBaselineMix[category],
+    )
+  ) {
+    incomplete.push({
+      code: "baseline_unrecognized",
+      message:
+        "the baseline's declared mix and total do not exactly match the categories and count of its recorded deliveries; the baseline cannot redefine its own comparison shape",
     });
   }
 
@@ -557,8 +582,6 @@ export function scoreShadowMilestone(
 
   // ── Size and mix ───────────────────────────────────────────────────────────
   const requirement = gateRecord?.comparisonSetRequirement ?? {};
-  const baselineMix: Record<string, unknown> =
-    typeof baseline?.mix === "object" && baseline.mix !== null && !Array.isArray(baseline.mix) ? baseline.mix : {};
   const requiredMix: Record<string, unknown> = Object.fromEntries(
     Object.entries(baselineMix).filter(([category]) => category !== "total"),
   );

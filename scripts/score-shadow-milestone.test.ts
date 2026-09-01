@@ -125,6 +125,7 @@ const syntheticBaseline = (deliveries: readonly ScoreOverrides[]): Record<string
   mix: { code: 1, docs: 1, operations: 1, total: 3 },
   deliveries: deliveries.map((overrides, index) => ({
     id: `baseline-${index}`,
+    category: ["code", "docs", "operations"][index],
     window: measurementWindow(),
     score: score(overrides),
   })),
@@ -425,6 +426,29 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     const verdict = scoreShadowMilestone(reachableBaseline, record);
 
     expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
+  it("refuses a baseline mix that lowers the total and drops a recorded delivery category", () => {
+    const baseline = { ...reachableBaseline, mix: { code: 1, operations: 1, total: 2 } };
+    const record = gateRecord([entry("shadow-code", "code"), entry("shadow-operations", "operations")]);
+    record["comparisonSetRequirement"] = { mix: { code: 1, operations: 1 }, total: 2 };
+
+    const verdict = scoreShadowMilestone(baseline, record);
+
+    expect(verdict.incomplete.map((note) => note.code)).toContain("baseline_unrecognized");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
+  it("refuses a baseline delivery that names no category", () => {
+    const baseline = structuredClone(reachableBaseline);
+    delete (baseline["deliveries"] as Record<string, unknown>[])[2]!["category"];
+
+    const verdict = scoreShadowMilestone(baseline, fullSet([{}, {}, {}]));
+
+    expect(verdict.incomplete.map((note) => note.code)).toContain("baseline_unrecognized");
     expect(verdict.status).toBe("incomplete");
     expect(verdict.shadow).toBeNull();
   });
