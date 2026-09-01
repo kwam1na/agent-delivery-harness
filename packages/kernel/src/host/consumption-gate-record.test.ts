@@ -512,7 +512,7 @@ describe("emitProjectionConsumptionRecord", () => {
         observedAt: "2026-08-30T12:00:00Z",
       })}\n`,
     );
-    const providerSpecific = await emitProjectionConsumptionRecord({
+    const providerSpecific = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
