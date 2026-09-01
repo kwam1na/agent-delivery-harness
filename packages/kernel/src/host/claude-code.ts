@@ -589,6 +589,15 @@ export async function composeClaudeCodeSession(
           hooks: [{ type: "command", command: hook("pre-tool-use") }],
         },
       ],
+      // The gate writer accepts no PreToolUse intent. This post-invocation
+      // event is the binding's sole evidence that the host completed its
+      // exact workflow-source Read for this fenced delivery.
+      PostToolUse: [
+        {
+          matcher: "Read",
+          hooks: [{ type: "command", command: hook("post-tool-use") }],
+        },
+      ],
       SessionEnd: [
         {
           hooks: [{ type: "command", command: hook("session-end") }],

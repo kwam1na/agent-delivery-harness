@@ -22,9 +22,10 @@
  *      clean host end. This is the Tier 3 gate, and the honest answer decides
  *      whether same-workspace resume is available at all.
  *   6. PROJECTION CONSUMPTION IS OBSERVED — whether an ordinary delivery turn
- *      causes the interceptor to record that the run named a receipted entry
- *      of the run-pinned projection. This is the acceptance check for the
- *      milestone's consumption record, and it exists here because the failure
+ *      causes the interceptor to record the host's completed exact Read of the
+ *      receipted workflow source in the run-pinned projection. This is the
+ *      acceptance check for the milestone's consumption record, and it exists
+ *      here because the failure
  *      it guards against is INVISIBLE to every in-process sensor: when the
  *      mechanism is dead, it produces no observation, which is spelled exactly
  *      like a run that honestly consumed nothing. A live host is the only
@@ -54,7 +55,7 @@
  * CLAUDE_CONFIG_DIR at a disposable directory to avoid it.
  */
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +63,8 @@ import { digestCanonical } from "../packages/kernel/src/digest.ts";
 import { createExecPort } from "../packages/kernel/src/host/exec-port.ts";
 import {
   PROJECTION_RECEIPT_FILE,
+  WORKTREE_EXCLUDES_FILE,
+  composeClaudeCodeSession,
   materializeProjection,
   mintGrantAttestation,
 } from "../packages/kernel/src/host/claude-code.ts";
@@ -149,14 +152,14 @@ export function runClaudeCodeProviderReview(input: NativeReviewInput): Promise<v
  */
 function runSession(input: {
   readonly cwd: string;
-  readonly settingsPath: string;
+  readonly cliArgs: readonly string[];
   readonly prompt: string;
   readonly timeoutMs: number;
 }): Promise<number> {
   return new Promise((resolve) => {
     execFile(
       "claude",
-      ["-p", input.prompt, "--settings", input.settingsPath, "--setting-sources", ""],
+      ["-p", input.prompt, ...input.cliArgs],
       { cwd: input.cwd, timeout: input.timeoutMs, encoding: "utf8" },
       (error) => resolve(error === null ? 0 : 1),
     );
@@ -169,7 +172,57 @@ const PROBE_FENCE = 1;
 const hookCommand = (subcommand: string, statePath: string): string =>
   [TSX_BIN, HOOK_MAIN, subcommand, statePath, String(PROBE_FENCE)].map((part) => JSON.stringify(part)).join(" ");
 
-/** The binding-composed session settings, in the shape the binding writes them. */
+interface QualificationGrant {
+  readonly allowedCapabilities: readonly string[];
+  readonly writablePaths: readonly string[];
+  readonly protectedPaths: readonly string[];
+}
+
+interface QualificationSession {
+  readonly settingsPath: string;
+  readonly cliArgs: readonly string[];
+  readonly discoveryConfigurationDigest: string;
+}
+
+/**
+ * Composes the operator-owned probe with the same binding helper and exact
+ * strict-sandbox argument vector as a managed session. This helper launches
+ * nothing; `runSession` remains the explicit authenticated test driver.
+ */
+export async function composeQualificationSession(input: {
+  readonly bindingDir: string;
+  readonly statePath: string;
+  readonly workspaceRoot: string;
+  readonly commonGitDir: string;
+  readonly grant: QualificationGrant;
+}): Promise<QualificationSession> {
+  mkdirSync(input.bindingDir, { recursive: true });
+  const excludesPath = path.join(input.bindingDir, WORKTREE_EXCLUDES_FILE);
+  if (!existsSync(excludesPath)) writeFileSync(excludesPath, "", { mode: 0o600 });
+
+  const composed = await composeClaudeCodeSession({
+    bindingDir: input.bindingDir,
+    statePath: input.statePath,
+    hookCommand: [TSX_BIN, HOOK_MAIN],
+    fence: PROBE_FENCE,
+    workspaceRoot: input.workspaceRoot,
+    commonGitDir: input.commonGitDir,
+    authorityDir: input.bindingDir,
+    grant: input.grant,
+  });
+  if (!composed.ok) throw new Error(`probe session composition failed: ${JSON.stringify(composed.blockers)}`);
+  const cliArgs = [
+    ...composed.cliArgs,
+    "--tools",
+    input.grant.allowedCapabilities.join(","),
+    "--permission-mode",
+    "dontAsk",
+  ];
+
+  return { ...composed, cliArgs };
+}
+
+/** The legacy host-behavior probes keep their original hook-only shape. */
 function writeSettings(input: {
   readonly bindingDir: string;
   readonly statePath: string;
@@ -180,6 +233,9 @@ function writeSettings(input: {
     permissions: { allow: [...input.allow] },
     hooks: {
       PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hookCommand("pre-tool-use", input.statePath) }] }],
+      PostToolUse: [
+        { matcher: "Read", hooks: [{ type: "command", command: hookCommand("post-tool-use", input.statePath) }] },
+      ],
       ...(input.sessionEndMarker === undefined
         ? {}
         : {
@@ -292,7 +348,7 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
       const target = path.join(cwd, "work", "side-effect.txt");
       await runSession({
         cwd,
-        settingsPath,
+        cliArgs: ["--settings", settingsPath, "--setting-sources", ""],
         prompt: `Use the Write tool to create the file work/side-effect.txt containing exactly: ok`,
         timeoutMs: 180_000,
       });
@@ -337,7 +393,7 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
       const target = path.join(cwd, "work", "planted-effect.txt");
       await runSession({
         cwd,
-        settingsPath,
+        cliArgs: ["--settings", settingsPath, "--setting-sources", ""],
         prompt:
           `Create the file work/planted-effect.txt containing exactly: widened. ` +
           `Use whichever tool works — the Bash tool or the Write tool.`,
@@ -367,7 +423,7 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
       const pidFile = path.join(cwd, "work", "child.pid");
       await runSession({
         cwd,
-        settingsPath,
+        cliArgs: ["--settings", settingsPath, "--setting-sources", ""],
         prompt:
           `Use the Bash tool once to run exactly this and nothing else: ` +
           `nohup sleep 120 > /dev/null 2>&1 & echo $! > work/child.pid`,
@@ -469,6 +525,13 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
             protectedPaths: [".git", ".managed-projection"],
             forbiddenOperations: [],
           };
+          const session = await composeQualificationSession({
+            bindingDir,
+            statePath,
+            workspaceRoot: worktreeDir,
+            commonGitDir: path.join(worktreeDir, ".git"),
+            grant,
+          });
           const expectation = {
             profile: "checkpoint" as const,
             hostVersion: version,
@@ -478,7 +541,7 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
             invocationFence: PROBE_FENCE,
             workspaceId: "ws-live-consumption",
             projectionDigest: materialized.projectionDigest,
-            discoveryConfigurationDigest: "b".repeat(64),
+            discoveryConfigurationDigest: session.discoveryConfigurationDigest,
             registeringInstallationId: "install-live-probe",
             activeProfile: "confirmation-fixture",
           };
@@ -496,10 +559,9 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
             })}\n`,
             { mode: 0o600 },
           );
-          const settingsPath = writeSettings({ bindingDir, statePath, allow: [...grant.allowedCapabilities] });
           await runSession({
             cwd: worktreeDir,
-            settingsPath,
+            cliArgs: session.cliArgs,
             // Deliberately names no projection path and asks for no file to be
             // read: naming one would prove only that a path the probe supplied
             // came back, which is not the question.
@@ -515,7 +577,7 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
             : undefined;
           probes.push({
             id: "projection-consumption-observed",
-            question: "does an ordinary delivery turn cause the binding to record that the run named a receipted projection entry?",
+            question: "does an ordinary delivery turn cause the binding to record the host's completed exact Read of the receipted workflow source?",
             answer: recorded
               ? `yes — the interceptor recorded ${JSON.stringify(entry)}`
               : "no — no observation was recorded, so no delivery of this host can ever be counted in the milestone's comparison set",

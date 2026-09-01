@@ -12,7 +12,7 @@
  * Written RED before `consumption-gate-record.ts` existed.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,6 +22,7 @@ import { PROJECTION_DIR, materializeProjection } from "./claude-code.ts";
 import {
   SHADOW_MILESTONE_GATE_RECORD_SPEC,
   emitProjectionConsumptionRecord,
+  PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
   projectionConsumptionObservationFile,
 } from "./consumption-gate-record.ts";
 import { createExecPort } from "./exec-port.ts";
@@ -91,9 +92,21 @@ async function gateRecordFile(name: string, deliveries: unknown[] = []): Promise
  */
 function observeConsumption(bench: Workbench, deliveryId: string, fence: number, entry = "workflows/delivery-v1.json"): void {
   mkdirSync(bench.bindingDir, { recursive: true });
+  const receipt = JSON.parse(readFileSync(path.join(bench.bindingDir, "projection-receipt.json"), "utf8")) as {
+    projectionDigest: string;
+  };
   writeFileSync(
     path.join(bench.bindingDir, projectionConsumptionObservationFile(fence)),
-    `${JSON.stringify({ deliveryId, fence, entry, observedAt: "2026-08-30T12:00:00Z" })}\n`,
+    `${JSON.stringify({
+      source: PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
+      deliveryId,
+      fence,
+      entry,
+      canonicalProjectionPath: realpathSync(path.join(bench.worktreeDir, PROJECTION_DIR, "workflows", "delivery-v1.json")),
+      projectionDigest: receipt.projectionDigest,
+      hostInvocationId: "toolu_observed_read",
+      observedAt: "2026-08-30T12:00:00Z",
+    })}\n`,
   );
 }
 
@@ -408,9 +421,10 @@ describe("emitProjectionConsumptionRecord", () => {
       expect(deliveriesIn(gateRecordPath)).toEqual([]);
     }
 
-    // And a receipted entry does record — so the check above is containment,
-    // not a blanket refusal.
-    observeConsumption(bench, "dlv-shadow-uncontained", 1, "consumption.json");
+    // Only the canonical workflow source may qualify. A receipt contains
+    // several files, but reading a marker or a skill is not evidence that the
+    // workflow source was read.
+    observeConsumption(bench, "dlv-shadow-uncontained", 1, "workflows/delivery-v1.json");
     const admitted = await emitProjectionConsumptionRecord({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
@@ -420,6 +434,59 @@ describe("emitProjectionConsumptionRecord", () => {
       category: "code",
     });
     expect(admitted.ok && admitted.emitted, JSON.stringify(admitted)).toBe(true);
+  });
+
+  it("leaves the gate artifact byte-identical for planted path-only or mismatched event evidence", async () => {
+    const bench = await workbench("event-mismatch");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-shadow-event-mismatch",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    const gateRecordPath = await gateRecordFile("event-mismatch");
+    const before = readFileSync(gateRecordPath, "utf8");
+
+    // A path string alone is enumerable by the session and has none of the
+    // model-external event fields the writer requires.
+    writeFileSync(
+      path.join(bench.bindingDir, projectionConsumptionObservationFile(1)),
+      `${JSON.stringify({
+        deliveryId: "dlv-shadow-event-mismatch",
+        fence: 1,
+        entry: "workflows/delivery-v1.json",
+      })}\n`,
+    );
+    const planted = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-event-mismatch",
+      fence: 1,
+      category: "code",
+    });
+    expect(planted.ok && !planted.emitted, JSON.stringify(planted)).toBe(true);
+    expect(readFileSync(gateRecordPath, "utf8")).toBe(before);
+
+    // Even the qualified source is refused if its digest is not the
+    // receipt-reverified projection digest for this exact run.
+    observeConsumption(bench, "dlv-shadow-event-mismatch", 1);
+    const observationPath = path.join(bench.bindingDir, projectionConsumptionObservationFile(1));
+    const mismatch = JSON.parse(readFileSync(observationPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(observationPath, `${JSON.stringify({ ...mismatch, projectionDigest: "0".repeat(64) })}\n`);
+    const mismatched = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-event-mismatch",
+      fence: 1,
+      category: "code",
+    });
+    expect(mismatched.ok && !mismatched.emitted, JSON.stringify(mismatched)).toBe(true);
+    expect(readFileSync(gateRecordPath, "utf8")).toBe(before);
   });
 
   it("loses no entry when two deliveries are emitted concurrently against one artifact", async () => {

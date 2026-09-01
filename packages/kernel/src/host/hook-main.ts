@@ -32,6 +32,11 @@ import {
 } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
 import { PROJECTION_DIR } from "./claude-code.ts";
+import {
+  PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
+  projectionConsumptionObservationFile,
+} from "./consumption-gate-record.ts";
+import { WORKFLOW_GRAPH_ENTRY } from "../workflow/graph.ts";
 
 export interface HookBindingState {
   readonly expectation: CheckpointAdmissionExpectation;
@@ -57,6 +62,8 @@ export interface HookBindingState {
 export interface HookToolInput {
   readonly tool_name?: string;
   readonly tool_input?: Record<string, unknown>;
+  /** The host-generated identity of this exact tool invocation. */
+  readonly tool_use_id?: string;
 }
 
 export type HookDecision = { readonly allowed: true } | { readonly allowed: false; readonly reason: string };
@@ -256,27 +263,6 @@ function writesOf(state: HookBindingState, toolName: string, toolInput: Record<s
 }
 
 /**
- * The tool-input members that NAME A PATH. Deliberately not "members an
- * invocation reads": `file_path` is also Write's and Edit's write member, and
- * `path` is Glob's and Grep's directory member. Neither is harmless because of
- * anything in this list — a write is harmless because the grant denies it in
- * the projection, and a directory is harmless because containment lists files
- * only. Reading a read-guarantee into this set would be reading in something
- * it does not carry.
- *
- * What the set DOES carry is that the string arrived in a member whose job is
- * to name a path, rather than in free text a session controls. It is also
- * flat rather than tool-keyed, unlike WRITE_PATH_MEMBERS above, so a `path`
- * member on any tool — an MCP tool included — counts; that stays bounded by
- * containment and inside what the record claims.
- *
- * Naming Claude Code's members here is not a coupling problem, because this
- * file IS the Claude Code binding — its whole job is that host's tool surface.
- * The host-neutral writer stays free of them.
- */
-const READ_PATH_MEMBERS = Object.freeze(["file_path", "path", "notebook_path"] as const);
-
-/**
  * Canonicalized, because the host reports paths in resolved form while the
  * workspace root arrives as the operator wrote it. On macOS a delivery
  * worktree under the system temp root is reached as `/var/folders/...` while
@@ -297,82 +283,93 @@ const canonical = (value: string): string => {
   }
 };
 
-/**
- * The projection entry an invocation names, if it names a receipted one.
- *
- * WHAT THIS CERTIFIES, EXACTLY: that an allowed invocation of this run named,
- * in a member that names files, a path the materialization receipt lists. Not
- * that the run read the file, and not that the run resolved its workflow from
- * the projection. The interceptor is model-external code the HOST invokes with
- * the invocation's own arguments, so what it reports is a fact about the run
- * rather than a claim the session made about itself — but the fact is the
- * naming, and the record built on it must say so in those words.
- *
- * TWO CHECKS, CLOSING DIFFERENT THINGS, NEITHER SUFFICIENT ALONE:
- *
- *   - The MEMBER restriction closes free-text steering. Receipted paths are
- *     not secret — `consumption.json` is constant and every skills/ and
- *     workflows/ entry is enumerable from the pinned generation — so without
- *     it a session mints an observation by naming a real entry in a Bash
- *     description or an edit's replaced text.
- *   - RECEIPT CONTAINMENT closes invented paths, which the member restriction
- *     does not: a path member may still name bytes that were never
- *     materialized.
- *
- * CONTAINMENT IS CHECKED HERE, NOT ONLY IN THE WRITER, because the observation
- * is recorded once per fence. A name that could never be admitted must not
- * burn that one slot: a Grep over `.managed-projection/skills` names a
- * DIRECTORY, the receipt lists files only, and if that were recorded the
- * honest Read of a receipted file that follows would find the slot taken and
- * the delivery would be excluded. Searching a directory and then reading a
- * file in it is ordinary agent behavior, so the check belongs on the write
- * path. The writer checks containment again as defense in depth.
- *
- * WHAT IT DELIBERATELY DOES NOT SEE, and what it cannot rule out: a read the
- * host performs internally without routing a path through its tool surface is
- * invisible here, so a genuinely consuming delivery can go unobserved; and a
- * run that names a receipted file in a path member without reading it is
- * indistinguishable from one that reads it. The first fails safe — no
- * observation, no entry, never an unobserved affirmation. The second is why
- * the claim is worded as naming rather than consumption. Closing either needs
- * a binding capability that does not exist.
- */
-export function projectionEntryTouched(
-  workspaceRoot: string,
-  toolInput: Record<string, unknown>,
-  receiptedEntries: readonly string[],
-): string | undefined {
-  const root = canonical(path.resolve(workspaceRoot, PROJECTION_DIR));
-  for (const member of READ_PATH_MEMBERS) {
-    const value = toolInput[member];
-    if (typeof value !== "string" || value.length === 0) continue;
-    const absolute = canonical(path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceRoot, value));
-    const relative = path.relative(root, absolute);
-    if (relative.length === 0 || relative.startsWith("..") || path.isAbsolute(relative)) continue;
-    const entry = relative.split(path.sep).join("/");
-    if (!receiptedEntries.includes(entry)) continue;
-    return entry;
-  }
-  return undefined;
+export interface ExactWorkflowSourceRead {
+  readonly deliveryId: string;
+  readonly fence: number;
+  readonly hostInvocationId: string;
+  readonly canonicalProjectionPath: string;
+  readonly projectionDigest: string;
 }
 
 /**
- * The receipted entry paths, read from the binding's own materialization
- * receipt. Unreadable or malformed yields none, so the observation is simply
- * not recorded — the fail-safe direction.
+ * The single observation the gate writer is permitted to use: this host's
+ * PostToolUse event for an exact Read of the receipted workflow graph. A
+ * PreToolUse callback sees only an intent and is deliberately not sufficient.
  */
-function receiptedEntriesOf(receiptPath: string | undefined): readonly string[] {
-  if (receiptPath === undefined) return [];
+export function exactWorkflowSourceRead(
+  state: HookBindingState,
+  input: HookToolInput,
+  receipt: { readonly deliveryId: string; readonly projectionDigest: string; readonly entries: readonly string[] } | undefined,
+): ExactWorkflowSourceRead | undefined {
+  if (
+    input.tool_name !== "Read" ||
+    typeof input.tool_use_id !== "string" ||
+    input.tool_use_id.length === 0 ||
+    state.deliveryId !== state.expectation.deliveryId ||
+    receipt === undefined ||
+    receipt.deliveryId !== state.expectation.deliveryId ||
+    receipt.projectionDigest !== state.expectation.projectionDigest ||
+    !receipt.entries.includes(WORKFLOW_GRAPH_ENTRY)
+  ) {
+    return undefined;
+  }
+  const toolInput = input.tool_input;
+  // A full source read has exactly one operand. In particular, offset/limit
+  // and every other partial-read spelling fail closed instead of being treated
+  // as equivalent to loading the workflow source.
+  if (
+    toolInput === undefined ||
+    Object.keys(toolInput).length !== 1 ||
+    !Object.prototype.hasOwnProperty.call(toolInput, "file_path")
+  ) {
+    return undefined;
+  }
+  const value = toolInput["file_path"];
+  if (typeof value !== "string" || value.length === 0 || !path.isAbsolute(value)) return undefined;
+
+  // The host must name the physical, direct workflow file. Resolving the
+  // incoming spelling would admit a symlink or alias; resolving the expected
+  // path separately detects a projection entry swapped to a symlink.
+  const canonicalRoot = canonical(path.resolve(state.workspaceRoot));
+  const directPath = path.join(canonicalRoot, PROJECTION_DIR, ...WORKFLOW_GRAPH_ENTRY.split("/"));
+  const expectedPath = canonical(directPath);
+  if (expectedPath !== directPath || value !== directPath) return undefined;
+  return {
+    deliveryId: state.expectation.deliveryId,
+    fence: state.expectation.invocationFence,
+    hostInvocationId: input.tool_use_id,
+    canonicalProjectionPath: expectedPath,
+    projectionDigest: receipt.projectionDigest,
+  };
+}
+
+/*
+ * Kept as a separately testable receipt reader because the interceptor must
+ * derive its target from binding-owned bytes, never from an invocation path.
+ */
+function receiptedProjectionOf(
+  receiptPath: string | undefined,
+): { readonly deliveryId: string; readonly projectionDigest: string; readonly entries: readonly string[] } | undefined {
+  if (receiptPath === undefined) return undefined;
   try {
     const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as {
+      deliveryId?: unknown;
+      projectionDigest?: unknown;
       entries?: readonly { path?: unknown }[];
     };
-    if (!Array.isArray(receipt.entries)) return [];
-    return receipt.entries
+    if (
+      typeof receipt.deliveryId !== "string" ||
+      typeof receipt.projectionDigest !== "string" ||
+      !Array.isArray(receipt.entries)
+    ) {
+      return undefined;
+    }
+    const entries = receipt.entries
       .map((entry) => entry?.path)
       .filter((value): value is string => typeof value === "string" && value.length > 0);
+    return { deliveryId: receipt.deliveryId, projectionDigest: receipt.projectionDigest, entries };
   } catch {
-    return [];
+    return undefined;
   }
 }
 
@@ -443,8 +440,8 @@ function nowInstant(): string {
 
 async function main(argv: readonly string[]): Promise<number> {
   const [subcommand, statePath, fenceArg] = argv;
-  if (statePath === undefined || (subcommand !== "pre-tool-use" && subcommand !== "session-end")) {
-    process.stderr.write("usage: hook-main.ts <pre-tool-use|session-end> <state-path> <session-fence>\n");
+  if (statePath === undefined || (subcommand !== "pre-tool-use" && subcommand !== "post-tool-use" && subcommand !== "session-end")) {
+    process.stderr.write("usage: hook-main.ts <pre-tool-use|post-tool-use|session-end> <state-path> <session-fence>\n");
     return 2;
   }
   // The session's own fence, baked into the command at admission. A malformed
@@ -478,37 +475,41 @@ async function main(argv: readonly string[]): Promise<number> {
         // An unrecorded observation only ages activity toward `unknown`; it
         // never widens the decision.
       }
-      // The projection-consumption observation, recorded when this run first
-      // reaches into the run-pinned projection. It is written ONCE per fence
-      // and never rewritten: the fact is that consumption happened, and a
-      // later invocation that touches nothing must not erase it.
-      const entry = projectionEntryTouched(
-        state.workspaceRoot,
-        typeof input.tool_input === "object" && input.tool_input !== null ? input.tool_input : {},
-        receiptedEntriesOf(state.projectionReceiptPath),
-      );
-      if (entry !== undefined && state.projectionConsumptionPath !== undefined) {
+    }
+    const rendered = renderHookDecision(decision);
+    if (rendered.length > 0) process.stdout.write(`${rendered}\n`);
+    return 0;
+  }
+
+  if (subcommand === "post-tool-use") {
+    let input: HookToolInput = {};
+    try {
+      input = JSON.parse(readFileSync(0, "utf8")) as HookToolInput;
+    } catch {
+      return 0;
+    }
+    const observedAt = nowInstant();
+    const decision = decideHookInvocation(state, input, observedAt, sessionFence);
+    if (decision.allowed && state !== undefined && state.projectionConsumptionPath !== undefined) {
+      const read = exactWorkflowSourceRead(state, input, receiptedProjectionOf(state.projectionReceiptPath));
+      if (read !== undefined) {
         try {
           writeFileSync(
             state.projectionConsumptionPath,
             `${JSON.stringify({
-              deliveryId: state.deliveryId,
-              fence: state.expectation.invocationFence,
-              entry,
+              source: PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
+              ...read,
+              entry: WORKFLOW_GRAPH_ENTRY,
               observedAt,
             })}\n`,
             { mode: 0o600, flag: "wx" },
           );
         } catch {
-          // Already recorded for this fence (the exclusive create fails), or
-          // unwritable. Either way the decision above is untouched, and an
-          // unrecorded consumption yields no gate-record entry rather than an
-          // unobserved affirmation.
+          // This is one exact event per fence. A second event or an unwritable
+          // binding directory leaves the gate record unchanged.
         }
       }
     }
-    const rendered = renderHookDecision(decision);
-    if (rendered.length > 0) process.stdout.write(`${rendered}\n`);
     return 0;
   }
 

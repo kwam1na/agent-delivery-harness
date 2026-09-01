@@ -19,9 +19,8 @@
  *   - the projection digest, from the materialization receipt in the binding's
  *     own directory, re-verified against the worktree bytes;
  *   - the marker, read back out of the receipted projection subtree; and
- *   - the model-external interceptor's observation that an allowed invocation
- *     of THIS run named, in a member that names files, a receipted path under
- *     the projection subtree.
+ *   - the qualified Claude Code interceptor's post-invocation observation of
+ *     THIS run's exact Read of the canonical workflow graph.
  *
  * THE THIRD FACT IS THE ONLY ONE ABOUT THE RUN. The first two are both true
  * the instant materialization returns: the receipt matches the bytes the
@@ -30,23 +29,12 @@
  * MATERIALIZED, and the milestone would then score deliveries that resolved
  * everything from ambient discovery and never opened the run-pinned subtree.
  *
- * WHAT THE RECORD THEREFORE CERTIFIES, IN PLAIN WORDS: that an allowed
- * invocation of this run named, in a member that names files, a path the
- * materialization receipt lists. NOT that the run read that file, and NOT
- * that the run resolved its workflow from the projection. Two gaps stay open
- * and neither is closable from inside this module: a read the host performs
- * internally, without routing a path through its tool surface, is invisible —
- * a genuinely consuming delivery can go unobserved and is then excluded; and
- * a run that names a receipted file in a path member without reading it is
- * indistinguishable from one that reads it. The first fails safe. The second
- * is why this comment, the operation's own documentation, and anything
- * reporting on the milestone must say "named" and not "consumed".
- *
- * A THIRD GAP WAS CLOSED rather than documented: naming a receipted path in
- * FREE TEXT — a shell description, an edit's replaced text — used to mint an
- * observation, because receipted paths are not secret and are enumerable from
- * the pinned generation. The binding now considers only the members that name
- * files, which is where a host's tool vocabulary belongs.
+ * WHAT THE RECORD THEREFORE CERTIFIES, IN PLAIN WORDS: that the qualified
+ * host emitted a PostToolUse event for its Read of the receipt-derived,
+ * canonical workflow graph path, bound to this delivery, fence, invocation,
+ * and projection digest. Reads that do not use this qualified surface —
+ * including unsupported hosts and host-internal reads — are excluded rather
+ * than inferred.
  *
  * A caller supplies only WHICH run it is asking about (delivery and fence) and
  * which baseline category the delivery is measured under. If the binding's own
@@ -59,22 +47,15 @@
  * consumption record — plus the identity and admission flag that record
  * justifies, and preserves every other byte of the artifact it finds.
  *
- * WHAT IS HOST-NEUTRAL HERE, AND WHAT IS NOT. The record contract the
- * consuming guard reads knows nothing about hosts, and neither does this
- * writer: it names no tool, no tool-input member, and no host vocabulary. The
- * per-binding half is the observation PRODUCER — the surface on which a
- * binding notices that a run named a projection entry — and it reaches this
- * module only through the observation contract below, which any binding can
- * write. The receipt and marker readers this module imports from the Claude
- * Code binding are host-neutral in substance (they read the product's own
- * projection layout and receipt, and reference nothing host-specific); they
- * live in that module for historical reasons only, and a second host
- * integration should relocate them rather than duplicate this writer.
+ * THIS WRITER INTENTIONALLY ADMITS ONLY THE QUALIFIED CLAUDE CODE SURFACE.
+ * It does not provide a generic cross-host observation contract or parity
+ * layer: unsupported hosts simply have no affirmative evidence.
  */
-import { open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { readConsumptionMarker, verifyProjection } from "./claude-code.ts";
+import { PROJECTION_DIR, readConsumptionMarker, verifyProjection } from "./claude-code.ts";
+import { WORKFLOW_GRAPH_ENTRY } from "../workflow/graph.ts";
 
 /**
  * THE BINDING-TO-WRITER OBSERVATION CONTRACT.
@@ -83,24 +64,28 @@ import { readConsumptionMarker, verifyProjection } from "./claude-code.ts";
  * model-external surface and never by a session: the worktree is
  * session-writable, this directory is not.
  *
- * This shape, not the mechanism that produces it, is what the writer depends
- * on. HOW a run is observed to name a projection entry is per-binding and
- * host-specific — the Claude Code binding reads its PreToolUse interceptor's
- * arguments; another host's binding will have a different surface, and the
- * plan's rule is that host differences surface as graded capabilities rather
- * than divergent contracts. A second binding satisfies this by writing this
- * same file from whatever surface it has. Nothing here names a tool, a member,
- * or anything else from a host's vocabulary, and the writer's containment
- * check compares against the product's own receipt entries for the same
- * reason.
+ * The file is accepted only when it carries the qualified Claude Code
+ * PostToolUse Read event shape below. The writer deliberately offers no
+ * fallback for another host.
  */
 export interface ProjectionConsumptionObservation {
+  /** Only the qualified Claude Code post-read interceptor may mint this. */
+  readonly source?: typeof PROJECTION_CONSUMPTION_OBSERVATION_SOURCE;
   readonly deliveryId?: string;
   readonly fence?: number;
-  /** The projection-relative entry an allowed invocation of this run named. */
+  /** The canonical workflow graph entry, derived from the binding receipt. */
   readonly entry?: string;
+  /** The exact canonical path the host's Read invocation completed against. */
+  readonly canonicalProjectionPath?: string;
+  /** The digest the binding receipt bound when this post-read event arrived. */
+  readonly projectionDigest?: string;
+  /** The host-generated identity of the completed Read invocation. */
+  readonly hostInvocationId?: string;
   readonly observedAt?: string;
 }
+
+/** The sole evidence producer this writer admits; unsupported hosts stay out. */
+export const PROJECTION_CONSUMPTION_OBSERVATION_SOURCE = "claude-code-post-tool-use-read/1";
 
 export const projectionConsumptionObservationFile = (fence: number): string =>
   `projection-consumption-${fence}.json`;
@@ -240,11 +225,23 @@ export async function emitProjectionConsumptionRecord(
   } catch {
     return unobserved("projection-not-consumed");
   }
+  let canonicalWorkflowPath: string;
+  try {
+    canonicalWorkflowPath = await realpath(
+      path.join(input.worktreeDir, PROJECTION_DIR, ...WORKFLOW_GRAPH_ENTRY.split("/")),
+    );
+  } catch {
+    return unobserved("projection-not-consumed");
+  }
   if (
+    observation.source !== PROJECTION_CONSUMPTION_OBSERVATION_SOURCE ||
     observation.deliveryId !== input.deliveryId ||
     observation.fence !== input.fence ||
-    typeof observation.entry !== "string" ||
-    observation.entry.length === 0 ||
+    observation.entry !== WORKFLOW_GRAPH_ENTRY ||
+    observation.canonicalProjectionPath !== canonicalWorkflowPath ||
+    observation.projectionDigest !== projection.projectionDigest ||
+    typeof observation.hostInvocationId !== "string" ||
+    observation.hostInvocationId.length === 0 ||
     // CONTAINMENT. DO NOT DELETE THIS AS A DUPLICATE OF THE BINDING'S CHECK —
     // it is the same question asked of differently trusted state.
     //
@@ -266,7 +263,7 @@ export async function emitProjectionConsumptionRecord(
     // worktree changed after the observation fails verification rather than
     // emitting. The most a delay can cost is a stale provenance, never a
     // claim about bytes that are no longer there.
-    !projection.entries.includes(observation.entry)
+    !projection.entries.includes(WORKFLOW_GRAPH_ENTRY)
   ) {
     return unobserved("projection-not-consumed");
   }
