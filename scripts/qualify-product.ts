@@ -766,6 +766,66 @@ const commitAll = (cwd: string, message: string): void => {
 const treeOf = (worktree: string): string => git(worktree, "rev-parse", "HEAD^{tree}");
 
 /**
+ * Bind the packed product to the disposable repository's actual policy
+ * material. The facade intentionally has no disposable default: this driver
+ * is the adopter and must resolve the installed exports, trusted base
+ * charters, installation trust epoch, sensor capability, and outcome
+ * authority before construction.
+ */
+function packedDisposablePolicyBinding(
+  product: Record<string, any>,
+  repoDir: string,
+  repositoryId: string,
+  admission: unknown,
+  installationPath: string,
+): Record<string, any> {
+  const trustStorePathFor = product["trustStorePathFor"];
+  const parseTrustState = product["parseTrustState"];
+  const compileDisposableCompiledPolicy = product["compileDisposableCompiledPolicy"];
+  const sha256Hex = product["sha256Hex"];
+  if (typeof trustStorePathFor !== "function" || typeof parseTrustState !== "function" || typeof compileDisposableCompiledPolicy !== "function" || typeof sha256Hex !== "function") {
+    throw new Error("the installed product does not publish the policy-binding primitives required by an adopter");
+  }
+  const trustVerdict = parseTrustState(readFileSync(trustStorePathFor(installationPath), "utf8"));
+  if (trustVerdict?.ok !== true) throw new Error(`the installed product trust state is invalid: ${JSON.stringify(trustVerdict)}`);
+
+  const reviewLenses = product["DISPOSABLE_REVIEW_LENSES"] as readonly { readonly personaId: string }[] | undefined;
+  const sensor = product["DISPOSABLE_SENSOR_CAPABILITY"] as
+    | { readonly descriptor: { readonly capabilityId: string }; readonly trustedBasePath: string }
+    | undefined;
+  const outcomeAuthorities = product["DISPOSABLE_OUTCOME_AUTHORITIES"] as readonly string[] | undefined;
+  if (reviewLenses === undefined || sensor === undefined || outcomeAuthorities === undefined) {
+    throw new Error("the installed product does not publish the disposable policy facts required by an adopter");
+  }
+  const personaSources = Object.fromEntries(
+    reviewLenses.map(({ personaId }) => {
+      const expectedName = personaId.replace(/^persona\./u, "");
+      const trustedBasePath = Object.keys(PERSONA_MARKDOWN).find((relative) => path.basename(relative, ".md") === expectedName);
+      if (trustedBasePath === undefined) throw new Error(`the qualification repository has no trusted charter for ${personaId}`);
+      // Preserve the exact newline-bearing file bytes. The facade compares
+      // these against the exec-port's untrimmed trusted-base observation.
+      const bytes = execFileSync("git", ["show", `main:${trustedBasePath}`], { cwd: repoDir, encoding: "utf8" });
+      return [personaId, { origin: "repository", bytes, digest: sha256Hex(bytes), trustedBasePath }];
+    }),
+  );
+  const compiledPolicy = compileDisposableCompiledPolicy({
+    repositoryId,
+    productTrustRevocationEpoch: trustVerdict.state.revocationEpoch,
+    // The disposable repository declares no separate repository-authority
+    // store; its compiled policy therefore pins the fixture's zero epoch.
+    repositoryAuthorityRevocationEpoch: 0,
+    personaBytes: Object.fromEntries(Object.entries(personaSources).map(([personaId, source]) => [personaId, source.bytes])),
+    admission,
+  });
+  return {
+    compiledPolicy,
+    personaSources,
+    sensor: { capabilityId: sensor.descriptor.capabilityId, trustedBasePath: sensor.trustedBasePath },
+    outcomeAuthorities: [...outcomeAuthorities],
+  };
+}
+
+/**
  * Stamps one disposable repository at its trusted pre-run base: the gate
  * config, its own acceptance sensor, its reviewer charters, and the kernel
  * link the tracked config imports — which points at the INSTALLED tree, never
@@ -1358,9 +1418,10 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
   };
 
   const configModule = await import(pathToFileURL(path.join(repoDir, "harness.config.ts")).href);
+  const policyBinding = packedDisposablePolicyBinding(product, repoDir, spec.repositoryId, configModule.default, input.installationPath);
   const facade = product["createManagedDeliveryFacade"]({
     repoDir,
-    config: configModule.default,
+    policyBinding,
     installation: { installationPath: input.installationPath, receiptDir: input.receiptDir },
     hostVersion: input.hostVersion,
     exec,
@@ -1689,9 +1750,10 @@ async function probeBindRefusesMissingHookEntry(
   const repoDir = path.join(input.scratch, "repo-missing-hook-entry");
   buildDisposableRepository(repoDir, spec, input.kernelDir);
   const config = await import(pathToFileURL(path.join(repoDir, "harness.config.ts")).href);
+  const policyBinding = packedDisposablePolicyBinding(input.product, repoDir, spec.repositoryId, config.default, installationPath);
   const facade = input.product["createManagedDeliveryFacade"]({
     repoDir,
-    config: config.default,
+    policyBinding,
     installation: { installationPath, receiptDir },
     hostVersion: HOST_VERSION,
   });
@@ -1758,9 +1820,10 @@ async function runNegativeProbes(input: NegativeInput): Promise<void> {
   const strangerDir = path.join(input.scratch, "repo-unlisted");
   buildDisposableRepository(strangerDir, strangerSpec, input.kernelDir);
   const strangerConfig = await import(pathToFileURL(path.join(strangerDir, "harness.config.ts")).href);
+  const strangerPolicyBinding = packedDisposablePolicyBinding(input.product, strangerDir, strangerSpec.repositoryId, strangerConfig.default, input.installationPath);
   const strangerFacade = input.product["createManagedDeliveryFacade"]({
     repoDir: strangerDir,
-    config: strangerConfig.default,
+    policyBinding: strangerPolicyBinding,
     installation: { installationPath: input.installationPath, receiptDir: input.receiptDir },
     hostVersion: HOST_VERSION,
   });
@@ -1888,9 +1951,10 @@ async function runNegativeProbes(input: NegativeInput): Promise<void> {
   const revokeRepoDir = path.join(input.scratch, "repo-revocation");
   buildDisposableRepository(revokeRepoDir, revokeSpec, input.kernelDir);
   const revokeConfig = await import(pathToFileURL(path.join(revokeRepoDir, "harness.config.ts")).href);
+  const revokePolicyBinding = packedDisposablePolicyBinding(input.product, revokeRepoDir, revokeSpec.repositoryId, revokeConfig.default, revokeInstallation);
   const revokeFacade = input.product["createManagedDeliveryFacade"]({
     repoDir: revokeRepoDir,
-    config: revokeConfig.default,
+    policyBinding: revokePolicyBinding,
     installation: { installationPath: revokeInstallation, receiptDir: revokeReceipts },
     hostVersion: HOST_VERSION,
   });
