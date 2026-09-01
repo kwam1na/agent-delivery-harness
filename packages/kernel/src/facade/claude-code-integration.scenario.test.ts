@@ -23,7 +23,7 @@
  * verified teardown, so the gate is the grade, not a hard-coded refusal.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,7 +32,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
 import { PROJECTION_DIR } from "../host/projection.ts";
-import { SHADOW_MILESTONE_GATE_RECORD_SPEC } from "../host/consumption-gate-record.ts";
+import {
+  SHADOW_MILESTONE_GATE_RECORD_PATH,
+  SHADOW_MILESTONE_GATE_RECORD_SPEC,
+} from "../host/consumption-gate-record.ts";
 import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec-port.ts";
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
 import { installComposition, packComposition } from "../substrate/installer.ts";
@@ -784,6 +787,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
   it.skipIf(process.platform !== "darwin")(
     "keeps a model's public-hook self-invocation out of authority while the genuine host callback records",
     async () => {
+      const gateRecordPath = gateRecord();
       const session = await openSession();
       const state = await bindingState(session.deliveryId);
       const authorityObservation = state.projectionConsumptionPath;
@@ -863,10 +867,8 @@ describe("the binding-sourced projection-consumption gate record", () => {
         deliveryId: session.deliveryId,
         fence: session.fence,
       });
-      const gateRecordPath = gateRecord("model-self-invocation");
       const recorded = await facade.recordProjectionConsumption({
         deliveryId: session.deliveryId,
-        gateRecordPath,
         category: "code",
       });
       must(recorded, "recordProjectionConsumption (host callback)");
@@ -874,17 +876,15 @@ describe("the binding-sourced projection-consumption gate record", () => {
     },
   );
 
-  /** The consuming repository's gate-record artifact, in the shape its guard reads. */
-  const gateRecord = (name: string): string => {
-    const dir = path.join(scratch, `gate-record-${name}`);
-    mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, "shadow-milestone-gate-record.json");
+  /** The facade derives this target from its protected repository context. */
+  const writeGateRecord = (file: string, repositoryId: string): string => {
+    mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(
       file,
       `${JSON.stringify(
         {
           spec: SHADOW_MILESTONE_GATE_RECORD_SPEC,
-          repositoryId: "athena",
+          repositoryId,
           comparisonSetRequirement: { mix: { code: 1, docs: 1, operations: 1 }, total: 3 },
           deliveries: [],
         },
@@ -894,6 +894,9 @@ describe("the binding-sourced projection-consumption gate record", () => {
     );
     return file;
   };
+
+  const gateRecord = (repositoryId = DISPOSABLE_CONTRACT.repository.repositoryId): string =>
+    writeGateRecord(path.join(repoDir, SHADOW_MILESTONE_GATE_RECORD_PATH), repositoryId);
 
   const entriesIn = (file: string): any[] =>
     (JSON.parse(readFileSync(file, "utf8")) as { deliveries: any[] }).deliveries;
@@ -926,12 +929,11 @@ describe("the binding-sourced projection-consumption gate record", () => {
   };
 
   it("gives a shadow delivery an entry the guard admits, and two deliveries two distinct entries", async () => {
-    const gateRecordPath = gateRecord("two-deliveries");
+    const gateRecordPath = gateRecord();
     const first = await openSession();
     await consumeProjection(first);
     const recorded = await facade.recordProjectionConsumption({
       deliveryId: first.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     must(recorded, "recordProjectionConsumption");
@@ -942,7 +944,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     must(
       await facade.recordProjectionConsumption({
         deliveryId: second.deliveryId,
-        gateRecordPath,
         category: "docs",
       }),
       "recordProjectionConsumption (second)",
@@ -970,13 +971,70 @@ describe("the binding-sourced projection-consumption gate record", () => {
     );
   });
 
+  it("refuses a cross-repository gate record without changing either artifact", async () => {
+    const sourceRecord = writeGateRecord(
+      path.join(scratch, "source", "shadow-milestone-gate-record.json"),
+      DISPOSABLE_CONTRACT.repository.repositoryId,
+    );
+    const targetRecord = gateRecord("athena");
+    const sourceBefore = readFileSync(sourceRecord, "utf8");
+    const targetBefore = readFileSync(targetRecord, "utf8");
+    const session = await openSession();
+    await consumeProjection(session);
+
+    const recorded = await facade.recordProjectionConsumption({
+      deliveryId: session.deliveryId,
+      category: "code",
+    });
+
+    expect(recorded.ok).toBe(false);
+    if (recorded.ok) return;
+    expect(recorded.blockers.map((blocker) => blocker.code)).toEqual([
+      "consumption_record_cross_repository_refused",
+    ]);
+    expect(readFileSync(sourceRecord, "utf8")).toBe(sourceBefore);
+    expect(readFileSync(targetRecord, "utf8")).toBe(targetBefore);
+  });
+
+  it("refuses a same-id record reached through a cross-repository directory symlink", async () => {
+    const policyDir = path.join(repoDir, path.dirname(SHADOW_MILESTONE_GATE_RECORD_PATH));
+    const externalPolicyDir = path.join(scratch, "symlinked-external-repository", ".agents", "policy");
+    const externalRecord = writeGateRecord(
+      path.join(externalPolicyDir, path.basename(SHADOW_MILESTONE_GATE_RECORD_PATH)),
+      DISPOSABLE_CONTRACT.repository.repositoryId,
+    );
+    const externalBefore = readFileSync(externalRecord, "utf8");
+    await rm(policyDir, { recursive: true, force: true });
+    symlinkSync(externalPolicyDir, policyDir, "dir");
+
+    try {
+      const session = await openSession();
+      await consumeProjection(session);
+      const recorded = await facade.recordProjectionConsumption({
+        deliveryId: session.deliveryId,
+        category: "code",
+      });
+
+      expect(recorded.ok).toBe(false);
+      if (recorded.ok) return;
+      expect(recorded.blockers.map((blocker) => blocker.code)).toEqual([
+        "consumption_record_cross_repository_refused",
+      ]);
+      expect(readFileSync(externalRecord, "utf8")).toBe(externalBefore);
+      expect(existsSync(`${externalRecord}.lock`)).toBe(false);
+    } finally {
+      await rm(policyDir, { recursive: true, force: true });
+      mkdirSync(policyDir, { recursive: true });
+    }
+  });
+
   it("keeps the one-shot observation slot open until an admissible name arrives", async () => {
     // THE LOCKOUT, end to end through the real interceptor: the observation
     // is recorded once per fence, so a name that could never be admitted must
     // not burn the slot. Searching a directory and then reading a file in it
     // is ordinary agent behavior, and the predicate's unit test cannot prove
     // the slot survives — only the binary's write path can.
-    const gateRecordPath = gateRecord("lockout");
+    const gateRecordPath = gateRecord();
     const session = await openSession();
 
     // A grep over the skills directory: names a DIRECTORY, which the receipt
@@ -990,7 +1048,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     });
     const afterSearch = await facade.recordProjectionConsumption({
       deliveryId: session.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     must(afterSearch, "recordProjectionConsumption (after the search)");
@@ -1000,7 +1057,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     await consumeProjection(session);
     const afterRead = await facade.recordProjectionConsumption({
       deliveryId: session.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     must(afterRead, "recordProjectionConsumption (after the read)");
@@ -1011,7 +1067,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
   });
 
   it("writes no entry for a delivery whose run never reached into the projection", async () => {
-    const gateRecordPath = gateRecord("untouched");
+    const gateRecordPath = gateRecord();
     const session = await openSession();
 
     // A fully bound delivery: the projection is materialized, the receipt
@@ -1021,7 +1077,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     // an affirmation of something nobody observed.
     const recorded = await facade.recordProjectionConsumption({
       deliveryId: session.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     must(recorded, "recordProjectionConsumption");
@@ -1034,7 +1089,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     await consumeProjection(session);
     const afterRead = await facade.recordProjectionConsumption({
       deliveryId: session.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     must(afterRead, "recordProjectionConsumption (after the read)");
@@ -1043,7 +1097,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
   });
 
   it("writes no entry for a delivery that never materialized a projection", async () => {
-    const gateRecordPath = gateRecord("unbound");
+    const gateRecordPath = gateRecord();
     sequence += 1;
     const presented = await facade.presentContract({
       contract: { ...DISPOSABLE_CONTRACT, contractId: `contract-cc-${sequence}` },
@@ -1061,7 +1115,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     // comparison set — the writer never invents one from the call itself.
     const recorded = await facade.recordProjectionConsumption({
       deliveryId: confirmed.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     expect(recorded.ok).toBe(false);
@@ -1069,7 +1122,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
   });
 
   it("writes no entry when the projection the binding materialized is gone", async () => {
-    const gateRecordPath = gateRecord("torn-down");
+    const gateRecordPath = gateRecord();
     const session = await openSession();
     must(await facade.tearDownWorkspaceProjection({ deliveryId: session.deliveryId }), "tearDownWorkspaceProjection");
 
@@ -1077,7 +1130,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     // consumption record is never written past a workspace-integrity refusal.
     const recorded = await facade.recordProjectionConsumption({
       deliveryId: session.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     expect(recorded.ok).toBe(false);
@@ -1102,7 +1154,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
    * constant.
    */
   it("denies the invocation at the spawned interceptor and records nothing once the attestation expires on the ambient clock", async () => {
-    const gateRecordPath = gateRecord("ambient-expiry");
+    const gateRecordPath = gateRecord();
 
     // The affirmative half: an attestation still valid on the wall clock is
     // admitted, and the consumption becomes an entry.
@@ -1110,7 +1162,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     expect(await consumeProjection(live)).toBe("");
     const emitted = await facade.recordProjectionConsumption({
       deliveryId: live.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     must(emitted, "recordProjectionConsumption (ambient-valid attestation)");
@@ -1150,7 +1201,6 @@ describe("the binding-sourced projection-consumption gate record", () => {
     // the delivery stays out of the comparison set rather than affirming.
     const unobserved = await facade.recordProjectionConsumption({
       deliveryId: stale.deliveryId,
-      gateRecordPath,
       category: "code",
     });
     must(unobserved, "recordProjectionConsumption (ambient-expired attestation)");

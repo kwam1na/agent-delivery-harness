@@ -23,6 +23,7 @@ import { PROJECTION_DIR } from "./projection.ts";
 import {
   SHADOW_MILESTONE_GATE_RECORD_SPEC,
   emitProjectionConsumptionRecord,
+  type EmitProjectionConsumptionInput,
 } from "./consumption-gate-record.ts";
 import {
   PROJECTION_CONSUMPTION_OBSERVATION_SPEC,
@@ -68,7 +69,11 @@ async function workbench(name: string): Promise<Workbench> {
 }
 
 /** The consuming repository's gate-record artifact, in the shape the guard reads. */
-async function gateRecordFile(name: string, deliveries: unknown[] = []): Promise<string> {
+async function gateRecordFile(
+  name: string,
+  deliveries: unknown[] = [],
+  repositoryId = "athena",
+): Promise<string> {
   const dir = await mkdtemp(path.join(scratch, `${name}-policy-`));
   const file = path.join(dir, "shadow-milestone-gate-record.json");
   writeFileSync(
@@ -76,7 +81,7 @@ async function gateRecordFile(name: string, deliveries: unknown[] = []): Promise
     `${JSON.stringify(
       {
         spec: SHADOW_MILESTONE_GATE_RECORD_SPEC,
-        repositoryId: "athena",
+        repositoryId,
         status: "awaiting-shadow-deliveries",
         comparisonSetRequirement: { mix: { code: 1, docs: 1, operations: 1 }, total: 3 },
         deliveries,
@@ -116,6 +121,19 @@ function observeConsumption(bench: Workbench, deliveryId: string, fence: number,
 const deliveriesIn = (file: string): any[] =>
   (JSON.parse(readFileSync(file, "utf8")) as { deliveries: any[] }).deliveries;
 
+/** The low-level writer receives its expected repository from the binding. */
+const emit = (
+  input: Omit<EmitProjectionConsumptionInput, "expectedRepositoryId" | "repositoryRoot"> & {
+    readonly expectedRepositoryId?: string;
+    readonly repositoryRoot?: string;
+  },
+) =>
+  emitProjectionConsumptionRecord({
+    ...input,
+    repositoryRoot: input.repositoryRoot ?? path.dirname(input.gateRecordPath),
+    expectedRepositoryId: input.expectedRepositoryId ?? "athena",
+  });
+
 beforeAll(async () => {
   scratch = await mkdtemp(path.join(tmpdir(), "consumption-gate-record-"));
 });
@@ -140,7 +158,7 @@ describe("emitProjectionConsumptionRecord", () => {
     observeConsumption(bench, "dlv-shadow-1", 1);
 
     const gateRecordPath = await gateRecordFile("observed");
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -177,7 +195,7 @@ describe("emitProjectionConsumptionRecord", () => {
     const gateRecordPath = await gateRecordFile("unobserved");
 
     // No materialization ran here: nothing but a claim exists.
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -205,7 +223,7 @@ describe("emitProjectionConsumptionRecord", () => {
       `${JSON.stringify({ deliveryId: "dlv-shadow-planted", fence: 1, consumed: "skills/agent-skills-core-v1.zip" })}\n`,
     );
 
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -233,7 +251,7 @@ describe("emitProjectionConsumptionRecord", () => {
     observeConsumption(bench, "dlv-shadow-2", 1);
     const gateRecordPath = await gateRecordFile("other-run");
 
-    const wrongFence = await emitProjectionConsumptionRecord({
+    const wrongFence = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -244,7 +262,7 @@ describe("emitProjectionConsumptionRecord", () => {
     if (!wrongFence.ok || wrongFence.emitted) throw new Error(JSON.stringify(wrongFence));
     expect(wrongFence.reason).toBe("marker-names-another-run");
 
-    const wrongDelivery = await emitProjectionConsumptionRecord({
+    const wrongDelivery = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -275,7 +293,7 @@ describe("emitProjectionConsumptionRecord", () => {
       expect(materialized.ok).toBe(true);
       observeConsumption(bench, deliveryId, 1);
       for (const _attempt of [0, 1]) {
-        const emitted = await emitProjectionConsumptionRecord({
+        const emitted = await emit({
           gateRecordPath,
           worktreeDir: bench.worktreeDir,
           bindingDir: bench.bindingDir,
@@ -311,7 +329,7 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(materialized.ok).toBe(true);
     observeConsumption(bench, "dlv-shadow-prior", 1);
 
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -349,7 +367,7 @@ describe("emitProjectionConsumptionRecord", () => {
     // exactly the state a delivery is in when it resolved every skill from
     // ambient discovery and never opened the run-pinned subtree. Affirming
     // consumption here would put a false claim at the centre of the gate.
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -378,7 +396,7 @@ describe("emitProjectionConsumptionRecord", () => {
     // An observation filed under this fence but naming a different delivery
     // proves nothing about this one.
     observeConsumption(bench, "dlv-shadow-somebody-else", 1);
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -411,7 +429,7 @@ describe("emitProjectionConsumptionRecord", () => {
     // could have been read from it.
     for (const entry of ["skills/invented.md", "../escape.md", "workflows"]) {
       observeConsumption(bench, "dlv-shadow-uncontained", 1, entry);
-      const emitted = await emitProjectionConsumptionRecord({
+      const emitted = await emit({
         gateRecordPath,
         worktreeDir: bench.worktreeDir,
         bindingDir: bench.bindingDir,
@@ -428,7 +446,7 @@ describe("emitProjectionConsumptionRecord", () => {
     // several files, but reading a marker or a skill is not evidence that the
     // workflow source was read.
     observeConsumption(bench, "dlv-shadow-uncontained", 1, "workflows/delivery-v1.json");
-    const admitted = await emitProjectionConsumptionRecord({
+    const admitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -463,7 +481,7 @@ describe("emitProjectionConsumptionRecord", () => {
         entry: "workflows/delivery-v1.json",
       })}\n`,
     );
-    const planted = await emitProjectionConsumptionRecord({
+    const planted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -511,7 +529,7 @@ describe("emitProjectionConsumptionRecord", () => {
     const observationPath = path.join(bench.bindingDir, projectionConsumptionObservationFile(1));
     const mismatch = JSON.parse(readFileSync(observationPath, "utf8")) as Record<string, unknown>;
     writeFileSync(observationPath, `${JSON.stringify({ ...mismatch, projectionDigest: "0".repeat(64) })}\n`);
-    const mismatched = await emitProjectionConsumptionRecord({
+    const mismatched = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -549,7 +567,7 @@ describe("emitProjectionConsumptionRecord", () => {
     // silently, with both callers reporting success.
     const results = await Promise.all(
       benches.map(({ bench, deliveryId }) =>
-        emitProjectionConsumptionRecord({
+        emit({
           gateRecordPath,
           worktreeDir: bench.worktreeDir,
           bindingDir: bench.bindingDir,
@@ -589,7 +607,7 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(materialized.ok).toBe(true);
     observeConsumption(bench, "dlv-shadow-excluded", 1);
 
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -639,8 +657,9 @@ describe("emitProjectionConsumptionRecord", () => {
         2,
       )}\n`,
     );
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
+      expectedRepositoryId: "agent-delivery-harness",
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
       deliveryId: "dlv-shadow-harness",
@@ -649,6 +668,47 @@ describe("emitProjectionConsumptionRecord", () => {
     });
     expect(emitted.ok && emitted.emitted, JSON.stringify(emitted)).toBe(true);
     expect(deliveriesIn(gateRecordPath).map((entry) => entry.id)).toEqual(["dlv-shadow-harness"]);
+  });
+
+  it("refuses a cross-repository target without changing either repository's record", async () => {
+    const bench = await workbench("cross-repository-target");
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: "dlv-harness-cross-repository",
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok).toBe(true);
+    observeConsumption(bench, "dlv-harness-cross-repository", 1);
+
+    const harnessRecord = await gateRecordFile(
+      "cross-repository-source",
+      [],
+      "agent-delivery-harness",
+    );
+    const athenaRecord = await gateRecordFile("cross-repository-target", [], "athena");
+    const sourceBefore = readFileSync(harnessRecord, "utf8");
+    const targetBefore = readFileSync(athenaRecord, "utf8");
+
+    const emitted = await emit({
+      gateRecordPath: athenaRecord,
+      expectedRepositoryId: "agent-delivery-harness",
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-harness-cross-repository",
+      fence: 1,
+      category: "code",
+    });
+
+    expect(emitted.ok).toBe(false);
+    if (emitted.ok) return;
+    expect(emitted.blockers.map((blocker) => blocker.code)).toEqual([
+      "gate_record_repository_mismatch",
+    ]);
+    expect(readFileSync(harnessRecord, "utf8")).toBe(sourceBefore);
+    expect(readFileSync(athenaRecord, "utf8")).toBe(targetBefore);
   });
 
   it("refuses a gate record of another version, and anything that is not one", async () => {
@@ -671,7 +731,7 @@ describe("emitProjectionConsumptionRecord", () => {
       const dir = await mkdtemp(path.join(scratch, "version-guard-policy-"));
       const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
       writeFileSync(gateRecordPath, `${JSON.stringify({ spec, deliveries: [] }, null, 2)}\n`);
-      const emitted = await emitProjectionConsumptionRecord({
+      const emitted = await emit({
         gateRecordPath,
         worktreeDir: bench.worktreeDir,
         bindingDir: bench.bindingDir,
@@ -702,7 +762,7 @@ describe("emitProjectionConsumptionRecord", () => {
     const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
     writeFileSync(gateRecordPath, `${JSON.stringify({ spec: "something-else/1", deliveries: [] }, null, 2)}\n`);
 
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,
@@ -731,7 +791,7 @@ describe("emitProjectionConsumptionRecord", () => {
 
     const dir = await mkdtemp(path.join(scratch, "missing-artifact-policy-"));
     const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
-    const emitted = await emitProjectionConsumptionRecord({
+    const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
       bindingDir: bench.bindingDir,

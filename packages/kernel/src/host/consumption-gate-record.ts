@@ -73,20 +73,22 @@ import { WORKFLOW_GRAPH_ENTRY } from "../workflow/graph.ts";
  *
  * The suffix still carries the version, so a `/2` artifact is refused rather
  * than written into with `/1` semantics. This is a shape guard, not an
- * authorization, and it never was one: the writer's reach is fixed entirely by
- * `gateRecordPath` and it refuses to create a file, so a hostile spec grants
- * nothing that pointing the narrower writer at another repository's record did
- * not already grant.
+ * authorization, and it never was one: the public facade derives one canonical
+ * target from its protected repository context, and this writer rechecks that
+ * target record's repository identity before it creates a lock or replaces a
+ * byte. A hostile spec therefore grants nothing.
  *
- * What the widening does cost is a MISCONFIGURATION guard. Pointing this
- * repository's binding at Athena's gate record used to be refused by the spec
- * mismatch; now it silently succeeds, so a mistyped `gateRecordPath` lands a
- * delivery in the wrong repository's comparison set instead of erroring.
+ * The suffix permits adopters to keep their own record spelling, while the
+ * derived expected repository identity prevents one adopter's delivery from
+ * entering another adopter's comparison set.
  */
 export const SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX = "shadow-milestone-gate-record/1";
 
 /** Athena's spelling of it — the first consumer, kept for callers that name it. */
 export const SHADOW_MILESTONE_GATE_RECORD_SPEC = `athena-${SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX}`;
+
+/** The only milestone record a delivery facade may address in its repository. */
+export const SHADOW_MILESTONE_GATE_RECORD_PATH = ".agents/policy/shadow-milestone-gate-record.json";
 
 const isGateRecordSpec = (value: unknown): boolean =>
   typeof value === "string" &&
@@ -111,6 +113,7 @@ export interface ProjectionConsumptionRecord {
 export const CONSUMPTION_GATE_RECORD_BLOCKER_CODES = Object.freeze([
   "gate_record_unreadable",
   "gate_record_unrecognized",
+  "gate_record_repository_mismatch",
   "gate_record_locked",
   "gate_record_write_failed",
 ] as const);
@@ -136,8 +139,12 @@ export type EmitProjectionConsumptionResult =
     };
 
 export interface EmitProjectionConsumptionInput {
-  /** The milestone gate-record artifact in the consuming repository. */
+  /** The facade-resolved canonical milestone record in the consuming repository. */
   readonly gateRecordPath: string;
+  /** The facade's repository root, used to refuse path aliases that escape it. */
+  readonly repositoryRoot: string;
+  /** Derived from the accepted delivery contract, never from the session. */
+  readonly expectedRepositoryId: string;
   readonly worktreeDir: string;
   /** The binding's own directory, holding the materialization receipt. */
   readonly bindingDir: string;
@@ -245,6 +252,18 @@ export async function emitProjectionConsumptionRecord(
     marker: { deliveryId: marker.deliveryId, fence: marker.fence, consumed: marker.consumed },
   };
 
+  // A repository-relative spelling is not containment when an ancestor is a
+  // symlink. Resolve the repository and record before touching either the
+  // artifact or an adjacent lock, then use those resolved paths for every
+  // later I/O so aliases of the same in-repository record share one lock.
+  const target = await resolveGateRecordTarget(input);
+  if ("ok" in target) return target;
+  const scopedInput: EmitProjectionConsumptionInput = {
+    ...input,
+    gateRecordPath: target.gateRecordPath,
+    repositoryRoot: target.repositoryRoot,
+  };
+
   // ── The durable entry ─────────────────────────────────────────────────────
   //
   // Three shadow deliveries share ONE artifact, so the read-modify-write below
@@ -254,7 +273,13 @@ export async function emitProjectionConsumptionRecord(
   // neither caller seeing a failure. The lock is an exclusive-create file
   // released in `finally`, and the publish is temp-then-rename, so a crash
   // mid-write leaves the previous artifact intact rather than a truncated one.
-  const lockPath = `${input.gateRecordPath}.lock`;
+  // Refuse an unrecognised or cross-repository target before creating even the
+  // adjacent lock file. The lock serializes an otherwise valid writer; it is
+  // not authority to touch an arbitrary artifact.
+  const preflight = await readGateRecord(scopedInput);
+  if ("ok" in preflight) return preflight;
+
+  const lockPath = `${scopedInput.gateRecordPath}.lock`;
   let lock: Awaited<ReturnType<typeof open>>;
   try {
     lock = await open(lockPath, "wx");
@@ -267,11 +292,47 @@ export async function emitProjectionConsumptionRecord(
     );
   }
   try {
-    return await writeEntry(input, record, lockPath);
+    return await writeEntry(scopedInput, record, lockPath);
   } finally {
     await lock.close().catch(() => undefined);
     await rm(lockPath, { force: true }).catch(() => undefined);
   }
+}
+
+async function resolveGateRecordTarget(
+  input: EmitProjectionConsumptionInput,
+): Promise<
+  | { readonly repositoryRoot: string; readonly gateRecordPath: string }
+  | EmitProjectionConsumptionResult
+> {
+  let repositoryRoot: string;
+  let gateRecordParent: string;
+  let gateRecordPath: string;
+  try {
+    [repositoryRoot, gateRecordParent, gateRecordPath] = await Promise.all([
+      realpath(input.repositoryRoot),
+      realpath(path.dirname(input.gateRecordPath)),
+      realpath(input.gateRecordPath),
+    ]);
+  } catch (error) {
+    return fail(
+      "gate_record_unreadable",
+      `${input.gateRecordPath} cannot be resolved inside its repository: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const isInsideRepository = (candidate: string): boolean => {
+    const relative = path.relative(repositoryRoot, candidate);
+    return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  };
+  if (!isInsideRepository(gateRecordParent) || !isInsideRepository(gateRecordPath)) {
+    return fail(
+      "gate_record_repository_mismatch",
+      `${input.gateRecordPath} resolves outside repository ${repositoryRoot}; the writer refuses a symlinked cross-repository gate target before changing either record`,
+    );
+  }
+  return { repositoryRoot, gateRecordPath };
 }
 
 async function writeEntry(
@@ -279,40 +340,10 @@ async function writeEntry(
   record: ProjectionConsumptionRecord,
   lockPath: string,
 ): Promise<EmitProjectionConsumptionResult> {
-  let text: string;
-  try {
-    text = await readFile(input.gateRecordPath, "utf8");
-  } catch (error) {
-    // The artifact belongs to the consuming repository and is created there.
-    // Writing one here would invent a measurement surface out of a wrong path.
-    return fail(
-      "gate_record_unreadable",
-      `${input.gateRecordPath} is not readable, so no consumption record can be added to it: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  let document: Record<string, unknown>;
-  try {
-    document = JSON.parse(text) as Record<string, unknown>;
-  } catch (error) {
-    return fail(
-      "gate_record_unreadable",
-      `${input.gateRecordPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  if (
-    typeof document !== "object" ||
-    document === null ||
-    !isGateRecordSpec(document["spec"]) ||
-    !Array.isArray(document["deliveries"])
-  ) {
-    return fail(
-      "gate_record_unrecognized",
-      `${input.gateRecordPath} does not declare a <consumer>-${SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX} spec with a deliveries list; the writer edits a milestone gate record and nothing else`,
-    );
-  }
+  const loaded = await readGateRecord(input);
+  if ("ok" in loaded) return loaded;
 
+  const document = loaded.document;
   const deliveries = [...(document["deliveries"] as unknown[])];
   const index = deliveries.findIndex(
     (entry) => typeof entry === "object" && entry !== null && (entry as Record<string, unknown>)["id"] === input.deliveryId,
@@ -348,9 +379,51 @@ async function writeEntry(
     await rm(tempPath, { force: true }).catch(() => undefined);
     return fail(
       "gate_record_write_failed",
-      `writing ${input.gateRecordPath} failed: ${error instanceof Error ? error.message : String(error)}`,
+      `writing ${input.gateRecordPath} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     );
   }
 
   return { ok: true, emitted: true, record };
+}
+
+async function readGateRecord(
+  input: EmitProjectionConsumptionInput,
+): Promise<{ readonly document: Record<string, unknown> } | EmitProjectionConsumptionResult> {
+  let text: string;
+  try {
+    text = await readFile(input.gateRecordPath, "utf8");
+  } catch (error) {
+    return fail(
+      "gate_record_unreadable",
+      `${input.gateRecordPath} is not readable, so no consumption record can be added to it: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  let document: Record<string, unknown>;
+  try {
+    document = JSON.parse(text) as Record<string, unknown>;
+  } catch (error) {
+    return fail("gate_record_unreadable", `${input.gateRecordPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (
+    typeof document !== "object" ||
+    document === null ||
+    !isGateRecordSpec(document["spec"]) ||
+    !Array.isArray(document["deliveries"])
+  ) {
+    return fail(
+      "gate_record_unrecognized",
+      `${input.gateRecordPath} does not declare a <consumer>-${SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX} spec with a deliveries list; the writer edits a milestone gate record and nothing else`,
+    );
+  }
+  if (document["repositoryId"] !== input.expectedRepositoryId) {
+    return fail(
+      "gate_record_repository_mismatch",
+      `${input.gateRecordPath} declares repositoryId ${JSON.stringify(document["repositoryId"])}, but this delivery is bound to ${JSON.stringify(input.expectedRepositoryId)}; the writer refuses a cross-repository gate target before changing either record`,
+    );
+  }
+  return { document };
 }

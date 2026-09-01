@@ -116,6 +116,7 @@ import {
 import { PROJECTION_RECEIPT_FILE, readConsumptionMarker, verifyProjection } from "../host/projection.ts";
 import {
   emitProjectionConsumptionRecord,
+  SHADOW_MILESTONE_GATE_RECORD_PATH,
   type ProjectionConsumptionUnobserved,
 } from "../host/consumption-gate-record.ts";
 import { projectionConsumptionObservationFile } from "../projection-consumption-observation.ts";
@@ -927,26 +928,24 @@ export interface ManagedDeliveryFacade {
    * Turns the binding's own observation into a durable entry in the shadow
    * milestone's gate-record artifact.
    *
-   * The caller names the delivery, the artifact, and the baseline category the
-   * delivery is measured under — never the observation itself. The delivery
-   * and fence the record binds come from the binding's own workspace record,
+   * The caller names the delivery and baseline category — never the target or
+   * observation. The target is the canonical gate-record path under the
+   * facade's protected repository root, and the expected repository identity
+   * comes from the accepted delivery contract. The delivery and fence the
+   * record binds come from the binding's own workspace record,
    * and the record's contents are re-derived from the materialization receipt,
    * the marker in the worktree, and the model-external interceptor's record of
    * this run's invocations, so no caller can assert what the binding did not
    * observe. When it did not, nothing is written and the delivery stays out of
    * the comparison set.
    *
-   * WHAT AN EMITTED ENTRY CERTIFIES: that an allowed invocation of this run
-   * NAMED, in a member that names files, a receipted path under the run-pinned
-   * projection subtree. Not that the run read that file, and not that it
-   * resolved its workflow from the projection. A read the host performs
-   * internally, without routing a path through its tool surface, is not
-   * observed at all — such a delivery is excluded rather than affirmed.
+    * WHAT AN EMITTED ENTRY CERTIFIES: that the qualified host emitted a
+    * PostToolUse event for this run's completed exact Read of the receipted
+    * canonical workflow source. Reads outside that qualified surface are not
+    * observed at all — such a delivery is excluded rather than affirmed.
    */
   recordProjectionConsumption(input: {
     readonly deliveryId: string;
-    /** The milestone gate-record artifact in the consuming repository. */
-    readonly gateRecordPath: string;
     readonly category: string;
   }): Promise<
     | { readonly ok: true; readonly emitted: true; readonly projectionDigest: string }
@@ -4353,7 +4352,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       return { ok: true, descendantTeardown, resumeEligibility };
     },
 
-    async recordProjectionConsumption({ deliveryId, gateRecordPath, category }) {
+    async recordProjectionConsumption({ deliveryId, category }) {
       // The canonical recheck first: an entry must never be written about a
       // delivery whose trust, installation, or projection binding no longer
       // holds. `verifyWorkspace` re-verifies the projection here for the same
@@ -4378,7 +4377,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         );
       }
       const emitted = await emitProjectionConsumptionRecord({
-        gateRecordPath,
+        // Neither target nor repository identity is caller-selectable. Both
+        // are derived from the protected facade context after the canonical
+        // delivery recheck, so a delivery cannot redirect its evidence into a
+        // different adopter's comparison authority.
+        gateRecordPath: path.join(input.repoDir, SHADOW_MILESTONE_GATE_RECORD_PATH),
+        repositoryRoot: input.repoDir,
+        expectedRepositoryId: guarded.meta.contract.repository.repositoryId,
         worktreeDir: guarded.workspace.worktreeDir,
         bindingDir: path.join(await deliveryDir(deliveryId), "binding"),
         // The run the record binds is the BINDING's, read from the workspace
@@ -4389,10 +4394,17 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         category,
       });
       if (!emitted.ok) {
+        const crossRepository = emitted.blockers.some(
+          (blocker) => blocker.code === "gate_record_repository_mismatch",
+        );
         return refuse(
-          "consumption_record_write_failed",
+          crossRepository
+            ? "consumption_record_cross_repository_refused"
+            : "consumption_record_write_failed",
           `Recording the projection-consumption entry failed: ${emitted.blockers.map((blocker) => blocker.message).join("; ")}`,
-          "Point the writer at the consuming repository's milestone gate-record artifact.",
+          crossRepository
+            ? "Restore the canonical gate record's repositoryId to the accepted delivery repository; cross-repository targets are refused."
+            : "Restore the consuming repository's canonical milestone gate-record artifact.",
         );
       }
       return emitted.emitted

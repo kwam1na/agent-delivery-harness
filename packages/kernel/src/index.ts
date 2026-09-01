@@ -803,15 +803,13 @@ export {
   type ReadConsumptionMarkerResult,
   type VerifyProjectionResult,
 } from "./host/projection.ts";
-// The binding's writer: an observed projection consumption becomes a durable
-// gate-record entry, or nothing at all.
+// The binding's gate-record contract. Mutation stays internal to the
+// repository-bound managed-delivery facade.
 export {
   CONSUMPTION_GATE_RECORD_BLOCKER_CODES,
   SHADOW_MILESTONE_GATE_RECORD_SPEC,
   SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX,
-  emitProjectionConsumptionRecord,
   type ConsumptionGateRecordBlockerCode,
-  type EmitProjectionConsumptionInput,
   type EmitProjectionConsumptionResult,
   type ProjectionConsumptionRecord,
   type ProjectionConsumptionUnobserved,
