@@ -2097,7 +2097,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (trust === undefined) {
       return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
     }
-    if (meta.policyBindingDigest !== compiledAdopterPolicyBindingDigest(policyBinding)) {
+    if (meta.policyBindingDigest !== policyBindingDigest) {
       return refuse(
         "policy_binding_mismatch",
         "The presented intake was bound to different adopter policy material.",
