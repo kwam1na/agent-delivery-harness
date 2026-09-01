@@ -22,7 +22,9 @@ import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   FACADE_OPERATIONS,
+  compiledAdopterPolicyBindingDigest,
   createManagedDeliveryFacade,
+  type CompiledAdopterPolicyBinding,
   type ManagedDeliveryFacade,
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
@@ -116,7 +118,7 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
     return blocked("not_a_repository", "The working directory is not a git repository.", "Run from the delivery worktree.");
   }
   const namespace = path.join(common, "managed-delivery");
-  let pointer: { installationPath: string; receiptDir: string; hostVersion: string };
+  let pointer: { installationPath: string; receiptDir: string; hostVersion: string; policyBindingDigest: string };
   try {
     pointer = JSON.parse(await readFile(path.join(namespace, "facade.json"), "utf8")) as typeof pointer;
   } catch {
@@ -179,9 +181,28 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
       );
     }
   }
+  let policyBinding: CompiledAdopterPolicyBinding | undefined = context.policyBinding;
+  if (policyBinding === undefined) {
+    try {
+      policyBinding = JSON.parse(await readFile(path.join(namespace, "policy-binding.json"), "utf8")) as CompiledAdopterPolicyBinding;
+    } catch {
+      return blocked(
+        "policy_binding_missing",
+        "No compiled adopter policy binding is retained for this delivery.",
+        "Register the delivery through an adopter binding, or pass one through the embedding runtime.",
+      );
+    }
+  }
+  if (pointer.policyBindingDigest !== compiledAdopterPolicyBindingDigest(policyBinding)) {
+    return blocked(
+      "policy_binding_mismatch",
+      "The retained compiled adopter policy binding does not match the product namespace pointer.",
+      "Restore the exact binding captured at registration; drift requires a new owner-approved delivery.",
+    );
+  }
   const facade = createManagedDeliveryFacade({
     repoDir: context.rootDir,
-    config: context.config,
+    policyBinding,
     installation: { installationPath: pointer.installationPath, receiptDir: pointer.receiptDir },
     hostVersion: pointer.hostVersion,
   });

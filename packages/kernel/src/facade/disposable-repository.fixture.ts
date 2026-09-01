@@ -16,7 +16,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineHarnessConfig, type HarnessConfig } from "../config.ts";
 import { PINNED_AGENT_SKILLS } from "../spine/composition.ts";
-import { DISPOSABLE_REVIEW_LENSES } from "../policy/disposable.ts";
+import {
+  DISPOSABLE_OUTCOME_AUTHORITIES,
+  DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS,
+  DISPOSABLE_REVIEW_LENSES,
+  DISPOSABLE_SENSOR_CAPABILITY,
+  compileDisposableCompiledPolicy,
+} from "../policy/disposable.ts";
 import { sha256Hex } from "../digest.ts";
 import type { AcceptedContract } from "../spine/contract.ts";
 import {
@@ -27,7 +33,7 @@ import {
   type ProviderReviewResult,
   type ProviderReviewVerdict,
 } from "../host/provider-review-result.ts";
-import type { FacadeFailure, ManagedDeliveryFacade } from "./managed-delivery.ts";
+import type { CompiledAdopterPolicyBinding, FacadeFailure, ManagedDeliveryFacade } from "./managed-delivery.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CHECKOUT_ROOT = path.resolve(HERE, "..", "..", "..", "..");
@@ -209,6 +215,40 @@ export default defineHarnessConfig(${JSON.stringify(CONFIG_INPUT, null, 2)});
 
 export function disposableHarnessConfig(): HarnessConfig {
   return defineHarnessConfig(CONFIG_INPUT);
+}
+
+/** The explicit disposable call-site binding for facade characterization. */
+export function disposablePolicyBinding(repositoryId = "disposable-skeleton", productTrustRevocationEpoch = 0): CompiledAdopterPolicyBinding {
+  const personaSources = Object.fromEntries(
+    Object.entries(DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS).map(([personaId, trustedBasePath]) => {
+      const bytes = PERSONA_MARKDOWN[trustedBasePath] as string;
+      return [personaId, { origin: "repository" as const, bytes, digest: sha256Hex(bytes), trustedBasePath }];
+    }),
+  );
+  return {
+    compiledPolicy: compileDisposableCompiledPolicy({
+      repositoryId,
+      productTrustRevocationEpoch,
+      repositoryAuthorityRevocationEpoch: 0,
+      personaBytes: Object.fromEntries(Object.entries(personaSources).map(([personaId, source]) => [personaId, source.bytes])),
+      admission: CONFIG_INPUT,
+    }),
+    personaSources,
+    sensor: {
+      capabilityId: DISPOSABLE_SENSOR_CAPABILITY.descriptor.capabilityId,
+      trustedBasePath: DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath,
+    },
+    outcomeAuthorities: DISPOSABLE_OUTCOME_AUTHORITIES,
+  };
+}
+
+/** Rebinds a NEW qualification delivery to the installation's current trust epoch. */
+export function disposablePolicyBindingForInstallation(
+  installationPath: string,
+  repositoryId = "disposable-skeleton",
+): CompiledAdopterPolicyBinding {
+  const trust = JSON.parse(readFileSync(path.join(installationPath, "trust", "product-trust.json"), "utf8")) as { revocationEpoch: number };
+  return disposablePolicyBinding(repositoryId, trust.revocationEpoch);
 }
 
 const git = (cwd: string, ...args: string[]): void => {

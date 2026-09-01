@@ -50,6 +50,8 @@ import {
   GREET_WRONG,
   buildDisposableRepository,
   disposableHarnessConfig,
+  disposablePolicyBinding,
+  disposablePolicyBindingForInstallation,
   fixtureProviderBindingCapability,
   fixtureProviderReview,
   ingestFixtureProviderReview,
@@ -148,7 +150,7 @@ beforeAll(async () => {
 
   facade = createManagedDeliveryFacade({
     repoDir,
-    config: disposableHarnessConfig(),
+    policyBinding: disposablePolicyBinding(),
     installation: { installationPath, receiptDir },
     hostVersion: "2.1.97",
     exec: recordingExecPort(),
@@ -568,6 +570,15 @@ describe("the thin one-handoff walking skeleton", () => {
     // A second delivery whose projection is tampered mid-run: the canonical
     // recheck fails closed, records a typed blocker, and `explain` renders it
     // with a remediation that names no internal command.
+    // This is a NEW delivery after the prior test's revoke/unrevoke cycle.
+    // Rebind only this new registration to the current trust epoch.
+    facade = createManagedDeliveryFacade({
+      repoDir,
+      policyBinding: disposablePolicyBindingForInstallation(installationPath),
+      installation: { installationPath, receiptDir },
+      hostVersion: "2.1.97",
+      exec: recordingExecPort(),
+    });
     const presented = await facade.presentContract({
       contract: { ...DISPOSABLE_CONTRACT, contractId: "contract-greeting-2" },
       expiry: EXPIRY,

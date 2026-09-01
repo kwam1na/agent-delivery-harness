@@ -30,11 +30,13 @@ import { installComposition, packComposition } from "../substrate/installer.ts";
 import { createQualificationFixtureAssertionSource } from "../substrate/assertion-source.ts";
 import { maintainTrustState, updateComposition } from "../substrate/lifecycle.ts";
 import { evaluateMigrationConsumption } from "./migration.ts";
-import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
+import { createManagedDeliveryFacade, type CompiledAdopterPolicyBinding, type ManagedDeliveryFacade } from "./managed-delivery.ts";
 import {
   DISPOSABLE_CONTRACT,
   buildDisposableRepository,
   disposableHarnessConfig,
+  disposablePolicyBinding,
+  disposablePolicyBindingForInstallation,
   fixtureProviderBindingCapability,
 } from "./disposable-repository.fixture.ts";
 
@@ -87,13 +89,22 @@ const installFixture = async (
   return { installationPath, receiptDir };
 };
 
-const facadeFor = (installation: { installationPath: string; receiptDir: string }): ManagedDeliveryFacade =>
+const facadeForBinding = (
+  installation: { installationPath: string; receiptDir: string },
+  policyBinding: CompiledAdopterPolicyBinding,
+): ManagedDeliveryFacade =>
   createManagedDeliveryFacade({
     repoDir,
-    config: disposableHarnessConfig(),
+    policyBinding,
     installation,
     hostVersion: "2.1.97",
   });
+
+const facadeFor = (installation: { installationPath: string; receiptDir: string }): ManagedDeliveryFacade =>
+  facadeForBinding(installation, disposablePolicyBinding());
+
+const facadeForCurrentEpoch = (installation: { installationPath: string; receiptDir: string }): ManagedDeliveryFacade =>
+  facadeForBinding(installation, disposablePolicyBindingForInstallation(installation.installationPath));
 
 /** Contract handoff through the fixture confirmation channel. */
 const registerDelivery = async (facade: ManagedDeliveryFacade, contractId: string): Promise<string> => {
@@ -212,6 +223,7 @@ describe("qualification use-time binding", () => {
 
 describe("revocation fencing and same-generation recovery", () => {
   it("fences a pinned delivery at the next canonical site, and un-revocation re-enables new preparation only", { timeout: 120_000 }, async () => {
+    facadeA = facadeForCurrentEpoch(installationA);
     const deliveryId = await registerDelivery(facadeA, "contract-revoke-1");
 
     const revoked = await maintainTrustState({
@@ -259,6 +271,7 @@ describe("revocation fencing and same-generation recovery", () => {
 
 describe("generation-change migration", () => {
   it("consumes the migration assertion without re-fencing and re-pins the delivery", { timeout: 120_000 }, async () => {
+    facadeA = facadeForCurrentEpoch(installationA);
     const deliveryId = await registerDelivery(facadeA, "contract-migrate-1");
     const bound = await bindFreshWorktree(facadeA, deliveryId);
     expect(bound.ok, JSON.stringify(bound)).toBe(true);
@@ -331,6 +344,7 @@ describe("generation-change migration", () => {
   });
 
   it("refuses a migration assertion naming a revoked target generation, and the delivery remains security_blocked", { timeout: 120_000 }, async () => {
+    facadeA = facadeForCurrentEpoch(installationA);
     const deliveryId = await registerDelivery(facadeA, "contract-migrate-2");
     // Recorded pin is generation 2; revoke it to fence the delivery.
     const revoke2 = await maintainTrustState({
@@ -442,13 +456,15 @@ describe("generation-change migration", () => {
 
 describe("rebinding migration", () => {
   it("rebinds only under a profile-matched migration recording the new registering installation", { timeout: 120_000 }, async () => {
+    const deliveryBinding = disposablePolicyBindingForInstallation(installationA.installationPath);
+    facadeA = facadeForBinding(installationA, deliveryBinding);
     const deliveryId = await registerDelivery(facadeA, "contract-rebind-1");
 
     // A second installation's trust state can never serve another
     // installation's delivery without the explicit migration: the mismatch
     // fences at the next canonical site.
     const installationB = await installFixture("installation-b");
-    const facadeB = facadeFor(installationB);
+    const facadeB = facadeForBinding(installationB, deliveryBinding);
     const fenced = await bindFreshWorktree(facadeB, deliveryId);
     expect(fenced.ok).toBe(false);
     expect(await stateOf(facadeB, deliveryId)).toBe("security_blocked");
@@ -492,6 +508,8 @@ describe("rebinding migration", () => {
   });
 
   it("refuses a profile-mismatched rebinding — a fixture delivery can never be served by a production installation", { timeout: 120_000 }, async () => {
+    const deliveryBinding = disposablePolicyBindingForInstallation(installationA.installationPath);
+    facadeA = facadeForBinding(installationA, deliveryBinding);
     const deliveryId = await registerDelivery(facadeA, "contract-rebind-2");
 
     const productionPack = await packComposition({
@@ -514,7 +532,7 @@ describe("rebinding migration", () => {
     });
     expect(installed.ok, JSON.stringify(installed)).toBe(true);
 
-    const facadeProduction = facadeFor({ installationPath, receiptDir });
+    const facadeProduction = facadeForBinding({ installationPath, receiptDir }, deliveryBinding);
     // The mismatch fences the fixture delivery under the production
     // installation…
     const fenced = await facadeProduction.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan", fence: await currentFenceOf(facadeProduction, deliveryId) });

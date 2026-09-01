@@ -75,17 +75,10 @@ import { reviewFindingCoherenceCodes } from "../validator/review-green.ts";
 import { createCandidateCapture, evaluateCandidateActivation, type CandidateCommandRunner } from "../candidate.ts";
 import { isRecordNeutralPath, isReviewNeutralPath, withDeliverableIdentity } from "../identity.ts";
 import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
-import type { HarnessConfig } from "../config.ts";
+import { validateHarnessConfig, type HarnessConfig } from "../config.ts";
 import type { CaptureCandidate, CapturedCandidate } from "../candidate.types.ts";
-import {
-  DISPOSABLE_INTAKE_GRANT,
-  DISPOSABLE_OUTCOME_AUTHORITIES,
-  DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS,
-  DISPOSABLE_REVIEW_LENSES,
-  DISPOSABLE_SENSOR_CAPABILITY,
-  DISPOSABLE_STAGE_GRANT,
-  compileDisposablePolicy,
-} from "../policy/disposable.ts";
+import { PORTABLE_INTAKE_GRANT, verifyCompiledPolicy, type CompiledPolicy } from "../policy/compile.ts";
+import { validateExecutionGrant } from "../spine/grant.ts";
 import {
   checkReviewFloor,
   composeOutcomeVerification,
@@ -282,19 +275,42 @@ export interface ManagedInstallation {
 }
 
 export interface CreateFacadeInput {
-  /** Any checkout of the disposable repository (root or linked worktree). */
+  /** Any checkout of the adopter repository (root or linked worktree). */
   readonly repoDir: string;
-  readonly config: HarnessConfig;
+  /** The adopter's already-compiled policy and its resolved native bindings. */
+  readonly policyBinding: CompiledAdopterPolicyBinding;
   readonly installation: ManagedInstallation;
   readonly hostVersion: string;
   readonly exec?: ExecPort;
 }
+
+/**
+ * The one adopter-owned seam into the portable facade. The policy compiler
+ * owns grants, lenses, capability identities, and the admission projection;
+ * the host/adopter supplies only resolved bytes and one trusted sensor path.
+ */
+export interface CompiledAdopterPolicyBinding {
+  readonly compiledPolicy: CompiledPolicy;
+  readonly personaSources: Readonly<Record<string, ResolvedPersonaSource>>;
+  readonly sensor: {
+    readonly capabilityId: string;
+    readonly trustedBasePath: string;
+  };
+  readonly outcomeAuthorities: readonly string[];
+}
+
+export type ResolvedPersonaSource =
+  | { readonly origin: "composition"; readonly bytes: string; readonly digest: string }
+  | { readonly origin: "repository"; readonly bytes: string; readonly digest: string; readonly trustedBasePath: string };
+
+export const compiledAdopterPolicyBindingDigest = (binding: CompiledAdopterPolicyBinding): string => digestCanonical(binding);
 
 interface DeliveryMeta {
   readonly contract: AcceptedContract;
   readonly policy: PolicySnapshot;
   readonly generationDigest: string;
   readonly intakeId: string;
+  readonly policyBindingDigest: string;
 }
 
 /**
@@ -308,6 +324,7 @@ interface IntakeMeta {
   readonly policy: PolicySnapshot;
   readonly generationDigest: string;
   readonly nonce?: string;
+  readonly policyBindingDigest: string;
 }
 
 /** The four-member verified release projection every typed stage result binds. */
@@ -1042,6 +1059,65 @@ async function voidSupersededBindingStates(bindingDir: string, currentFence: num
 }
 
 export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDeliveryFacade {
+  const policyBinding = input.policyBinding;
+  const compiledPolicy = policyBinding.compiledPolicy;
+  if (compiledPolicy.admission === undefined) {
+    throw new Error("the adopter's compiled repository policy has no admission projection");
+  }
+  const policyVerdict = verifyCompiledPolicy(compiledPolicy);
+  if (!policyVerdict.ok) {
+    throw new Error(`the adopter's compiled repository policy is invalid: ${policyVerdict.rejections.map((rejection) => rejection.message).join("; ")}`);
+  }
+  const admissionVerdict = validateHarnessConfig(compiledPolicy.admission);
+  if (!admissionVerdict.ok) {
+    throw new Error(`the adopter's compiled admission projection is invalid: ${admissionVerdict.blockers.map((blocker) => blocker.summary).join("; ")}`);
+  }
+  const stageGrants = new Map(compiledPolicy.checkpointGrants.map((entry) => [entry.stageId, entry.grant]));
+  const stageGrant = stageGrants.get("plan");
+  if (stageGrant === undefined || !["implement", "compound"].every((stageId) => stageGrants.has(stageId))) {
+    throw new Error("the adopter's compiled repository policy must grant plan, implement, and compound checkpoints");
+  }
+  const stageGrantDigest = digestCanonical(stageGrant);
+  if (["implement", "compound"].some((stageId) => digestCanonical(stageGrants.get(stageId)) !== stageGrantDigest)) {
+    throw new Error("the facade requires one shared checkpoint grant across model-driven stages");
+  }
+  const invalidGrant = ["plan", "implement", "compound"].find((stageId) => {
+    const grant = stageGrants.get(stageId);
+    const verdict = validateExecutionGrant(grant);
+    return !verdict.ok || grant?.profile !== "checkpoint";
+  });
+  if (invalidGrant !== undefined) {
+    throw new Error("the adopter's model-driven checkpoint grant is invalid");
+  }
+  const sensorCapability = compiledPolicy.capabilities.find(
+    (capability) => capability.capabilityId === policyBinding.sensor.capabilityId && capability.kind === "sensor",
+  );
+  if (sensorCapability === undefined || sensorCapability.resultSpec !== "sensor-result/1") {
+    throw new Error("the adopter's trusted sensor binding is not present in the compiled policy");
+  }
+  if (path.isAbsolute(policyBinding.sensor.trustedBasePath) || policyBinding.sensor.trustedBasePath.split("/").includes("..")) {
+    throw new Error("the adopter's trusted sensor binding must be a repository-relative path");
+  }
+  for (const lens of compiledPolicy.snapshot.reviewLenses) {
+    const source = policyBinding.personaSources[lens.personaId];
+    if (source === undefined || source.digest !== sha256Hex(source.bytes) || source.digest !== lens.personaDigest) {
+      throw new Error(`the adopter's resolved persona bytes do not match ${lens.personaId}`);
+    }
+    if (source.origin === "repository" && (path.isAbsolute(source.trustedBasePath) || source.trustedBasePath.split("/").includes(".."))) {
+      throw new Error(`the repository persona source for ${lens.personaId} must be a repository-relative path`);
+    }
+  }
+  const config = admissionVerdict.config;
+  const policy = compiledPolicy.snapshot;
+  const policyBindingDigest = compiledAdopterPolicyBindingDigest(policyBinding);
+  const checkpointGrantFor = (stageId: string) => {
+    const grant = stageGrants.get(stageId);
+    if (grant === undefined) throw new Error(`the adopter's compiled repository policy has no ${stageId} checkpoint grant`);
+    return grant;
+  };
+  const checkpointGrantDigestFor = (stageId: string): string => digestCanonical(checkpointGrantFor(stageId));
+  // Workspace admission is established before the first model-driven stage;
+  // later checkpoints advertise their own policy grant in `next`.
   const exec = input.exec ?? createExecPort();
 
   const git = async (cwd: string, ...args: string[]): Promise<{ code: number; out: string }> => {
@@ -1099,9 +1175,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     providerCaptureQueue = new Promise<void>((resolve) => { release = resolve; });
     await prior;
     try {
-      const mutable = await captureFor(mutableRoot, input.config, candidateRunner, storageGitRunner);
+      const mutable = await captureFor(mutableRoot, config, candidateRunner, storageGitRunner);
       if (!mutable.ok) return { ok: false as const, failure: mutable.failure };
-      const review = await captureFor(reviewRoot, input.config, candidateRunner, storageGitRunner);
+      const review = await captureFor(reviewRoot, config, candidateRunner, storageGitRunner);
       if (!review.ok) return { ok: false as const, failure: review.failure };
       return { ok: true as const, mutable: mutable.candidate, review: review.candidate };
     } finally {
@@ -1245,6 +1321,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     const read = await store.read();
     if (!read.ok) return refuse("journal_unreadable", "The delivery journal is unreadable.", "Inspect the durable journal file.");
     const views = viewsOf(read.entries);
+    const recordedPolicyBindingDigest = reduced.state.policyBindingDigest;
+    if (
+      meta.policyBindingDigest !== policyBindingDigest ||
+      recordedPolicyBindingDigest !== policyBindingDigest ||
+      meta.policyBindingDigest !== recordedPolicyBindingDigest
+    ) {
+      return refuse(
+        "policy_binding_mismatch",
+        "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+        "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+      );
+    }
     const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
 
     const pinned = reduced.state.generationDigest;
@@ -1604,21 +1692,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   };
 
   const nextCheckpointOf = (state: DeliveryState, views: readonly JournalEntryView[]): ManagedCheckpoint => {
-    const grantDigest = digestCanonical(DISPOSABLE_STAGE_GRANT);
     switch (state) {
       case "accepted":
       case "preparing":
         return { kind: "bind-workspace" };
       case "planning":
-        return { kind: "workflow-stage", stageId: "plan", remediation: false, grantDigest };
+        return { kind: "workflow-stage", stageId: "plan", remediation: false, grantDigest: checkpointGrantDigestFor("plan") };
       case "implementing":
-        return { kind: "workflow-stage", stageId: "implement", remediation: false, grantDigest };
+        return { kind: "workflow-stage", stageId: "implement", remediation: false, grantDigest: checkpointGrantDigestFor("implement") };
       case "remediating":
-        return { kind: "workflow-stage", stageId: "implement", remediation: true, grantDigest };
+        return { kind: "workflow-stage", stageId: "implement", remediation: true, grantDigest: checkpointGrantDigestFor("implement") };
       case "validating":
-        return { kind: "repository-sensor", capabilityId: DISPOSABLE_SENSOR_CAPABILITY.descriptor.capabilityId };
+        return { kind: "repository-sensor", capabilityId: policyBinding.sensor.capabilityId };
       case "reviewing":
-        return { kind: "review", stageId: "review.acquire", lenses: DISPOSABLE_REVIEW_LENSES.map((lens) => lens.lensId) };
+        return { kind: "review", stageId: "review.acquire", lenses: policy.reviewLenses.map((lens) => lens.lensId) };
       case "admitting":
         return { kind: "admission" };
       case "recording":
@@ -1628,7 +1715,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       case "completed":
         return { kind: "complete" };
       case "compounding":
-        return { kind: "workflow-stage", stageId: "compound", remediation: false, grantDigest };
+        return { kind: "workflow-stage", stageId: "compound", remediation: false, grantDigest: checkpointGrantDigestFor("compound") };
       default: {
         const blocker = lastOf(views, "blocker.recorded");
         return {
@@ -1716,6 +1803,33 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     };
   };
 
+  /** Read-only retention/explanation admission: the current facade may only
+   * inspect or remove a delivery whose two durable binding records agree with
+   * the exact binding captured by this facade. */
+  const verifyDeliveryBinding = async (deliveryId: string): Promise<{ ok: true } | FacadeFailure> => {
+    const dir = await deliveryDir(deliveryId);
+    const meta = await readJson<DeliveryMeta>(path.join(dir, "delivery.json"));
+    if (meta === undefined) {
+      return refuse("unknown_delivery", `No registered delivery ${deliveryId}.`, "Register a delivery through the contract handoff first.");
+    }
+    const reduced = await (await journalStoreFor(deliveryId)).state();
+    if (!reduced.ok) {
+      return refuse("journal_rejected", "The durable delivery journal does not reduce.", "Inspect the durable delivery journal file.");
+    }
+    if (
+      meta.policyBindingDigest !== policyBindingDigest ||
+      reduced.state.policyBindingDigest !== policyBindingDigest ||
+      meta.policyBindingDigest !== reduced.state.policyBindingDigest
+    ) {
+      return refuse(
+        "policy_binding_mismatch",
+        "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+        "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+      );
+    }
+    return { ok: true };
+  };
+
   // ── Intake plumbing ──────────────────────────────────────────────────────
 
   const intakePath = async (intakeId: string, suffix: string): Promise<string> =>
@@ -1791,25 +1905,30 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   }
 
   /**
-   * Reads every reviewer charter the fixed policy's lenses reference out of
-   * the trusted pre-run base. A charter the base does not carry is absent,
-   * and the compiler then rejects its lens reference before any mutation
-   * rather than at first review.
+   * Resolves repository-owned reviewer sources from the trusted pre-run base;
+   * composition-owned sources were already authenticated and are carried
+   * forward without assuming an adopter repository path.
    */
   const trustedBaseCharters = async (
     baseRef: string,
-  ): Promise<{ readonly personaBytes: Record<string, string> } | FacadeFailure> => {
+  ): Promise<{ readonly personaBytes: Readonly<Record<string, string>> } | FacadeFailure> => {
     const personaBytes: Record<string, string> = {};
-    for (const [personaId, relativePath] of Object.entries(DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS)) {
-      const shown = await exec.run({ command: "git", args: ["show", `${baseRef}:${relativePath}`], cwd: input.repoDir });
-      if (shown.code !== 0) {
+    for (const lens of policy.reviewLenses) {
+      const source = policyBinding.personaSources[lens.personaId];
+      if (source === undefined) return refuse("reviewer_charter_missing", `No resolved reviewer charter exists for ${lens.personaId}.`, "Bind every activated review lens to an authenticated persona source.");
+      if (source.origin === "composition") {
+        personaBytes[lens.personaId] = source.bytes;
+        continue;
+      }
+      const shown = await exec.run({ command: "git", args: ["show", `${baseRef}:${source.trustedBasePath}`], cwd: input.repoDir });
+      if (shown.code !== 0 || shown.stdout !== source.bytes) {
         return refuse(
-          "reviewer_charter_missing",
-          `The trusted pre-run base ${baseRef} carries no ${relativePath} for reviewer charter ${personaId}.`,
-          "Every lens the policy activates must resolve to a charter at the base; candidate-supplied charters never govern.",
+          "reviewer_charter_moved",
+          `The trusted pre-run base ${baseRef} does not carry the exact reviewer charter ${lens.personaId} bound by policy.`,
+          "Rebind the repository-owned persona from the exact trusted base bytes before presenting the contract.",
         );
       }
-      personaBytes[personaId] = shown.stdout;
+      personaBytes[lens.personaId] = shown.stdout;
     }
     return { personaBytes };
   };
@@ -1850,6 +1969,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (trust === undefined) {
       return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
     }
+    if (policy.repositoryId !== contract.repository.repositoryId) {
+      return refuse(
+        "policy_repository_mismatch",
+        "The compiled adopter policy belongs to a different repository than this contract.",
+        "Compile and bind the repository policy for the contract's repository identity.",
+      );
+    }
+    if (policy.productTrustRevocationEpoch !== trust.revocationEpoch) {
+      return refuse(
+        "policy_trust_epoch_mismatch",
+        "The compiled adopter policy was not produced under the current product trust epoch.",
+        "Recompile and bind the repository policy under the current trust state.",
+      );
+    }
 
     // The qualification profile's use-time binding at registration: a fixture
     // installation registers deliveries only in its receipt-listed disposable
@@ -1871,19 +2004,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
       );
     }
-
-    // The repository's reviewer charters, read from the TRUSTED PRE-RUN BASE:
-    // the compiled lens declaration pins these bytes, so a candidate edit to a
-    // tracked charter is a proposal for a future delivery and cannot rewrite
-    // the charter that judges this one.
+    // Resolve every authenticated reviewer source before confirmation.
     const charters = await trustedBaseCharters(contract.repository.baseRef);
     if (!("personaBytes" in charters)) return charters;
-    const policy = compileDisposablePolicy({
-      repositoryId: contract.repository.repositoryId,
-      productTrustRevocationEpoch: trust.revocationEpoch,
-      repositoryAuthorityRevocationEpoch: 0,
-      personaBytes: charters.personaBytes,
-    });
     const withinPolicy = checkContractWithinPolicy(contract, policy);
     if (!withinPolicy.ok) {
       return refuse(
@@ -1926,7 +2049,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (!rendered.ok) return rendered;
     await writeOwned(
       await intakePath(intakeId, ".meta.json"),
-      `${JSON.stringify({ contract, policy: validated.policy, generationDigest: validated.generationDigest, nonce } satisfies IntakeMeta)}\n`,
+      `${JSON.stringify({ contract, policy: validated.policy, generationDigest: validated.generationDigest, nonce, policyBindingDigest } satisfies IntakeMeta)}\n`,
     );
     return { ok: true, nonce, normalizedContractDigest, channelPath: rendered.channelPath };
   };
@@ -1934,7 +2057,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   interface AcceptancePreflight {
     readonly binding: { readonly registeringInstallationId: string; readonly activeCompositionProfile: string };
     readonly sensorBytes: string;
-    /** The repository-owned reviewer charters, by identity, read from the base. */
+    /** The authenticated reviewer charter bytes, by identity. */
     readonly personaBytes: Readonly<Record<string, string>>;
     /** Read HERE, not after the terminal transition: see the preflight's contract below. */
     readonly trust: ProductTrustState;
@@ -1974,6 +2097,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (trust === undefined) {
       return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
     }
+    if (meta.policyBindingDigest !== compiledAdopterPolicyBindingDigest(policyBinding)) {
+      return refuse(
+        "policy_binding_mismatch",
+        "The presented intake was bound to different adopter policy material.",
+        "Re-present the contract with the exact compiled adopter policy binding.",
+      );
+    }
+    if (meta.policy.repositoryId !== meta.contract.repository.repositoryId) {
+      return refuse(
+        "policy_repository_mismatch",
+        "The presented policy belongs to a different repository than the contract.",
+        "Re-present the contract with its repository's compiled policy.",
+      );
+    }
     const generation = await loadPinnedGeneration({
       installationPath: input.installation.installationPath,
       generationDigest: meta.generationDigest,
@@ -1983,6 +2120,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         "trust_ineligible",
         "The generation bound at presentation is not execution-eligible under current local trust state.",
         "Restore local trust state through the operator maintenance lane, then retry acceptance.",
+      );
+    }
+    if (meta.policy.productTrustRevocationEpoch !== trust.revocationEpoch) {
+      return refuse(
+        "policy_trust_epoch_mismatch",
+        "The presented policy was not produced under the current product trust epoch.",
+        "Re-present the contract with a policy compiled under the current trust state.",
       );
     }
     const withinPolicy = checkContractWithinPolicy(meta.contract, meta.policy);
@@ -1997,23 +2141,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     // from that copy — the candidate's tracked rewrite never governs.
     const shown = await exec.run({
       command: "git",
-      args: ["show", `${meta.contract.repository.baseRef}:${DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath}`],
+      args: ["show", `${meta.contract.repository.baseRef}:${policyBinding.sensor.trustedBasePath}`],
       cwd: input.repoDir,
     });
     if (shown.code !== 0) {
       return refuse(
         "trusted_sensor_missing",
-        `The trusted pre-run base ${meta.contract.repository.baseRef} carries no ${DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath}.`,
+        `The trusted pre-run base ${meta.contract.repository.baseRef} carries no ${policyBinding.sensor.trustedBasePath}.`,
         "The repository's sensor must exist at the base; candidate-supplied sensors never govern.",
       );
     }
     const charters = await trustedBaseCharters(meta.contract.repository.baseRef);
     if (!("personaBytes" in charters)) return charters;
-    // The charter digests were pinned into the policy at presentation, so a
-    // base whose charters moved since then no longer matches what this
-    // delivery would judge against. Caught HERE, where a refusal is
-    // retryable, rather than registering a delivery whose read-only copy can
-    // never satisfy its own pinned policy.
+    // Repository-owned source bytes were compared to the trusted base above;
+    // composition-owned bytes remain independent of adopter repository paths.
     for (const lens of meta.policy.reviewLenses) {
       if (sha256Hex(charters.personaBytes[lens.personaId] ?? "") === lens.personaDigest) continue;
       return refuse(
@@ -2057,6 +2198,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     });
     await appendEntry(store, deliveryId, "policy.snapshot.bound", {
       policyDigest: meta.policy.policyDigest,
+      policyBindingDigest,
       repositoryAuthorityEpoch: meta.policy.repositoryAuthorityRevocationEpoch,
     });
     await appendEntry(store, deliveryId, "trust.epoch.observed", {
@@ -2070,8 +2212,11 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     }
     await writeOwned(
       path.join(dir, "delivery.json"),
-      `${JSON.stringify({ contract: meta.contract, policy: meta.policy, generationDigest: meta.generationDigest, intakeId } satisfies DeliveryMeta)}\n`,
+      `${JSON.stringify({ contract: meta.contract, policy: meta.policy, generationDigest: meta.generationDigest, intakeId, policyBindingDigest } satisfies DeliveryMeta)}\n`,
     );
+    // Keep the exact adopter binding beside the product namespace pointer so
+    // the CLI can recreate this facade without rediscovering policy paths.
+    await writeOwned(path.join(ns, "policy-binding.json"), `${JSON.stringify(policyBinding)}\n`);
 
     // The namespace pointer the host-facing CLI resolves the facade from:
     // installation paths and host version, in the product namespace, never
@@ -2082,6 +2227,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         installationPath: input.installation.installationPath,
         receiptDir: input.installation.receiptDir,
         hostVersion: input.hostVersion,
+        policyBindingDigest,
       })}\n`,
     );
 
@@ -2276,8 +2422,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         observedAt,
         intakeDraftId: intakeId,
       };
-      const attestation = mintGrantAttestation({ grant: DISPOSABLE_INTAKE_GRANT, expectation, expiry: attestationExpiry });
-      const admission = evaluateHostAdmission(expectation, DISPOSABLE_INTAKE_GRANT, attestation);
+      const attestation = mintGrantAttestation({ grant: PORTABLE_INTAKE_GRANT, expectation, expiry: attestationExpiry });
+      const admission = evaluateHostAdmission(expectation, PORTABLE_INTAKE_GRANT, attestation);
       if (!admission.admitted) {
         return refuse(
           "host_admission_refused",
@@ -2294,7 +2440,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!openedTransition.ok) return openedTransition;
       await writeOwned(await intakePath(intakeId, ".request.json"), `${JSON.stringify({ workRequest })}\n`);
       const grantPath = await intakePath(intakeId, ".grant.json");
-      await writeOwned(grantPath, `${JSON.stringify({ grant: DISPOSABLE_INTAKE_GRANT, expectation, attestation, admission })}\n`);
+      await writeOwned(grantPath, `${JSON.stringify({ grant: PORTABLE_INTAKE_GRANT, expectation, attestation, admission })}\n`);
       return { ok: true, intakeId, grantDigest: admission.grantDigest, grantPath };
     },
 
@@ -2590,7 +2736,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         workspaceRoot: worktreeDir,
         commonGitDir: commonOfWorktree.out,
         authorityDir: path.join(input.installation.installationPath, "provider-review-authority"),
-        grant: DISPOSABLE_STAGE_GRANT,
+        grant: stageGrant,
       });
       if (!session.ok) {
         return refuse(
@@ -2630,8 +2776,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         registeringInstallationId: registered?.payload["registeringInstallationId"] as string,
         activeProfile: registered?.payload["activeCompositionProfile"] as string,
       };
-      const attestation = mintGrantAttestation({ grant: DISPOSABLE_STAGE_GRANT, expectation, expiry: attestationExpiry });
-      const admission = evaluateHostAdmission(expectation, DISPOSABLE_STAGE_GRANT, attestation);
+      const attestation = mintGrantAttestation({ grant: stageGrant, expectation, expiry: attestationExpiry });
+      const admission = evaluateHostAdmission(expectation, stageGrant, attestation);
       if (!admission.admitted) {
         return refuse(
           "host_admission_refused",
@@ -2645,7 +2791,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         statePath,
         `${JSON.stringify({
           expectation,
-          grant: DISPOSABLE_STAGE_GRANT,
+          grant: stageGrant,
           attestation,
           workspaceRoot: worktreeDir,
           observationPath,
@@ -2657,7 +2803,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       );
       await writeOwned(observationPath, `${JSON.stringify({ fence, observedAt })}\n`);
       const lifetime = observationLifetimeSeconds ?? 900;
-      const grantDigest = digestCanonical(DISPOSABLE_STAGE_GRANT);
+      const grantDigest = stageGrantDigest;
       const providerReviewBinding: CapabilityBinding = {
         id: providerReviewBindingCapability.id,
         digest: capabilityDigest({
@@ -2760,6 +2906,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const read = await store.read();
       if (!reduced.ok || !read.ok) {
         return refuse("journal_rejected", "The durable journal does not reduce.", "Inspect the durable journal file.");
+      }
+      if (meta.policyBindingDigest !== policyBindingDigest || reduced.state.policyBindingDigest !== policyBindingDigest) {
+        return refuse(
+          "policy_binding_mismatch",
+          "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+          "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+        );
       }
       const views = viewsOf(read.entries);
       const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
@@ -3094,7 +3247,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const summaryRaw = `${run.stdout}\n${run.stderr}`.trim().slice(0, 1900);
       const result = {
         spec: "sensor-result/1",
-        capabilityId: DISPOSABLE_SENSOR_CAPABILITY.descriptor.capabilityId,
+        capabilityId: policyBinding.sensor.capabilityId,
         outcome,
         summary: summaryRaw.length > 0 ? summaryRaw : `sensor ${outcome} with no output`,
         candidateTreeSha: treeSha,
@@ -3144,7 +3297,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         );
       }
       const authority = await readJson<ProviderReviewAuthorityState>(providerAuthorityStatePath(deliveryId));
-      const grantDigest = digestCanonical(DISPOSABLE_STAGE_GRANT);
+      const grantDigest = stageGrantDigest;
       const currentTrust = await readTrust();
       if (
         currentTrust === undefined ||
@@ -3195,7 +3348,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const current = currentCandidateOf(guarded.views);
       if (current === undefined) return refuse("no_candidate", "No candidate is checkpointed.", "Checkpoint a candidate first.");
 
-      const providerRegistration = input.config.providers[0];
+      const providerRegistration = config.providers[0];
       if (providerRegistration === undefined) {
         return refuse("no_provider", "The repository gate registers no provider.", "Register the review provider in the harness config.");
       }
@@ -3227,9 +3380,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (commonReview.code !== 0 || commonReview.out !== commonMutable.out) {
         return refuse("provider_review_workspace_invalid", "The review snapshot is not a linked workspace of the bound repository.", "Create it from the bound repository's common Git directory.");
       }
-      const mutableCapture = await captureFor(mutableRoot, input.config, candidateRunner, storageGitRunner);
+      const mutableCapture = await captureFor(mutableRoot, config, candidateRunner, storageGitRunner);
       if (!mutableCapture.ok) return mutableCapture.failure;
-      const capture = await captureFor(reviewRoot, input.config, candidateRunner, storageGitRunner);
+      const capture = await captureFor(reviewRoot, config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
       if (mutableCapture.candidate.treeSha !== current.treeSha || capture.candidate.treeSha !== current.treeSha) {
         return refuse("candidate_moved", "The worktree moved before the native review handoff.", "Re-checkpoint the candidate, then prepare the review handoff again.");
@@ -3744,7 +3897,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
 
       const rootDir = workspace.worktreeDir;
-      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
+      const capture = await captureFor(rootDir, config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
       if (captured.treeSha !== current.treeSha) {
@@ -3801,8 +3954,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
 
       // The EXISTING harness admission: preparation receipt, evidence
       // manifest from the two lens attempts, submission, and the gate.
-      const storage = await resolveRecordStorage(rootDir, { storageNamespace: input.config.storageNamespace, runGit: storageGitRunner });
-      await publishPreparationReceipt(rootDir, { config: input.config, candidate: captured }, { storageNamespace: input.config.storageNamespace, runGit: storageGitRunner });
+      const storage = await resolveRecordStorage(rootDir, { storageNamespace: config.storageNamespace, runGit: storageGitRunner });
+      await publishPreparationReceipt(rootDir, { config, candidate: captured }, { storageNamespace: config.storageNamespace, runGit: storageGitRunner });
 
       const artifacts = createArtifactsPort();
       const qualified = qualifyReviewAttempts(attempts, current.treeSha).qualified;
@@ -3940,8 +4093,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
       const submission = await submitManifest(
-        { rootDir, manifestPath, config: input.config },
-        { captureCandidate: capture.captureCandidate, artifacts, storageNamespace: input.config.storageNamespace, runGit: storageGitRunner },
+        { rootDir, manifestPath, config },
+        { captureCandidate: capture.captureCandidate, artifacts, storageNamespace: config.storageNamespace, runGit: storageGitRunner },
       );
       if (submission.status !== "accepted") {
         await recordBlockerAndTransition(
@@ -3956,11 +4109,11 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
 
       const admission = await runAdmission(
-        { rootDir, config: input.config, context: classifyExecutionContext({ config: input.config, env, stdinIsTTY: false, stdoutIsTTY: false }) },
+        { rootDir, config, context: classifyExecutionContext({ config, env, stdinIsTTY: false, stdoutIsTTY: false }) },
         {
           captureCandidate: capture.captureCandidate,
-          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config: input.config, run: candidateRunner }),
-          storageNamespace: input.config.storageNamespace,
+          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config, run: candidateRunner }),
+          storageNamespace: config.storageNamespace,
           runGit: storageGitRunner,
         },
       );
@@ -4018,15 +4171,15 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const workspace = guarded.workspace;
       if (workspace === undefined) return refuse("workspace_unbound", "No workspace is bound.", "Bind the host-supplied worktree first.");
       const rootDir = workspace.worktreeDir;
-      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
+      const capture = await captureFor(rootDir, config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
 
       const admission = await runAdmission(
-        { rootDir, config: input.config, context: classifyExecutionContext({ config: input.config, env, stdinIsTTY: false, stdoutIsTTY: false }) },
+        { rootDir, config, context: classifyExecutionContext({ config, env, stdinIsTTY: false, stdoutIsTTY: false }) },
         {
           captureCandidate: capture.captureCandidate,
-          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config: input.config, run: candidateRunner }),
-          storageNamespace: input.config.storageNamespace,
+          projectActivation: (candidate: CapturedCandidate) => evaluateCandidateActivation({ rootDir, candidate, config, run: candidateRunner }),
+          storageNamespace: config.storageNamespace,
           runGit: storageGitRunner,
         },
       );
@@ -4034,18 +4187,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuseWith(admission.blockers);
       }
       const evidenceRecords = [];
-      for (const obligation of input.config.obligations) {
+      for (const obligation of config.obligations) {
         const discovery = await discoverRecords(rootDir, {
-          gateId: input.config.gateId,
+          gateId: config.gateId,
           obligationId: obligation.id,
-          storageNamespace: input.config.storageNamespace,
+          storageNamespace: config.storageNamespace,
           runGit: storageGitRunner,
         });
         evidenceRecords.push(...discovery.records);
       }
-      const built = buildDeliveryRecord({ config: input.config, decision: admission.decision, evidenceRecords });
+      const built = buildDeliveryRecord({ config, decision: admission.decision, evidenceRecords });
       if (!built.ok) return refuseWith(built.blockers);
-      const relativePath = deliveryRecordPathFor(input.config, admission.decision.candidate.deliverable.digest);
+      const relativePath = deliveryRecordPathFor(config, admission.decision.candidate.deliverable.digest);
       await mkdir(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
       await writeFile(path.join(rootDir, relativePath), deliveryRecordBytes(built.record), "utf8");
       return { ok: true, relativePath };
@@ -4062,7 +4215,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (porcelain.code !== 0 || porcelain.out !== "") {
         return refuse("record_uncommitted", "The tracked record is not checkpoint-committed.", "Commit the record through the host's native git tooling.");
       }
-      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
+      const capture = await captureFor(rootDir, config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
 
@@ -4125,7 +4278,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         const nonNeutral = changed.out
           .split("\u0000")
           .filter((entry) => entry.length > 0)
-          .filter((repoPath) => !(isReviewNeutralPath(input.config, repoPath) && isRecordNeutralPath(input.config, repoPath)));
+          .filter((repoPath) => !(isReviewNeutralPath(config, repoPath) && isRecordNeutralPath(config, repoPath)));
         if (nonNeutral.length > 0) {
           // The frozen matrix has a direct edge for exactly this: any
           // non-neutral byte or identity change returns to validation, and
@@ -4143,7 +4296,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         }
       }
 
-      const relativePath = deliveryRecordPathFor(input.config, captured.deliverable.digest);
+      const relativePath = deliveryRecordPathFor(config, captured.deliverable.digest);
       let recordText: string;
       try {
         recordText = await readFile(path.join(rootDir, relativePath), "utf8");
@@ -4158,7 +4311,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // paths, so a candidate carrying a projection or discovery-configuration
       // path is rejected on the tree's evidence alone.
       const check = verifyDeliveryRecord(
-        input.config,
+        config,
         parsed.record,
         { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
         { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
@@ -4210,7 +4363,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // repository's pull-request Action runs — is re-run over the committed
       // record, so hosted and local merge-ready evidence are both current.
       const rootDir = workspace.worktreeDir;
-      const capture = await captureFor(rootDir, input.config, candidateRunner, storageGitRunner);
+      const capture = await captureFor(rootDir, config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
       const captured = capture.candidate;
 
@@ -4227,7 +4380,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // stands in — it can never turn the blocked decision into a pass.
       let externalVerification: ExternalVerification = "unavailable";
       let recordedBaseTipSha = captured.base.tipSha;
-      const relativePath = deliveryRecordPathFor(input.config, captured.deliverable.digest);
+      const relativePath = deliveryRecordPathFor(config, captured.deliverable.digest);
       let recordText: string | undefined;
       try {
         recordText = await readFile(path.join(rootDir, relativePath), "utf8");
@@ -4245,7 +4398,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           // tree it could not list, and half a verification is not a pass — so
           // a failed listing leaves the verification unavailable.
           const check = verifyDeliveryRecord(
-            input.config,
+            config,
             parsed.record,
             { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
             { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
@@ -4560,7 +4713,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         invocationFence: guarded.lastFence,
         proposal: pendingProposal,
         contractCriterionIds: guarded.meta.contract.acceptanceCriteria.map((criterion) => criterion.criterionId),
-        outcomeAuthorities: DISPOSABLE_OUTCOME_AUTHORITIES,
+        outcomeAuthorities: policyBinding.outcomeAuthorities,
         currentProfile: binding.activeCompositionProfile,
         consumedNonces: consumedAssertionNoncesOf(guarded.views),
         now,
@@ -4702,6 +4855,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     async exportDelivery({ deliveryId }) {
       const context = await retentionContext();
       if (!("namespaceDir" in context)) return context;
+      const binding = await verifyDeliveryBinding(deliveryId);
+      if (!binding.ok) return binding;
       const outcome = await runDeliveryExport(context, deliveryId);
       if (!outcome.ok) return refuse(outcome.code, outcome.summary, outcome.remediation);
       return { ok: true, exportPath: outcome.exportPath, artifactDigest: outcome.artifactDigest };
@@ -4710,6 +4865,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     async deleteDelivery({ deliveryId }) {
       const context = await retentionContext();
       if (!("namespaceDir" in context)) return context;
+      const binding = await verifyDeliveryBinding(deliveryId);
+      if (!binding.ok) return binding;
       const outcome = await runDeliveryDeletion(context, deliveryId);
       if (!outcome.ok) return refuse(outcome.code, outcome.summary, outcome.remediation);
       return { ok: true, preservedAuditRecords: outcome.preservedAuditRecords };
@@ -4858,6 +5015,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     },
 
     async explainBlocker({ deliveryId }) {
+      const binding = await verifyDeliveryBinding(deliveryId);
+      if (!binding.ok) return binding;
       const store = await journalStoreFor(deliveryId);
       const read = await store.read();
       if (!read.ok) return refuse("journal_unreadable", "The delivery journal is unreadable.", "Inspect the durable journal file.");
@@ -4922,6 +5081,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const read = await store.read();
       if (!reduced.ok || !read.ok) {
         return refuse("journal_rejected", "The durable journal does not reduce.", "Inspect the durable journal file.");
+      }
+      if (meta.policyBindingDigest !== policyBindingDigest || reduced.state.policyBindingDigest !== policyBindingDigest) {
+        return refuse(
+          "policy_binding_mismatch",
+          "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+          "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+        );
       }
       if (reduced.state.state !== "security_blocked") {
         return refuse(
