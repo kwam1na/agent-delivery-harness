@@ -48,9 +48,11 @@ drafts are retained in an intake journal that is separate from the delivery
 journal, because no delivery exists yet.
 
 **Confirm.** The drafted contract is presented for exactly one operator
-confirmation, completed by an echoed single-use challenge on the binding's own
-interactive channel. This is not a tool call the model can make: `confirmContract`
-is reachable from the `binding-channel` surface and from nowhere else.
+confirmation. A qualified host must own the opaque, model-inaccessible producer
+that presents the bound challenge before registration and receives its echo. A
+static adapter normalizes that result for the kernel, which alone evaluates and
+consumes it. The product has no qualified production producer today, so current
+hosts remain at tier 0 and production registration fails closed.
 
 **Deliver.** The host binds a worktree, which mints the delivery's invocation
 fence, and the delivery proceeds through typed checkpoints — workflow stages,
@@ -102,9 +104,14 @@ read an operation's cost and reachability from the installed product rather than
 from this page.
 
 The surfaces are the part worth reading twice. `cli` and `mcp` are the
-model-visible tool surfaces. `binding-channel` is the isolated interactive
-channel the qualified host binding owns, outside the model-visible tool and shell
-surface — the two confirmation operations live there and only there.
+model-visible tool surfaces. `binding-channel` names the kernel-facing surface
+where a qualified host's static adapter would submit the normalized confirmation
+observation; it is not an interactive producer and does not itself prove human
+origin. The opaque interaction belongs to the host before registration, outside
+anything model-owned execution can invoke, observe, inherit, or interpose. No
+current host supplies a qualified producer, so the two confirmation operations
+remain unavailable in production; the disposable fixture exercises only their
+shared decision semantics.
 `integration-event` is the trusted host-runtime integration used for graceful
 termination provenance. `facade` means library call by an embedding product
 surface. Provider-review preparation and ingestion are facade calls, but the
@@ -291,7 +298,7 @@ rather than a constant in the source:
 | Tier | What it means |
 |---|---|
 | 0 | Read-only inspection only. |
-| 1 | The mutation floor: deny-until-attested grant enforcement, a worktree-materialized digest-receipted projection, binding attestation, an isolated operator-confirmation channel, fence-revocation cancellation, and fresh-worktree-only resume. |
+| 1 | The mutation floor: deny-until-attested grant enforcement, a worktree-materialized digest-receipted projection, binding attestation, a qualified host-owned operator-confirmation producer, fence-revocation cancellation, and fresh-worktree-only resume. |
 | 2 | Trusted graceful lifecycle events. |
 | 3 | Graceful termination provenance with verified descendant teardown — the grade that would enable same-worktree resume. |
 
@@ -363,9 +370,12 @@ Neither class can be minted by the model.
 
 **Operator confirmation** (`operator-confirmation/1`) covers contract
 confirmation and takeover authorization. It requires no cryptographic assertion;
-its strength is that it is model-external by construction — a single-use echoed
-challenge on an interactive channel the binding owns, outside the tool and shell
-surface.
+its strength comes from a qualified host-owned producer that runs before
+registration or takeover and outside model-owned execution. The producer's
+static adapter emits one normalized, host-neutral observation; the kernel alone
+evaluates and consumes that observation. A caller, facade surface, or
+`binding-channel` label is never evidence of operator origin, and without a
+qualified producer the confirmation lane fails closed.
 
 **Sensitive-approval assertion** (`sensitive-approval-assertion/1`) is the
 stronger class: one fresh host-native or OS-native interactive evaluation with a
