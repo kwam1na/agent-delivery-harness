@@ -47,6 +47,7 @@ import {
   GREET_WRONG,
   buildDisposableRepository,
   disposableHarnessConfig,
+  disposablePolicyBinding,
   fixtureProviderBindingCapability,
   fixtureProviderReview,
   ingestFixtureProviderReview,
@@ -129,7 +130,7 @@ beforeAll(async () => {
   repoDir = buildDisposableRepository(path.join(scratch, "repo")).repoDir;
   facade = createManagedDeliveryFacade({
     repoDir,
-    config: disposableHarnessConfig(),
+    policyBinding: disposablePolicyBinding(),
     installation: { installationPath, receiptDir },
     hostVersion: "2.1.97",
   });

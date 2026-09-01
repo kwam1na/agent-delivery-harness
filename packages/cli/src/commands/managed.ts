@@ -23,6 +23,7 @@ import path from "node:path";
 import {
   FACADE_OPERATIONS,
   createManagedDeliveryFacade,
+  type CompiledAdopterPolicyBinding,
   type ManagedDeliveryFacade,
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
@@ -179,9 +180,21 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
       );
     }
   }
+  let policyBinding: CompiledAdopterPolicyBinding | undefined = context.policyBinding;
+  if (policyBinding === undefined) {
+    try {
+      policyBinding = JSON.parse(await readFile(path.join(namespace, "policy-binding.json"), "utf8")) as CompiledAdopterPolicyBinding;
+    } catch {
+      return blocked(
+        "policy_binding_missing",
+        "No compiled adopter policy binding is retained for this delivery.",
+        "Register the delivery through an adopter binding, or pass one through the embedding runtime.",
+      );
+    }
+  }
   const facade = createManagedDeliveryFacade({
     repoDir: context.rootDir,
-    config: context.config,
+    policyBinding,
     installation: { installationPath: pointer.installationPath, receiptDir: pointer.receiptDir },
     hostVersion: pointer.hostVersion,
   });

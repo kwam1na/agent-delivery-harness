@@ -16,7 +16,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineHarnessConfig, type HarnessConfig } from "../config.ts";
 import { PINNED_AGENT_SKILLS } from "../spine/composition.ts";
-import { DISPOSABLE_REVIEW_LENSES } from "../policy/disposable.ts";
+import {
+  DISPOSABLE_OUTCOME_AUTHORITIES,
+  DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS,
+  DISPOSABLE_REVIEW_LENSES,
+  DISPOSABLE_SENSOR_CAPABILITY,
+  compileDisposableCompiledPolicy,
+} from "../policy/disposable.ts";
 import { sha256Hex } from "../digest.ts";
 import type { AcceptedContract } from "../spine/contract.ts";
 import {
@@ -27,7 +33,7 @@ import {
   type ProviderReviewResult,
   type ProviderReviewVerdict,
 } from "../host/provider-review-result.ts";
-import type { FacadeFailure, ManagedDeliveryFacade } from "./managed-delivery.ts";
+import type { CompiledAdopterPolicyBinding, FacadeFailure, ManagedDeliveryFacade } from "./managed-delivery.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CHECKOUT_ROOT = path.resolve(HERE, "..", "..", "..", "..");
@@ -209,6 +215,28 @@ export default defineHarnessConfig(${JSON.stringify(CONFIG_INPUT, null, 2)});
 
 export function disposableHarnessConfig(): HarnessConfig {
   return defineHarnessConfig(CONFIG_INPUT);
+}
+
+/** The explicit disposable call-site binding for facade characterization. */
+export function disposablePolicyBinding(repositoryId = "disposable-skeleton"): CompiledAdopterPolicyBinding {
+  const personaBytes = Object.fromEntries(
+    Object.entries(DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS).map(([personaId, relativePath]) => [personaId, PERSONA_MARKDOWN[relativePath] as string]),
+  );
+  return {
+    compiledPolicy: compileDisposableCompiledPolicy({
+      repositoryId,
+      productTrustRevocationEpoch: 0,
+      repositoryAuthorityRevocationEpoch: 0,
+      personaBytes,
+      admission: CONFIG_INPUT,
+    }),
+    personaBytes,
+    sensor: {
+      capabilityId: DISPOSABLE_SENSOR_CAPABILITY.descriptor.capabilityId,
+      trustedBasePath: DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath,
+    },
+    outcomeAuthorities: DISPOSABLE_OUTCOME_AUTHORITIES,
+  };
 }
 
 const git = (cwd: string, ...args: string[]): void => {

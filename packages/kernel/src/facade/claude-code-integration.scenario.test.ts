@@ -46,6 +46,7 @@ import {
   GREET_RIGHT,
   buildDisposableRepository,
   disposableHarnessConfig,
+  disposablePolicyBinding,
   fixtureProviderBindingCapability,
   typedStageResultBytes,
 } from "./disposable-repository.fixture.ts";
@@ -164,7 +165,7 @@ beforeAll(async () => {
 
   facade = createManagedDeliveryFacade({
     repoDir,
-    config: disposableHarnessConfig(),
+    policyBinding: disposablePolicyBinding(),
     installation: { installationPath, receiptDir },
     hostVersion: HOST_VERSION,
     exec: recordingExecPort(),

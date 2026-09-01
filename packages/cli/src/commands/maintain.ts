@@ -37,7 +37,7 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "@agent-delivery-harness/kernel";
+import { createManagedDeliveryFacade, type CompiledAdopterPolicyBinding, type ManagedDeliveryFacade } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 
@@ -96,9 +96,21 @@ async function resolveFacade(context: CommandContext): Promise<ManagedDeliveryFa
       "Install the composition and register a delivery first.",
     );
   }
+  let policyBinding: CompiledAdopterPolicyBinding | undefined = context.policyBinding;
+  if (policyBinding === undefined) {
+    try {
+      policyBinding = JSON.parse(await readFile(path.join(common, "managed-delivery", "policy-binding.json"), "utf8")) as CompiledAdopterPolicyBinding;
+    } catch {
+      return blocked(
+        "policy_binding_missing",
+        "No compiled adopter policy binding is retained for this installation.",
+        "Register a delivery through an adopter binding, or pass one through the embedding runtime.",
+      );
+    }
+  }
   return createManagedDeliveryFacade({
     repoDir: context.rootDir,
-    config: context.config,
+    policyBinding,
     installation: { installationPath: pointer.installationPath, receiptDir: pointer.receiptDir },
     hostVersion: pointer.hostVersion,
   });

@@ -35,6 +35,7 @@ import {
   DISPOSABLE_CONTRACT,
   buildDisposableRepository,
   disposableHarnessConfig,
+  disposablePolicyBinding,
   fixtureProviderBindingCapability,
 } from "./disposable-repository.fixture.ts";
 
@@ -90,7 +91,7 @@ const installFixture = async (
 const facadeFor = (installation: { installationPath: string; receiptDir: string }): ManagedDeliveryFacade =>
   createManagedDeliveryFacade({
     repoDir,
-    config: disposableHarnessConfig(),
+    policyBinding: disposablePolicyBinding(),
     installation,
     hostVersion: "2.1.97",
   });

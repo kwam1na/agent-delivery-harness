@@ -45,6 +45,7 @@ import {
   type Blocker,
   type CaptureCandidate,
   type CapturedCandidate,
+  type CompiledAdopterPolicyBinding,
   type EnvSnapshot,
   type ExecutionContext,
   type HarnessConfig,
@@ -104,6 +105,8 @@ export interface RepoWiring {
 export interface CommandContext {
   readonly rootDir: string;
   readonly config: HarnessConfig;
+  /** Optional adopter binding; managed commands also load the persisted binding after registration. */
+  readonly policyBinding?: CompiledAdopterPolicyBinding;
   readonly env: EnvSnapshot;
   readonly stdinIsTTY: boolean;
   readonly stdoutIsTTY: boolean;
@@ -150,6 +153,8 @@ export interface CliRuntime {
   readonly stderr: (text: string) => void;
   /** Loads the consumer config. Defaults to importing `harness.config.ts`. */
   readonly loadConfig?: (rootDir: string) => Promise<HarnessConfig>;
+  /** An embedding adopter may pass its already-compiled policy directly. */
+  readonly policyBinding?: CompiledAdopterPolicyBinding;
   /** The interactive waiver prompt. Only ever offered under a TTY. */
   readonly promptForWaiver?: WaiverPrompt;
   /** The filesystem port. Defaults to one rooted in the system temp directory. */
@@ -293,6 +298,7 @@ export async function runCliBoundary(
     const context: CommandContext = {
       rootDir: runtime.cwd,
       config,
+      ...(runtime.policyBinding === undefined ? {} : { policyBinding: runtime.policyBinding }),
       env: runtime.env,
       stdinIsTTY: runtime.stdinIsTTY,
       stdoutIsTTY: runtime.stdoutIsTTY,

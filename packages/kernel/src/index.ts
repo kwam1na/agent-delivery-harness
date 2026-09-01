@@ -658,8 +658,8 @@ export {
 //
 // The final module boundaries of the managed delivery product — policy,
 // checkpoint, workflow, host binding, evidence, finish line, and the facade —
-// at their narrowest production slice: one fixed disposable policy and stage
-// grant, one append-only checkpoint path, the exact bundled workflow graph,
+// at their narrowest production slice: one compiled adopter policy binding and
+// stage grant, one append-only checkpoint path, the exact bundled workflow graph,
 // the qualified Claude Code admission composition, the mandatory review
 // floor, the merge-ready finish line, and one typed status/resume surface.
 export {
@@ -668,6 +668,7 @@ export {
   DISPOSABLE_SENSOR_CAPABILITY,
   DISPOSABLE_STAGE_GRANT,
   MANDATORY_LENS_CATEGORIES,
+  compileDisposableCompiledPolicy,
   compileDisposablePolicy,
   type CompileDisposablePolicyInput,
 } from "./policy/disposable.ts";
@@ -708,6 +709,7 @@ export {
   POLICY_COMPILE_CODES,
   PORTABLE_MODEL_DRIVEN_STAGES,
   PORTABLE_PRIVILEGED_CREDENTIALS,
+  PORTABLE_INTAKE_GRANT,
   PORTABLE_STAGE_GRANT,
   checkBoundPolicy,
   compileRepositoryPolicy,
@@ -875,6 +877,7 @@ export {
   type ManagedCheckpoint,
   type ManagedDeliveryFacade,
   type ManagedInstallation,
+  type CompiledAdopterPolicyBinding,
 } from "./facade/managed-delivery.ts";
 export {
   evaluateMigrationConsumption,

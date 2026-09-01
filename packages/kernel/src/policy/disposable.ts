@@ -14,8 +14,9 @@
  * widen it.
  */
 import { sha256Hex } from "../digest.ts";
+import type { HarnessConfigInput } from "../config.ts";
 import type { PolicySnapshot } from "../spine/policy.ts";
-import { PORTABLE_INTAKE_GRANT, PORTABLE_STAGE_GRANT, compileRepositoryPolicy } from "./compile.ts";
+import { PORTABLE_INTAKE_GRANT, PORTABLE_STAGE_GRANT, compileRepositoryPolicy, type CompiledPolicy } from "./compile.ts";
 import { REPOSITORY_POLICY_DOCUMENT_SPEC } from "./document.ts";
 
 export { MANDATORY_LENS_CATEGORIES } from "./compile.ts";
@@ -75,10 +76,12 @@ export interface CompileDisposablePolicyInput {
   readonly repositoryAuthorityRevocationEpoch: number;
   /** The reviewer-charter bytes read from the trusted pre-run base, per identity. */
   readonly personaBytes: Readonly<Record<string, string>>;
+  /** Optional admission projection, supplied by disposable fixture callers. */
+  readonly admission?: HarnessConfigInput;
 }
 
 /** Compiles the fixed policy for one disposable repository. Digest self-binds. */
-export function compileDisposablePolicy(input: CompileDisposablePolicyInput): PolicySnapshot {
+export function compileDisposableCompiledPolicy(input: CompileDisposablePolicyInput): CompiledPolicy {
   // A charter the trusted base did not supply is absent, not empty: it stays
   // out of the resolvable set so the compiler rejects the reference rather
   // than binding the digest of nothing.
@@ -110,6 +113,7 @@ export function compileDisposablePolicy(input: CompileDisposablePolicyInput): Po
       ],
       approvals: [],
       trackerAbsenceFallback: "proceed-without-tracker",
+      ...(input.admission === undefined ? {} : { admission: input.admission }),
     },
     adapters: [
       {
@@ -128,7 +132,12 @@ export function compileDisposablePolicy(input: CompileDisposablePolicyInput): Po
     // The inputs above are fixed; a rejection here is a defect, not a state.
     throw new Error(`the disposable policy no longer compiles: ${JSON.stringify(result.rejections)}`);
   }
-  return result.compiled.snapshot;
+  return result.compiled;
+}
+
+/** The historical disposable call-site projection, retained for characterization tests. */
+export function compileDisposablePolicy(input: CompileDisposablePolicyInput): PolicySnapshot {
+  return compileDisposableCompiledPolicy(input).snapshot;
 }
 
 /**
