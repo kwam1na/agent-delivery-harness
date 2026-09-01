@@ -26,7 +26,7 @@
  * `proceed-without-tracker`, and no tracker transport exists to launch.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -35,8 +35,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIntakeJournalStore, createJournalStore } from "../checkpoint/journal-store.ts";
 import { CONFIRMATION_FIXTURE_PROFILE } from "../substrate/manifest.ts";
 import { installComposition, packComposition } from "../substrate/installer.ts";
-import { createQualificationFixtureAssertionSource } from "../substrate/assertion-source.ts";
-import { maintainTrustState } from "../substrate/lifecycle.ts";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
 import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
 import {
@@ -302,18 +300,20 @@ describe("iterative intake under the read-only grant", () => {
     expect(presented.ok, JSON.stringify(presented)).toBe(true);
     if (!presented.ok) return;
 
-    // Revoke the installed generation between presentation and confirmation:
+    // Corrupt the installed generation between presentation and confirmation:
     // the confirmation itself consumes, and the acceptance preflight then
-    // fails closed — the ordering the spine froze.
-    const revoked = await maintainTrustState({
+    // fails closed — without advancing the trust epoch the compiled policy is
+    // bound to. This keeps the retry scenario about recoverable installation
+    // drift rather than pretending an old policy survives a trust change.
+    const manifestPath = path.join(
       installationPath,
-      receiptDir,
-      operation: "revoke",
-      generationDigest: installedGenerationDigest,
-      assertionSource: createQualificationFixtureAssertionSource(),
-      now: NOW,
-    });
-    expect(revoked.ok, JSON.stringify(revoked)).toBe(true);
+      "generations",
+      installedGenerationDigest,
+      "composition-manifest.json",
+    );
+    const manifestBytes = readFileSync(manifestPath);
+    chmodSync(manifestPath, 0o644);
+    writeFileSync(manifestPath, "{}\n");
 
     const blocked = await facade.confirmContract({ intakeId: opened.intakeId, echo: operatorEcho(presented.channelPath) });
     expect(blocked.ok).toBe(false);
@@ -321,15 +321,8 @@ describe("iterative intake under the read-only grant", () => {
 
     // The consumed confirmation stands; a retry over the UNCHANGED draft
     // re-runs validation without a second operator confirmation.
-    const unrevoked = await maintainTrustState({
-      installationPath,
-      receiptDir,
-      operation: "unrevoke",
-      generationDigest: installedGenerationDigest,
-      assertionSource: createQualificationFixtureAssertionSource(),
-      now: NOW,
-    });
-    expect(unrevoked.ok, JSON.stringify(unrevoked)).toBe(true);
+    writeFileSync(manifestPath, manifestBytes);
+    chmodSync(manifestPath, 0o444);
 
     const retried = await facade.retryAcceptance({ intakeId: opened.intakeId });
     expect(retried.ok, JSON.stringify(retried)).toBe(true);
