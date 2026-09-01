@@ -18,7 +18,7 @@
  *     delivery remaining `security_blocked` after each.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -532,7 +532,22 @@ describe("rebinding migration", () => {
     });
     expect(installed.ok, JSON.stringify(installed)).toBe(true);
 
-    const facadeProduction = facadeForBinding({ installationPath, receiptDir }, deliveryBinding);
+    const productionInstallation = { installationPath, receiptDir };
+    const productionRegistrationFacade = facadeForBinding(
+      productionInstallation,
+      disposablePolicyBindingForInstallation(installationPath),
+    );
+    // A fixture-proven echo evaluator is not a production producer. Until a
+    // host binding qualifies one, production registration fails before any
+    // challenge or caller-supplied echo surface exists.
+    const productionPresentation = await productionRegistrationFacade.presentContract({
+      contract: { ...DISPOSABLE_CONTRACT, contractId: "contract-production-no-producer" },
+      expiry: EXPIRY,
+    });
+    expect(codesOf(productionPresentation)).toContain("interactive_channel_required");
+    expect(existsSync(path.join(installationPath, "confirmations"))).toBe(false);
+
+    const facadeProduction = facadeForBinding(productionInstallation, deliveryBinding);
     // The mismatch fences the fixture delivery under the production
     // installation…
     const fenced = await facadeProduction.submitStageResult({ deliveryId, stageId: "plan", resultBytes: "plan", fence: await currentFenceOf(facadeProduction, deliveryId) });

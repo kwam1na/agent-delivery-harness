@@ -1116,26 +1116,26 @@
   ],
   "laneCases": [
     {
-      "id": "no-assertion-source-disables-only-the-sensitive-set",
+      "id": "missing-assertion-source-and-confirmation-producer-fail-closed",
       "sources": {
         "hostNative": false,
         "osNative": false
       },
       "expect": {
         "sensitiveApprovals": "fail_closed_no_assertion_source",
-        "operatorConfirmations": "available",
+        "operatorConfirmations": "fail_closed_no_qualified_producer",
         "mergeReadyLane": "available"
       }
     },
     {
-      "id": "os-native-source-serves-sensitive-approvals",
+      "id": "os-native-assertion-source-does-not-create-confirmation-producer",
       "sources": {
         "hostNative": false,
         "osNative": true
       },
       "expect": {
         "sensitiveApprovals": "available",
-        "operatorConfirmations": "available",
+        "operatorConfirmations": "fail_closed_no_qualified_producer",
         "mergeReadyLane": "available"
       }
     }

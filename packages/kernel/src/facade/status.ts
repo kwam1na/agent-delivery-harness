@@ -278,7 +278,13 @@ function deriveAuthorizedNextActions(
 
   // Presenting a takeover reads the last trusted commit, so a delivery that
   // never bound a workspace has nothing to supersede.
-  if (takeoverFirst && input.workspaceBound) add("presentTakeover");
+  if (
+    takeoverFirst &&
+    input.workspaceBound &&
+    input.assertionSource.lanes.operatorConfirmations === "available"
+  ) {
+    add("presentTakeover");
+  }
   if (mutation === "unverified") add("exportDelivery");
 
   for (const action of READ_ACTIONS) add(action);
