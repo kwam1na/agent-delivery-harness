@@ -1,7 +1,7 @@
 {
   "schemaVersion": "product-qualification/1",
   "description": "The release-level product qualification: the composed product installed into clean disposable repositories from PACKED ARTIFACTS ONLY, driving scoped intake through the full checkpoint path to merge-ready under two distinct repository policies. Every claim below names the leg that proved it. The packed leg is re-executable — `npm run qualify:product` reproduces it end to end — the fixture leg names in-process sensors that exist and run on every CI leg, and the authenticated-host leg records an operator-owned native Claude result flowing through the same packed path. Claims that no leg establishes are listed under notProvenHere rather than implied by silence.",
-  "recordedAt": "2026-09-01T07:02:30Z",
+  "recordedAt": "2026-09-01T09:48:22Z",
   "platform": "macOS 15.6.1 arm64",
   "gateVerdict": {
     "decision": "proceed",
@@ -53,7 +53,7 @@
         "statement": "a second repository changes policy without forking workflows or harness semantics",
         "outcome": "met",
         "leg": "packed",
-        "evidence": "disposable-alpha and disposable-beta differ in gate id, identity token, review-neutral set, record-neutral set, delivery-record location, source layout, test classification, contracted outcome, and intake lane — beta declares a consumer-owned `beta-tree/v1` token because `deliverable-tree/v1` pins its own narration set. What differs is the tracked GATE CONFIGURATION, which is what an adopter controls at this layer; the product's compiled repository policy for a disposable repository is a fixed document parameterized by repository id and charter digests, and the record does not claim otherwise. Both repositories were served by ONE installed generation — the same installation path and active pointer, observed once and reused — and each tracked record landed in its own policy-declared neutral tree, so the record location came from policy rather than from a product-wide constant."
+        "evidence": "disposable-alpha and disposable-beta differ in gate id, identity token, review-neutral set, record-neutral set, delivery-record location, source layout, test classification, contracted outcome, and intake lane — beta declares a consumer-owned `beta-tree/v1` token because `deliverable-tree/v1` pins its own narration set. Each facade was explicitly bound by its caller to one compiled adopter policy assembled from the installed product's compiler, current installation trust epoch, exact trusted-base reviewer charter bytes, sensor binding, outcome authority, and that repository's installed admission configuration; the product supplied no implicit or host-specific fallback. What differs is the tracked GATE CONFIGURATION, which is what an adopter controls at this layer; the product's compiled repository policy for a disposable repository is a fixed document parameterized by repository id and charter digests, and the record does not claim otherwise. Both repositories were served by ONE installed generation — the same installation path and active pointer, observed once and reused — and each tracked record landed in its own policy-declared neutral tree, so the record location came from policy rather than from a product-wide constant."
       },
       {
         "id": "no-agent-process-no-workspace-lifecycle",
@@ -95,7 +95,7 @@
         "statement": "every claimed sensor is mutated red, and a comment-only no-op is not",
         "outcome": "met",
         "leg": "fixture",
-        "evidence": "the lane's judgements are pure functions falsified in both directions by scripts/qualify-product.test.ts, its COMPOSITION is falsified (dropping either half of the observation verdict is caught directly, because the wiring test's degenerate input can only ever witness the vacuity half), and its WIRING is falsified too — the lane is driven for real on an input that cannot get past its first step and required to return the vacuity findings rather than an empty list. The pre-existing rules' mutations each produced a named failing test — deliberately enumerated rather than counted, because the numeral is the part nobody checks: the agent-runtime rule never reporting AND always reporting; policy-independence never firing; anti-vacuity dropping its enumeration; the two repositories converging; path containment becoming a prefix test; the refusal detector ignoring an allowed result; the per-lane inventory collapsing into one shared counter; the second intake lane disappearing; either half of the observation verdict dropped; and the exit ceasing to call it. The process sensor additionally falsifies Git workspace lifecycle hidden behind global options and an agent launcher hidden behind Node. ELEVEN FURTHER mutations on the packed-surface rules, likewise each naming a failing test: the resolved-name enumeration ceasing to report emptiness; the membership loop never reporting; the required-name set emptied; the launcher check dropped; the staging check weakened to a path-only sensor AND to a command-string-only sensor — the pair an incomplete sensor passes, since a check on the command string alone survives an absent path and a check on the staged path alone survives a command pointing elsewhere; containment dropped; the empty-command, empty-inventory and no-path-member guards dropped; and the command-line parser degraded to a whitespace split. Weakening the shared path-containment helper to a prefix comparison is counted ONCE, above: it is the same one-line edit, and it now reddens a named test in both families rather than surviving in this one. FOUR PRODUCT mutations were falsified against the packed lane itself rather than against a pure rule, because the two defects this candidate closes live in the product: removing the verifier's re-export, restoring the tsx launcher, staging the entry while pointing the command elsewhere, and emitting the entry's unresolved spelling each turned the lane red with a named finding, the last one only because the lane EXECUTES the emitted command rather than reading it. A comment-only edit left all 58 green — 49 in the lane's own suite and 9 in the record checker, counted rather than apportioned — and a comment-only edit in the facade left the packed lane clean."
+        "evidence": "the lane's judgements are pure functions falsified in both directions by scripts/qualify-product.test.ts, its COMPOSITION is falsified (dropping either half of the observation verdict is caught directly, because the wiring test's degenerate input can only ever witness the vacuity half), and its WIRING is falsified too — the lane is driven for real on an input that cannot get past its first step and required to return the vacuity findings rather than an empty list. The pre-existing rules' mutations each produced a named failing test — deliberately enumerated rather than counted, because the numeral is the part nobody checks: the agent-runtime rule never reporting AND always reporting; policy-independence never firing; anti-vacuity dropping its enumeration; the two repositories converging; path containment becoming a prefix test; the refusal detector ignoring an allowed result; the per-lane inventory collapsing into one shared counter; the second intake lane disappearing; either half of the observation verdict dropped; and the exit ceasing to call it. The process sensor additionally falsifies Git workspace lifecycle hidden behind global options and an agent launcher hidden behind Node. ELEVEN FURTHER mutations on the packed-surface rules, likewise each naming a failing test: the resolved-name enumeration ceasing to report emptiness; the membership loop never reporting; the required-name set emptied; the launcher check dropped; the staging check weakened to a path-only sensor AND to a command-string-only sensor — the pair an incomplete sensor passes, since a check on the command string alone survives an absent path and a check on the staged path alone survives a command pointing elsewhere; containment dropped; the empty-command, empty-inventory and no-path-member guards dropped; and the command-line parser degraded to a whitespace split. Weakening the shared path-containment helper to a prefix comparison is counted ONCE, above: it is the same one-line edit, and it now reddens a named test in both families rather than surviving in this one. FOUR PRODUCT mutations were falsified against the packed lane itself rather than against a pure rule, because the two defects this candidate closes live in the product: removing the verifier's re-export, restoring the tsx launcher, staging the entry while pointing the command elsewhere, and emitting the entry's unresolved spelling each turned the lane red with a named finding, the last one only because the lane EXECUTES the emitted command rather than reading it. A comment-only edit left all 59 green — 49 in the lane's own suite and 10 in the record checker, counted rather than apportioned — and a comment-only edit in the facade left the packed lane clean."
       }
     ]
   },
@@ -104,8 +104,8 @@
     "driver": "scripts/qualify-product.ts",
     "sourceAccess": "the driver imports nothing from packages/. It reaches the product twice, both times through an artifact: the npm-packed tarball install tree supplies the operator-facing installer — resolved through the package's own `exports` map rather than by joining a path into its src/, so what the lane drives is the published surface and not merely the shipped layout — and the installed generation root supplies the product that drives the deliveries.",
     "observed": {
-      "generationDigest": "4dba566e53948c7a889de093809a80bb4a7d2374f99414d5e282ccd7a3cf77a5",
-      "installationId": "install-109d785d7427855a82a19c398ba6cce5",
+      "generationDigest": "dc9da4c39a98f56bcefcd4d1327baea8b50959314fdd5eb2ffab869ff0e2fd42",
+      "installationId": "install-c56356ebffe9b972100a8a5a3b308f4d",
       "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
       "compositionProfile": "confirmation-fixture",
       "repositoriesDelivered": [
@@ -160,9 +160,9 @@
         }
       ],
       "retainedGenerations": [
-        "4dba566e53948c7a889de093809a80bb4a7d2374f99414d5e282ccd7a3cf77a5",
-        "9d2b669126b975b27cd9ae6851f9e5d05f679ee22d22120cc8ac88e211174adb",
-        "d2e4db6a0f277748f42f4b3e92019d85a88ce0f5b46c5430d0bdacbb7d0332f7"
+        "dc9da4c39a98f56bcefcd4d1327baea8b50959314fdd5eb2ffab869ff0e2fd42",
+        "2878f3b7d7dfb229c0d3bd0762b1b6123a8cad8b5804eb81e159c09067332417",
+        "88b1fe6ed80045b0a49bf0c39a64bf1d734188da879d93bb2021b049d2d712d2"
       ]
     },
     "crossPlatform": "the same lane runs as a release-workflow step on ubuntu-latest, and that run is the cross-platform evidence this gate requires. PENDING FOR THIS RECORD: the Linux leg for this candidate had not reported when these observations were written, so the digest above is the macOS one only and no second platform is claimed here. Nothing in the lane compares the two digests; the comparison is the operator's, and this field is where it lands.",
@@ -175,89 +175,89 @@
     "driver": "scripts/qualify-claude-code-session.ts --provider-delivery",
     "command": "QUALIFY_CLAUDE_CODE_SESSION=1 node --import tsx scripts/qualify-claude-code-session.ts --provider-delivery",
     "providerVersion": "2.1.252",
-    "generationDigest": "4dba566e53948c7a889de093809a80bb4a7d2374f99414d5e282ccd7a3cf77a5",
-    "installationId": "install-109d785d7427855a82a19c398ba6cce5",
+    "generationDigest": "dc9da4c39a98f56bcefcd4d1327baea8b50959314fdd5eb2ffab869ff0e2fd42",
+    "installationId": "install-c56356ebffe9b972100a8a5a3b308f4d",
     "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
-    "retainedRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7",
+    "retainedRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl",
     "findings": 0,
     "repositories": [
       {
         "repositoryId": "disposable-alpha",
-        "deliveryId": "dlv-4491fcccf157",
-        "providerRunId": "5ce513e9-189a-4ea0-bc98-bf4b5fc1b505",
-        "finalPassId": "pass-5ce513e9-189a-4ea0-bc98-bf4b5fc1b505",
-        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/installation/provider-review-authority/deliveries/dlv-4491fcccf157",
-        "journalEvidenceRecordId": "2cddfe2c36e945fad421cc1fba22d8b3f93e0d39cd2c1beca01cf1c9113097e4",
-        "journalManifestDigest": "b6541c4e1bf2eac71fa3ff9c05498eb0e0e060b74b908b407b1ced77378c0139",
-        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/5ce513e9-189a-4ea0-bc98-bf4b5fc1b505/manifest.json",
-        "manifestSha256": "17e23b8641ffe5535f1b719dca94d578261b3be0bb4a4921b21bc35d8a4dafe9",
-        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/worktree-disposable-alpha/telemetry/delivery-runs/record--0b8cab69851f83498a8616af7c084d8e15cca6ce388bf87642f114b6a6f6f9d4.json",
-        "trackedRecordSha256": "7056cbef95a3017149ae33ff0ceb80370e317577a7133a2c9218d430b2d9bea0",
-        "trackedCommit": "852d08a13c3cdfc8ba1ed8099f1b7719502234f1",
+        "deliveryId": "dlv-648ccf384f5c",
+        "providerRunId": "863480d2-4a24-47a5-acac-a4518493f8b8",
+        "finalPassId": "pass-863480d2-4a24-47a5-acac-a4518493f8b8",
+        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/installation/provider-review-authority/deliveries/dlv-648ccf384f5c",
+        "journalEvidenceRecordId": "2d7e48f0129fb8b5f238764e5c2b6806bf82b91d23c6080de7bd09bf3fde4574",
+        "journalManifestDigest": "ac1a9a5feb8bc3ba060bce3d2192e7bdb0f46496b911901be0377e77a434e62b",
+        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/863480d2-4a24-47a5-acac-a4518493f8b8/manifest.json",
+        "manifestSha256": "98c488bc7e8addd05eb5091d65938f0e231e0e6b7de67cc663a86dec4f266f69",
+        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/worktree-disposable-alpha/telemetry/delivery-runs/record--0b8cab69851f83498a8616af7c084d8e15cca6ce388bf87642f114b6a6f6f9d4.json",
+        "trackedRecordSha256": "6db41cf5d7940211bf3e23e0807bdcb03ce223e3200ee87faa0525c29dab72b0",
+        "trackedCommit": "612301d988a3b2380cb5865778c905ba4ce02cd4",
         "reviews": [
           {
             "lensId": "lens.outcome-correctness",
-            "nativeSessionId": "9b93505f-f142-4e5a-addb-76242a3df314",
-            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-4491fcccf157/binding/provider-review-handoffs/handoff-f8747b762c01bb81.json",
-            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/installation/provider-review-authority/deliveries/dlv-4491fcccf157/handoffs/handoff-f8747b762c01bb81.json",
-            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/native-provider-results/disposable-alpha/handoff-f8747b762c01bb81.json",
-            "nativeResultSha256": "5091214e7381bbebd7c62c62f7658bcaac7643b75d4ca6dc8c99270cf4940277",
+            "nativeSessionId": "207752aa-fb12-49f6-adaa-afbdb6e95526",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-648ccf384f5c/binding/provider-review-handoffs/handoff-c6bdc83b26ba8ff4.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/installation/provider-review-authority/deliveries/dlv-648ccf384f5c/handoffs/handoff-c6bdc83b26ba8ff4.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/native-provider-results/disposable-alpha/handoff-c6bdc83b26ba8ff4.json",
+            "nativeResultSha256": "0621a3fc2d21c85ccfc344a845a02ddca7895988203072cfbcfdbbc80207cc9a",
             "promptContextDigest": "4046d68cc9fee844dc39a2fecf96bbadb1c409d9964c70ee97eee8ea47874f53",
-            "contextDigest": "88a7f8e7a19377630a3c1f6056e559528af694a7af799b0fcc02edfcc7dc7918",
-            "attemptId": "attempt-dceac4a82873bbb7",
-            "acceptedArtifactDigest": "3e5cca4fcac40254b94ac1e72c389b11faf3394902094eb2722f461a030fd736"
+            "contextDigest": "26d2106bd15ddbbb9c36af3951dc8dea58ff8f7bd1cdff658360e22618d5d404",
+            "attemptId": "attempt-8e0fe264a9e79d83",
+            "acceptedArtifactDigest": "6aa4d780c8560eecdb9b15796b008f7d4c5d5771bb3c2904973d7247dc070643"
           },
           {
             "lensId": "lens.testing-policy",
-            "nativeSessionId": "5165da6c-4691-499d-aaf9-b118605cb16e",
-            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-4491fcccf157/binding/provider-review-handoffs/handoff-7a99275a9fed81db.json",
-            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/installation/provider-review-authority/deliveries/dlv-4491fcccf157/handoffs/handoff-7a99275a9fed81db.json",
-            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/native-provider-results/disposable-alpha/handoff-7a99275a9fed81db.json",
-            "nativeResultSha256": "e72726d1741ec579e6ec9a0233ac7e4e8dcfd58a504f04454345b3d4ca0e375f",
+            "nativeSessionId": "bdf129f5-16bb-4322-8492-787493a033d4",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-648ccf384f5c/binding/provider-review-handoffs/handoff-6f626297f5e376e1.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/installation/provider-review-authority/deliveries/dlv-648ccf384f5c/handoffs/handoff-6f626297f5e376e1.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/native-provider-results/disposable-alpha/handoff-6f626297f5e376e1.json",
+            "nativeResultSha256": "a6f8e2eab0cc86d79a9d40a7f303655395711c695ec78a282d53aac176da824e",
             "promptContextDigest": "bc2a28f219fe9eba8b61ad34c801f145e57ba750bb080adb246a93cf0c277a3d",
-            "contextDigest": "ee64480dfe7ab5dfae4c85b31b2c216bfc04a93fb307905d710b513107ed2620",
-            "attemptId": "attempt-8f1fade8d5f4b613",
-            "acceptedArtifactDigest": "95a6e1883c34800d6782d84e26f1e59480e034b585df5c442b80183c77b4b303"
+            "contextDigest": "1a2428adbd9c03571dd253ee6978f93b3401a482f27ba54d8776a104399ec689",
+            "attemptId": "attempt-470835bf96012175",
+            "acceptedArtifactDigest": "156b9780b6ca7a86e6b70157c1acb71e1b834632618a16711c4b7bed8eff1faa"
           }
         ]
       },
       {
         "repositoryId": "disposable-beta",
-        "deliveryId": "dlv-4240f58a8ea3",
-        "providerRunId": "a93c4266-4fe7-4f89-8658-6b8785f62791",
-        "finalPassId": "pass-a93c4266-4fe7-4f89-8658-6b8785f62791",
-        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/installation/provider-review-authority/deliveries/dlv-4240f58a8ea3",
-        "journalEvidenceRecordId": "ec039d7bb23a3d98186e8f4dc90b969fb54320e1e0fe9bf9b20549ae133c690b",
-        "journalManifestDigest": "eadc55d8543ce7bbb06a1e6c952bba5e3b053c1bc006802fbda089535c61d45b",
-        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/a93c4266-4fe7-4f89-8658-6b8785f62791/manifest.json",
-        "manifestSha256": "ae77cbbd2f93a65e7e0c312729af82096464b894d0e0f0884a2877c1be02f1e3",
-        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/worktree-disposable-beta/audit/runs/record--eaaaa952fa8df6f7b6dcd8756ac13a6919c69751411378f4234789cc709d23a7.json",
-        "trackedRecordSha256": "0a90853ea6cd7fcb6696405f9a445d1bfe99332ad85cce3941955948af7d36d7",
-        "trackedCommit": "5a134b41e8e457fca21a2ef4574279986089db79",
+        "deliveryId": "dlv-19fd2ba77790",
+        "providerRunId": "18226383-c6d1-485f-9997-4420e71ee555",
+        "finalPassId": "pass-18226383-c6d1-485f-9997-4420e71ee555",
+        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/installation/provider-review-authority/deliveries/dlv-19fd2ba77790",
+        "journalEvidenceRecordId": "d34b4c2849d6da6872526b4bb3d5bf4f44951e7bf3230058e3a6198fe03a3aa7",
+        "journalManifestDigest": "50244b1be920a08c531f9a85e2fd71f1fa7e7715c68c23f808a71e3c442426f0",
+        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/18226383-c6d1-485f-9997-4420e71ee555/manifest.json",
+        "manifestSha256": "5e94064430bfd06e44eabd6543db26c87dde0ce2f01b509113d8b2c0ae5841ec",
+        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/worktree-disposable-beta/audit/runs/record--eaaaa952fa8df6f7b6dcd8756ac13a6919c69751411378f4234789cc709d23a7.json",
+        "trackedRecordSha256": "2ca61cd8a40784cda1b05d3e2d4377a020deb965b5d27ca81204434c6b80fa3e",
+        "trackedCommit": "bf89d0dea5395d6c6ae7987ecd233ac54b2808e4",
         "reviews": [
           {
             "lensId": "lens.outcome-correctness",
-            "nativeSessionId": "05f69694-1737-488e-b65a-087da6111319",
-            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-4240f58a8ea3/binding/provider-review-handoffs/handoff-0d2c039f3ff6f06d.json",
-            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/installation/provider-review-authority/deliveries/dlv-4240f58a8ea3/handoffs/handoff-0d2c039f3ff6f06d.json",
-            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/native-provider-results/disposable-beta/handoff-0d2c039f3ff6f06d.json",
-            "nativeResultSha256": "58a6710212a5f0961917af6176c05712b668d72726536d2a2d0965d8b0fd2267",
+            "nativeSessionId": "36378175-8228-49fe-83b2-512d6c9830be",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-19fd2ba77790/binding/provider-review-handoffs/handoff-7dae654227c177cb.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/installation/provider-review-authority/deliveries/dlv-19fd2ba77790/handoffs/handoff-7dae654227c177cb.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/native-provider-results/disposable-beta/handoff-7dae654227c177cb.json",
+            "nativeResultSha256": "b49d3112d63439859d89af6efbaa3fc5c032b13f91719c1d37d486b9d4272ba1",
             "promptContextDigest": "345220bb071e4e5841647d0500a617c2fb9c5af0257350ce225bf53c397f546c",
-            "contextDigest": "fd22cead1598fa1987ba85c84ec2dd0a84f8a6e2e25af9d28945544ad7ce8512",
-            "attemptId": "attempt-7432a7b3c617390b",
-            "acceptedArtifactDigest": "b358171caf2149b4c184af06e3067eabed98490db11f4b6185217c88bd768b32"
+            "contextDigest": "0a3da68b67ed2654953c35997908664b34075fc1c705816aa8c404c464f5414b",
+            "attemptId": "attempt-737074dd4c489949",
+            "acceptedArtifactDigest": "8d632846e4f6c2f266d92c27bd7d123e44fb856b29409ea7e399a9b638a3f6ba"
           },
           {
             "lensId": "lens.testing-policy",
-            "nativeSessionId": "5a6d4ebc-d943-40f0-9206-f75da0ff0e5b",
-            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-4240f58a8ea3/binding/provider-review-handoffs/handoff-b4fab1eb70eb8113.json",
-            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/installation/provider-review-authority/deliveries/dlv-4240f58a8ea3/handoffs/handoff-b4fab1eb70eb8113.json",
-            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-71EkA7/native-provider-results/disposable-beta/handoff-b4fab1eb70eb8113.json",
-            "nativeResultSha256": "d98b807e5e01b0e45db1a2d4ad0623e0b9ca46b125d6300e6e2eb62a3bb03382",
+            "nativeSessionId": "d9be5a7d-5da5-4ce1-b157-92f0d9f12c07",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-19fd2ba77790/binding/provider-review-handoffs/handoff-df3a137c431a212a.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/installation/provider-review-authority/deliveries/dlv-19fd2ba77790/handoffs/handoff-df3a137c431a212a.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-5RjVJl/native-provider-results/disposable-beta/handoff-df3a137c431a212a.json",
+            "nativeResultSha256": "c2c68ad9867f50dd956de4dad9700ce4d93967da1403078e2c6815be62e981a8",
             "promptContextDigest": "dbdc3322bfa22a10535461e73557337d4c4de5ee903f3b050884a0578bc10b5f",
-            "contextDigest": "e524be151c7b907f9c74a4d786bf2b4e5cf2ebbb42c91312e6299f62d9b9e638",
-            "attemptId": "attempt-7b68b2a99054e38a",
-            "acceptedArtifactDigest": "1d72318a6929e7e223fb0bc8ed31620837603ef20cd0e7d7ae20f8adf7369c5a"
+            "contextDigest": "25bc2757045683a5359d263e533089fa52379920fbc21e3fb756446fdc8b2bff",
+            "attemptId": "attempt-eda1e4833d7e91c4",
+            "acceptedArtifactDigest": "3e062654a9533267f0d9dc874138a2b531c985958010a9f9fbbbbf82c0e7415f"
           }
         ]
       }
@@ -323,7 +323,7 @@
   },
   "notProvenHere": [
     "A live authenticated provider-result lane on any host other than Claude Code. The Codex-shaped fixture proves the shared contract only; it is not a native Codex result and is not counted as one.",
-    "A Codex delivery lane, of any kind. Codex CAPABILITIES are graded in qualifications/host-admission-capabilities.json (codex-cli, Tier 1 mutation floor live-probed model-free; Tier 2 lifecycle and Tier 3 descendant teardown provisional), so the Codex surface is not unknown. What does not exist in this repository is a Codex host-binding module or a qualified Codex delivery integration to drive a lane with — that is V26-1478, which this ticket lists as a blocker and which is still open. The second-host half of the release claim therefore belongs to V26-1478 and was deliberately not attempted here; the ticket's own carve-out (a sub-Tier-1 second host runs as capability verification only) does not create a delivery lane where no binding exists.",
+    "A Codex delivery lane, of any kind. Codex capability grades and host-neutral fixture envelopes do not supply the missing native host binding or a qualified projection-consumption producer. Until that explicit binding is implemented and qualified, Codex remains excluded rather than receiving a fallback or a divergent decision/evidence contract; that follow-on is deferred to V26-1517 pending Athena MVP field evidence.",
     "Advancing the shipped reviewer persona set alone through the agent-skills corpus validation and release build. That advance happens in the agent-skills repository, and its effect here is the three re-stamped composition digest constants — inherent to a digest-pinned composition, not per-persona coupling.",
     "Replacing one host integration alone, and the planted duplicated-workflow coupling that must fail. Both need a second host integration to replace or duplicate against.",
     "A control-plane-absent lane as a distinct scenario. No control plane is configured anywhere in this repository, so every lane above already runs without one; that is an absence rather than a probe, and it is recorded as such rather than claimed as coverage.",
