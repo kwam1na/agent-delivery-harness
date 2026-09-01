@@ -106,6 +106,7 @@ export type MemberCheck = (value: unknown, at: string, collector: SpineCollector
 export interface MemberRule {
   readonly name: string;
   readonly check: MemberCheck;
+  readonly required?: boolean;
 }
 
 /**
@@ -131,7 +132,7 @@ export function checkClosed(
   }
   for (const rule of rules) {
     if (!Object.prototype.hasOwnProperty.call(value, rule.name) || value[rule.name] === undefined) {
-      collector.emit("missing_member", spinePointer(at, rule.name), "required member is absent");
+      if (rule.required !== false) collector.emit("missing_member", spinePointer(at, rule.name), "required member is absent");
       continue;
     }
     rule.check(value[rule.name], spinePointer(at, rule.name), collector);

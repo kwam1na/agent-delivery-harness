@@ -71,6 +71,7 @@ import {
 import { publishPreparationReceipt } from "../preparation.ts";
 import { discoverRecords, resolveRecordStorage } from "../records.ts";
 import { submitManifest } from "../recorder.ts";
+import { reviewFindingCoherenceCodes } from "../validator/review-green.ts";
 import { createCandidateCapture, evaluateCandidateActivation, type CandidateCommandRunner } from "../candidate.ts";
 import { isRecordNeutralPath, isReviewNeutralPath, withDeliverableIdentity } from "../identity.ts";
 import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
@@ -360,6 +361,7 @@ interface CapabilityBinding {
 interface StoredProviderReviewHandoff {
   readonly handoff: ProviderReviewHandoff;
   readonly invocationCapability: CapabilityBinding;
+  readonly reviewWorkspaceDir: string;
 }
 
 interface ProviderReviewAuthorityState {
@@ -368,6 +370,7 @@ interface ProviderReviewAuthorityState {
   readonly fence: number;
   readonly discoveryConfigurationDigest: string;
   readonly grantDigest: string;
+  readonly productTrustRevocationEpoch: number;
   readonly bindingCapability: CapabilityBinding;
 }
 
@@ -388,6 +391,8 @@ const capabilityDigest = (input: {
   readonly discoveryConfigurationDigest?: string;
   readonly grantDigest?: string;
   readonly promptContextDigest?: string;
+  readonly productTrustRevocationEpoch?: number;
+  readonly reviewWorkspaceId?: string;
 }): string => digestCanonical(input);
 
 async function writeOwned(target: string, contents: string): Promise<void> {
@@ -709,6 +714,8 @@ export interface ManagedDeliveryFacade {
     readonly nativeRunId: string;
     readonly finalPassId: string;
     readonly lensId: string;
+    /** Distinct read-only snapshot created and retired by the operator-owned host. */
+    readonly reviewWorkspaceDir: string;
     /** Instructions joined with trusted persona, contract, and sensor bytes by the binding. */
     readonly reviewInstructionsBytes: string;
     readonly bindingCapability: ProviderReviewCapability;
@@ -1082,6 +1089,27 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       throw new Error(`git ${args.join(" ")} failed (${outcome.code}): ${outcome.stderr.trim()}`);
     }
     return outcome.stdout.trim();
+  };
+
+  // Candidate capture uses `git write-tree` to include a staged candidate.
+  // Serialize only the two read/capture brackets for concurrent native
+  // callbacks so they cannot contend on one linked worktree index; durable
+  // acceptance still races at the guarded journal CAS below.
+  let providerCaptureQueue: Promise<void> = Promise.resolve();
+  const captureProviderPair = async (mutableRoot: string, reviewRoot: string) => {
+    let release!: () => void;
+    const prior = providerCaptureQueue;
+    providerCaptureQueue = new Promise<void>((resolve) => { release = resolve; });
+    await prior;
+    try {
+      const mutable = await captureFor(mutableRoot, input.config, candidateRunner, storageGitRunner);
+      if (!mutable.ok) return { ok: false as const, failure: mutable.failure };
+      const review = await captureFor(reviewRoot, input.config, candidateRunner, storageGitRunner);
+      if (!review.ok) return { ok: false as const, failure: review.failure };
+      return { ok: true as const, mutable: mutable.candidate, review: review.candidate };
+    } finally {
+      release();
+    }
   };
 
   let namespaceDirCache: string | undefined;
@@ -1488,6 +1516,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     readonly artifactDigest: string;
   }
 
+  const providerRunKeyOf = (result: ProviderReviewResult): string => digestCanonical({
+    providerId: result.provider.id,
+    providerVersion: result.provider.version,
+    runId: result.provider.runId,
+    finalPassId: result.provider.finalPassId,
+  });
+
+  const suspendedProviderRunKeysOf = (views: readonly JournalEntryView[]): ReadonlySet<string> => new Set(
+    views
+      .filter((view) => view.kind === "blocker.recorded" && view.payload["code"] === "review.result-replay-conflict")
+      .map((view) => view.payload["providerRunKey"])
+      .filter((key): key is string => typeof key === "string"),
+  );
+
   const recordedProviderAttemptsOf = (views: readonly JournalEntryView[]): RecordedProviderAttempt[] =>
     views
       .filter((view) => view.kind === "attempt.artifact.recorded")
@@ -1548,8 +1590,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   ): Promise<{ readonly ok: true; readonly attempts: RecordedReviewAttempt[]; readonly results: ProviderReviewResult[] } | FacadeFailure> => {
     const loaded = await acceptedProviderResultsOf(deliveryId, views);
     if (!loaded.ok) return loaded;
+    const results = loaded.results.filter((result) => !suspendedProviderRunKeysOf(views).has(providerRunKeyOf(result)));
     const attempts: RecordedReviewAttempt[] = [];
-    for (const result of loaded.results) {
+    for (const result of results) {
       attempts.push({
         attemptId: result.reviewer.attemptId,
         lensId: result.reviewer.lensId,
@@ -1560,7 +1603,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         personaDigest: result.reviewer.personaDigest,
       });
     }
-    return { ok: true, attempts, results: loaded.results };
+    return { ok: true, attempts, results };
   };
 
   const nextCheckpointOf = (state: DeliveryState, views: readonly JournalEntryView[]): ManagedCheckpoint => {
@@ -2628,6 +2671,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           fence,
           discoveryConfigurationDigest: session.discoveryConfigurationDigest,
           grantDigest,
+          productTrustRevocationEpoch: trust.revocationEpoch,
         }),
       };
       // Capability material and invocation bindings are installation-owned,
@@ -2641,6 +2685,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           fence,
           discoveryConfigurationDigest: session.discoveryConfigurationDigest,
           grantDigest,
+          productTrustRevocationEpoch: trust.revocationEpoch,
           bindingCapability: providerReviewBinding,
         } satisfies ProviderReviewAuthorityState)}\n`,
       );
@@ -3080,6 +3125,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       nativeRunId,
       finalPassId,
       lensId,
+      reviewWorkspaceDir,
       reviewInstructionsBytes,
       bindingCapability,
       invocationCapability,
@@ -3102,13 +3148,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
       const authority = await readJson<ProviderReviewAuthorityState>(providerAuthorityStatePath(deliveryId));
       const grantDigest = digestCanonical(DISPOSABLE_STAGE_GRANT);
+      const currentTrust = await readTrust();
       if (
+        currentTrust === undefined ||
         authority === undefined ||
         authority.deliveryId !== deliveryId ||
         authority.workspaceId !== workspace.workspaceId ||
         authority.fence !== workspace.fence ||
         authority.discoveryConfigurationDigest !== workspace.discoveryConfigurationDigest ||
-        authority.grantDigest !== grantDigest
+        authority.grantDigest !== grantDigest ||
+        authority.productTrustRevocationEpoch !== currentTrust.revocationEpoch
       ) {
         return refuse(
           "provider_binding_authority_unavailable",
@@ -3125,6 +3174,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           fence: workspace.fence,
           discoveryConfigurationDigest: workspace.discoveryConfigurationDigest,
           grantDigest,
+          productTrustRevocationEpoch: currentTrust.revocationEpoch,
         }) !== authority.bindingCapability.digest) {
         return refuse(
           "provider_binding_capability_refused",
@@ -3165,17 +3215,30 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuse("provider_pass_invalid", "The native final-pass identity is empty or unsafe.", "Use the native host's final-pass identifier.");
       }
 
-      const capture = await captureFor(workspace.worktreeDir, input.config, candidateRunner, storageGitRunner);
+      let mutableRoot: string;
+      let reviewRoot: string;
+      try {
+        [mutableRoot, reviewRoot] = await Promise.all([realpath(workspace.worktreeDir), realpath(reviewWorkspaceDir)]);
+      } catch {
+        return refuse("provider_review_workspace_invalid", "The host-created review snapshot is absent or unresolved.", "Create a distinct linked review snapshot before preparing the handoff.");
+      }
+      if (reviewRoot === mutableRoot || reviewRoot.startsWith(`${mutableRoot}${path.sep}`) || mutableRoot.startsWith(`${reviewRoot}${path.sep}`)) {
+        return refuse("provider_review_workspace_invalid", "The review snapshot overlaps the mutable delivery worktree.", "Create a distinct read-only snapshot outside the delivery worktree's writable grant.");
+      }
+      const commonReview = await git(reviewRoot, "rev-parse", "--path-format=absolute", "--git-common-dir");
+      const commonMutable = await git(mutableRoot, "rev-parse", "--path-format=absolute", "--git-common-dir");
+      if (commonReview.code !== 0 || commonReview.out !== commonMutable.out) {
+        return refuse("provider_review_workspace_invalid", "The review snapshot is not a linked workspace of the bound repository.", "Create it from the bound repository's common Git directory.");
+      }
+      const mutableCapture = await captureFor(mutableRoot, input.config, candidateRunner, storageGitRunner);
+      if (!mutableCapture.ok) return mutableCapture.failure;
+      const capture = await captureFor(reviewRoot, input.config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
-      if (capture.candidate.treeSha !== current.treeSha) {
+      if (mutableCapture.candidate.treeSha !== current.treeSha || capture.candidate.treeSha !== current.treeSha) {
         return refuse("candidate_moved", "The worktree moved before the native review handoff.", "Re-checkpoint the candidate, then prepare the review handoff again.");
       }
 
-      const trust = lastOf(guarded.views, "trust.epoch.observed");
-      const productTrustRevocationEpoch = trust?.payload["productTrustEpoch"];
-      if (typeof productTrustRevocationEpoch !== "number") {
-        return refuse("provider_binding_incomplete", "The bound invocation has no trust-epoch identity.", "Re-bind the host-created workspace.");
-      }
+      const productTrustRevocationEpoch = currentTrust.revocationEpoch;
 
       const lens = guarded.meta.policy.reviewLenses.find((entry) => entry.lensId === lensId);
       if (lens === undefined) {
@@ -3240,12 +3303,14 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           nativeSessionId,
           nativeRunId,
           promptContextDigest: handoff.promptContextDigest,
+          productTrustRevocationEpoch,
+          reviewWorkspaceId: handoff.candidate.workspaceId,
         }),
       };
       await artifacts.writeTextFile(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`, { mode: OWNER_FILE });
       await writeOwned(
         providerHandoffAuthorityPath(deliveryId, handoff.handoffId),
-        `${JSON.stringify({ handoff, invocationCapability: invocationCapabilityBinding } satisfies StoredProviderReviewHandoff, null, 2)}\n`,
+        `${JSON.stringify({ handoff, invocationCapability: invocationCapabilityBinding, reviewWorkspaceDir: reviewRoot } satisfies StoredProviderReviewHandoff, null, 2)}\n`,
       );
       return { ok: true, handoff, handoffPath };
     },
@@ -3266,6 +3331,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuse("provider_handoff_missing", `Provider result ${handoffId} has no binding-owned handoff.`, "Prepare the native reviewer invocation first.");
       }
       const handoff = stored.handoff;
+      const currentTrust = await readTrust();
       if (!capabilityShape(invocationCapability) || invocationCapability.id !== stored.invocationCapability.id ||
         capabilityDigest({
           domain: "review-invocation",
@@ -3277,6 +3343,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           nativeSessionId: handoff.nativeSessionId,
           nativeRunId: handoff.provider.runId,
           promptContextDigest: handoff.promptContextDigest,
+          productTrustRevocationEpoch: handoff.productTrustRevocationEpoch,
+          reviewWorkspaceId: handoff.candidate.workspaceId,
         }) !== stored.invocationCapability.digest) {
         return refuse(
           "provider_invocation_capability_refused",
@@ -3290,6 +3358,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           "The native callback belongs to a superseded delivery, workspace, or fence.",
           "Discard the delayed callback and prepare a new invocation from the standing workspace.",
         );
+      }
+      if (currentTrust === undefined || currentTrust.revocationEpoch !== handoff.productTrustRevocationEpoch) {
+        return refuse("provider_trust_epoch_mismatch", "The product trust revocation epoch advanced after this provider binding was prepared.", "Re-bind the workspace and prepare a fresh native review invocation.");
       }
 
       const parsed = parseProviderReviewResult(resultBytes);
@@ -3322,10 +3393,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
       const normalizedResultBytes = `${JSON.stringify(result, null, 2)}\n`;
       const artifactDigest = sha256Hex(normalizedResultBytes);
-      const existingAttempt = recordedProviderAttemptsOf(guarded.views).find(
-        (candidate) => candidate.attemptId === result.reviewer.attemptId,
-      );
-      if (existingAttempt !== undefined) {
+      const providerRunKey = providerRunKeyOf(result);
+      const replayAgainst = async (views: readonly JournalEntryView[]): Promise<
+        | { readonly ok: true; readonly replay: "identical"; readonly disposition: "approved" | "changes_requested" }
+        | FacadeFailure
+        | undefined
+      > => {
+        const existingAttempt = recordedProviderAttemptsOf(views).find(
+          (candidate) => candidate.attemptId === result.reviewer.attemptId,
+        );
+        if (existingAttempt === undefined) return undefined;
         const conflict =
           existingAttempt.lensId !== result.reviewer.lensId ||
           existingAttempt.contextDigest !== result.reviewer.contextDigest ||
@@ -3335,6 +3412,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
             code: "review.result-replay-conflict",
             summary: `handoff ${result.handoffId} was replayed with different provider-result bytes`,
+            providerRunKey,
           });
           return refuse(
             "provider_result_replay_conflict",
@@ -3342,7 +3420,14 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             "Treat the native run as conflicted and complete a fresh run under a new handoff.",
           );
         }
-        const accepted = await acceptedProviderResultsOf(deliveryId, guarded.views);
+        if (suspendedProviderRunKeysOf(views).has(providerRunKey)) {
+          return refuse(
+            "provider_result_run_suspended",
+            `Provider run ${result.provider.runId}/${result.provider.finalPassId} is suspended by a conflicting replay.`,
+            "Complete a coherent fresh run under new native run and final-pass identities.",
+          );
+        }
+        const accepted = await acceptedProviderResultsOf(deliveryId, views);
         if (!accepted.ok) return accepted;
         const existing = accepted.results.find((candidate) => candidate.reviewer.attemptId === result.reviewer.attemptId);
         if (existing === undefined) {
@@ -3353,11 +3438,17 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           );
         }
         return { ok: true, replay: "identical", disposition: existing.verdict };
-      }
+      };
+      const replay = await replayAgainst(guarded.views);
+      if (replay !== undefined) return replay;
       const current = currentCandidateOf(guarded.views);
       if (current === undefined) return refuse("no_candidate", "No candidate is checkpointed.", "Checkpoint a candidate first.");
-      const capture = await captureFor(workspace.worktreeDir, input.config, candidateRunner, storageGitRunner);
-      if (!capture.ok) return capture.failure;
+      const captures = await captureProviderPair(workspace.worktreeDir, stored.reviewWorkspaceDir);
+      if (!captures.ok) {
+        return refuseResult("provider_result_review_workspace_unavailable", "The mutable candidate or host-created review snapshot is missing or invalid at ingestion.", "Retain the exact read-only review snapshot until its native result is ingested.");
+      }
+      const mutableCapture = { candidate: captures.mutable };
+      const capture = { candidate: captures.review };
       const currentCandidate = {
         vcs: capture.candidate.vcs,
         treeSha: capture.candidate.treeSha,
@@ -3366,7 +3457,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         base: capture.candidate.base,
         workspaceId: capture.candidate.workspaceId,
       };
-      if (current.treeSha !== capture.candidate.treeSha || digestCanonical(currentCandidate) !== digestCanonical(result.candidate)) {
+      if (current.treeSha !== mutableCapture.candidate.treeSha || current.treeSha !== capture.candidate.treeSha || digestCanonical(currentCandidate) !== digestCanonical(result.candidate)) {
         return refuseResult(
           "provider_result_candidate_moved",
           "The candidate or deliverable identity changed after the native review handoff.",
@@ -3380,11 +3471,14 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           "Complete a fresh native review run successfully.",
         );
       }
-      const verdictCoherent = result.verdict === "approved" || result.findings.length > 0;
+      const coherenceCodes = result.findings.flatMap(reviewFindingCoherenceCodes);
+      const verdictCoherent = result.verdict === "approved" ? coherenceCodes.length === 0 : result.findings.length > 0;
       if (!verdictCoherent) {
         return refuseResult(
-          "provider_result_verdict_incoherent",
-          "The provider verdict, reviewer verdicts, and findings do not describe one complete terminal result.",
+          result.verdict === "approved" ? "provider_result_not_review_green" : "provider_result_verdict_incoherent",
+          result.verdict === "approved"
+            ? `The approved provider result contradicts review-green coherence: ${[...new Set(coherenceCodes)].join(", ")}.`
+            : "The provider verdict, reviewer verdicts, and findings do not describe one complete terminal result.",
           "Complete a fresh native review whose structured conclusion is internally coherent.",
         );
       }
@@ -3402,14 +3496,32 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // the sole acceptance/replay authority and contains the attempt binding
       // and its content address atomically.
       await writeOwned(persistedResultPath(await deliveryDir(deliveryId), artifactDigest), normalizedResultBytes);
-      const recorded = await appendEntry(guarded.store, deliveryId, "attempt.artifact.recorded", {
-        attemptId: result.reviewer.attemptId,
-        lensId: result.reviewer.lensId,
-        contextDigest: result.reviewer.contextDigest,
-        personaDigest: result.reviewer.personaDigest,
-        artifactDigest,
+      const recorded = await guarded.store.append({
+        spec: "journal-entry/1",
+        journal: "delivery",
+        subjectId: deliveryId,
+        expectedRevision: guarded.expectedRevision,
+        idempotencyKey: `provider-attempt-${result.reviewer.attemptId}`,
+        kind: "attempt.artifact.recorded",
+        payload: {
+          attemptId: result.reviewer.attemptId,
+          lensId: result.reviewer.lensId,
+          contextDigest: result.reviewer.contextDigest,
+          personaDigest: result.reviewer.personaDigest,
+          artifactDigest,
+        },
       });
-      if (!recorded.ok) return recorded;
+      if (!recorded.ok) {
+        const raced = await guarded.store.read();
+        if (!raced.ok) return refuse("journal_unreadable", "The delivery journal is unreadable after an acceptance race.", "Inspect the durable journal file.");
+        const resolved = await replayAgainst(viewsOf(raced.entries));
+        if (resolved !== undefined) return resolved;
+        return refuse(
+          "journal_rejected",
+          `The guarded attempt acceptance lost its journal CAS: ${recorded.rejections.map((rejection) => rejection.message).join("; ")}`,
+          "Reload the standing delivery journal and retry only from its current checkpoint.",
+        );
+      }
       // A convenient provider-run copy is retained only AFTER journal
       // acceptance. Its absence cannot create or revoke an accepted attempt.
       await artifacts.writeTextFile(

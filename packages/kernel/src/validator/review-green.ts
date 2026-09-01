@@ -59,6 +59,33 @@ const SETTLED_DISPOSITIONS: readonly string[] = Object.freeze(["resolved", "pre_
 /** RG-7: no P0 or P1 may ever be deferred, regardless of scope. */
 const DEFERRABLE_SEVERITIES: readonly string[] = Object.freeze(["P2", "P3"]);
 
+export type ReviewFindingCoherenceCode = "blocking_finding_present" | "actionable_unresolved" | "illegal_deferral";
+
+/** RG-6/RG-7's single reusable semantic decision for native and manifest review evidence. */
+export function reviewFindingCoherenceCodes(finding: {
+  readonly severity: unknown;
+  readonly scope: unknown;
+  readonly actionable: unknown;
+  readonly blocking: unknown;
+  readonly disposition: unknown;
+  readonly deferredIssueId?: unknown;
+}): readonly ReviewFindingCoherenceCode[] {
+  const codes: ReviewFindingCoherenceCode[] = [];
+  if (finding.blocking === true) codes.push("blocking_finding_present");
+  if (finding.actionable === true && !SETTLED_DISPOSITIONS.includes(finding.disposition as string)) {
+    codes.push("actionable_unresolved");
+  }
+  if (finding.disposition === "deferred") {
+    const legal = finding.actionable === true && finding.blocking === false &&
+      DEFERRABLE_SEVERITIES.includes(finding.severity as string) && finding.scope === "expansion" &&
+      isNonEmptyString(finding.deferredIssueId) && DEFERRED_ISSUE_ID.test(finding.deferredIssueId);
+    if (!legal) codes.push("illegal_deferral");
+  } else if (finding.deferredIssueId !== undefined) {
+    codes.push("illegal_deferral");
+  }
+  return codes;
+}
+
 /** The artifact role §9.2 defines. */
 export const REVIEWER_APPROVAL_ROLE = "reviewer-approval";
 
@@ -281,28 +308,19 @@ function checkFindings(payload: Record<string, unknown>, at: string, collector: 
     }
 
     // RG-6.
-    if (blocking === true) {
+    const coherenceCodes = reviewFindingCoherenceCodes({ severity, scope, actionable, blocking, disposition, deferredIssueId: member(finding, "deferredIssueId") });
+    if (coherenceCodes.includes("blocking_finding_present")) {
       collector.emit("blocking_finding_present", "RG-6", pointer(findingAt, "blocking"), "a blocking finding contradicts a green verdict");
     }
-    if (actionable === true && disposition !== undefined && !SETTLED_DISPOSITIONS.includes(disposition as string)) {
+    if (coherenceCodes.includes("actionable_unresolved")) {
       collector.emit("actionable_unresolved", "RG-6", pointer(findingAt, "disposition"), "actionable work is neither resolved, pre-existing, nor deferred");
     }
 
     // RG-7.
     const deferredIssueId = member(finding, "deferredIssueId");
-    if (disposition === "deferred") {
-      const legal =
-        actionable === true &&
-        blocking === false &&
-        DEFERRABLE_SEVERITIES.includes(severity as string) &&
-        scope === "expansion" &&
-        isNonEmptyString(deferredIssueId) &&
-        DEFERRED_ISSUE_ID.test(deferredIssueId);
-      if (!legal) {
-        collector.emit("illegal_deferral", "RG-7", findingAt, "deferral does not satisfy every condition deferral requires");
-      }
-    } else if (deferredIssueId !== undefined) {
-      collector.emit("illegal_deferral", "RG-7", pointer(findingAt, "deferredIssueId"), "a tracker id on a finding that was not deferred");
+    if (coherenceCodes.includes("illegal_deferral")) {
+      collector.emit("illegal_deferral", "RG-7", disposition === "deferred" ? findingAt : pointer(findingAt, "deferredIssueId"),
+        disposition === "deferred" ? "deferral does not satisfy every condition deferral requires" : "a tracker id on a finding that was not deferred");
     }
 
     derived.push({ severity, disposition, deferredIssueId });

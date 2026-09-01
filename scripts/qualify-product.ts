@@ -196,12 +196,35 @@ export function forbiddenProcessFinding(
       message: `the product launched ${command}; it must never start a coding-agent runtime`,
     };
   }
-  if (executable === "git" && FORBIDDEN_WORKSPACE_OPERATIONS.includes(String(args[0]))) {
+  const stringArgs = args.map(String);
+  const gitSubcommand = (() => {
+    if (executable !== "git") return undefined;
+    for (let index = 0; index < stringArgs.length; index += 1) {
+      const argument = stringArgs[index]!;
+      if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"].includes(argument)) {
+        index += 1;
+        continue;
+      }
+      if (argument.startsWith("--git-dir=") || argument.startsWith("--work-tree=") || argument.startsWith("--namespace=") ||
+        argument.startsWith("--exec-path=") || argument.startsWith("-c=")) continue;
+      if (argument.startsWith("-")) continue;
+      return argument;
+    }
+    return undefined;
+  })();
+  if (gitSubcommand !== undefined && FORBIDDEN_WORKSPACE_OPERATIONS.includes(gitSubcommand)) {
     return {
       rule: "no-agent-process",
       subject,
-      message: `the product ran \`git ${String(args[0])}\`; workspace lifecycle belongs to the host, not the product`,
+      message: `the product ran \`git ${gitSubcommand}\`; workspace lifecycle belongs to the host, not the product`,
     };
+  }
+  if (executable === "node") {
+    const target = stringArgs.find((argument) => !argument.startsWith("-"));
+    const targetName = target === undefined ? "" : path.basename(target).replace(/\.(?:c?js|mjs|ts)$/u, "");
+    if (FORBIDDEN_PRODUCT_EXECUTABLES.includes(targetName)) {
+      return { rule: "no-agent-process", subject, message: `the product launched ${target} through Node; it must never start a coding-agent runtime` };
+    }
   }
   return undefined;
 }
@@ -1488,6 +1511,12 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
   const providerFinalPassId = `pass-${providerRunId}`;
   for (const lens of product["DISPOSABLE_REVIEW_LENSES"] as readonly { lensId: string }[]) {
     const reviewerSessionId = randomUUID();
+    // Host-owned lifecycle: the product receives this exact read-only review
+    // snapshot but never creates, launches, or retires it.
+    const reviewWorkspaceDir = path.join(input.scratch, "review-snapshots", spec.repositoryId, reviewerSessionId);
+    mkdirSync(path.dirname(reviewWorkspaceDir), { recursive: true });
+    git(worktree, "worktree", "add", "--detach", "--no-checkout", reviewWorkspaceDir, "HEAD");
+    git(reviewWorkspaceDir, "read-tree", "--reset", "-u", treeOf(worktree));
     const reviewInstructionsBytes = [
       `Review the exact current candidate tree ${treeOf(worktree)}. Do not edit any file.`,
       `Apply only the mandatory reviewer lens ${lens.lensId}; this invocation represents no other reviewer.`,
@@ -1504,6 +1533,7 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
       nativeRunId: providerRunId,
       finalPassId: providerFinalPassId,
       lensId: lens.lensId,
+      reviewWorkspaceDir,
       reviewInstructionsBytes,
       bindingCapability: providerReviewBindingCapability,
       invocationCapability,
@@ -1518,7 +1548,7 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
         { mode: 0o600 },
       );
     } else {
-      await input.nativeReview({ repositoryId: spec.repositoryId, worktreeDir: worktree, settingsPath: bound.settingsPath, handoffPath: handoff.handoffPath, nativeResultPath, handoff: handoff.handoff });
+      await input.nativeReview({ repositoryId: spec.repositoryId, worktreeDir: reviewWorkspaceDir, settingsPath: bound.settingsPath, handoffPath: handoff.handoffPath, nativeResultPath, handoff: handoff.handoff });
     }
     if (!existsSync(nativeResultPath)) return fail("nativeProviderReview", { code: "provider_native_result_missing", path: nativeResultPath });
     log(`${spec.repositoryId}/${lens.lensId}: native provider result ${nativeResultPath}`);
@@ -1536,6 +1566,7 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
       invocationCapability,
     });
     if (ingested.ok !== true) return fail("ingestProviderReviewResult", ingested);
+    git(worktree, "worktree", "remove", "--force", reviewWorkspaceDir);
   }
   const reduced = await facade.reduceReview({ deliveryId, fence });
   if (reduced.ok !== true) return fail("reduceReview", reduced);

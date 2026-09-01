@@ -224,6 +224,7 @@ export interface FixtureProviderReview {
   readonly handoff: ProviderReviewHandoff;
   readonly result: ProviderReviewResult;
   readonly invocationCapability: ProviderReviewCapability;
+  readonly reviewWorkspaceDir: string;
 }
 
 /** Qualification-only deterministic stand-in for a secret retained by a host. */
@@ -248,7 +249,7 @@ export async function fixtureProviderReview(input: {
   readonly findings?: readonly ProviderReviewFinding[];
 }): Promise<FixtureProviderReview | FacadeFailure> {
   const namespaceDir = await input.facade.namespaceDir();
-  const workspace = JSON.parse(readFileSync(path.join(namespaceDir, "deliveries", input.deliveryId, "workspace.json"), "utf8")) as { workspaceId: string };
+  const workspace = JSON.parse(readFileSync(path.join(namespaceDir, "deliveries", input.deliveryId, "workspace.json"), "utf8")) as { workspaceId: string; worktreeDir: string };
   const lensId = input.lensId ?? DISPOSABLE_REVIEW_LENSES[0]?.lensId;
   if (lensId === undefined) throw new Error("qualification fixture has no review lens");
   const nativeSessionId = `${input.runId}-${lensId.replaceAll(".", "-")}`;
@@ -256,6 +257,10 @@ export async function fixtureProviderReview(input: {
     id: `fixture-invocation-${nativeSessionId}`,
     secret: sha256Hex(`qualification-only-provider-invocation:${input.deliveryId}:${nativeSessionId}`),
   };
+  const reviewWorkspaceDir = path.join(path.dirname(workspace.worktreeDir), `.review-${nativeSessionId}`);
+  const candidateTree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: workspace.worktreeDir, encoding: "utf8" }).trim();
+  git(workspace.worktreeDir, "worktree", "add", "--detach", "--no-checkout", reviewWorkspaceDir, "HEAD");
+  git(reviewWorkspaceDir, "read-tree", "--reset", "-u", candidateTree);
   const prepared = await input.facade.prepareProviderReviewHandoff({
     deliveryId: input.deliveryId,
     expectedFence: input.fence,
@@ -264,6 +269,7 @@ export async function fixtureProviderReview(input: {
     nativeRunId: input.runId,
     finalPassId: `pass-final-${input.runId}`,
     lensId,
+    reviewWorkspaceDir,
     reviewInstructionsBytes: `qualification review ${lensId} for ${input.deliveryId} at fence ${input.fence}`,
     bindingCapability: fixtureProviderBindingCapability(input.deliveryId),
     invocationCapability,
@@ -302,7 +308,7 @@ export async function fixtureProviderReview(input: {
   if (!adapted.ok) {
     throw new Error(`qualification fixture could not adapt its native envelope: ${adapted.code}: ${adapted.message}`);
   }
-  return { handoff: prepared.handoff, result: adapted.result, invocationCapability };
+  return { handoff: prepared.handoff, result: adapted.result, invocationCapability, reviewWorkspaceDir };
 }
 
 export async function ingestFixtureProviderReview(input: {

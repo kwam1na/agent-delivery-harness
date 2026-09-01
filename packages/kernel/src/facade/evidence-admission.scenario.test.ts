@@ -503,6 +503,103 @@ describe("binding-owned provider result ingestion", () => {
     return opened;
   };
 
+  it("refuses an approved result carrying a blocking unresolved finding before journaling it", { timeout: 180_000 }, async () => {
+    const { deliveryId, fence } = await openReview("provider-approved-blocker");
+    const prepared = await fixtureProviderReview({ facade, deliveryId, fence, runId: "run-approved-blocker" });
+    expect("result" in prepared, JSON.stringify(prepared)).toBe(true);
+    if (!("result" in prepared)) return;
+
+    const refused = await facade.ingestProviderReviewResult({
+      deliveryId,
+      handoffId: prepared.handoff.handoffId,
+      resultBytes: JSON.stringify({
+        ...prepared.result,
+        verdict: "approved",
+        findings: [{
+          id: "blocking-defect",
+          severity: "P0",
+          scope: "in_contract",
+          actionable: true,
+          blocking: true,
+          disposition: "unresolved",
+        }],
+      }),
+      fence,
+      invocationCapability: prepared.invocationCapability,
+    });
+    expect(codesOf(refused)).toContain("provider_result_not_review_green");
+
+    const store = createJournalStore(path.join(await facade.namespaceDir(), "deliveries", deliveryId, "journal.jsonl"));
+    const read = await store.read();
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect((read.entries as readonly { kind: string }[]).filter((entry) => entry.kind === "attempt.artifact.recorded"))
+        .toHaveLength(0);
+    }
+    const reduced = await facade.reduceReview({ deliveryId, fence });
+    expect(reduced.ok).toBe(false);
+  });
+
+  it("binds review to a distinct host snapshot across mutable A-to-B-to-A and refuses a mixed snapshot", { timeout: 180_000 }, async () => {
+    const stable = await openReview("provider-snapshot-aba");
+    const prepared = await fixtureProviderReview({ facade, deliveryId: stable.deliveryId, fence: stable.fence, runId: "run-snapshot-aba" });
+    expect("result" in prepared, JSON.stringify(prepared)).toBe(true);
+    if (!("result" in prepared)) return;
+    expect(prepared.reviewWorkspaceDir).not.toBe(stable.worktree);
+    expect(prepared.handoff.candidate.workspaceId).not.toBe(stable.workspaceId);
+
+    // The mutable workspace transiently carries B and returns byte-for-byte to
+    // A. The reviewer never observes that ABA because its host-created cwd is
+    // the distinct snapshot bound above.
+    writeFileSync(path.join(stable.worktree, "src", "greet.mjs"), GREET_WRONG);
+    writeFileSync(path.join(stable.worktree, "src", "greet.mjs"), GREET_RIGHT);
+    const accepted = await facade.ingestProviderReviewResult({
+      deliveryId: stable.deliveryId,
+      handoffId: prepared.handoff.handoffId,
+      resultBytes: JSON.stringify(prepared.result),
+      fence: stable.fence,
+      invocationCapability: prepared.invocationCapability,
+    });
+    expect(accepted).toMatchObject({ ok: true, replay: "recorded" });
+
+    const mixed = await openReview("provider-snapshot-mixed");
+    const mixedPrepared = await fixtureProviderReview({ facade, deliveryId: mixed.deliveryId, fence: mixed.fence, runId: "run-snapshot-mixed" });
+    expect("result" in mixedPrepared, JSON.stringify(mixedPrepared)).toBe(true);
+    if (!("result" in mixedPrepared)) return;
+    writeFileSync(path.join(mixedPrepared.reviewWorkspaceDir, "src", "greet.mjs"), GREET_WRONG);
+    commitAll(mixedPrepared.reviewWorkspaceDir, "mutate review snapshot after handoff");
+    const refused = await facade.ingestProviderReviewResult({
+      deliveryId: mixed.deliveryId,
+      handoffId: mixedPrepared.handoff.handoffId,
+      resultBytes: JSON.stringify(mixedPrepared.result),
+      fence: mixed.fence,
+      invocationCapability: mixedPrepared.invocationCapability,
+    });
+    expect(codesOf(refused)).toContain("provider_result_candidate_moved");
+  });
+
+  it("requires a fresh provider binding when the product trust epoch advances", { timeout: 180_000 }, async () => {
+    const { deliveryId, fence } = await openReview("provider-trust-epoch");
+    const prepared = await fixtureProviderReview({ facade, deliveryId, fence, runId: "run-trust-epoch" });
+    expect("result" in prepared, JSON.stringify(prepared)).toBe(true);
+    if (!("result" in prepared)) return;
+    const advanced = await facade.maintainTrustState({
+      operation: "unrevoke",
+      generationDigest: "f".repeat(64),
+      assertionSource: createQualificationFixtureAssertionSource(),
+      now: NOW,
+    });
+    expect(advanced.ok, JSON.stringify(advanced)).toBe(true);
+    const refused = await facade.ingestProviderReviewResult({
+      deliveryId,
+      handoffId: prepared.handoff.handoffId,
+      resultBytes: JSON.stringify(prepared.result),
+      fence,
+      invocationCapability: prepared.invocationCapability,
+    });
+    expect(codesOf(refused)).toContain("provider_trust_epoch_mismatch");
+  });
+
   it("fails closed on partial, wrong-scope, failed, and post-edit native results", { timeout: 240_000 }, async () => {
     const { deliveryId, worktree, fence, workspaceId } = await openReview("provider-refusals");
 
@@ -514,6 +611,7 @@ describe("binding-owned provider result ingestion", () => {
       nativeRunId: "run-forged",
       finalPassId: "pass-forged",
       lensId: "lens.outcome-correctness",
+      reviewWorkspaceDir: worktree,
       reviewInstructionsBytes: "forged model-authored preparation",
       bindingCapability: { id: fixtureProviderBindingCapability(deliveryId).id, secret: "forged".repeat(8) },
       invocationCapability: { id: "invocation-forged", secret: "x".repeat(64) },
@@ -528,6 +626,7 @@ describe("binding-owned provider result ingestion", () => {
       nativeRunId: "run-session-a",
       finalPassId: "pass-session-a",
       lensId: "lens.outcome-correctness",
+      reviewWorkspaceDir: worktree,
       reviewInstructionsBytes: "delayed session A",
       bindingCapability: fixtureProviderBindingCapability(deliveryId),
       invocationCapability: { id: "invocation-session-a", secret: "x".repeat(64) },
@@ -616,7 +715,7 @@ describe("binding-owned provider result ingestion", () => {
   });
 
   it("keeps root and invocation capability bindings only in installation-owned authority", { timeout: 180_000 }, async () => {
-    const { deliveryId, fence } = await openReview("provider-authority");
+    const { deliveryId, fence, worktree } = await openReview("provider-authority");
     const deliveryStateDir = path.join(await facade.namespaceDir(), "deliveries", deliveryId);
     const workspacePath = path.join(deliveryStateDir, "workspace.json");
     const workspaceBytes = readFileSync(workspacePath, "utf8");
@@ -655,6 +754,7 @@ describe("binding-owned provider result ingestion", () => {
       nativeRunId: "run-forged-public-state",
       finalPassId: "pass-forged-public-state",
       lensId: "lens.testing-policy",
+      reviewWorkspaceDir: worktree,
       reviewInstructionsBytes: "review exact candidate",
       bindingCapability: { id: "forged", secret: "f".repeat(64) },
       invocationCapability: { id: "invocation-forged-public-state", secret: "i".repeat(64) },
@@ -692,6 +792,81 @@ describe("binding-owned provider result ingestion", () => {
       (entry) => entry.kind === "blocker.recorded" && entry.payload["code"] === "review.result-replay-conflict",
     );
     expect(conflicts).toHaveLength(1);
+    expect(String(conflicts[0]?.payload["providerRunKey"])).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("accepts exactly one attempt under concurrent identical or conflicting callbacks", { timeout: 180_000 }, async () => {
+    const identicalDelivery = await openReview("provider-cas-identical");
+    const identicalPrepared = await fixtureProviderReview({ facade, deliveryId: identicalDelivery.deliveryId, fence: identicalDelivery.fence, runId: "run-cas-identical" });
+    expect("result" in identicalPrepared, JSON.stringify(identicalPrepared)).toBe(true);
+    if (!("result" in identicalPrepared)) return;
+    const identicalInput = {
+      deliveryId: identicalDelivery.deliveryId,
+      handoffId: identicalPrepared.handoff.handoffId,
+      resultBytes: JSON.stringify(identicalPrepared.result),
+      fence: identicalDelivery.fence,
+      invocationCapability: identicalPrepared.invocationCapability,
+    };
+    const identical = await Promise.all([
+      facade.ingestProviderReviewResult(identicalInput),
+      facade.ingestProviderReviewResult(identicalInput),
+    ]);
+    expect(identical.filter((result) => result.ok && result.replay === "recorded"), JSON.stringify(identical)).toHaveLength(1);
+    expect(identical.filter((result) => result.ok && result.replay === "identical"), JSON.stringify(identical)).toHaveLength(1);
+
+    const conflictingDelivery = await openReview("provider-cas-conflicting");
+    const conflictingPrepared = await fixtureProviderReview({ facade, deliveryId: conflictingDelivery.deliveryId, fence: conflictingDelivery.fence, runId: "run-cas-conflicting" });
+    expect("result" in conflictingPrepared, JSON.stringify(conflictingPrepared)).toBe(true);
+    if (!("result" in conflictingPrepared)) return;
+    const original = JSON.stringify(conflictingPrepared.result);
+    const different = JSON.stringify({
+      ...conflictingPrepared.result,
+      findings: [{ id: "concurrent-advisory", severity: "P3", scope: "adjacent", actionable: false, blocking: false, disposition: "advisory" }],
+    });
+    const conflicting = await Promise.all([original, different].map((resultBytes) => facade.ingestProviderReviewResult({
+      deliveryId: conflictingDelivery.deliveryId,
+      handoffId: conflictingPrepared.handoff.handoffId,
+      resultBytes,
+      fence: conflictingDelivery.fence,
+      invocationCapability: conflictingPrepared.invocationCapability,
+    })));
+    expect(conflicting.filter((result) => result.ok && result.replay === "recorded")).toHaveLength(1);
+    expect(conflicting.filter((result) => codesOf(result).includes("provider_result_replay_conflict"))).toHaveLength(1);
+    const store = createJournalStore(path.join(await facade.namespaceDir(), "deliveries", conflictingDelivery.deliveryId, "journal.jsonl"));
+    const read = await store.read();
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect((read.entries as readonly { kind: string }[]).filter((entry) => entry.kind === "attempt.artifact.recorded")).toHaveLength(1);
+    }
+  });
+
+  it("suspends the exact conflicted provider tuple and allows one later coherent run to supersede it", { timeout: 240_000 }, async () => {
+    const { deliveryId, fence } = await openReview("provider-conflict-recovery");
+    let first: Awaited<ReturnType<typeof fixtureProviderReview>> | undefined;
+    for (const lensId of ["lens.outcome-correctness", "lens.testing-policy"]) {
+      const prepared = await fixtureProviderReview({ facade, deliveryId, fence, runId: "run-conflicted", lensId });
+      expect("result" in prepared, JSON.stringify(prepared)).toBe(true);
+      if (!("result" in prepared)) return;
+      first ??= prepared;
+      const ingested = await facade.ingestProviderReviewResult({ deliveryId, handoffId: prepared.handoff.handoffId, resultBytes: JSON.stringify(prepared.result), fence, invocationCapability: prepared.invocationCapability });
+      expect(ingested.ok, JSON.stringify(ingested)).toBe(true);
+    }
+    if (first === undefined || !("result" in first)) return;
+    const conflict = await facade.ingestProviderReviewResult({
+      deliveryId,
+      handoffId: first.handoff.handoffId,
+      resultBytes: JSON.stringify({ ...first.result, findings: [{ id: "late-advisory", severity: "P3", scope: "adjacent", actionable: false, blocking: false, disposition: "advisory" }] }),
+      fence,
+      invocationCapability: first.invocationCapability,
+    });
+    expect(codesOf(conflict)).toContain("provider_result_replay_conflict");
+    const suspended = await facade.reduceReview({ deliveryId, fence });
+    expect(codesOf(suspended)).toContain("review_floor_unmet");
+
+    const replacement = await ingestFixtureProviderReview({ facade, deliveryId, fence, runId: "run-replacement" });
+    expect(replacement.ok, JSON.stringify(replacement)).toBe(true);
+    const recovered = await facade.reduceReview({ deliveryId, fence });
+    expect(recovered).toMatchObject({ ok: true, state: "compounding" });
   });
 
   it("keeps journal consumption authoritative when accepted result bytes disappear", { timeout: 180_000 }, async () => {
