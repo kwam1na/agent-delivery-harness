@@ -78,7 +78,7 @@ cannot drift from the tool.
   `delivery-record/1` verify core. The managed half: the frozen contract spine
   (closed grammars, 20 delivery states, and pure reducers with no I/O or clock),
   the three-layer policy compiler and its reviewer lenses, the managed-delivery
-  facade and its 37-operation inventory, the append-only checkpoint journal,
+  facade and its 38-operation inventory, the append-only checkpoint journal,
   host bindings and the model-external write-path interceptor, the merge-ready
   reducer with its deliberately unbound action port, and the installation
   substrate carrying the `local-digest / operator-pinned` trust label.

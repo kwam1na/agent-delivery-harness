@@ -26,6 +26,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { compareUtf16CodeUnits } from "../canonical.ts";
 import { digestCanonical, sha256Hex } from "../digest.ts";
 import type { AdmissionExpectation } from "../binding/host-admission.ts";
@@ -499,8 +500,18 @@ export interface ComposeClaudeCodeSessionInput {
    * session has been superseded and its tools close.
    */
   readonly fence: number;
-  /** The stage grant whose allowed capabilities become the host's own permission allow rules. */
-  readonly grant: { readonly allowedCapabilities: readonly string[] };
+  /** Exact host-created workspace this admission applies to. */
+  readonly workspaceRoot: string;
+  /** Shared Git authority, which neither Bash nor file tools may read or mutate. */
+  readonly commonGitDir: string;
+  /** Installation-owned capability state, outside the model's admitted filesystem. */
+  readonly authorityDir: string;
+  /** The stage grant projected into both tool permissions and the OS sandbox. */
+  readonly grant: {
+    readonly allowedCapabilities: readonly string[];
+    readonly writablePaths: readonly string[];
+    readonly protectedPaths: readonly string[];
+  };
 }
 
 export type ComposeClaudeCodeSessionResult =
@@ -526,6 +537,26 @@ export async function composeClaudeCodeSession(
       .map((part) => JSON.stringify(part))
       .join(" ");
 
+  const workspaceRoot = path.resolve(input.workspaceRoot);
+  const commonGitDir = path.resolve(input.commonGitDir);
+  const authorityDir = path.resolve(input.authorityDir);
+  const absolutePermissionPath = (target: string): string => `/${path.resolve(target).replace(/^\/+/, "")}`;
+  const unique = (values: readonly string[]): string[] => [...new Set(values)].sort(compareUtf16CodeUnits);
+  const writableRoots = unique(input.grant.writablePaths.map((relative) => path.resolve(workspaceRoot, relative)));
+  const protectedRoots = unique(input.grant.protectedPaths.map((relative) => path.resolve(workspaceRoot, relative)));
+  const deniedAuthorityRoots = unique([commonGitDir, authorityDir]);
+  const deniedWriteRoots = unique([
+    workspaceRoot,
+    ...protectedRoots,
+    ...deniedAuthorityRoots,
+    path.resolve(tmpdir()),
+    path.resolve("/tmp"),
+  ]);
+  const permissionDenials = deniedAuthorityRoots.flatMap((target) => [
+    `Read(${absolutePermissionPath(target)}/**)`,
+    `Edit(${absolutePermissionPath(target)}/**)`,
+  ]);
+
   const settings = {
     // The supported host enforces the grant through its OWN permission
     // system; the hook is the deny-until-attested interceptor on top. Only
@@ -533,6 +564,23 @@ export async function composeClaudeCodeSession(
     // the host's non-interactive default denial.
     permissions: {
       allow: [...input.grant.allowedCapabilities],
+      deny: permissionDenials,
+    },
+    // Claude Code 2.1.252's Seatbelt/bubblewrap boundary. The broad workspace
+    // and ambient-temp denies remove the host defaults; the more-specific
+    // grant roots are the only writable descendants. Protected descendants
+    // remain explicit denies. No command may retry outside the sandbox.
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: true,
+      excludedCommands: [],
+      allowUnsandboxedCommands: false,
+      filesystem: {
+        allowWrite: writableRoots,
+        denyWrite: deniedWriteRoots,
+        denyRead: deniedAuthorityRoots,
+      },
     },
     hooks: {
       PreToolUse: [
@@ -576,7 +624,7 @@ export async function composeClaudeCodeSession(
     // selection makes the binding-composed `--settings` file the session's
     // ONLY settings source, so the discovery configuration is exactly the
     // digest-bound bytes above.
-    cliArgs: ["--settings", settingsPath, "--setting-sources", ""],
+    cliArgs: ["--restricted", "--settings", settingsPath, "--setting-sources", ""],
     discoveryConfigurationDigest,
   };
 }

@@ -50,6 +50,9 @@ import {
   GREET_WRONG,
   buildDisposableRepository,
   disposableHarnessConfig,
+  fixtureProviderBindingCapability,
+  fixtureProviderReview,
+  ingestFixtureProviderReview,
   typedStageResultBytes,
 } from "./disposable-repository.fixture.ts";
 
@@ -215,6 +218,7 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-1",
       observedAt: NOW,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
     });
     expect(bound.ok, JSON.stringify(bound)).toBe(true);
     if (!bound.ok) return;
@@ -293,6 +297,7 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-2",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
     });
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
     if (!rebound.ok) return;
@@ -377,24 +382,14 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(greenSensor.state).toBe("reviewing");
 
     // ── Review round 1: a PLANTED FINDING loops through remediation ──
-    await facade.submitReviewAttempt({
+    const firstReview = await ingestFixtureProviderReview({
+      facade,
       deliveryId,
-      attemptId: "attempt-r1-outcome",
-      lensId: "lens.outcome-correctness",
-      verdict: "findings",
-      contextBytes: "outcome lens context r1: contract, diff, sensor evidence",
-      artifactBytes: "finding: greeting module lacks the contracted docstring",
       fence: rebound.fence,
+      runId: "run-review-round-1",
+      verdict: "changes_requested",
     });
-    await facade.submitReviewAttempt({
-      deliveryId,
-      attemptId: "attempt-r1-testing",
-      lensId: "lens.testing-policy",
-      verdict: "approved",
-      contextBytes: "testing lens context r1: sensor coverage over the contracted behavior",
-      artifactBytes: "approved: acceptance sensor covers the criterion",
-      fence: rebound.fence,
-    });
+    expect(firstReview.ok, JSON.stringify(firstReview)).toBe(true);
     const round1 = await facade.reduceReview({ deliveryId, fence: rebound.fence });
     expect(round1.ok && round1.state === "remediating").toBe(true);
 
@@ -411,56 +406,28 @@ describe("the thin one-handoff walking skeleton", () => {
     if (!green2.ok) return;
     expect(green2.state).toBe("reviewing");
 
-    // ── Review round 2: same-context re-invocation does not count ──
-    await facade.submitReviewAttempt({
+    // ── Review round 2: SAME context/lens relabeling cannot synthesize an
+    //    independent reviewer; an unretained invocation proof cannot be forged ──
+    const preparedReview = await fixtureProviderReview({ facade, deliveryId, fence: rebound.fence, runId: "run-review-round-2" });
+    expect("result" in preparedReview, JSON.stringify(preparedReview)).toBe(true);
+    if (!("result" in preparedReview)) return;
+    const poisoned = await facade.ingestProviderReviewResult({
       deliveryId,
-      attemptId: "attempt-r2-outcome",
-      lensId: "lens.outcome-correctness",
-      verdict: "approved",
-      contextBytes: "outcome lens context r2: contract, diff, sensor evidence",
-      artifactBytes: "approved: outcome verified against the contract",
+      handoffId: preparedReview.handoff.handoffId,
+      resultBytes: JSON.stringify(preparedReview.result),
       fence: rebound.fence,
+      invocationCapability: { id: preparedReview.invocationCapability.id, secret: "forged".repeat(8) },
     });
-    await facade.submitReviewAttempt({
-      deliveryId,
-      attemptId: "attempt-r2-testing-cloned",
-      lensId: "lens.testing-policy",
-      verdict: "approved",
-      contextBytes: "outcome lens context r2: contract, diff, sensor evidence", // SAME context — a re-invocation
-      artifactBytes: "approved (cloned context)",
-      fence: rebound.fence,
-    });
-    const poisoned = await facade.reduceReview({ deliveryId, fence: rebound.fence });
-    expect(poisoned.ok).toBe(false); // the floor is not met by a re-invocation
-    if (!poisoned.ok) {
-      expect(poisoned.blockers[0]?.summary).toContain("same context digest");
-    }
+    expect(poisoned.ok).toBe(false);
+    if (!poisoned.ok) expect(poisoned.blockers[0]?.code).toBe("provider_invocation_capability_refused");
 
-    // An attempt identity is single-use: the recorded findings-free verdict
-    // cannot be replaced by re-submitting under the same id.
-    const laundered = await facade.submitReviewAttempt({
+    const aligned = await ingestFixtureProviderReview({
+      facade,
       deliveryId,
-      attemptId: "attempt-r2-outcome",
-      lensId: "lens.outcome-correctness",
-      verdict: "approved",
-      contextBytes: "a different context under a reused identity",
-      artifactBytes: "approved (laundered)",
       fence: rebound.fence,
+      runId: "run-review-round-2-aligned",
     });
-    expect(laundered.ok).toBe(false);
-    if (!laundered.ok) {
-      expect(laundered.blockers[0]?.code).toBe("duplicate_attempt");
-    }
-
-    await facade.submitReviewAttempt({
-      deliveryId,
-      attemptId: "attempt-r2-testing",
-      lensId: "lens.testing-policy",
-      verdict: "approved",
-      contextBytes: "testing lens context r2: independently constructed coverage review",
-      artifactBytes: "approved: coverage bound to the exact candidate",
-      fence: rebound.fence,
-    });
+    expect(aligned.ok, JSON.stringify(aligned)).toBe(true);
     const round2 = await facade.reduceReview({ deliveryId, fence: rebound.fence });
     expect(round2.ok, JSON.stringify(round2)).toBe(true);
     if (!round2.ok) return;
@@ -619,6 +586,7 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-3",
       observedAt: NOW,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
     });
     expect(bound.ok, JSON.stringify(bound)).toBe(true);
 
@@ -665,6 +633,7 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-4",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
     });
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
     const resumedStatus = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });

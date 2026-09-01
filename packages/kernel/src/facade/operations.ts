@@ -7,8 +7,8 @@
  * WHY THIS IS DATA AND NOT PROSE. The facade's boundary is a set of claims
  * that are easy to state and easy to erode: confirmations are served only by
  * the binding's model-external channel; termination provenance enters only
- * through the trusted lifecycle integration; the tool surfaces inspect rather
- * than orchestrate. Written as comments those claims decay the first time a
+ * through its trusted integration; the tool surfaces
+ * inspect rather than orchestrate. Written as comments those claims decay the first time a
  * command is added. Written here they are checkable, and
  * `checkFacadeSurfaceInvariants` is what checks them — over this inventory in
  * the kernel's own suite, and over the CLI's and MCP's advertised surfaces in
@@ -50,8 +50,9 @@ export type FacadeCapabilityClass = (typeof FACADE_CAPABILITY_CLASSES)[number];
  * `cli` and `mcp` are the model-visible tool surfaces. `binding-channel` is
  * the isolated interactive channel the qualified host binding owns, outside
  * the model-visible tool and shell surface. `integration-event` is the trusted
- * host-runtime lifecycle integration. `facade` means the operation is reachable
- * only as a library call by an embedding product surface.
+ * host-runtime integration for lifecycle and native review events. `facade`
+ * means the operation is reachable only as a library call by an embedding
+ * product surface.
  */
 export const FACADE_SURFACES = Object.freeze(["cli", "mcp", "binding-channel", "integration-event", "facade"] as const);
 export type FacadeSurface = (typeof FACADE_SURFACES)[number];
@@ -124,7 +125,22 @@ export const FACADE_OPERATIONS: readonly FacadeOperation[] = Object.freeze([
   entry("submitStageResult", "control", "required", "advances", ["cli"], "Submits a typed workflow-stage result for the current checkpoint."),
   entry("checkpointCandidate", "control", "required", "advances", ["cli"], "Checkpoints the versioned candidate the workspace now stands on."),
   entry("runSensor", "control", "required", "advances", ["cli"], "Runs the bound repository sensor and journals its typed result."),
-  entry("submitReviewAttempt", "control", "required", "advances", ["cli"], "Records one reviewer attempt against the current candidate."),
+  entry(
+    "prepareProviderReviewHandoff",
+    "control",
+    "absent-by-state",
+    "none",
+    ["facade"],
+    "Pins one native provider invocation after checking the host-retained binding capability.",
+  ),
+  entry(
+    "ingestProviderReviewResult",
+    "control",
+    "required",
+    "advances",
+    ["facade"],
+    "Admits one native result after checking its invocation-scoped capability.",
+  ),
   entry("reduceReview", "control", "required", "advances", ["cli"], "Reduces the recorded attempts to a review verdict."),
   entry("admit", "control", "required", "advances", ["cli"], "Runs admission over the activated obligations."),
   entry("prepareTrackedRecord", "control", "required", "advances", ["cli"], "Writes the tracked delivery record for native commit."),

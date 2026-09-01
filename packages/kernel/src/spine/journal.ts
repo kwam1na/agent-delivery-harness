@@ -510,6 +510,7 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "delivery/blocker.recorded": table([
     { name: "code", check: spineId },
     { name: "summary", check: boundedText },
+    { name: "providerRunKey", check: sha256, required: false },
   ]),
   "delivery/finish.line.recorded": table([{ name: "result", check: embedded(validateFinishLineResult) }]),
   // The post-action family. The intent is the durable record the host writes

@@ -78,6 +78,26 @@ describe("the no-agent-process rule", () => {
     }
   });
 
+  it("normalizes Git global options before deciding workspace ownership", () => {
+    expect(forbiddenProcessFinding("repo", "/usr/bin/git", ["-C", "/repo", "worktree", "add", "/review"])?.rule)
+      .toBe("no-agent-process");
+    expect(forbiddenProcessFinding("repo", "/usr/bin/git", ["--git-dir=/repo/.git", "worktree", "remove", "/review"])?.rule)
+      .toBe("no-agent-process");
+    expect(forbiddenProcessFinding("repo", "/usr/bin/git", ["-c", "core.hooksPath=/dev/null", "clone", "source", "dest"])?.rule)
+      .toBe("no-agent-process");
+    expect(forbiddenProcessFinding("repo", "/usr/bin/git", ["-C", "/repo", "rev-parse", "HEAD"]))
+      .toBeUndefined();
+  });
+
+  it("recognizes a coding-agent target launched through Node", () => {
+    expect(forbiddenProcessFinding("repo", "/usr/local/bin/node", ["/opt/codex/bin/codex.js", "exec"])?.rule)
+      .toBe("no-agent-process");
+    expect(forbiddenProcessFinding("repo", "/usr/local/bin/node", ["--enable-source-maps", "/opt/claude/claude.mjs"])?.rule)
+      .toBe("no-agent-process");
+    expect(forbiddenProcessFinding("repo", "/usr/local/bin/node", ["tools/sensor.mjs"]))
+      .toBeUndefined();
+  });
+
   // THE CONTROL. Without this, a rule that reported every invocation would
   // pass every assertion above and make the whole lane permanently red for the
   // wrong reason — which is indistinguishable from coverage until someone

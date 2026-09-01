@@ -44,6 +44,8 @@ import {
   GREET_RIGHT,
   buildDisposableRepository,
   disposableHarnessConfig,
+  fixtureProviderBindingCapability,
+  ingestFixtureProviderReview,
   typedStageResultBytes,
 } from "./disposable-repository.fixture.ts";
 
@@ -121,6 +123,7 @@ const bindFreshWorktree = async (deliveryId: string): Promise<{ worktree: string
     hostTaskId: `host-${worktreeCounter}`,
     observedAt: NOW,
     attestationExpiry: EXPIRY,
+    providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
   });
   expect(bound.ok, JSON.stringify(bound)).toBe(true);
   if (!bound.ok) throw new Error("unreachable");
@@ -425,21 +428,8 @@ describe("the typed checkpoint reducer", () => {
     if (!sensed.ok) return;
     expect(sensed.state).toBe("reviewing");
 
-    for (const [lensId, tag, attempt] of [
-      ["lens.outcome-correctness", "outcome", "attempt-typed-outcome"],
-      ["lens.testing-policy", "testing", "attempt-typed-testing"],
-    ] as const) {
-      const submitted = await facade.submitReviewAttempt({
-        deliveryId,
-        attemptId: attempt,
-        lensId,
-        verdict: "approved",
-        contextBytes: `${tag} lens context for the typed-checkpoint drive`,
-        artifactBytes: `approved by ${tag}`,
-        fence,
-      });
-      expect(submitted.ok, JSON.stringify(submitted)).toBe(true);
-    }
+    const submitted = await ingestFixtureProviderReview({ facade, deliveryId, fence, runId: "run-typed-checkpoint" });
+    expect(submitted.ok, JSON.stringify(submitted)).toBe(true);
     const reduced = await facade.reduceReview({ deliveryId, fence });
     expect(reduced.ok, JSON.stringify(reduced)).toBe(true);
     if (!reduced.ok) return;
@@ -510,21 +500,14 @@ describe("the typed checkpoint reducer", () => {
     };
 
     const reviewRound = async (round: number): Promise<{ ok: boolean; state?: string; codes: string[] }> => {
-      for (const [lensId, tag, verdict] of [
-        ["lens.outcome-correctness", "outcome", "findings"],
-        ["lens.testing-policy", "testing", "approved"],
-      ] as const) {
-        const submitted = await facade.submitReviewAttempt({
-          deliveryId: loopDeliveryId,
-          attemptId: `loop-r${round}-${tag}`,
-          lensId,
-          verdict,
-          contextBytes: `${tag} lens context, bounded-loop round ${round}`,
-          artifactBytes: verdict === "findings" ? `finding in round ${round}` : `approved in round ${round}`,
-          fence: bound.fence,
-        });
-        expect(submitted.ok, JSON.stringify(submitted)).toBe(true);
-      }
+      const submitted = await ingestFixtureProviderReview({
+        facade,
+        deliveryId: loopDeliveryId,
+        fence: bound.fence,
+        runId: `run-loop-${round}`,
+        verdict: "changes_requested",
+      });
+      expect(submitted.ok, JSON.stringify(submitted)).toBe(true);
       const reduced = await facade.reduceReview({ deliveryId: loopDeliveryId, fence: bound.fence });
       return reduced.ok ? { ok: true, state: reduced.state, codes: [] } : { ok: false, codes: codesOf(reduced) };
     };
@@ -582,20 +565,14 @@ describe("the typed checkpoint reducer", () => {
       expect(checkpointed.ok, JSON.stringify(checkpointed)).toBe(true);
       const sensed = await facade.runSensor({ deliveryId: deletedDeliveryId, fence: bound.fence });
       expect(sensed.ok, JSON.stringify(sensed)).toBe(true);
-      for (const [lensId, tag, verdict] of [
-        ["lens.outcome-correctness", "outcome", "findings"],
-        ["lens.testing-policy", "testing", "approved"],
-      ] as const) {
-        await facade.submitReviewAttempt({
-          deliveryId: deletedDeliveryId,
-          attemptId: `deleted-r${round}-${tag}`,
-          lensId,
-          verdict,
-          contextBytes: `${tag} lens context, deleted-persistence round ${round}`,
-          artifactBytes: `${verdict} in round ${round}`,
-          fence: bound.fence,
-        });
-      }
+      const submitted = await ingestFixtureProviderReview({
+        facade,
+        deliveryId: deletedDeliveryId,
+        fence: bound.fence,
+        runId: `run-deleted-${round}`,
+        verdict: "changes_requested",
+      });
+      expect(submitted.ok, JSON.stringify(submitted)).toBe(true);
       const reduced = await facade.reduceReview({ deliveryId: deletedDeliveryId, fence: bound.fence });
       expect(reduced.ok, JSON.stringify(reduced)).toBe(true);
       return reduced.ok ? reduced.state : undefined;

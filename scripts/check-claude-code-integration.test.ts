@@ -146,21 +146,21 @@ describe("the record's legs", () => {
     expect(record.knownLimitations.length).toBeGreaterThan(0);
   });
 
-  it("does not leave the granted-shell exposure to be inferred from a claim the graded record omits", () => {
+  it("pins the strict filesystem admission claim in both records", () => {
     // The two records have to say the same thing. This one describes the
-    // exposure in prose; the graded one carries it as a stated position. If
+    // admission posture in prose; the graded one carries it as a stated position. If
     // the position disappears from the graded record, the prose here becomes
     // a description of something no sensor can find, so this fails with it.
     const graded = (admissionRecord.hosts as any[]).find((host) => host.hostId === record.host.hostId);
     const position = graded.capabilities.commonGitAuthorityPathProtected;
     expect(position, "the graded record takes a position instead of omitting the claim").toBeDefined();
-    expect(position.status).toBe("unsupported");
+    expect(position.status).toBe("supported-with-required-admission-flags");
 
     const stated = (record.knownLimitations as string[]).filter((limitation) =>
       limitation.includes("commonGitAuthorityPathProtected"),
     );
     expect(stated.length, "a limitation names the graded claim it corresponds to").toBeGreaterThan(0);
-    expect(stated.join(" ")).toMatch(/unsupported/u);
+    expect(stated.join(" ")).toMatch(/supported-with-required-admission-flags/u);
   });
 
   it("does not carry the host's tier forward on a superseded version in either record alone", () => {

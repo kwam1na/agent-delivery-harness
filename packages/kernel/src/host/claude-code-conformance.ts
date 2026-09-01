@@ -96,6 +96,13 @@ export function createClaudeCodeConformancePort(input: ClaudeCodeConformancePort
       statePath: path.join(input.bindingDir, bindingStateFile(input.fence)),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
       fence: input.fence,
+      workspaceRoot: input.worktreeDir,
+      commonGitDir: (await exec.run({
+        command: "git",
+        args: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd: input.worktreeDir,
+      })).stdout.trim(),
+      authorityDir: input.bindingDir,
       grant: STAGE_GRANT,
     });
     if (!session.ok) return;

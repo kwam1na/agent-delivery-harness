@@ -52,9 +52,11 @@
  * WHAT THIS LANE DOES NOT LAUNCH. No agent runtime. The product may never
  * start `claude --print`, `codex exec`, or any subordinate runtime, and the
  * `no-agent-process` lane inventories every process the product ran through
- * its exec port to say so from evidence rather than from intent. This driver
- * launches no agent runtime either; the live host legs are a separate lane
- * (`scripts/qualify-claude-code-session.ts`) an operator runs.
+ * its exec port to say so from evidence rather than from intent. The ordinary
+ * packed run launches no agent runtime either. The separate, operator-owned
+ * live lane (`scripts/qualify-claude-code-session.ts --provider-delivery`)
+ * supplies the optional native-review callback and launches the host from its
+ * TEST HARNESS; that process never crosses the product's exec port.
  *
  * WHERE IT RUNS. Packing five tarballs, installing them, packing five
  * composition generations, and driving two full deliveries is tens of seconds,
@@ -63,6 +65,7 @@
  * falsifies its rules cheaply on every leg.
  */
 import { execFileSync, type StdioOptions } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -193,12 +196,35 @@ export function forbiddenProcessFinding(
       message: `the product launched ${command}; it must never start a coding-agent runtime`,
     };
   }
-  if (executable === "git" && FORBIDDEN_WORKSPACE_OPERATIONS.includes(String(args[0]))) {
+  const stringArgs = args.map(String);
+  const gitSubcommand = (() => {
+    if (executable !== "git") return undefined;
+    for (let index = 0; index < stringArgs.length; index += 1) {
+      const argument = stringArgs[index]!;
+      if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"].includes(argument)) {
+        index += 1;
+        continue;
+      }
+      if (argument.startsWith("--git-dir=") || argument.startsWith("--work-tree=") || argument.startsWith("--namespace=") ||
+        argument.startsWith("--exec-path=") || argument.startsWith("-c=")) continue;
+      if (argument.startsWith("-")) continue;
+      return argument;
+    }
+    return undefined;
+  })();
+  if (gitSubcommand !== undefined && FORBIDDEN_WORKSPACE_OPERATIONS.includes(gitSubcommand)) {
     return {
       rule: "no-agent-process",
       subject,
-      message: `the product ran \`git ${String(args[0])}\`; workspace lifecycle belongs to the host, not the product`,
+      message: `the product ran \`git ${gitSubcommand}\`; workspace lifecycle belongs to the host, not the product`,
     };
+  }
+  if (executable === "node") {
+    const target = stringArgs.find((argument) => !argument.startsWith("-"));
+    const targetName = target === undefined ? "" : path.basename(target).replace(/\.(?:c?js|mjs|ts)$/u, "");
+    if (FORBIDDEN_PRODUCT_EXECUTABLES.includes(targetName)) {
+      return { rule: "no-agent-process", subject, message: `the product launched ${target} through Node; it must never start a coding-agent runtime` };
+    }
   }
   return undefined;
 }
@@ -520,7 +546,7 @@ const CAPTURED: StdioOptions = ["ignore", "pipe", "pipe"];
 
 const NOW = "2026-08-31T12:00:00Z";
 const LATER = "2026-08-31T12:00:30Z";
-const HOST_VERSION = "2.1.97";
+const HOST_VERSION = "2.1.252";
 
 /**
  * The attestation expiry, taken from the AMBIENT clock rather than written as
@@ -791,7 +817,33 @@ export interface QualificationInput {
   readonly sourceRoot: string;
   readonly workRoot?: string;
   readonly log?: (line: string) => void;
+  /** Exact native provider version; defaults to the version graded by fixtures. */
+  readonly hostVersion?: string;
+  /**
+   * Operator-owned live-host callback. The packed lane prepares the trusted
+   * handoff and exact output path; the callback runs the native host and writes
+   * its unmodified result envelope there. Omitted for the ordinary fixture run.
+   */
+  readonly nativeReview?: NativeReviewDriver;
+  /** Retain the disposable root only when an operator needs the live evidence. */
+  readonly retainWorkDir?: boolean;
 }
+
+export interface NativeReviewInput {
+  readonly repositoryId: string;
+  readonly worktreeDir: string;
+  readonly settingsPath: string;
+  readonly handoffPath: string;
+  readonly nativeResultPath: string;
+  readonly handoff: {
+    readonly nativeSessionId: string;
+    readonly candidate: { readonly treeSha: string };
+    readonly promptContextBytes: string;
+    readonly reviewer: { readonly lensId: string };
+  };
+}
+
+export type NativeReviewDriver = (input: NativeReviewInput) => Promise<void>;
 
 /** Generation roots are installed read-only; removal needs the bit back first. */
 function restoreWritable(dir: string): void {
@@ -1023,6 +1075,8 @@ export async function runProductQualification(input: QualificationInput): Promis
         stagedRelativePaths,
         findings,
         processInventory: (perRepositoryProcessInventory[spec.repositoryId] ??= new Set<string>()),
+        nativeReview: input.nativeReview,
+        hostVersion: input.hostVersion ?? HOST_VERSION,
         log,
       });
       if (outcome === undefined) continue;
@@ -1061,8 +1115,12 @@ export async function runProductQualification(input: QualificationInput): Promis
     });
 
   } finally {
-    restoreWritable(scratch);
-    rmSync(scratch, { recursive: true, force: true });
+    if (input.retainWorkDir === true) {
+      log(`retained work dir: ${scratch}`);
+    } else {
+      restoreWritable(scratch);
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
 
   return finish();
@@ -1247,6 +1305,8 @@ interface DriveInput {
   readonly stagedRelativePaths: readonly string[];
   readonly findings: QualificationFinding[];
   readonly processInventory: Set<string>;
+  readonly nativeReview?: NativeReviewDriver;
+  readonly hostVersion: string;
   readonly log: (line: string) => void;
 }
 
@@ -1302,7 +1362,7 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
     repoDir,
     config: configModule.default,
     installation: { installationPath: input.installationPath, receiptDir: input.receiptDir },
-    hostVersion: HOST_VERSION,
+    hostVersion: input.hostVersion,
     exec,
   });
 
@@ -1364,12 +1424,15 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
   // ── The HOST creates the worktree; the product only binds it ──
   const worktree = path.join(input.scratch, `worktree-${spec.repositoryId}`);
   git(repoDir, "worktree", "add", "--quiet", "-b", "delivery", worktree, "main");
+  const nativeSessionId = randomUUID();
+  const providerReviewBindingCapability = { id: `binding-${nativeSessionId}`, secret: `${randomUUID()}${randomUUID()}` };
   const bound = await facade.bindWorkspace({
     deliveryId,
     worktreeDir: worktree,
-    hostTaskId: `host-task-${spec.repositoryId}`,
+    hostTaskId: nativeSessionId,
     observedAt: NOW,
     attestationExpiry: EXPIRY,
+    providerReviewBindingCapability,
   });
   if (bound.ok !== true) return fail("bindWorkspace", bound);
   const fence: number = bound.fence;
@@ -1438,25 +1501,73 @@ async function driveRepository(input: DriveInput): Promise<{ readonly gateConfig
     return fail("runSensor", { outcome: sensor.outcome, note: "the repository's acceptance sensor did not pass its own contracted outcome" });
   }
 
-  // ── Two mandatory lenses, independently constructed contexts ──
-  await facade.submitReviewAttempt({
-    deliveryId,
-    attemptId: `${spec.repositoryId}-outcome`,
-    lensId: "lens.outcome-correctness",
-    verdict: "approved",
-    contextBytes: `outcome lens context for ${spec.repositoryId}: contract, diff, sensor evidence`,
-    artifactBytes: `approved: ${spec.exportName}() achieves the contracted outcome`,
-    fence,
-  });
-  await facade.submitReviewAttempt({
-    deliveryId,
-    attemptId: `${spec.repositoryId}-testing`,
-    lensId: "lens.testing-policy",
-    verdict: "approved",
-    contextBytes: `testing lens context for ${spec.repositoryId}: coverage bound to the exact candidate`,
-    artifactBytes: "approved: the acceptance sensor falsifies the contracted outcome",
-    fence,
-  });
+  // ── The binding-owned native provider result ──
+  // The model-authored conclusion contains no provider/session/candidate
+  // provenance. The handoff composes persona, contract, exact-candidate sensor
+  // evidence, and instructions into the bytes the host submits. The installed
+  // Claude adapter verifies those exact submitted bytes before combining the
+  // binding provenance with the conclusion and journaling the attempt.
+  const providerRunId = randomUUID();
+  const providerFinalPassId = `pass-${providerRunId}`;
+  for (const lens of product["DISPOSABLE_REVIEW_LENSES"] as readonly { lensId: string }[]) {
+    const reviewerSessionId = randomUUID();
+    // Host-owned lifecycle: the product receives this exact read-only review
+    // snapshot but never creates, launches, or retires it.
+    const reviewWorkspaceDir = path.join(input.scratch, "review-snapshots", spec.repositoryId, reviewerSessionId);
+    mkdirSync(path.dirname(reviewWorkspaceDir), { recursive: true });
+    git(worktree, "worktree", "add", "--detach", "--no-checkout", reviewWorkspaceDir, "HEAD");
+    git(reviewWorkspaceDir, "read-tree", "--reset", "-u", treeOf(worktree));
+    const reviewInstructionsBytes = [
+      `Review the exact current candidate tree ${treeOf(worktree)}. Do not edit any file.`,
+      `Apply only the mandatory reviewer lens ${lens.lensId}; this invocation represents no other reviewer.`,
+      "Return only a JSON object with no markdown fence or commentary.",
+      'The closed shape is {"verdict":"approved"|"changes_requested","findings":[{"id":"<stable id>","severity":"P0"|"P1"|"P2"|"P3","scope":"in_contract"|"adjacent"|"expansion","actionable":true|false,"blocking":true|false,"disposition":"resolved"|"advisory"|"pre_existing"|"deferred"|"unresolved"|"ignored","deferredIssueId":"<required only for deferred expansion>"}]}.',
+      "A changes_requested verdict requires at least one finding.",
+    ].join("\n");
+    const invocationCapability = { id: `review-${reviewerSessionId}`, secret: `${randomUUID()}${randomUUID()}` };
+    const handoff = await facade.prepareProviderReviewHandoff({
+      deliveryId,
+      expectedFence: fence,
+      expectedWorkspaceId: bound.workspaceId,
+      nativeSessionId: reviewerSessionId,
+      nativeRunId: providerRunId,
+      finalPassId: providerFinalPassId,
+      lensId: lens.lensId,
+      reviewWorkspaceDir,
+      reviewInstructionsBytes,
+      bindingCapability: providerReviewBindingCapability,
+      invocationCapability,
+    });
+    if (handoff.ok !== true) return fail("prepareProviderReviewHandoff", handoff);
+    const nativeResultPath = path.join(input.scratch, "native-provider-results", spec.repositoryId, `${handoff.handoff.handoffId}.json`);
+    mkdirSync(path.dirname(nativeResultPath), { recursive: true });
+    if (input.nativeReview === undefined) {
+      writeFileSync(
+        nativeResultPath,
+        `${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: reviewerSessionId, result: JSON.stringify({ verdict: "approved", findings: [] }) })}\n`,
+        { mode: 0o600 },
+      );
+    } else {
+      await input.nativeReview({ repositoryId: spec.repositoryId, worktreeDir: reviewWorkspaceDir, settingsPath: bound.settingsPath, handoffPath: handoff.handoffPath, nativeResultPath, handoff: handoff.handoff });
+    }
+    if (!existsSync(nativeResultPath)) return fail("nativeProviderReview", { code: "provider_native_result_missing", path: nativeResultPath });
+    log(`${spec.repositoryId}/${lens.lensId}: native provider result ${nativeResultPath}`);
+    const adapted = product["adaptClaudeCodeReviewResult"]({
+      handoff: handoff.handoff,
+      submittedPromptContextBytes: handoff.handoff.promptContextBytes,
+      nativeEnvelopeBytes: readFileSync(nativeResultPath, "utf8"),
+    });
+    if (adapted.ok !== true) return fail("adaptClaudeCodeReviewResult", adapted);
+    const ingested = await facade.ingestProviderReviewResult({
+      deliveryId,
+      handoffId: handoff.handoff.handoffId,
+      resultBytes: JSON.stringify(adapted.result),
+      fence,
+      invocationCapability,
+    });
+    if (ingested.ok !== true) return fail("ingestProviderReviewResult", ingested);
+    git(worktree, "worktree", "remove", "--force", reviewWorkspaceDir);
+  }
   const reduced = await facade.reduceReview({ deliveryId, fence });
   if (reduced.ok !== true) return fail("reduceReview", reduced);
 
@@ -1618,6 +1729,7 @@ async function probeBindRefusesMissingHookEntry(
       hostTaskId: "host-task-missing-hook-entry",
       observedAt: NOW,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: { id: "binding-missing-hook-entry", secret: `${randomUUID()}${randomUUID()}` },
     }),
     "trust_ineligible",
   );
@@ -1833,6 +1945,7 @@ async function runNegativeProbes(input: NegativeInput): Promise<void> {
     hostTaskId: "host-task-revocation",
     observedAt: NOW,
     attestationExpiry: EXPIRY,
+    providerReviewBindingCapability: { id: "binding-revocation", secret: `${randomUUID()}${randomUUID()}` },
   });
   if (fencedBind.ok === true) {
     findings.push({

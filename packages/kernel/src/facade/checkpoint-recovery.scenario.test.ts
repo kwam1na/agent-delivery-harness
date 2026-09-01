@@ -49,6 +49,8 @@ import {
   GREET_WRONG,
   buildDisposableRepository,
   disposableHarnessConfig,
+  fixtureProviderBindingCapability,
+  ingestFixtureProviderReview,
   typedStageResultBytes,
 } from "./disposable-repository.fixture.ts";
 
@@ -180,6 +182,7 @@ async function newDelivery(): Promise<Driven> {
     hostTaskId: `host-${sequence}`,
     observedAt: NOW,
     attestationExpiry: EXPIRY,
+    providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
   });
   must(bound, "bindWorkspace");
   return { deliveryId: confirmed.deliveryId, worktree, branch, fence: bound.fence, round: 0 };
@@ -221,21 +224,13 @@ async function sensor(driven: Driven, expected: "passed" | "failed"): Promise<vo
 
 async function review(driven: Driven): Promise<void> {
   driven.round += 1;
-  for (const [lensId, tag] of [
-    ["lens.outcome-correctness", "outcome"],
-    ["lens.testing-policy", "testing"],
-  ] as const) {
-    const submitted = await facade.submitReviewAttempt({
-      deliveryId: driven.deliveryId,
-      attemptId: `${driven.deliveryId}-r${driven.round}-${tag}`,
-      lensId,
-      verdict: "approved",
-      contextBytes: `${tag} lens context r${driven.round} for ${driven.deliveryId}`,
-      artifactBytes: `approved by ${tag} r${driven.round}`,
-      fence: driven.fence,
-    });
-    must(submitted, "submitReviewAttempt");
-  }
+  const ingested = await ingestFixtureProviderReview({
+    facade,
+    deliveryId: driven.deliveryId,
+    fence: driven.fence,
+    runId: `run-${driven.round}-${driven.deliveryId}`,
+  });
+  must(ingested, "ingestProviderReviewResult");
   const reduced = await facade.reduceReview({ deliveryId: driven.deliveryId, fence: driven.fence });
   must(reduced, "reduceReview");
 }
@@ -312,6 +307,7 @@ async function takeoverResume(driven: Driven): Promise<void> {
     hostTaskId: `host-${sequence}-resume`,
     observedAt: LATER,
     attestationExpiry: EXPIRY,
+    providerReviewBindingCapability: fixtureProviderBindingCapability(driven.deliveryId),
   });
   must(rebound, "rebind after takeover");
   driven.worktree = fresh;
@@ -399,14 +395,12 @@ describe("durable checkpoints and host-driven recovery", () => {
     // and action outputs are permanently rejected at the canonical recheck.
     const staleOutputs = [
       await facade.checkpointCandidate({ deliveryId: driven.deliveryId, resultBytes: "stale", fence: staleFence }),
-      await facade.submitReviewAttempt({
+      await facade.ingestProviderReviewResult({
         deliveryId: driven.deliveryId,
-        attemptId: `${driven.deliveryId}-stale-attempt`,
-        lensId: "lens.outcome-correctness",
-        verdict: "approved",
-        contextBytes: "stale context",
-        artifactBytes: "stale artifact",
+        handoffId: "handoff-stale",
+        resultBytes: "stale",
         fence: staleFence,
+        invocationCapability: { id: "stale-invocation", secret: "x".repeat(64) },
       }),
       await facade.runSensor({ deliveryId: driven.deliveryId, fence: staleFence }),
       await facade.completeFinishLine({ deliveryId: driven.deliveryId, fence: staleFence }),
@@ -442,6 +436,7 @@ describe("durable checkpoints and host-driven recovery", () => {
       hostTaskId: "host-same-worktree",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(driven.deliveryId),
     });
     expect(sameWorktree.ok).toBe(false);
     if (!sameWorktree.ok) expect(sameWorktree.blockers[0]?.code).toBe("takeover_mismatch");
@@ -455,6 +450,7 @@ describe("durable checkpoints and host-driven recovery", () => {
       hostTaskId: "host-race-fresh",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(driven.deliveryId),
     });
     must(rebound, "fresh-worktree rebind");
     const liveResult = await facade.submitStageResult({

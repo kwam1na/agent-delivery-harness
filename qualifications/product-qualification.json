@@ -1,7 +1,7 @@
 {
   "schemaVersion": "product-qualification/1",
-  "description": "The release-level product qualification: the composed product installed into clean disposable repositories from PACKED ARTIFACTS ONLY, driving scoped intake through the full checkpoint path to merge-ready under two distinct repository policies. Every claim below names the leg that proved it. The packed leg is re-executable — `npm run qualify:product` reproduces it end to end — and the fixture leg names in-process sensors that exist and run on every CI leg. Claims that neither leg establishes are listed under notProvenHere rather than implied by silence.",
-  "recordedAt": "2026-08-31T11:30:00Z",
+  "description": "The release-level product qualification: the composed product installed into clean disposable repositories from PACKED ARTIFACTS ONLY, driving scoped intake through the full checkpoint path to merge-ready under two distinct repository policies. Every claim below names the leg that proved it. The packed leg is re-executable — `npm run qualify:product` reproduces it end to end — the fixture leg names in-process sensors that exist and run on every CI leg, and the authenticated-host leg records an operator-owned native Claude result flowing through the same packed path. Claims that no leg establishes are listed under notProvenHere rather than implied by silence.",
+  "recordedAt": "2026-09-01T04:05:43Z",
   "platform": "macOS 15.6.1 arm64",
   "gateVerdict": {
     "decision": "proceed",
@@ -18,7 +18,21 @@
         "statement": "an already-scoped contract reaches merge-ready through plan, implement, trusted sensor, two-lens review, compound, admission, neutral tracked record, and finish line",
         "outcome": "met",
         "leg": "packed",
-        "evidence": "both disposable repositories completed the frozen checkpoint path and reported state `completed`, with a non-empty discharged-obligation set and an operator-intervention counter of zero"
+        "evidence": "both disposable repositories completed the frozen checkpoint path and reported state `completed`, with a non-empty discharged-obligation set and an operator-intervention counter of zero. Each policy lens ran as a distinct native invocation under an installation-owned capability outside the admitted filesystem grant; the installed Claude adapter preserved the exact raw envelope bytes and required the exact bound persona, contract, sensor evidence, and review-instruction bytes to be the prompt context the host submitted. One atomic journal append per result fed the sole manifest builder, admission gate, tracked-record verifier, and finish line."
+      },
+      {
+        "id": "provider-result-ingestion",
+        "statement": "each completed native-provider reviewer result is capability-bound to exact provider/session/workspace/fence/trust/candidate/persona/prompt context and reaches the existing evidence gate without sidecar authority or a second manifest path",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "for both repositories the trusted operator-owned driver created a distinct review snapshot outside the model/reviewer writable roots, and the packed product only validated and bound it before preparing one handoff per policy reviewer. The snapshot is reviewer-read-only through the admitted host grant; the operator-owned same-user host is trusted and retains lifecycle authority. The product required installation-owned root and invocation proofs, bound and rechecked the current trust-revocation epoch immediately before attempt acceptance, adapted exact Claude-native envelopes, applied shared review-green coherence, and accepted normalized results only through original-revision CAS. Attempts/replay are journal-derived with no sidecar authority before the existing recorder and single manifest builder. Source sensors falsify forged proofs; wrong workspace, fence, session, provider, trust epoch, candidate snapshot, persona, or submitted context; partial, failed, moved, approved-but-blocking, and conflicting results; missing or tampered accepted bytes; mixed provider-run triples; concurrent callbacks; fresh attempt ids under suspended tuples; concurrent exact-tuple conflict-marker durability; and changes-requested approval."
+      },
+      {
+        "id": "authenticated-native-provider-acceptance",
+        "statement": "an authenticated Claude Code review reaches merge-ready from its retained raw native result through shared ingestion, the existing attempt journal and sole manifest builder, admission, and tracked-record verification",
+        "outcome": "met",
+        "leg": "live",
+        "evidence": "Claude Code 2.1.252 reviewed both exact candidates through four native UUID child sessions: one outcome-correctness and one testing-policy invocation per repository, sharing exactly one provider run and final pass inside each delivery. Every untouched outer envelope and SHA-256 is retained; every accepted normalized result carries its raw bytes/digest, exact consumed persona+contract+sensor+instruction prompt digest, session/run, workspace, fence, and candidate. Installation-owned root/invocation bindings are retained outside the admitted filesystem grant. Each delivery journal contains exactly two attempt.artifact.recorded entries and one evidence.reference.recorded entry; the sole manifest contains both provider-result and reviewer-approval artifacts with the common run provenance; tracked records verified; and each journal reached one completed transition. Earlier live refusals remain retained and accepted nothing. The operator-owned driver launched the native sessions; the product only decided and recorded evidence."
       },
       {
         "id": "outcome-only-iterative-scoping",
@@ -46,7 +60,7 @@
         "statement": "the product launches no coding-agent runtime and owns no workspace lifecycle",
         "outcome": "met",
         "leg": "packed",
-        "evidence": "every process the product ran through its INJECTED EXEC PORT during both deliveries was inventoried, per repository rather than across the run, and each lane's inventory is non-empty. The complete inventory is `git` and `node`. The host — here the qualification driver standing in for it — created every worktree; the product only bound them. Scoped deliberately to port-routed processes: see knownLimitations for the modules that reach node:child_process directly and what that does and does not leave open."
+        "evidence": "every normalized command the product ran through its INJECTED EXEC PORT during both deliveries was inventoried per repository, and each lane's inventory is non-empty. The observed executable inventory is `git` and `node`; the detector resolves Git global options before deciding the subcommand and recognizes exact coding-agent file targets passed through Node. The trusted host created and retired every delivery worktree and reviewer-read-only review snapshot outside model/reviewer writable roots; the product only validated and bound them. This criterion is exactly a port-routed normalized-command observation plus the facade's static non-orchestration contract, not an exhaustive process-table claim. See knownLimitations for launch shapes and direct subprocess modules outside that observation."
       },
       {
         "id": "qualification-profile-both-directions",
@@ -81,7 +95,7 @@
         "statement": "every claimed sensor is mutated red, and a comment-only no-op is not",
         "outcome": "met",
         "leg": "fixture",
-        "evidence": "the lane's judgements are pure functions falsified in both directions by scripts/qualify-product.test.ts, its COMPOSITION is falsified (dropping either half of the observation verdict is caught directly, because the wiring test's degenerate input can only ever witness the vacuity half), and its WIRING is falsified too — the lane is driven for real on an input that cannot get past its first step and required to return the vacuity findings rather than an empty list. The pre-existing rules' mutations each produced a named failing test — deliberately enumerated rather than counted, because the numeral is the part nobody checks: the agent-runtime rule never reporting AND always reporting; policy-independence never firing; anti-vacuity dropping its enumeration; the two repositories converging; path containment becoming a prefix test; the refusal detector ignoring an allowed result; the per-lane inventory collapsing into one shared counter; the second intake lane disappearing; either half of the observation verdict dropped; and the exit ceasing to call it. ELEVEN FURTHER mutations on the packed-surface rules, likewise each naming a failing test: the resolved-name enumeration ceasing to report emptiness; the membership loop never reporting; the required-name set emptied; the launcher check dropped; the staging check weakened to a path-only sensor AND to a command-string-only sensor — the pair an incomplete sensor passes, since a check on the command string alone survives an absent path and a check on the staged path alone survives a command pointing elsewhere; containment dropped; the empty-command, empty-inventory and no-path-member guards dropped; and the command-line parser degraded to a whitespace split. Weakening the shared path-containment helper to a prefix comparison is counted ONCE, above: it is the same one-line edit, and it now reddens a named test in both families rather than surviving in this one. FOUR PRODUCT mutations were falsified against the packed lane itself rather than against a pure rule, because the two defects this candidate closes live in the product: removing the verifier's re-export, restoring the tsx launcher, staging the entry while pointing the command elsewhere, and emitting the entry's unresolved spelling each turned the lane red with a named finding, the last one only because the lane EXECUTES the emitted command rather than reading it. A comment-only edit left all 56 green — 47 in the lane's own suite and 9 in the record checker, counted rather than apportioned — and a comment-only edit in the facade left the packed lane clean."
+        "evidence": "the lane's judgements are pure functions falsified in both directions by scripts/qualify-product.test.ts, its COMPOSITION is falsified (dropping either half of the observation verdict is caught directly, because the wiring test's degenerate input can only ever witness the vacuity half), and its WIRING is falsified too — the lane is driven for real on an input that cannot get past its first step and required to return the vacuity findings rather than an empty list. The pre-existing rules' mutations each produced a named failing test — deliberately enumerated rather than counted, because the numeral is the part nobody checks: the agent-runtime rule never reporting AND always reporting; policy-independence never firing; anti-vacuity dropping its enumeration; the two repositories converging; path containment becoming a prefix test; the refusal detector ignoring an allowed result; the per-lane inventory collapsing into one shared counter; the second intake lane disappearing; either half of the observation verdict dropped; and the exit ceasing to call it. The process sensor additionally falsifies Git workspace lifecycle hidden behind global options and an agent launcher hidden behind Node. ELEVEN FURTHER mutations on the packed-surface rules, likewise each naming a failing test: the resolved-name enumeration ceasing to report emptiness; the membership loop never reporting; the required-name set emptied; the launcher check dropped; the staging check weakened to a path-only sensor AND to a command-string-only sensor — the pair an incomplete sensor passes, since a check on the command string alone survives an absent path and a check on the staged path alone survives a command pointing elsewhere; containment dropped; the empty-command, empty-inventory and no-path-member guards dropped; and the command-line parser degraded to a whitespace split. Weakening the shared path-containment helper to a prefix comparison is counted ONCE, above: it is the same one-line edit, and it now reddens a named test in both families rather than surviving in this one. FOUR PRODUCT mutations were falsified against the packed lane itself rather than against a pure rule, because the two defects this candidate closes live in the product: removing the verifier's re-export, restoring the tsx launcher, staging the entry while pointing the command elsewhere, and emitting the entry's unresolved spelling each turned the lane red with a named finding, the last one only because the lane EXECUTES the emitted command rather than reading it. A comment-only edit left all 58 green — 49 in the lane's own suite and 9 in the record checker, counted rather than apportioned — and a comment-only edit in the facade left the packed lane clean."
       }
     ]
   },
@@ -90,8 +104,8 @@
     "driver": "scripts/qualify-product.ts",
     "sourceAccess": "the driver imports nothing from packages/. It reaches the product twice, both times through an artifact: the npm-packed tarball install tree supplies the operator-facing installer — resolved through the package's own `exports` map rather than by joining a path into its src/, so what the lane drives is the published surface and not merely the shipped layout — and the installed generation root supplies the product that drives the deliveries.",
     "observed": {
-      "generationDigest": "616af8ce4bb692bbc8c9ea61b6a68d0d225c1a913bf7bf90cfbdf0444c8b9d85",
-      "installationId": "install-7ddd848e70798366f39f6d256b0f90f9",
+      "generationDigest": "61433c87976bbf01252b513f28353af895a62da40015b212f216f092a579e884",
+      "installationId": "install-0885d8020533244c4fd4437b2a61bf29",
       "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
       "compositionProfile": "confirmation-fixture",
       "repositoriesDelivered": [
@@ -146,15 +160,108 @@
         }
       ],
       "retainedGenerations": [
-        "616af8ce4bb692bbc8c9ea61b6a68d0d225c1a913bf7bf90cfbdf0444c8b9d85",
-        "5e7d3bdf8343c78f9cad91c3b2bcf45c534dd4adaf2839d01d4e6a8da906c92f",
-        "4ee1ce51d7984a22efd14e1b6c50fa8bd630dca2d5cb67b7451824dd9c2f3867"
+        "61433c87976bbf01252b513f28353af895a62da40015b212f216f092a579e884",
+        "d09b0db99bfc53dff63c20735b0b2bb4ec82780d0a5c236c43a9b930e7d11106",
+        "a3ac0668b152de669d9c7de333818c95a3dc9958725a6f6bfeb75649754aaead"
       ]
     },
     "crossPlatform": "the same lane runs as a release-workflow step on ubuntu-latest, and that run is the cross-platform evidence this gate requires. PENDING FOR THIS RECORD: the Linux leg for this candidate had not reported when these observations were written, so the digest above is the macOS one only and no second platform is claimed here. Nothing in the lane compares the two digests; the comparison is the operator's, and this field is where it lands.",
-    "hostVersion": "2.1.97 (the graded version, not the installed one — see hostVersionCurrency)",
+    "hostVersion": "2.1.252",
     "hostLane": "in-process. The driver stands in for the host task the way the walking skeleton's scenario sensor does: it creates the worktrees and submits the typed stage results a host would. The product launches nothing either way, which is what the process inventory above records.",
-    "hostVersionCurrency": "The value above is the version qualifications/host-admission-capabilities.json grades, and it is what this lane passes to the facade. The Claude Code CLI installed on the recording machine is 2.1.251 — four releases newer — so any Claude Code capability read through that graded record is a claim about 2.1.97 and not about the installed CLI. This lane asserts NO live Claude Code capability: it launches no host session and drives the facade in-process, so the version is a parameter it passes rather than a surface it probed. The currency gap itself is tracked separately as V26-1506 and is not addressed here."
+    "hostVersionCurrency": "The ordinary packed lane and the authenticated acceptance both carry Claude Code 2.1.252 into their reviewer results and manifests. The strict filesystem admission floor is reverified at that version. The older Tier 2 lifecycle and descendant-teardown observations were not re-driven and do not silently gain a current-version claim; same-workspace resume remains closed."
+  },
+  "authenticatedHostAcceptance": {
+    "statement": "operator-owned Claude Code reviews over the packed generation ran one native invocation per policy reviewer and reached completed delivery through capability-checked ingestion, journal-authoritative attempts, the sole manifest builder, admission, tracked-record verification, and finish line",
+    "driver": "scripts/qualify-claude-code-session.ts --provider-delivery",
+    "command": "QUALIFY_CLAUDE_CODE_SESSION=1 node --import tsx scripts/qualify-claude-code-session.ts --provider-delivery",
+    "providerVersion": "2.1.252",
+    "generationDigest": "61433c87976bbf01252b513f28353af895a62da40015b212f216f092a579e884",
+    "installationId": "install-0885d8020533244c4fd4437b2a61bf29",
+    "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+    "retainedRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg",
+    "findings": 0,
+    "repositories": [
+      {
+        "repositoryId": "disposable-alpha",
+        "deliveryId": "dlv-aa6224172cc9",
+        "providerRunId": "268a0373-86f9-4df3-bfee-8a44fdc564c1",
+        "finalPassId": "pass-268a0373-86f9-4df3-bfee-8a44fdc564c1",
+        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/installation/provider-review-authority/deliveries/dlv-aa6224172cc9",
+        "journalEvidenceRecordId": "70c59b836269ed6908fca4e488e2e41f9f2252e77eafac8c0d34b24f1be4445b",
+        "journalManifestDigest": "ba4de96faa22a838a62fd9188a887a93951b8af29f42982d6578b0dc37bac039",
+        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/268a0373-86f9-4df3-bfee-8a44fdc564c1/manifest.json",
+        "manifestSha256": "11d6e5592c348a2e8e752bb4d098de02135456eb12645c3102333812059764d7",
+        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/worktree-disposable-alpha/telemetry/delivery-runs/record--0b8cab69851f83498a8616af7c084d8e15cca6ce388bf87642f114b6a6f6f9d4.json",
+        "trackedRecordSha256": "4bc8af03242770feeebed05b0621624b01d401ade5b46f97e122dd3145d2eb7f",
+        "trackedCommit": "8069c09447411c759e440fdfcd3b9b6004148b77",
+        "reviews": [
+          {
+            "lensId": "lens.outcome-correctness",
+            "nativeSessionId": "27de96ed-0f5b-445e-8808-1d145a6c0f50",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-aa6224172cc9/binding/provider-review-handoffs/handoff-901a1fef2a74c4e1.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/installation/provider-review-authority/deliveries/dlv-aa6224172cc9/handoffs/handoff-901a1fef2a74c4e1.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/native-provider-results/disposable-alpha/handoff-901a1fef2a74c4e1.json",
+            "nativeResultSha256": "f0fb5088b684498d62e442e248218ed0ce21c8744ccbb6e759536028e6df7191",
+            "promptContextDigest": "4046d68cc9fee844dc39a2fecf96bbadb1c409d9964c70ee97eee8ea47874f53",
+            "contextDigest": "db415b54f6ad981232be1cb23db23148fbc2cb20feb92780953d1b334b719d1f",
+            "attemptId": "attempt-fefb08901be225e8",
+            "acceptedArtifactDigest": "d088115d163a7436780d10b27b7a22e0bc50b21043f8703162f332c2c50172a8"
+          },
+          {
+            "lensId": "lens.testing-policy",
+            "nativeSessionId": "d269c4dc-1cd4-4c7e-bb89-2560ae670044",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-aa6224172cc9/binding/provider-review-handoffs/handoff-56658fe6bcc03f19.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/installation/provider-review-authority/deliveries/dlv-aa6224172cc9/handoffs/handoff-56658fe6bcc03f19.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/native-provider-results/disposable-alpha/handoff-56658fe6bcc03f19.json",
+            "nativeResultSha256": "455abdc05cfbfe17523a6aa70db516ef6a18abbd7eb39f10d964fa35de226f07",
+            "promptContextDigest": "bc2a28f219fe9eba8b61ad34c801f145e57ba750bb080adb246a93cf0c277a3d",
+            "contextDigest": "5da7fc2c0cfe1e55f968264608a6c432b99c32412d0bdd36e7a9b6edd376878f",
+            "attemptId": "attempt-9fd6313c37b82f88",
+            "acceptedArtifactDigest": "b466251de71f8a5cd18a94b741daad28f430ba6c9b3bfddd58616ec0c6122709"
+          }
+        ]
+      },
+      {
+        "repositoryId": "disposable-beta",
+        "deliveryId": "dlv-abb36ce7e595",
+        "providerRunId": "2bb393b4-b7f5-44a1-9b79-5272f3423127",
+        "finalPassId": "pass-2bb393b4-b7f5-44a1-9b79-5272f3423127",
+        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/installation/provider-review-authority/deliveries/dlv-abb36ce7e595",
+        "journalEvidenceRecordId": "e90190e9c765308479c9c5ab7e39a8998ab2b4b9e9dd5f23421cc16449fc2066",
+        "journalManifestDigest": "29d7fcb4d0be5b64ee15069ab10f07f2da2ed78c2010797128e832e635a9f5aa",
+        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/2bb393b4-b7f5-44a1-9b79-5272f3423127/manifest.json",
+        "manifestSha256": "48e4002789a20bfcd85a89d25f30031f5cada37e371b4949302f7a588e92d037",
+        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/worktree-disposable-beta/audit/runs/record--eaaaa952fa8df6f7b6dcd8756ac13a6919c69751411378f4234789cc709d23a7.json",
+        "trackedRecordSha256": "b2bbe59fe1a4af261202e7522c93ef925b53ccab8ea57018372f122d08f92965",
+        "trackedCommit": "64d8672945ab6cd743fddca3a11690a56e61e029",
+        "reviews": [
+          {
+            "lensId": "lens.outcome-correctness",
+            "nativeSessionId": "b6c92118-76b2-4f07-96fc-44fbae089e9c",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-abb36ce7e595/binding/provider-review-handoffs/handoff-6352506ff934c6da.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/installation/provider-review-authority/deliveries/dlv-abb36ce7e595/handoffs/handoff-6352506ff934c6da.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/native-provider-results/disposable-beta/handoff-6352506ff934c6da.json",
+            "nativeResultSha256": "0d85cd9a1945e3c52c5d43d8caad9168874bf72a4a74e56b3b6adb7f3fa617db",
+            "promptContextDigest": "345220bb071e4e5841647d0500a617c2fb9c5af0257350ce225bf53c397f546c",
+            "contextDigest": "cf1ca20d8a436c6f94172a9a4f34cf62d0cce3fa7a79928ba686f7e525bc0ae7",
+            "attemptId": "attempt-b7b9ffb1a2ad8dcc",
+            "acceptedArtifactDigest": "8fb8af95504329858921bdb3aadf24e8c1433ed3a18f567006f304e83904790e"
+          },
+          {
+            "lensId": "lens.testing-policy",
+            "nativeSessionId": "4bf2a729-70a0-4e5f-946e-7a320e797b2e",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-abb36ce7e595/binding/provider-review-handoffs/handoff-662dcae58f050e81.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/installation/provider-review-authority/deliveries/dlv-abb36ce7e595/handoffs/handoff-662dcae58f050e81.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-ZD0PSg/native-provider-results/disposable-beta/handoff-662dcae58f050e81.json",
+            "nativeResultSha256": "bf2e77a88444dffe3c523687d5dce3f0588020c0996652f6a8b9b2e9f4b8be97",
+            "promptContextDigest": "dbdc3322bfa22a10535461e73557337d4c4de5ee903f3b050884a0578bc10b5f",
+            "contextDigest": "23ce60e9f4ec06d905347c3a72665af45492e547d268da7a17a4eb6e41d53ae9",
+            "attemptId": "attempt-edf84cc2a48b4a37",
+            "acceptedArtifactDigest": "7d93886ef787f8d1fc45e739c826390c83a296f177a2227ed7e04787abd33d04"
+          }
+        ]
+      }
+    ]
   },
   "packedSurfaceFindings": [
     {
@@ -201,6 +308,10 @@
         "sensor": "packages/kernel/src/facade/evidence-admission.scenario.test.ts"
       },
       {
+        "property": "Claude and Codex-shaped native results share one closed host-neutral handoff/result contract and only Claude supplies a native-envelope adapter",
+        "sensor": "packages/kernel/src/host/provider-review-result.test.ts"
+      },
+      {
         "property": "host interruption and fresh-task resume across checkpoints",
         "sensor": "packages/kernel/src/facade/checkpoint-recovery.scenario.test.ts"
       },
@@ -211,7 +322,7 @@
     ]
   },
   "notProvenHere": [
-    "A LIVE authenticated host lane driving these disposable repositories on any host. The Claude Code host integration is separately qualified against a real session in qualifications/claude-code-integration.json at Tier 2 against host version 2.1.97; this lane drives the same facade in-process and re-establishes none of those live probes.",
+    "A live authenticated provider-result lane on any host other than Claude Code. The Codex-shaped fixture proves the shared contract only; it is not a native Codex result and is not counted as one.",
     "A Codex delivery lane, of any kind. Codex CAPABILITIES are graded in qualifications/host-admission-capabilities.json (codex-cli, Tier 1 mutation floor live-probed model-free; Tier 2 lifecycle and Tier 3 descendant teardown provisional), so the Codex surface is not unknown. What does not exist in this repository is a Codex host-binding module or a qualified Codex delivery integration to drive a lane with — that is V26-1478, which this ticket lists as a blocker and which is still open. The second-host half of the release claim therefore belongs to V26-1478 and was deliberately not attempted here; the ticket's own carve-out (a sub-Tier-1 second host runs as capability verification only) does not create a delivery lane where no binding exists.",
     "Advancing the shipped reviewer persona set alone through the agent-skills corpus validation and release build. That advance happens in the agent-skills repository, and its effect here is the three re-stamped composition digest constants — inherent to a digest-pinned composition, not per-persona coupling.",
     "Replacing one host integration alone, and the planted duplicated-workflow coupling that must fail. Both need a second host integration to replace or duplicate against.",
@@ -222,11 +333,12 @@
   ],
   "knownLimitations": [
     "The two disposable repositories are driven by one process in sequence, so the lane proves that one release serves two policies and not that two installations serve them concurrently.",
-    "The no-agent-process evidence is scoped to processes routed through the injected exec port. Every record-storage and candidate-capture git call on the delivery path is so routed, which is what makes the claim meaningful; but candidate.ts, records.ts, substrate/assertion-source.ts and substrate/preflight.ts import node:child_process directly, so a runtime launched from one of those would not appear in the inventory. The deny predicate also matches on the executable basename and the first argument, so `git -C <dir> worktree add` or a runtime launched as `node <path>` would not be classified — the current product does neither. This is a port-routed observation, not a process-table sweep.",
+    "The no-agent-process evidence is exactly a normalized-command observation on the injected exec port, not a process-table sweep. It covers direct forbidden executable basenames, Git workspace subcommands after global options such as `-C`/`-c`/`--git-dir`, and exact coding-agent file targets launched through Node. Shell command strings (`sh -c`), environment launchers, Node eval/loader forms such as `node -e`, and dynamically constructed targets are outside this detector's claim. Candidate.ts, records.ts, substrate/assertion-source.ts and substrate/preflight.ts import node:child_process directly, so launches there are also outside the port inventory. The facade retains a separate static non-orchestration contract; this qualification does not inflate that contract into exhaustive runtime tracing.",
     "Each disposable repository's tracked harness.config.ts resolves defineHarnessConfig from the npm-tarball tree rather than the generation root, so the config object crossing into the generation-root facade is minted by a second kernel module instance. That is the adopter's real shape — an adopter installs the package and imports it from node_modules — but it means the config-construction half of the product is exercised only through the tarball.",
     "The product half of 'packed artifacts only' is a composition generation packed from the source checkout and imported by a checkout-shaped path inside the generation root. The kernel's npm `exports` map and `files` list are therefore exercised for the INSTALLER half but not for the product half; `sensor:standalone` is what covers those for every package, and this lane does not duplicate it.",
     "Several judgements inside the heavy lane are not extracted and so are not falsifiable by the fast suite: the three-generations-distinct check in the lifecycle step, the internals of the outcome-only scoping turn, and the emitted-hook-command wrapper — reading the composed settings file, slicing the host's appended arguments off the vector, executing it, and the bind probe's control half. The RULE the wrapper feeds is extracted and falsified in both directions; its wiring is not. All of them are reachable only from a full `npm run qualify:product` run, which is the pre-existing posture for everything inside driveRepository; the checked-in record — zero findings, with beta recorded under intakeMode outcome-only and seven negative probes satisfied — is the evidence that they ran. Deliberately not counted: a numeral here is the part nobody checks.",
-    "The packed leg proves the emitted hook command runs the staged interceptor and denies an unattested session. It does not run a LIVE host session: no host process reads the composed settings file and invokes the command through its own hook machinery, so what is established is that the command an installed generation emits is executable and refuses, not that this host's hook plumbing invokes it as written.",
+    "The packed leg proves the emitted hook command runs the staged interceptor and denies an unattested session. The separate authenticated lane proves Claude emitted the retained review envelopes under the strict composed sandbox, while the one-off sandbox characterization proves OS containment. Neither makes host launch or hook driving a product responsibility.",
+    "The packed provider-result leg uses a structurally native Claude result envelope written by the qualification fixture, not an authenticated Claude session. It proves packed reachability and the full handoff-to-ingestion-to-gate wiring; the explicit operator lane separately establishes that Claude itself emitted the retained envelopes.",
     "The facade's own `hook_entry_missing` refusal is unexercised. Every guarded operation reloads the delivery's pinned generation and re-verifies its digest closure, so a generation missing the staged hook entry is already refused as `trust_ineligible` — which is what the bind probe pins, because it is what fires. The hook-entry branch keeps the resolution total for a race after that verification, and no sensor here reaches it."
   ]
 }

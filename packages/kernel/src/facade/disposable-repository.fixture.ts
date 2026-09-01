@@ -11,12 +11,23 @@
  * the two legs cannot drift.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineHarnessConfig, type HarnessConfig } from "../config.ts";
 import { PINNED_AGENT_SKILLS } from "../spine/composition.ts";
+import { DISPOSABLE_REVIEW_LENSES } from "../policy/disposable.ts";
+import { sha256Hex } from "../digest.ts";
 import type { AcceptedContract } from "../spine/contract.ts";
+import {
+  adaptClaudeCodeReviewResult,
+  type ProviderReviewFinding,
+  type ProviderReviewHandoff,
+  type ProviderReviewCapability,
+  type ProviderReviewResult,
+  type ProviderReviewVerdict,
+} from "../host/provider-review-result.ts";
+import type { FacadeFailure, ManagedDeliveryFacade } from "./managed-delivery.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CHECKOUT_ROOT = path.resolve(HERE, "..", "..", "..", "..");
@@ -207,6 +218,126 @@ const git = (cwd: string, ...args: string[]): void => {
 export interface DisposableRepository {
   readonly repoDir: string;
   readonly baseCommit: string;
+}
+
+export interface FixtureProviderReview {
+  readonly handoff: ProviderReviewHandoff;
+  readonly result: ProviderReviewResult;
+  readonly invocationCapability: ProviderReviewCapability;
+  readonly reviewWorkspaceDir: string;
+}
+
+/** Qualification-only deterministic stand-in for a secret retained by a host. */
+export const fixtureProviderBindingCapability = (deliveryId: string): ProviderReviewCapability => ({
+  id: `fixture-binding-${deliveryId}`,
+  secret: sha256Hex(`qualification-only-provider-binding:${deliveryId}`),
+});
+
+/**
+ * The deterministic binding stand-in used by in-process scenarios. It drives
+ * the same handoff + Claude native-envelope adapter + trusted ingestion seam
+ * as the opt-in live lane; it never calls the removed model-visible attempt
+ * submission path.
+ */
+export async function fixtureProviderReview(input: {
+  readonly facade: ManagedDeliveryFacade;
+  readonly deliveryId: string;
+  readonly fence: number;
+  readonly runId: string;
+  readonly lensId?: string;
+  readonly verdict?: ProviderReviewVerdict;
+  readonly findings?: readonly ProviderReviewFinding[];
+}): Promise<FixtureProviderReview | FacadeFailure> {
+  const namespaceDir = await input.facade.namespaceDir();
+  const workspace = JSON.parse(readFileSync(path.join(namespaceDir, "deliveries", input.deliveryId, "workspace.json"), "utf8")) as { workspaceId: string; worktreeDir: string };
+  const lensId = input.lensId ?? DISPOSABLE_REVIEW_LENSES[0]?.lensId;
+  if (lensId === undefined) throw new Error("qualification fixture has no review lens");
+  const nativeSessionId = `${input.runId}-${lensId.replaceAll(".", "-")}`;
+  const invocationCapability: ProviderReviewCapability = {
+    id: `fixture-invocation-${nativeSessionId}`,
+    secret: sha256Hex(`qualification-only-provider-invocation:${input.deliveryId}:${nativeSessionId}`),
+  };
+  const reviewWorkspaceDir = path.join(path.dirname(workspace.worktreeDir), `.review-${nativeSessionId}`);
+  const candidateTree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: workspace.worktreeDir, encoding: "utf8" }).trim();
+  git(workspace.worktreeDir, "worktree", "add", "--detach", "--no-checkout", reviewWorkspaceDir, "HEAD");
+  git(reviewWorkspaceDir, "read-tree", "--reset", "-u", candidateTree);
+  const prepared = await input.facade.prepareProviderReviewHandoff({
+    deliveryId: input.deliveryId,
+    expectedFence: input.fence,
+    expectedWorkspaceId: workspace.workspaceId,
+    nativeSessionId,
+    nativeRunId: input.runId,
+    finalPassId: `pass-final-${input.runId}`,
+    lensId,
+    reviewWorkspaceDir,
+    reviewInstructionsBytes: `qualification review ${lensId} for ${input.deliveryId} at fence ${input.fence}`,
+    bindingCapability: fixtureProviderBindingCapability(input.deliveryId),
+    invocationCapability,
+  });
+  if (!prepared.ok) return prepared;
+  const verdict = input.verdict ?? "approved";
+  const findings =
+    input.findings ??
+    (verdict === "approved"
+      ? []
+      : [
+          {
+            id: `finding-${input.runId}`,
+            severity: "P2" as const,
+            scope: "in_contract" as const,
+            actionable: true,
+            blocking: true,
+            disposition: "unresolved" as const,
+          },
+        ]);
+  const conclusion = {
+    verdict,
+    findings,
+  };
+  const adapted = adaptClaudeCodeReviewResult({
+    handoff: prepared.handoff,
+    submittedPromptContextBytes: prepared.handoff.promptContextBytes,
+    nativeEnvelopeBytes: JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      session_id: prepared.handoff.nativeSessionId,
+      result: JSON.stringify(conclusion),
+    }),
+  });
+  if (!adapted.ok) {
+    throw new Error(`qualification fixture could not adapt its native envelope: ${adapted.code}: ${adapted.message}`);
+  }
+  return { handoff: prepared.handoff, result: adapted.result, invocationCapability, reviewWorkspaceDir };
+}
+
+export async function ingestFixtureProviderReview(input: {
+  readonly facade: ManagedDeliveryFacade;
+  readonly deliveryId: string;
+  readonly fence: number;
+  readonly runId: string;
+  readonly verdict?: ProviderReviewVerdict;
+  readonly findings?: readonly ProviderReviewFinding[];
+}): Promise<
+  | { readonly ok: true; readonly replay: "recorded" | "identical"; readonly disposition: ProviderReviewVerdict }
+  | FacadeFailure
+> {
+  let disposition: ProviderReviewVerdict = "approved";
+  for (const [index, lens] of DISPOSABLE_REVIEW_LENSES.entries()) {
+    const verdict = input.verdict === "changes_requested" && index === 0 ? "changes_requested" : "approved";
+    const prepared = await fixtureProviderReview({ ...input, lensId: lens.lensId, verdict, findings: index === 0 ? input.findings : [] });
+    if (!("result" in prepared)) return prepared;
+    const ingested = await input.facade.ingestProviderReviewResult({
+      deliveryId: input.deliveryId,
+      handoffId: prepared.handoff.handoffId,
+      resultBytes: JSON.stringify(prepared.result),
+      fence: input.fence,
+      invocationCapability: prepared.invocationCapability,
+    });
+    if (!ingested.ok) return ingested;
+    if (ingested.disposition === "changes_requested") disposition = "changes_requested";
+  }
+  return { ok: true, replay: "recorded", disposition };
 }
 
 /**

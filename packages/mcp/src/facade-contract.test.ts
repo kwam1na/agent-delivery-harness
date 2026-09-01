@@ -14,8 +14,8 @@
  *   - every operation a surface offers is one the inventory declares;
  *   - the MCP surface offers read-class operations and nothing else, so a tool
  *     call inspects the delivery rather than orchestrating it;
- *   - no operator confirmation and no termination-provenance operation is
- *     nameable from a model-visible surface; and
+ *   - no operator confirmation, termination provenance, or native provider
+ *     result operation is nameable from a model-visible surface; and
  *   - the product launches no subordinate agent runtime.
  *
  * The last one is a source scan rather than a behavioural test on purpose: the
@@ -48,7 +48,6 @@ const CLI_OPERATION_MAP: Readonly<Record<string, string>> = Object.freeze({
   compound: "submitStageResult",
   checkpoint: "checkpointCandidate",
   "run-sensor": "runSensor",
-  "submit-review": "submitReviewAttempt",
   "reduce-review": "reduceReview",
   admit: "admit",
   "prepare-record": "prepareTrackedRecord",

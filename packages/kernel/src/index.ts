@@ -481,6 +481,24 @@ export {
   type NormalizedTermination,
 } from "./host/conformance.ts";
 export { createFakeHostConformancePort } from "./host/fake-host.ts";
+export {
+  PROVIDER_REVIEW_HANDOFF_SPEC,
+  PROVIDER_REVIEW_RESULT_SPEC,
+  adaptClaudeCodeReviewResult,
+  createProviderReviewHandoff,
+  parseProviderReviewResult,
+  type ClaudeCodeReviewAdaptation,
+  type NativeReviewConclusion,
+  type ProviderReviewCandidate,
+  type ProviderReviewCapability,
+  type ProviderReviewFinding,
+  type ProviderReviewHandoff,
+  type ProviderReviewHandoffReviewer,
+  type ProviderReviewParseResult,
+  type ProviderReviewResult,
+  type ProviderReviewTerminalState,
+  type ProviderReviewVerdict,
+} from "./host/provider-review-result.ts";
 
 export {
   EXTERNAL_ACTIONS,

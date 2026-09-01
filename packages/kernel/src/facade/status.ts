@@ -159,7 +159,7 @@ function checkpointAction(checkpoint: ManagedCheckpoint): string | undefined {
     case "repository-sensor":
       return "runSensor";
     case "review":
-      return "submitReviewAttempt";
+      return "prepareProviderReviewHandoff";
     case "admission":
       return "admit";
     case "tracked-record":

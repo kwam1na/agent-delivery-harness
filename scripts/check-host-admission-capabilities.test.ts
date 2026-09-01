@@ -587,20 +587,19 @@ describe("the granted-shell journal-defense posture", () => {
       const position = host.capabilities[CLAIM];
       const context = `${host.hostId}.${CLAIM}`;
       // A position is a verdict either way; "not mentioned" is not one of them.
-      expect(["supported", "unsupported"], context).toContain(position.status);
+      expect(["supported", "supported-with-required-admission-flags", "unsupported"], context).toContain(position.status);
       expect(position.mechanism.length, `${context} mechanism`).toBeGreaterThan(0);
       expectVerification(position.verification, context);
     }
   });
 
-  it("declares the shell exposure on the host that grants it rather than implying protection by silence", () => {
+  it("requires the qualified Claude sandbox instead of leaving the granted shell unconfined", () => {
     const declared = hostById.get("claude-code").capabilities[CLAIM];
-    expect(declared.status).toBe("unsupported");
-    // The declaration has to say WHY, in terms of the shipped configuration
-    // that produces it, or it is a bare label an operator cannot act on.
-    expect(declared.mechanism).toMatch(/hook-main\.ts/u);
-    expect(declared.mechanism).toMatch(/mutation-stage grant/u);
-    expect(declared.verification.surface, "the position names the shipped grant it follows from").toMatch(/compile\.ts/u);
+    expect(declared.status).toBe("supported-with-required-admission-flags");
+    expect(declared.mechanism).toMatch(/--restricted/u);
+    expect(declared.mechanism).toMatch(/failIfUnavailable=true/u);
+    expect(declared.mechanism).toMatch(/common-Git/u);
+    expect(declared.reverification).toMatchObject({ hostVersion: "2.1.252", outcome: "holds" });
   });
 
   it("keeps the common-Git scenario row a per-host position rather than a product-wide claim", () => {
