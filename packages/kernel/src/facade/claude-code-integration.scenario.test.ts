@@ -781,12 +781,98 @@ describe("the in-session projection's immutable context", () => {
 });
 
 describe("the binding-sourced projection-consumption gate record", () => {
-  // Landing dependency: V26-1518 moves the hook runtime and binding-owned
-  // state outside an admitted agent's Bash write reach. Rebase this scenario
-  // onto that change before turning this into an executable integration probe:
-  // a direct Bash launch of hook-main must leave binding evidence unchanged,
-  // while the genuine Claude Code callback still records the exact read.
-  it.todo("V26-1518: agent Bash cannot mint hook evidence while the genuine host callback can");
+  it.skipIf(process.platform !== "darwin")(
+    "keeps a model's public-hook self-invocation out of authority while the genuine host callback records",
+    async () => {
+      const session = await openSession();
+      const state = await bindingState(session.deliveryId);
+      const authorityObservation = state.projectionConsumptionPath;
+      const receiptPath = state.projectionReceiptPath;
+      expect(typeof authorityObservation).toBe("string");
+      expect(typeof receiptPath).toBe("string");
+      if (authorityObservation === undefined || receiptPath === undefined) return;
+
+      // The landed admission projects common Git into Claude's OS-level deny
+      // set. The observation is inside that authority root, while src is the
+      // model's exact writable control root.
+      const commonGitDir = git(session.worktree, "rev-parse", "--path-format=absolute", "--git-common-dir");
+      const realCommonGitDir = realpathSync(commonGitDir);
+      const authorityParent = realpathSync(path.dirname(authorityObservation));
+      expect(path.relative(realCommonGitDir, authorityParent)).not.toMatch(/^\.\.(?:\/|$)/u);
+      const settings = JSON.parse(readFileSync(await settingsPathOf(session.deliveryId), "utf8")) as {
+        sandbox: { filesystem: { allowWrite: string[]; denyWrite: string[] } };
+      };
+      expect(settings.sandbox.filesystem.allowWrite).toContain(path.join(session.worktree, "src"));
+      expect(settings.sandbox.filesystem.denyWrite).toContain(path.resolve(commonGitDir));
+
+      // A model does not need the genuine protected state to try this attack:
+      // it can mint matching-looking state and receipt bytes under src, import
+      // the public hook, and point its output at authority. Use the same forged
+      // bytes first against an allowed control path so a non-writing hook or a
+      // broken predicate cannot make the authority denial pass vacuously.
+      const forgedStatePath = path.join(session.worktree, "src", "forged-hook-state.json");
+      const forgedReceiptPath = path.join(session.worktree, "src", "forged-projection-receipt.json");
+      const allowedControl = path.join(session.worktree, "src", "forged-projection-consumption.json");
+      writeFileSync(forgedReceiptPath, readFileSync(receiptPath));
+      const writeForgedState = (projectionConsumptionPath: string): void => {
+        writeFileSync(
+          forgedStatePath,
+          `${JSON.stringify({ ...state, projectionReceiptPath: forgedReceiptPath, projectionConsumptionPath })}\n`,
+        );
+      };
+      const invocation = (tool_use_id: string): Record<string, unknown> => ({
+        tool_name: "Read",
+        tool_input: { file_path: realpathSync(path.join(session.worktree, PROJECTION_DIR, "workflows", "delivery-v1.json")) },
+        tool_use_id,
+      });
+      const seatbeltProfile = [
+        "(version 1)",
+        "(allow default)",
+        `(deny file-write* (subpath ${JSON.stringify(realCommonGitDir)}))`,
+      ].join("\n");
+      const selfInvoke = (tool_use_id: string): void => {
+        execFileSync(
+          "/usr/bin/sandbox-exec",
+          [
+            "-p",
+            seatbeltProfile,
+            path.join(REPO_ROOT, "node_modules", ".bin", "tsx"),
+            path.join(REPO_ROOT, "packages", "kernel", "src", "host", "hook-main.ts"),
+            "post-tool-use",
+            forgedStatePath,
+            String(session.fence),
+          ],
+          { input: JSON.stringify(invocation(tool_use_id)), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+        );
+      };
+
+      writeForgedState(allowedControl);
+      selfInvoke("toolu_model_control");
+      expect(existsSync(allowedControl)).toBe(true);
+
+      writeForgedState(authorityObservation);
+      selfInvoke("toolu_model_authority_attack");
+      expect(existsSync(authorityObservation)).toBe(false);
+
+      // The host owns callback execution and runs it outside the model's Bash
+      // sandbox. Its genuine callback over binding-owned state can therefore
+      // record the exact read, after which the product only adjudicates it.
+      await consumeProjection(session);
+      expect(JSON.parse(readFileSync(authorityObservation, "utf8"))).toMatchObject({
+        source: "claude-code-post-tool-use-read/1",
+        deliveryId: session.deliveryId,
+        fence: session.fence,
+      });
+      const gateRecordPath = gateRecord("model-self-invocation");
+      const recorded = await facade.recordProjectionConsumption({
+        deliveryId: session.deliveryId,
+        gateRecordPath,
+        category: "code",
+      });
+      must(recorded, "recordProjectionConsumption (host callback)");
+      expect(recorded.emitted).toBe(true);
+    },
+  );
 
   /** The consuming repository's gate-record artifact, in the shape its guard reads. */
   const gateRecord = (name: string): string => {
