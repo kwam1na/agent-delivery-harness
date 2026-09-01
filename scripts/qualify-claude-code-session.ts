@@ -22,9 +22,10 @@
  *      clean host end. This is the Tier 3 gate, and the honest answer decides
  *      whether same-workspace resume is available at all.
  *   6. PROJECTION CONSUMPTION IS OBSERVED — whether an ordinary delivery turn
- *      causes the interceptor to record that the run named a receipted entry
- *      of the run-pinned projection. This is the acceptance check for the
- *      milestone's consumption record, and it exists here because the failure
+ *      causes the interceptor to record the host's completed exact Read of the
+ *      receipted workflow source in the run-pinned projection. This is the
+ *      acceptance check for the milestone's consumption record, and it exists
+ *      here because the failure
  *      it guards against is INVISIBLE to every in-process sensor: when the
  *      mechanism is dead, it produces no observation, which is spelled exactly
  *      like a run that honestly consumed nothing. A live host is the only
@@ -170,7 +171,7 @@ const hookCommand = (subcommand: string, statePath: string): string =>
   [TSX_BIN, HOOK_MAIN, subcommand, statePath, String(PROBE_FENCE)].map((part) => JSON.stringify(part)).join(" ");
 
 /** The binding-composed session settings, in the shape the binding writes them. */
-function writeSettings(input: {
+export function writeSettings(input: {
   readonly bindingDir: string;
   readonly statePath: string;
   readonly allow: readonly string[];
@@ -180,6 +181,9 @@ function writeSettings(input: {
     permissions: { allow: [...input.allow] },
     hooks: {
       PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: hookCommand("pre-tool-use", input.statePath) }] }],
+      PostToolUse: [
+        { matcher: "Read", hooks: [{ type: "command", command: hookCommand("post-tool-use", input.statePath) }] },
+      ],
       ...(input.sessionEndMarker === undefined
         ? {}
         : {
@@ -515,7 +519,7 @@ export async function qualifyClaudeCodeSession(): Promise<LiveQualification> {
             : undefined;
           probes.push({
             id: "projection-consumption-observed",
-            question: "does an ordinary delivery turn cause the binding to record that the run named a receipted projection entry?",
+            question: "does an ordinary delivery turn cause the binding to record the host's completed exact Read of the receipted workflow source?",
             answer: recorded
               ? `yes — the interceptor recorded ${JSON.stringify(entry)}`
               : "no — no observation was recorded, so no delivery of this host can ever be counted in the milestone's comparison set",
