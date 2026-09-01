@@ -16,7 +16,7 @@ const baseInput = (overrides: Partial<ManagedStatusInput> = {}): ManagedStatusIn
   assertionSource: {
     availability: "available",
     detail: "os-native",
-    lanes: { sensitiveApprovals: "available", operatorConfirmations: "available", mergeReadyLane: "available" },
+    lanes: { sensitiveApprovals: "available", operatorConfirmations: "fail_closed_no_qualified_producer", mergeReadyLane: "available" },
   },
   quarantinedWorkspaces: [],
   candidate: { treeSha: "b".repeat(40), branchRefValue: "refs/heads/delivery" },
@@ -31,6 +31,12 @@ const baseInput = (overrides: Partial<ManagedStatusInput> = {}): ManagedStatusIn
   policyRequiredInterruptions: 1,
   operatorInterventions: 0,
   ...overrides,
+});
+
+const fixtureConfirmationSource = (): ManagedStatusInput["assertionSource"] => ({
+  availability: "available",
+  detail: "confirmation-fixture",
+  lanes: { sensitiveApprovals: "available", operatorConfirmations: "available", mergeReadyLane: "available" },
 });
 
 describe("the typed status model", () => {
@@ -189,7 +195,11 @@ describe("an action is never named where the operation would refuse", () => {
   it("withholds every FENCE-CARRYING operation while a takeover is required", () => {
     // The bound task is gone and its fence is superseded, so every operation
     // that carries one refuses; the takeover is the real next action.
-    const status = composeManagedStatus(baseInput({ hostActivity: "unknown", resume: "takeover-required" }));
+    const status = composeManagedStatus(baseInput({
+      hostActivity: "unknown",
+      resume: "takeover-required",
+      assertionSource: fixtureConfirmationSource(),
+    }));
     expect(status.authorizedNextActions).not.toContain("submitStageResult");
     expect(status.authorizedNextActions).toContain("presentTakeover");
     // Nothing named here may be an operation that carries a fence.
@@ -227,6 +237,7 @@ describe("an action is never named where the operation would refuse", () => {
         hostActivity: "unknown",
         resume: "takeover-required",
         pendingDecision: { requestKind: "waiver", criterionId: "c1", actorId: "actor-a", candidateTreeSha: "b".repeat(40) },
+        assertionSource: fixtureConfirmationSource(),
       }),
     );
     expect(status.authorizedNextActions).not.toContain("recordApprovalRequest");
@@ -259,7 +270,7 @@ describe("pending decisions and interruption", () => {
           detail: "no interactive context",
           lanes: {
             sensitiveApprovals: "fail_closed_no_assertion_source",
-            operatorConfirmations: "available",
+            operatorConfirmations: "fail_closed_no_qualified_producer",
             mergeReadyLane: "available",
           },
         },
@@ -268,9 +279,18 @@ describe("pending decisions and interruption", () => {
     expect(status.authorizedNextActions).not.toContain("consumeWaiver");
   });
 
-  it("offers the takeover presentation when resuming needs one", () => {
-    const status = composeManagedStatus(baseInput({ hostActivity: "unknown", resume: "takeover-required" }));
+  it("offers takeover only when resuming needs one and the confirmation fixture is active", () => {
+    const status = composeManagedStatus(baseInput({
+      hostActivity: "unknown",
+      resume: "takeover-required",
+      assertionSource: fixtureConfirmationSource(),
+    }));
     expect(status.authorizedNextActions).toContain("presentTakeover");
+  });
+
+  it("withholds takeover when production has no qualified confirmation producer", () => {
+    const status = composeManagedStatus(baseInput({ hostActivity: "unknown", resume: "takeover-required" }));
+    expect(status.authorizedNextActions).not.toContain("presentTakeover");
   });
 
   it("offers cancellation finalization once cancellation was requested", () => {

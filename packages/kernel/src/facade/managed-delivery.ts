@@ -24,13 +24,12 @@
  * a model-visible surface, a closed channel, a consumed or expired challenge,
  * or a wrong echo refuses exactly as in production.
  *
- * RESUME. This host is graded Tier 2: graceful SessionEnd reports honest
- * `paused`, and resume is ALWAYS an operator-authorized takeover into a fresh
- * host-created worktree reconstructed from the last trusted commit — never
- * same-worktree reuse. The takeover confirmation binds the superseded fence,
- * the expected journal revision, and the target base commit, and consumption
- * rejects on any mismatch. The single policy-required authorization is
- * counted as an interruption, never as an operator intervention.
+ * RESUME. Graceful SessionEnd evidence can report honest `paused`, but this
+ * host is currently graded Tier 0 because production has no qualified
+ * pre-registration confirmation producer. The confirmation fixture proves
+ * fresh-worktree takeover semantics, including fence, revision, and target
+ * commit binding; production takeover remains unavailable until the missing
+ * producer is qualified.
  */
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
@@ -1746,8 +1745,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (binding.activeCompositionProfile !== "confirmation-fixture") {
       return refuse(
         "interactive_channel_required",
-        "Production confirmations complete only on the binding's interactive channel, which this facade slice does not render.",
-        "Run qualification under the confirmation-fixture profile, or use the interactive facade once it lands.",
+        "Production confirmations fail closed because this host has no qualified binding-owned producer.",
+        "Qualify a host-native producer before enabling production contract confirmation or takeover.",
       );
     }
     const pending: PendingConfirmation = {
@@ -3032,6 +3031,15 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
               detail: probe.detail,
               lanes: assertionLaneAvailability({ hostNative: false, osNative: false }),
             };
+      }
+      // The durable file channel is qualification-only. Production has no
+      // qualified producer and status must not advertise a takeover that the
+      // facade is guaranteed to refuse.
+      if (currentBinding?.activeCompositionProfile === "confirmation-fixture") {
+        assertionView = {
+          ...assertionView,
+          lanes: { ...assertionView.lanes, operatorConfirmations: "available" },
+        };
       }
 
       const dispositions = views.filter((view) => view.kind === "workspace.disposition.recorded");

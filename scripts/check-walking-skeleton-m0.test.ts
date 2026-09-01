@@ -32,13 +32,16 @@ interface M0Record {
 const record = JSON.parse(readFileSync(path.join(REPO_ROOT, "qualifications", "walking-skeleton-m0.json"), "utf8")) as M0Record;
 
 describe("the walking-skeleton milestone record", () => {
-  it("carries a decidable gate verdict with every criterion met", () => {
+  it("stops on the one unmet production-confirmation criterion", () => {
     expect(record.schemaVersion).toBe("walking-skeleton-m0/1");
     expect(["proceed", "stop"]).toContain(record.gateVerdict.decision);
-    expect(record.gateVerdict.decision).toBe("proceed");
+    expect(record.gateVerdict.decision).toBe("stop");
     expect(record.gateVerdict.criteria.length).toBeGreaterThan(0);
+    const unmet = record.gateVerdict.criteria.filter((criterion) => criterion.outcome === "unmet");
+    expect(unmet).toHaveLength(1);
+    expect(unmet[0]?.statement).toMatch(/production lane.*qualified.*operator-confirmation producer/iu);
     for (const criterion of record.gateVerdict.criteria) {
-      expect(criterion.outcome, criterion.statement).toBe("met");
+      expect(["met", "unmet"], criterion.statement).toContain(criterion.outcome);
       expect(["live", "fixture"], criterion.statement).toContain(criterion.leg);
     }
   });
@@ -51,7 +54,7 @@ describe("the walking-skeleton milestone record", () => {
   it("binds the proof to the graded host at its recorded tier and the fixture profile", () => {
     const host = record.hosts[0];
     expect(host?.hostId).toBe("claude-code");
-    expect(host?.tier).toBe(2);
+    expect(host?.tier).toBe(0);
     // The graded capability record is the authority the tier must match.
     const graded = JSON.parse(
       readFileSync(path.join(REPO_ROOT, "qualifications", "host-admission-capabilities.json"), "utf8"),

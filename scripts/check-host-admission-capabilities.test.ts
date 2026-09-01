@@ -290,7 +290,7 @@ describe("host-admission capability record document", () => {
       ["capabilities.gracefulLifecycleEvents", "unverified"],
       ["capabilities.grantIntegrityAgainstCandidatePlantedSettings", "holds"],
       ["capabilities.terminationProvenanceWithDescendantTeardown", "unverified"],
-      ["grade", "unverified"],
+      ["grade", "withdrawn"],
       ["probes.discoveryScopingExclusivity", "withdrawn"],
       ["probes.gracefulTeardown", "unverified"],
     ]);
@@ -330,11 +330,10 @@ describe("host-admission capability record document", () => {
     // SET IS PINNED WITH ITS OUTCOMES, not just its names — dropping a block
     // fails, and so does promoting an unreached claim to a holding one or
     // demoting a holding one. The asymmetry with the other host is the finding
-    // worth protecting: this host's grade re-verifies as `holds` where the
-    // other's could not be re-observed at all, because `codex sandbox` runs a
-    // command under the same seatbelt policy with no model and no session,
-    // and the Tier 1 floor is exactly what that surface decides. The two
-    // entries that stay `unverified` are the two that need a real turn.
+    // worth protecting: the sandbox capabilities re-verify where the other's
+    // could not be re-observed, but the GRADE is withdrawn because sandbox
+    // evidence cannot substitute for the missing confirmation producer. The
+    // two entries that stay `unverified` are the two that need a real turn.
     const cx = hostById.get("codex-cli");
     const outcomes = new Map<string, string>(
       slotsOn(cx).map((slot) => [slot.context.replace(`${cx.hostId}.`, "").replace(" reverification", ""), slot.entry.reverification.outcome]),
@@ -345,14 +344,13 @@ describe("host-admission capability record document", () => {
       ["capabilities.gracefulLifecycleEvents", "holds"],
       ["capabilities.readOnlyInspection", "holds"],
       ["capabilities.terminationProvenanceWithDescendantTeardown", "unverified"],
-      ["grade", "holds"],
+      ["grade", "withdrawn"],
       ["probes.approvalAssertionSource", "holds"],
       ["probes.discoveryScopingExclusivity", "holds"],
       ["probes.gracefulTeardown", "unverified"],
     ]);
     expect(cx.grade.reverification.hostVersion).not.toBe(cx.hostVersion);
-    // A re-taken tier must have been driven, not re-read.
-    expect(cx.grade.reverification.kind).toBe("live-probe");
+    expect(cx.grade.reverification.outcome).toBe("withdrawn");
   });
 
   it("names the entries it did not re-observe instead of letting silence cover them", () => {
@@ -475,20 +473,11 @@ describe("host-admission capability record document", () => {
     expect(claim.reverification.scope, "the scope states where this result stops applying").toMatch(
       /bounded to out-of-workspace paths OUTSIDE the system temporary directory/u,
     );
-    // And the boundary has to reach the TIER VERDICT, not sit only in the
-    // entry beneath it. The verdict is the slot a consumer reads to decide
-    // whether the mutation floor holds; a caveat one level down is a caveat
-    // that will not be read by whoever acts on the tier.
-    // Matched on the clause that STATES the boundary, polarity included: the
-    // method names the directory more than once, so a loose match survives
-    // both the clause being rewritten away and its verdict being negated in
-    // place.
+    // The sandbox claim remains bounded, but it no longer props up a Tier 1
+    // verdict: isolated operator confirmation is independently absent.
     const grade = hostById.get("codex-cli").grade.reverification;
-    expect(grade.method, "the tier verdict carries the boundary its floor was re-established under").toMatch(
-      /re-established for out-of-workspace paths OUTSIDE the system temporary directory only/u,
-    );
-    // And the consequence an operator has to act on, not just the caveat.
-    expect(grade.method, "the tier verdict states what the boundary costs").toMatch(/gets no scoping/iu);
+    expect(grade.outcome).toBe("withdrawn");
+    expect(grade.method).toMatch(/no qualified producer/iu);
   });
 
   it("cannot grade Tier 3 over a surviving background child", () => {
@@ -504,7 +493,8 @@ describe("host-admission capability record document", () => {
     expect(cx.probes.gracefulTeardown.answer).toMatch(/^no/u);
     // Positive teardown evidence alone must not produce a Tier 3 claim while
     // lifecycle events remain unexercised on the app-server surface.
-    expect(cx.grade.tier).toBe(1);
+    expect(cx.grade.tier).toBe(0);
+    expect(cx.capabilities.isolatedOperatorConfirmationChannel.status).toBe("unsupported");
     expect(cx.capabilities.sameWorktreeResume.status).toBe("ungraded");
   });
 
@@ -660,7 +650,7 @@ describe("the delivery-lane binding position", () => {
     // module fails the rule above, which is the point.
     const cx = hostById.get("codex-cli");
     expect(cx.deliveryLaneBinding.status).toBe("absent");
-    expect(cx.grade.tier, "the capabilities are graded even though the lane is not").toBeGreaterThanOrEqual(1);
+    expect(cx.grade.tier, "no delivery binding or confirmation producer means Tier 0").toBe(0);
     // The carve-out that a sub-Tier-1 second host runs as capability
     // verification only must not be read as manufacturing a lane. Matched with
     // the qualifying clause, because "does not create a lane" alone survives
@@ -780,7 +770,7 @@ describe("frozen admission fixtures", () => {
     }
   });
 
-  it("assertion-source degradation disables only the sensitive set", () => {
+  it("reports assertion-source and qualified-confirmation-producer gaps independently", () => {
     for (const c of fixtures.laneCases) {
       expect(assertionLaneAvailability(c.sources), c.id).toEqual(c.expect);
     }

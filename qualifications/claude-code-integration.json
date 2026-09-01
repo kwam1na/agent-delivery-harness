@@ -1,22 +1,22 @@
 {
   "schemaVersion": "claude-code-integration/1",
   "description": "Qualification record for the Claude Code-native delivery integration's two layers: the trusted model-external binding that applies and attests the grant, workspace, fence, and run-pinned projection BEFORE admission, and the in-session projection that reads checkpoints, consumes immutable context, and submits normalized results AFTER it. Live legs were driven against a real authenticated Claude Code session by the qualification harness, never by the product. Product-owned properties are proven by in-process sensors named here. Nothing is claimed beyond what ran.",
-  "recordedAt": "2026-09-01T05:17:16Z",
+  "recordedAt": "2026-09-01T12:45:12Z",
   "platform": "macOS 15.6.1 arm64",
   "host": {
     "hostId": "claude-code",
     "hostVersion": "2.1.97",
-    "tier": 2,
+    "tier": 0,
     "admissionSurface": "session-scoped --settings composed by the binding (grant-derived permission rules, strict fail-closed OS sandbox, model-external PreToolUse interceptor, exact-Read PostToolUse observation hook, SessionEnd lifecycle hook) with --restricted and --setting-sources set to the empty selection, so every ambient scope is excluded and the binding's digest-bound settings file is the session's only settings source",
     "reverification": {
       "kind": "recorded-observation",
       "hostVersion": "2.1.252",
-      "outcome": "unverified",
+      "outcome": "withdrawn",
       "surface": "authenticated claude -p with --restricted, exact tool grant, empty ambient setting sources, sandbox.enabled=true, failIfUnavailable=true, allowUnsandboxedCommands=false, excludedCommands=[], and exact filesystem allow/deny rules on macOS Seatbelt",
-      "method": "the current strict admission surface and filesystem boundary remain established by the retained Seatbelt characterization. This candidate's authenticated exact-Read leg additionally used the existing binding composer and its returned --restricted, digest-bound strict-sandbox settings, empty ambient setting sources, and exact tool grant to prove the PostToolUse observation wiring. The other five host-behavior probes retain their historical configurations and provenance, so this callback-focused refresh does not silently re-grade the host tier.",
-      "observedAt": "2026-09-01T05:16:31Z",
-      "reason": "the callback-focused authenticated lane proves projection consumption, not a new full-profile tier grade",
-      "scope": "the strict filesystem admission surface remains current at 2.1.252; the new exact-Read PostToolUse observation is recorded separately below and does not widen same-workspace resume."
+      "method": "the former Tier 2 verdict is withdrawn because its Tier 1 floor treated fixture-proven echo decisions as a production confirmation producer. The strict sandbox and exact-Read evidence remain established for their own capabilities, but the sandbox is composed only after contract confirmation and cannot authenticate the pre-registration operator origin that is missing.",
+      "observedAt": "2026-09-01T12:45:00Z",
+      "reason": "no production-qualified binding-owned confirmation producer exists before contract registration",
+      "scope": "the host tier only; the strict filesystem, projection-consumption, lifecycle, and teardown observations retain their separately stated evidence and limits."
     }
   },
   "terminationProvenance": {
@@ -30,7 +30,7 @@
     "descendantTeardown": "unverified",
     "resumeEligibility": "fresh-worktree-only",
     "sameWorkspaceResume": "closed",
-    "tierVerdict": "Tier 2. Tier 1 mutation floor and Tier 2 graceful lifecycle events are live-probed on this host version. Tier 3 is REFUSED: a detached background child survived a clean session end in both the admission spike and this unit's own live lane, so descendant teardown is unverified, same-workspace resume stays gated, and operator-authorized takeover into a fresh worktree remains the designed — not degraded — resume path.",
+    "tierVerdict": "Tier 0. Read-only inspection remains supported, but Tier 1 is refused because no production-qualified binding-owned confirmation producer exists before contract registration. The lifecycle and teardown evidence still requires fresh-worktree-only resume once a delivery can be registered; it cannot promote the host past the missing Tier 1 floor.",
     "grammarEnforcement": "the honesty rule lives in the frozen payload grammar, not in a caller: an unverified descendant teardown may only ever carry fresh-worktree-only resume, so a journal entry cannot record a Tier 3 claim this host does not support",
     "entrypoint": "the trusted host-runtime lifecycle integration only — the SessionEnd hook the binding wires, and the facade operation it drives. No model-callable tool can reach it, and the operation is absent from the CLI's session-facing command surface.",
     "gradeSource": "the graded capability record carried inside the pinned generation (qualifications/host-admission-capabilities.json), keyed on host id and exact host version. The facade operation takes no teardown parameter, the binding state file carries no teardown field, and every doubt — unreadable record, ungraded version, tier below 3, or a capability entry that is not `supported` — resolves to `unverified`, which can only narrow resume eligibility. The record is inside the pinned generation's digest closure, which the canonical recheck verifies before the read, so a session cannot edit it without fencing the delivery into security_blocked first."
@@ -256,6 +256,6 @@
   ],
   "knownLimitations": [
     "The commonGitAuthorityPathProtected claim is supported-with-required-admission-flags on Claude Code 2.1.252 only. A host version that cannot apply the exact sandbox settings, silently falls back, permits an unsandboxed retry, or widens the filesystem grant is not admitted; there is no direct-API or weaker-host fallback.",
-    "The callback-focused 2.1.252 lane did not re-grade the full strict-sandbox lifecycle tier. Same-workspace resume therefore remains closed and operator-authorized takeover into a fresh worktree is required."
+    "The callback-focused 2.1.252 lane did not establish a pre-registration confirmation producer. Production registration and takeover remain unavailable; the fixture-only fresh-worktree takeover proof does not widen that lane."
   ]
 }

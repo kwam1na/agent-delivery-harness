@@ -1,10 +1,16 @@
 {
   "schemaVersion": "walking-skeleton-m0/1",
   "description": "The thin one-handoff walking-skeleton proof — the milestone's decidable kill-switch gate. One already-scoped contract, one disposable git repository, one installed confirmation-fixture composition, and the full checkpoint path plan -> implement -> validate -> review -> admit -> record -> merge-ready, exercised twice: LIVE against real Claude Code host tasks launched by the qualification harness (never by the product), and IN-PROCESS by the disposable-repository scenario sensor driving the same facade, binding, journal, and evidence loop with the planted failures the milestone names. Every claim below states which leg proved it; nothing is claimed beyond what ran.",
-  "recordedAt": "2026-08-30T14:33:01Z",
+  "recordedAt": "2026-09-01T12:45:12Z",
   "gateVerdict": {
-    "decision": "proceed",
+    "decision": "stop",
     "criteria": [
+      {
+        "statement": "the production lane has a qualified binding-owned operator-confirmation producer before contract registration",
+        "outcome": "unmet",
+        "leg": "fixture",
+        "evidence": "the echo evaluator and disposable confirmation-fixture channel are qualified, but neither Claude nor Codex has a production-qualified pre-registration producer; the production facade fails closed"
+      },
       {
         "statement": "an already-scoped contract accepted inside a host task reaches merge-ready without operator stage choreography",
         "outcome": "met",
@@ -15,10 +21,10 @@
         "statement": "ending the task after an intermediate checkpoint and resuming in a fresh task replays no accepted work",
         "outcome": "met",
         "leg": "live",
-        "evidence": "the first task ended cleanly after the validating -> reviewing checkpoint; SessionEnd recorded honest Tier 2 paused; the fresh task resumed at reviewing with plan and implement stage results durable exactly once"
+        "evidence": "the first task ended cleanly after the validating -> reviewing checkpoint; SessionEnd recorded an honest paused lifecycle observation; the fresh fixture task resumed at reviewing with plan and implement stage results durable exactly once"
       },
       {
-        "statement": "resume at the graded floor is one operator-authorized takeover through the facade channel into a fresh worktree from the last trusted commit, not counted as an intervention",
+        "statement": "the confirmation fixture proves one operator-authorized takeover into a fresh worktree from the last trusted commit, not counted as an intervention",
         "outcome": "met",
         "leg": "live",
         "evidence": "one takeover authorization consumed on the binding-owned fixture channel; fresh worktree on takeover-2 at the last trusted commit; fence 2 superseded fence 1; interruption counter 2, intervention counter 0"
@@ -35,7 +41,7 @@
     {
       "hostId": "claude-code",
       "hostVersion": "2.1.97",
-      "tier": 2,
+      "tier": 0,
       "admission": "session-scoped --settings composed by the binding (grant-derived permission allow rules, model-external PreToolUse interceptor, SessionEnd lifecycle hook) with --setting-sources set to the empty selection, so candidate-writable scopes are excluded and the binding's digest-bound settings file is the session's only settings source"
     }
   ],
@@ -69,7 +75,7 @@
         },
         {
           "phase": "interruption",
-          "ran": "clean host end after an intermediate checkpoint; the model-external SessionEnd hook appended activity.observed paused (Tier 2 trusted lifecycle evidence); the delivery checkpoint did not move"
+          "ran": "clean host end after an intermediate checkpoint; the model-external SessionEnd hook appended activity.observed paused as retained lifecycle evidence; the delivery checkpoint did not move"
         },
         {
           "phase": "takeover resume",
@@ -96,7 +102,7 @@
         { "id": "candidate-rewrites-sensor", "statement": "the candidate rewrites its tracked sensor to always pass, and the trusted-base copy still governs" },
         { "id": "planted-reviewer-failure", "statement": "a planted review finding loops through remediation and a fresh aligned review" },
         { "id": "same-context-reinvocation", "statement": "same-context lens relabeling cannot synthesize reviewer independence; every counted reviewer requires a distinct host invocation receipt" },
-        { "id": "interruption-resume", "statement": "termination leaves the delivery paused (Tier 2) safely and a fresh task resumes from the last trustworthy checkpoint with no replayed work" },
+        { "id": "interruption-resume", "statement": "termination leaves the fixture delivery paused safely and a fresh task resumes from the last trustworthy checkpoint with no replayed work" },
         { "id": "model-minted-confirmation", "statement": "model-minted contract and takeover confirmations are refused (model-visible surface, orphaned channel)" },
         { "id": "exact-candidate-mutation", "statement": "a tampered receipted projection byte fails closed at the next canonical recheck with a typed blocker" },
         { "id": "typed-blocker-visibility", "statement": "one typed blocker is readable through the facade without inspecting internal module commands" },

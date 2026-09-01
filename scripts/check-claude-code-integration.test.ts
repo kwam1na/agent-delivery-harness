@@ -176,8 +176,9 @@ describe("the record's legs", () => {
     expect(here.hostVersion, "both records name the same installed version").toBe(there.hostVersion);
     expect(here.hostVersion, "and it is not the version the entry is keyed at").not.toBe(record.host.hostVersion);
     expect(here.outcome).toBe(there.outcome);
-    // The tier was not re-observed, so both must say why rather than restate it.
-    expect(here.outcome).toBe("unverified");
+    // The former tier was withdrawn, so both must name the missing floor.
+    expect(here.outcome).toBe("withdrawn");
+    expect(here.reason).toMatch(/no production-qualified.*confirmation producer/iu);
     expect(here.reason.length, "the integration record names why the tier went unreached").toBeGreaterThan(0);
     expect(here.observedAt, "an observation cannot postdate the record carrying it").toMatch(SPINE_INSTANT);
     expect(here.observedAt <= record.recordedAt).toBe(true);

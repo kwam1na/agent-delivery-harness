@@ -474,20 +474,20 @@ export interface AssertionSourceAvailability {
 export interface LaneAvailability {
   /** Waiver confirmation, update, rollback, trust-state maintenance, merge/deploy approvals. */
   readonly sensitiveApprovals: "available" | "fail_closed_no_assertion_source";
-  /** Contract confirmation and takeover need only the isolated facade channel. */
-  readonly operatorConfirmations: "available";
+  /** Contract confirmation and takeover fail closed until a producer is qualified. */
+  readonly operatorConfirmations: "available" | "fail_closed_no_qualified_producer";
   readonly mergeReadyLane: "available";
 }
 
 /**
- * Losing every assertion source disables the sensitive set and nothing else:
- * operator confirmations arrive on the installation's interactive facade
- * channel, and the merge-ready mutation lane continues.
+ * Sensitive approval and operator-confirmation availability are independent:
+ * a native assertion source does not manufacture a qualified confirmation
+ * producer, while losing either lane leaves merge-ready adjudication intact.
  */
 export function assertionLaneAvailability(sources: AssertionSourceAvailability): LaneAvailability {
   return {
     sensitiveApprovals: sources.hostNative || sources.osNative ? "available" : "fail_closed_no_assertion_source",
-    operatorConfirmations: "available",
+    operatorConfirmations: "fail_closed_no_qualified_producer",
     mergeReadyLane: "available",
   };
 }

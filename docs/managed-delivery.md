@@ -295,8 +295,11 @@ rather than a constant in the source:
 | 2 | Trusted graceful lifecycle events. |
 | 3 | Graceful termination provenance with verified descendant teardown — the grade that would enable same-worktree resume. |
 
-Today `claude-code` is graded tier 2 and `codex-cli` tier 1. No host in the
-record carries tier 3, which is why resume is a takeover everywhere.
+Today both `claude-code` and `codex-cli` are graded tier 0: neither has a
+production-qualified operator-confirmation producer before registration, and
+Codex also has no delivery-lane binding. Production registration and takeover
+therefore remain unavailable; the disposable confirmation fixture proves only
+the shared decision semantics.
 
 The consuming code keys on the **affirmative** grade rather than on the absence
 of a negative one. Reading "not ungraded" as "capable" would invent a capability

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "host-admission-capabilities/1",
   "description": "Graded capability record for trusted host-control admission, per exact host version, against the capability ladder: Tier 0 read-only inspection only; Tier 1 mutation floor (deny-until-attested grant enforcement, worktree-materialized digest-receipted projection, binding attestation, isolated operator-confirmation channel, fence-revocation cancellation, fresh-worktree-only resume); Tier 2 trusted graceful lifecycle events; Tier 3 graceful termination provenance with verified descendant teardown, enabling same-worktree resume. Facts probed on a real host carry live-probe or recorded-observation provenance; properties the product binding owns on any host are proven by the frozen fixtures in fixtures/host-admission-fixtures.json against the model-external admission validator.",
-  "gradedAt": "2026-09-01T02:35:00Z",
+  "gradedAt": "2026-09-01T12:45:12Z",
   "platform": "macOS 15.6.1 arm64",
   "verificationKinds": [
     "live-probe",
@@ -14,17 +14,17 @@
       "hostVersion": "2.1.97",
       "admissionSurface": "trusted plugin/hook/session-admission path: session-scoped settings (--settings JSON, --setting-sources scope selection), permission allow/deny rules, PreToolUse/SessionEnd/Stop hooks, per-session plugin roots (--plugin-dir), worktree checkouts read their own project settings",
       "grade": {
-        "tier": 2,
-        "reason": "Tier 1 mutation floor: host-enforceable and live-probed (deny-until-attested interceptor; candidate-scope exclusion at admission); Tier 2: SessionEnd lifecycle hook live-probed firing on clean non-interactive end; Tier 3: refused \u2014 a detached background child survived a clean host end, so descendant teardown is unverified and same-worktree resume stays closed.",
+        "tier": 0,
+        "reason": "Tier 0 only: read-only inspection remains supported, but Tier 1 requires an isolated operator-confirmation channel and no production-qualified Claude producer exists before contract registration. The qualified echo evaluator and fixture channel do not establish operator origin in production; stronger grant and lifecycle capabilities cannot promote a host past the missing floor.",
         "reverification": {
           "kind": "recorded-observation",
           "hostVersion": "2.1.252",
-          "outcome": "unverified",
+          "outcome": "withdrawn",
           "surface": "Claude Code 2.1.252 admission surface: current --help/settings validation plus the authenticated strict-sandbox characterization recorded under commonGitAuthorityPathProtected",
-          "method": "the strict admission surface was re-enumerated and live-probed at 2.1.252, including --restricted, the sandbox settings, exact allow/deny filesystem controls, and empty ambient setting sources. The TIER VERDICT ITSELF WAS NOT RE-OBSERVED. Both lifecycle legs that decide it — a SessionEnd hook firing on a clean non-interactive end, and a detached background child's liveness after that end — remain on their 2.1.97 observation. The current filesystem probe therefore updates the mutation floor without silently re-grading graceful lifecycle or descendant teardown.",
-          "observedAt": "2026-09-01T02:32:00Z",
-          "reason": "the deciding legs are only reachable by launching an authenticated host session, which is an operator-only lane",
-          "scope": "the host tier only. The strict filesystem floor is current through commonGitAuthorityPathProtected. Lifecycle and descendant teardown remain unverified at 2.1.252, which narrows resume. The entries not re-observed are readOnlyInspection, denyUntilAttestedGrant, worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume, sameWorktreeResume, and approvalAssertionSource."
+          "method": "the former Tier 2 verdict is withdrawn: its Tier 1 floor treated fixture-proven echo decisions as a production operator-confirmation producer. No qualified producer exists before contract registration, when the model sandbox boundary has not yet been composed. The separately recorded strict filesystem and lifecycle observations remain evidence for their own capabilities, but they cannot restore the missing Tier 1 floor.",
+          "observedAt": "2026-09-01T12:45:00Z",
+          "reason": "the architecture correction invalidates the prior floor without needing another host session",
+          "scope": "the host tier only. Isolated operator confirmation is now explicitly fail-closed; every other capability retains its own stated evidence and limits. The entries not re-observed are readOnlyInspection, denyUntilAttestedGrant, worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume, sameWorktreeResume, and approvalAssertionSource."
         }
       },
       "capabilities": {
@@ -93,8 +93,8 @@
           }
         },
         "isolatedOperatorConfirmationChannel": {
-          "status": "supported",
-          "mechanism": "product-owned facade outside the model-visible tool and shell surface; confirmation operations are denied inside every grant and completion requires echoing a single-use challenge on the same open interactive binding-owned channel",
+          "status": "unsupported",
+          "mechanism": "the pure echo decision and grant exclusion are qualified, but no production Claude binding-owned producer is qualified before contract registration; the fixture channel is qualification-only and cannot establish production operator origin",
           "verification": {
             "kind": "fixture",
             "refs": [
@@ -221,7 +221,7 @@
         "approvalAssertionSource": {
           "hostNative": "absent \u2014 interactive permission prompts only; no OS biometric/password integration and no API for a hook or prompt to require OS-level authentication",
           "osNative": "available on this platform \u2014 LocalAuthentication.framework, /usr/bin/security, and /usr/bin/bioutil present",
-          "gating": "sensitive approvals use the OS-native maintenance-lane provider; operator confirmations and the merge-ready mutation lane are unaffected",
+          "gating": "sensitive approvals use the OS-native maintenance-lane provider; operator confirmations independently fail closed without a qualified producer; the merge-ready mutation lane is unaffected",
           "verification": {
             "kind": "recorded-observation",
             "surface": "v2.1.97 permissions/hooks documentation; local platform inspection",
@@ -266,16 +266,16 @@
       "hostVersion": "0.147.0",
       "admissionSurface": "app-server task-and-turn admission path: JSON-RPC over stdio (initialize handshake verified live); thread/start and turn/start carry sandbox policy, permissions, approval policy, approvals reviewer, and cwd per thread and per turn; approval requests route to the client via execCommandApproval / applyPatchApproval / item-level request-approval server requests",
       "grade": {
-        "tier": 1,
-        "reason": "Tier 1 mutation floor: OS-level sandbox enforcement live-probed model-free (read-only denies writes; workspace-write scopes writes to the workspace; .git denied inside the workspace) and per-thread/per-turn grant application is a documented protocol surface; Tier 2 lifecycle notifications and Tier 3 descendant teardown have positive evidence (teardown live-probed on the exec surface, lifecycle events protocol-documented) but the app-server admission surface itself was not driven through a live turn in this spike, so Tier 2-3 stay provisional rather than graded.",
+        "tier": 0,
+        "reason": "Tier 0 only: read-only inspection remains supported, but Tier 1 requires an isolated operator-confirmation channel. Codex has neither a delivery-lane binding nor a qualified native confirmation producer, and fixture-proven echo decisions cannot manufacture either one.",
         "reverification": {
-          "kind": "live-probe",
+          "kind": "recorded-observation",
           "hostVersion": "0.151.0",
-          "outcome": "holds",
-          "surface": "codex --version, codex sandbox --permission-profile in a disposable git repository, codex app-server generate-json-schema --experimental --out, and a codex app-server initialize handshake over stdio, all with CODEX_HOME pointed at a disposable directory so no operator configuration was read or written",
-          "method": "the tier verdict was re-taken, not restated. UNLIKE THE CLAUDE CODE GRADE, WHICH COULD NOT BE RE-OBSERVED AT ALL, the deciding leg of this one is reachable without a model: the Tier 1 mutation floor rests on OS sandbox enforcement, and `codex sandbox` executes an arbitrary command under that same seatbelt policy with no session and no authentication. Every clause of the Tier 1 reason was re-driven at 0.151.0 and each held, WITH ONE BOUNDARY THAT BELONGS ON THE VERDICT AND NOT ONLY IN THE ENTRY BENEATH IT: the workspace-scoping clause was re-established for out-of-workspace paths OUTSIDE the system temporary directory only. Under it the sandboxed write succeeded, because the seatbelt policy grants that directory as a writable root independently of the workspace. A delivery workspace materialized under the temporary directory therefore gets no scoping from the control this floor rests on, which is a deployment constraint rather than a defect in the grading, and the full probe is recorded under denyUntilAttestedGrant. The Tier 2-3 clauses were NOT re-driven and are unchanged in what they claim: they still say the app-server admission surface was never taken through a live turn, which remains true, because doing so requires an authenticated host this product must never launch. So the tier is 1 for the same reason it was 1, re-established rather than carried forward, and the provisional legs stay provisional.",
-          "observedAt": "2026-08-31T20:08:00Z",
-          "scope": "the tier verdict and the Tier 1 mutation-floor clauses beneath it. Eight slots in this host entry carry their own outcome: four capability entries (readOnlyInspection, denyUntilAttestedGrant, gracefulLifecycleEvents, terminationProvenanceWithDescendantTeardown), the common-Git authority position re-observed separately ahead of this re-grade, and all three mandated probes. THE ENTRIES NOT RE-OBSERVED ARE NAMED RATHER THAN LEFT TO INFERENCE: sameWorktreeResume, which was explicitly deferred at grading and remains ungraded, and the five product-owned fixture-verified entries (worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume), which are host-version-independent by construction — they name fixture cases rather than a host observation, so there is no host version for them to have gone stale against."
+          "outcome": "withdrawn",
+          "surface": "capability-record reconciliation against the frozen Tier 1 definition and the absence of a Codex delivery binding or qualified confirmation producer",
+          "method": "the former Tier 1 verdict is withdrawn. Its sandbox and admission observations remain valid in their own capability entries, but Tier 1 also requires isolated operator confirmation. Codex has no delivery binding and no qualified producer, so fixture evidence for the pure echo decision cannot satisfy the production floor.",
+          "observedAt": "2026-09-01T12:45:00Z",
+          "scope": "the host tier only. The sandbox, common-Git, lifecycle, and teardown entries retain their separately bounded evidence; isolated operator confirmation is explicitly fail-closed and is not fixture-derived support. The entries not re-observed are worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume, and sameWorktreeResume."
         }
       },
       "capabilities": {
@@ -362,8 +362,8 @@
           }
         },
         "isolatedOperatorConfirmationChannel": {
-          "status": "supported",
-          "mechanism": "product-owned facade; confirmation operations excluded from every grant and denied by the interceptor",
+          "status": "unsupported",
+          "mechanism": "the pure echo decision and grant exclusion are host-neutral, but no Codex delivery binding or qualified native producer exists; fixture evidence does not create either one",
           "verification": {
             "kind": "fixture",
             "refs": [
@@ -449,7 +449,7 @@
         "gracefulTeardown": {
           "question": "does a background child survive a clean host end?",
           "answer": "no \u2014 a detached nohup child was gone after the clean end of a codex exec session; the host tears down command descendants",
-          "consequence": "Tier 3 remains reachable for this host once graceful provenance is exercised on the app-server admission surface; not claimed from this spike alone",
+          "consequence": "The teardown observation remains useful, but no higher tier is reachable until Codex has both a delivery-lane binding and the missing production-qualified confirmation producer.",
           "verification": {
             "kind": "live-probe",
             "surface": "codex exec -s workspace-write (v0.147.0), disposable directory",
@@ -470,7 +470,7 @@
         "approvalAssertionSource": {
           "hostNative": "absent \u2014 approval requests route to the app-server client for a decision, which is a channel the binding serves, not an authenticated operator assertion; no OS biometric/password integration is exposed",
           "osNative": "available on this platform \u2014 LocalAuthentication.framework, /usr/bin/security, and /usr/bin/bioutil present",
-          "gating": "sensitive approvals use the OS-native maintenance-lane provider; operator confirmations and the merge-ready mutation lane are unaffected",
+          "gating": "sensitive approvals use the OS-native maintenance-lane provider; operator confirmations independently fail closed without a qualified producer; the merge-ready mutation lane is unaffected",
           "verification": {
             "kind": "recorded-observation",
             "surface": "app-server protocol schema (approval server requests); local platform inspection",
@@ -638,11 +638,11 @@
     },
     {
       "id": "no-assertion-source-degrades-only-sensitive-ops",
-      "statement": "with no approval-assertion source, sensitive operations disable while operator confirmations and the merge-ready lane continue",
+      "statement": "sensitive approvals and operator confirmations fail closed independently when their respective source or qualified producer is absent, while the merge-ready lane continues",
       "proof": "fixture",
       "refs": [
-        "no-assertion-source-disables-only-the-sensitive-set",
-        "os-native-source-serves-sensitive-approvals"
+        "missing-assertion-source-and-confirmation-producer-fail-closed",
+        "os-native-assertion-source-does-not-create-confirmation-producer"
       ]
     },
     {
