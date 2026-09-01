@@ -418,6 +418,17 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     expect(verdict.status).toBe("incomplete");
   });
 
+  it("refuses a gate record that lowers the frozen baseline mix and total", () => {
+    const record = gateRecord([entry("shadow-code", "code")]);
+    record["comparisonSetRequirement"] = { mix: { code: 1 }, total: 1 };
+
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+
+    expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.shadow).toBeNull();
+  });
+
   it("refuses a category the baseline mix does not name at all", () => {
     // The other half of the mix rule. Two `code` entries trip only the
     // over-the-cap branch; a category the baseline never heard of reaches the

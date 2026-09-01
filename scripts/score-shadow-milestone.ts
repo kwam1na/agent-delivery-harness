@@ -557,8 +557,33 @@ export function scoreShadowMilestone(
 
   // ── Size and mix ───────────────────────────────────────────────────────────
   const requirement = gateRecord?.comparisonSetRequirement ?? {};
-  const requiredMix: Record<string, unknown> = requirement.mix ?? {};
-  const requiredTotal = Number(requirement.total ?? NaN);
+  const baselineMix: Record<string, unknown> =
+    typeof baseline?.mix === "object" && baseline.mix !== null && !Array.isArray(baseline.mix) ? baseline.mix : {};
+  const requiredMix: Record<string, unknown> = Object.fromEntries(
+    Object.entries(baselineMix).filter(([category]) => category !== "total"),
+  );
+  const requiredTotal = Number(baselineMix["total"] ?? NaN);
+  const declaredTotal = Number(requirement["total"] ?? NaN);
+  const declaredMix: Record<string, unknown> =
+    typeof requirement.mix === "object" && requirement.mix !== null && !Array.isArray(requirement.mix)
+      ? requirement.mix
+      : {};
+  const requiredCategories = Object.keys(requiredMix).sort();
+  const declaredCategories = Object.keys(declaredMix).sort();
+  const requirementMatchesBaseline =
+    requirement["total"] === baselineMix["total"] &&
+    requiredCategories.length === declaredCategories.length &&
+    requiredCategories.every(
+      (category, index) => category === declaredCategories[index] && declaredMix[category] === requiredMix[category],
+    );
+
+  if (!requirementMatchesBaseline) {
+    incomplete.push({
+      code: "comparison_set_mix_mismatch",
+      message:
+        "the gate record's comparison-set requirement does not exactly match the frozen baseline mix and total; the baseline is the scoring authority and a gate record cannot lower or reshape it",
+    });
+  }
 
   if (preM1BlockersCleared && countedDeliveryIds.length === 0) {
     // NOT a failure and NOT "nothing consumed". The measurement has not been
@@ -567,6 +592,12 @@ export function scoreShadowMilestone(
       code: "no_observed_consumption",
       message:
         "no delivery has been observed consuming a projection, so there is no comparison set to score; this is the absence of a measurement, not a measured absence",
+    });
+  } else if (preM1BlockersCleared && !Number.isFinite(declaredTotal)) {
+    incomplete.push({
+      code: "comparison_set_incomplete",
+      message:
+        "the gate record declares no readable comparison-set total; the frozen baseline remains authoritative, but a missing declaration cannot be treated as agreement with it",
     });
   } else if (preM1BlockersCleared && !(countedDeliveryIds.length >= requiredTotal)) {
     // Negated `>=` so an unparseable total falls to the incomplete side.
