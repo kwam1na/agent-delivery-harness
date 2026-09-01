@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { digestCanonical, sha256Hex } from "../digest.ts";
-import { createManagedDeliveryFacade } from "./managed-delivery.ts";
+import { compiledAdopterPolicyBindingDigest, createManagedDeliveryFacade, type ResolvedPersonaSource } from "./managed-delivery.ts";
 import { disposablePolicyBinding } from "./disposable-repository.fixture.ts";
 
 describe("compiled adopter policy binding", () => {
@@ -20,17 +20,17 @@ describe("compiled adopter policy binding", () => {
 
   it("accepts adopter-specific grants, lenses, sensor identity, and authority", () => {
     const original = disposablePolicyBinding("adopter-shaped-repository");
-    const personaBytes: Readonly<Record<string, string>> = {
-      ...original.personaBytes,
-      "persona.outcome-correctness": "# Adopter outcome lens\n",
-      "persona.testing-policy": "# Adopter testing lens\n",
+    const personaSources: Readonly<Record<string, ResolvedPersonaSource>> = {
+      ...original.personaSources,
+      "persona.outcome-correctness": { origin: "composition" as const, bytes: "# Adopter outcome lens\n", digest: sha256Hex("# Adopter outcome lens\n") },
+      "persona.testing-policy": { origin: "composition" as const, bytes: "# Adopter testing lens\n", digest: sha256Hex("# Adopter testing lens\n") },
     };
     const { policyDigest: _policyDigest, ...snapshotWithoutDigest } = original.compiledPolicy.snapshot;
     const snapshotBody = {
       ...snapshotWithoutDigest,
       reviewLenses: original.compiledPolicy.snapshot.reviewLenses.map((lens) => ({
         ...lens,
-        personaDigest: sha256Hex(personaBytes[lens.personaId] as string),
+        personaDigest: personaSources[lens.personaId]!.digest,
       })),
     };
     const snapshot = { ...snapshotBody, policyDigest: digestCanonical(snapshotBody) };
@@ -53,7 +53,7 @@ describe("compiled adopter policy binding", () => {
         repoDir: "/tmp/adopter-shaped-repository",
         policyBinding: {
           compiledPolicy,
-          personaBytes,
+          personaSources,
           sensor: { capabilityId: "sensor.adopter", trustedBasePath: "tools/adopter-sensor.mjs" },
           outcomeAuthorities: ["repository-owner"],
         },
@@ -61,5 +61,35 @@ describe("compiled adopter policy binding", () => {
         hostVersion: "test",
       }),
     ).not.toThrow();
+  });
+
+  it("includes every native binding field in the canonical drift identity", () => {
+    const binding = disposablePolicyBinding();
+    const baseline = compiledAdopterPolicyBindingDigest(binding);
+    expect(compiledAdopterPolicyBindingDigest({ ...binding, outcomeAuthorities: ["different-owner"] })).not.toBe(baseline);
+    expect(
+      compiledAdopterPolicyBindingDigest({
+        ...binding,
+        sensor: { ...binding.sensor, trustedBasePath: "tools/other-sensor.mjs" },
+      }),
+    ).not.toBe(baseline);
+    expect(
+      compiledAdopterPolicyBindingDigest({
+        ...binding,
+        personaSources: {
+          ...binding.personaSources,
+          "persona.testing-policy": {
+            ...binding.personaSources["persona.testing-policy"]!,
+            bytes: "# drifted\n",
+          },
+        },
+      }),
+    ).not.toBe(baseline);
+    expect(
+      compiledAdopterPolicyBindingDigest({
+        ...binding,
+        compiledPolicy: { ...binding.compiledPolicy, policyGeneration: binding.compiledPolicy.policyGeneration + 1 },
+      }),
+    ).not.toBe(baseline);
   });
 });

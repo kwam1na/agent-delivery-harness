@@ -219,18 +219,21 @@ export function disposableHarnessConfig(): HarnessConfig {
 
 /** The explicit disposable call-site binding for facade characterization. */
 export function disposablePolicyBinding(repositoryId = "disposable-skeleton"): CompiledAdopterPolicyBinding {
-  const personaBytes = Object.fromEntries(
-    Object.entries(DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS).map(([personaId, relativePath]) => [personaId, PERSONA_MARKDOWN[relativePath] as string]),
+  const personaSources = Object.fromEntries(
+    Object.entries(DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS).map(([personaId, trustedBasePath]) => {
+      const bytes = PERSONA_MARKDOWN[trustedBasePath] as string;
+      return [personaId, { origin: "repository" as const, bytes, digest: sha256Hex(bytes), trustedBasePath }];
+    }),
   );
   return {
     compiledPolicy: compileDisposableCompiledPolicy({
       repositoryId,
       productTrustRevocationEpoch: 0,
       repositoryAuthorityRevocationEpoch: 0,
-      personaBytes,
+      personaBytes: Object.fromEntries(Object.entries(personaSources).map(([personaId, source]) => [personaId, source.bytes])),
       admission: CONFIG_INPUT,
     }),
-    personaBytes,
+    personaSources,
     sensor: {
       capabilityId: DISPOSABLE_SENSOR_CAPABILITY.descriptor.capabilityId,
       trustedBasePath: DISPOSABLE_SENSOR_CAPABILITY.trustedBasePath,

@@ -124,6 +124,7 @@ export interface DeliveryJournalState {
   readonly expectedRevision: number;
   readonly lastFence: number;
   readonly policyDigest?: string;
+  readonly policyBindingDigest?: string;
   readonly authorityEpoch?: number;
   readonly generationDigest?: string;
   /** The contract identity in force, once a confirmed amendment created one. */
@@ -144,6 +145,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
   let expectedRevision = 0;
   let lastFence = 0;
   let policyDigest: string | undefined;
+  let policyBindingDigest: string | undefined;
   let authorityEpoch: number | undefined;
   let generationDigest: string | undefined;
   let contractId: string | undefined;
@@ -278,6 +280,8 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
       }
       case "policy.snapshot.bound": {
         policyDigest = payload["policyDigest"] as string;
+        const bindingDigest = payload["policyBindingDigest"];
+        if (bindingDigest !== undefined) policyBindingDigest = bindingDigest as string;
         authorityEpoch = payload["repositoryAuthorityEpoch"] as number;
         break;
       }
@@ -467,6 +471,7 @@ export function reduceDeliveryJournal(entries: readonly unknown[]): ReduceDelive
     lastFence,
     lastActiveState,
     ...(policyDigest === undefined ? {} : { policyDigest }),
+    ...(policyBindingDigest === undefined ? {} : { policyBindingDigest }),
     ...(authorityEpoch === undefined ? {} : { authorityEpoch }),
     ...(generationDigest === undefined ? {} : { generationDigest }),
     ...(contractId === undefined ? {} : { contractId }),

@@ -878,6 +878,8 @@ export {
   type ManagedDeliveryFacade,
   type ManagedInstallation,
   type CompiledAdopterPolicyBinding,
+  type ResolvedPersonaSource,
+  compiledAdopterPolicyBindingDigest,
 } from "./facade/managed-delivery.ts";
 export {
   evaluateMigrationConsumption,

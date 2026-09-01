@@ -275,7 +275,7 @@ export interface ManagedInstallation {
 }
 
 export interface CreateFacadeInput {
-  /** Any checkout of the disposable repository (root or linked worktree). */
+  /** Any checkout of the adopter repository (root or linked worktree). */
   readonly repoDir: string;
   /** The adopter's already-compiled policy and its resolved native bindings. */
   readonly policyBinding: CompiledAdopterPolicyBinding;
@@ -291,7 +291,7 @@ export interface CreateFacadeInput {
  */
 export interface CompiledAdopterPolicyBinding {
   readonly compiledPolicy: CompiledPolicy;
-  readonly personaBytes: Readonly<Record<string, string>>;
+  readonly personaSources: Readonly<Record<string, ResolvedPersonaSource>>;
   readonly sensor: {
     readonly capabilityId: string;
     readonly trustedBasePath: string;
@@ -299,11 +299,18 @@ export interface CompiledAdopterPolicyBinding {
   readonly outcomeAuthorities: readonly string[];
 }
 
+export type ResolvedPersonaSource =
+  | { readonly origin: "composition"; readonly bytes: string; readonly digest: string }
+  | { readonly origin: "repository"; readonly bytes: string; readonly digest: string; readonly trustedBasePath: string };
+
+export const compiledAdopterPolicyBindingDigest = (binding: CompiledAdopterPolicyBinding): string => digestCanonical(binding);
+
 interface DeliveryMeta {
   readonly contract: AcceptedContract;
   readonly policy: PolicySnapshot;
   readonly generationDigest: string;
   readonly intakeId: string;
+  readonly policyBindingDigest: string;
 }
 
 /**
@@ -317,6 +324,7 @@ interface IntakeMeta {
   readonly policy: PolicySnapshot;
   readonly generationDigest: string;
   readonly nonce?: string;
+  readonly policyBindingDigest: string;
 }
 
 /** The four-member verified release projection every typed stage result binds. */
@@ -1091,13 +1099,17 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     throw new Error("the adopter's trusted sensor binding must be a repository-relative path");
   }
   for (const lens of compiledPolicy.snapshot.reviewLenses) {
-    const bytes = policyBinding.personaBytes[lens.personaId];
-    if (bytes === undefined || sha256Hex(bytes) !== lens.personaDigest) {
+    const source = policyBinding.personaSources[lens.personaId];
+    if (source === undefined || source.digest !== sha256Hex(source.bytes) || source.digest !== lens.personaDigest) {
       throw new Error(`the adopter's resolved persona bytes do not match ${lens.personaId}`);
+    }
+    if (source.origin === "repository" && (path.isAbsolute(source.trustedBasePath) || source.trustedBasePath.split("/").includes(".."))) {
+      throw new Error(`the repository persona source for ${lens.personaId} must be a repository-relative path`);
     }
   }
   const config = admissionVerdict.config;
   const policy = compiledPolicy.snapshot;
+  const policyBindingDigest = compiledAdopterPolicyBindingDigest(policyBinding);
   const checkpointGrantFor = (stageId: string) => {
     const grant = stageGrants.get(stageId);
     if (grant === undefined) throw new Error(`the adopter's compiled repository policy has no ${stageId} checkpoint grant`);
@@ -1309,6 +1321,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     const read = await store.read();
     if (!read.ok) return refuse("journal_unreadable", "The delivery journal is unreadable.", "Inspect the durable journal file.");
     const views = viewsOf(read.entries);
+    const recordedPolicyBindingDigest = reduced.state.policyBindingDigest;
+    if (
+      meta.policyBindingDigest !== policyBindingDigest ||
+      recordedPolicyBindingDigest !== policyBindingDigest ||
+      meta.policyBindingDigest !== recordedPolicyBindingDigest
+    ) {
+      return refuse(
+        "policy_binding_mismatch",
+        "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+        "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+      );
+    }
     const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
 
     const pinned = reduced.state.generationDigest;
@@ -1854,18 +1878,33 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   }
 
   /**
-   * Reads every reviewer charter the fixed policy's lenses reference out of
-   * the trusted pre-run base. A charter the base does not carry is absent,
-   * and the compiler then rejects its lens reference before any mutation
-   * rather than at first review.
+   * Resolves repository-owned reviewer sources from the trusted pre-run base;
+   * composition-owned sources were already authenticated and are carried
+   * forward without assuming an adopter repository path.
    */
   const trustedBaseCharters = async (
-    _baseRef: string,
-  ): Promise<{ readonly personaBytes: Readonly<Record<string, string>> }> => ({
-    // The adopter resolved these bytes while compiling the policy. The facade
-    // verifies their digests at construction and never guesses repository paths.
-    personaBytes: policyBinding.personaBytes,
-  });
+    baseRef: string,
+  ): Promise<{ readonly personaBytes: Readonly<Record<string, string>> } | FacadeFailure> => {
+    const personaBytes: Record<string, string> = {};
+    for (const lens of policy.reviewLenses) {
+      const source = policyBinding.personaSources[lens.personaId];
+      if (source === undefined) return refuse("reviewer_charter_missing", `No resolved reviewer charter exists for ${lens.personaId}.`, "Bind every activated review lens to an authenticated persona source.");
+      if (source.origin === "composition") {
+        personaBytes[lens.personaId] = source.bytes;
+        continue;
+      }
+      const shown = await exec.run({ command: "git", args: ["show", `${baseRef}:${source.trustedBasePath}`], cwd: input.repoDir });
+      if (shown.code !== 0 || shown.stdout !== source.bytes) {
+        return refuse(
+          "reviewer_charter_moved",
+          `The trusted pre-run base ${baseRef} does not carry the exact reviewer charter ${lens.personaId} bound by policy.`,
+          "Rebind the repository-owned persona from the exact trusted base bytes before presenting the contract.",
+        );
+      }
+      personaBytes[lens.personaId] = shown.stdout;
+    }
+    return { personaBytes };
+  };
 
   /**
    * The presentation-time validation both lanes run before anything reaches
@@ -1903,6 +1942,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (trust === undefined) {
       return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
     }
+    if (policy.repositoryId !== contract.repository.repositoryId) {
+      return refuse(
+        "policy_repository_mismatch",
+        "The compiled adopter policy belongs to a different repository than this contract.",
+        "Compile and bind the repository policy for the contract's repository identity.",
+      );
+    }
+    if (policy.productTrustRevocationEpoch !== trust.revocationEpoch) {
+      return refuse(
+        "policy_trust_epoch_mismatch",
+        "The compiled adopter policy was not produced under the current product trust epoch.",
+        "Recompile and bind the repository policy under the current trust state.",
+      );
+    }
 
     // The qualification profile's use-time binding at registration: a fixture
     // installation registers deliveries only in its receipt-listed disposable
@@ -1924,10 +1977,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         "Qualification runs happen in the disposable repositories named at install time; production repositories need a production installation.",
       );
     }
-    // The repository's reviewer charters, read from the TRUSTED PRE-RUN BASE:
-    // the compiled lens declaration pins these bytes, so a candidate edit to a
-    // tracked charter is a proposal for a future delivery and cannot rewrite
-    // the charter that judges this one.
+    // Resolve every authenticated reviewer source before confirmation.
     const charters = await trustedBaseCharters(contract.repository.baseRef);
     if (!("personaBytes" in charters)) return charters;
     const withinPolicy = checkContractWithinPolicy(contract, policy);
@@ -1972,7 +2022,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (!rendered.ok) return rendered;
     await writeOwned(
       await intakePath(intakeId, ".meta.json"),
-      `${JSON.stringify({ contract, policy: validated.policy, generationDigest: validated.generationDigest, nonce } satisfies IntakeMeta)}\n`,
+      `${JSON.stringify({ contract, policy: validated.policy, generationDigest: validated.generationDigest, nonce, policyBindingDigest } satisfies IntakeMeta)}\n`,
     );
     return { ok: true, nonce, normalizedContractDigest, channelPath: rendered.channelPath };
   };
@@ -1980,7 +2030,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   interface AcceptancePreflight {
     readonly binding: { readonly registeringInstallationId: string; readonly activeCompositionProfile: string };
     readonly sensorBytes: string;
-    /** The repository-owned reviewer charters, by identity, read from the base. */
+    /** The authenticated reviewer charter bytes, by identity. */
     readonly personaBytes: Readonly<Record<string, string>>;
     /** Read HERE, not after the terminal transition: see the preflight's contract below. */
     readonly trust: ProductTrustState;
@@ -2020,6 +2070,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     if (trust === undefined) {
       return refuse("trust_state_unreadable", "The installation trust store is absent or corrupt.", "Absent trust state fails closed; reinstall or repair.");
     }
+    if (meta.policyBindingDigest !== compiledAdopterPolicyBindingDigest(policyBinding)) {
+      return refuse(
+        "policy_binding_mismatch",
+        "The presented intake was bound to different adopter policy material.",
+        "Re-present the contract with the exact compiled adopter policy binding.",
+      );
+    }
+    if (meta.policy.repositoryId !== meta.contract.repository.repositoryId) {
+      return refuse(
+        "policy_repository_mismatch",
+        "The presented policy belongs to a different repository than the contract.",
+        "Re-present the contract with its repository's compiled policy.",
+      );
+    }
     const generation = await loadPinnedGeneration({
       installationPath: input.installation.installationPath,
       generationDigest: meta.generationDigest,
@@ -2029,6 +2093,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         "trust_ineligible",
         "The generation bound at presentation is not execution-eligible under current local trust state.",
         "Restore local trust state through the operator maintenance lane, then retry acceptance.",
+      );
+    }
+    if (meta.policy.productTrustRevocationEpoch !== trust.revocationEpoch) {
+      return refuse(
+        "policy_trust_epoch_mismatch",
+        "The presented policy was not produced under the current product trust epoch.",
+        "Re-present the contract with a policy compiled under the current trust state.",
       );
     }
     const withinPolicy = checkContractWithinPolicy(meta.contract, meta.policy);
@@ -2055,11 +2126,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     }
     const charters = await trustedBaseCharters(meta.contract.repository.baseRef);
     if (!("personaBytes" in charters)) return charters;
-    // The charter digests were pinned into the policy at presentation, so a
-    // base whose charters moved since then no longer matches what this
-    // delivery would judge against. Caught HERE, where a refusal is
-    // retryable, rather than registering a delivery whose read-only copy can
-    // never satisfy its own pinned policy.
+    // Repository-owned source bytes were compared to the trusted base above;
+    // composition-owned bytes remain independent of adopter repository paths.
     for (const lens of meta.policy.reviewLenses) {
       if (sha256Hex(charters.personaBytes[lens.personaId] ?? "") === lens.personaDigest) continue;
       return refuse(
@@ -2103,6 +2171,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     });
     await appendEntry(store, deliveryId, "policy.snapshot.bound", {
       policyDigest: meta.policy.policyDigest,
+      policyBindingDigest,
       repositoryAuthorityEpoch: meta.policy.repositoryAuthorityRevocationEpoch,
     });
     await appendEntry(store, deliveryId, "trust.epoch.observed", {
@@ -2116,7 +2185,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     }
     await writeOwned(
       path.join(dir, "delivery.json"),
-      `${JSON.stringify({ contract: meta.contract, policy: meta.policy, generationDigest: meta.generationDigest, intakeId } satisfies DeliveryMeta)}\n`,
+      `${JSON.stringify({ contract: meta.contract, policy: meta.policy, generationDigest: meta.generationDigest, intakeId, policyBindingDigest } satisfies DeliveryMeta)}\n`,
     );
     // Keep the exact adopter binding beside the product namespace pointer so
     // the CLI can recreate this facade without rediscovering policy paths.
@@ -2131,6 +2200,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         installationPath: input.installation.installationPath,
         receiptDir: input.installation.receiptDir,
         hostVersion: input.hostVersion,
+        policyBindingDigest,
       })}\n`,
     );
 
@@ -2809,6 +2879,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const read = await store.read();
       if (!reduced.ok || !read.ok) {
         return refuse("journal_rejected", "The durable journal does not reduce.", "Inspect the durable journal file.");
+      }
+      if (meta.policyBindingDigest !== policyBindingDigest || reduced.state.policyBindingDigest !== policyBindingDigest) {
+        return refuse(
+          "policy_binding_mismatch",
+          "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+          "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+        );
       }
       const views = viewsOf(read.entries);
       const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
@@ -4971,6 +5048,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const read = await store.read();
       if (!reduced.ok || !read.ok) {
         return refuse("journal_rejected", "The durable journal does not reduce.", "Inspect the durable journal file.");
+      }
+      if (meta.policyBindingDigest !== policyBindingDigest || reduced.state.policyBindingDigest !== policyBindingDigest) {
+        return refuse(
+          "policy_binding_mismatch",
+          "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+          "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+        );
       }
       if (reduced.state.state !== "security_blocked") {
         return refuse(

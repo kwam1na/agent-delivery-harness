@@ -497,6 +497,7 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "delivery/policy.snapshot.bound": table([
     { name: "policyDigest", check: sha256 },
     { name: "repositoryAuthorityEpoch", check: nonNegativeInt },
+    { name: "policyBindingDigest", check: sha256, required: false },
   ]),
   "delivery/generation.pinned": table([
     { name: "generationDigest", check: sha256 },
