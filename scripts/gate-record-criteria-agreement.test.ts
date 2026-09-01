@@ -57,6 +57,28 @@ function scorableSet() {
           projectionDigest: DIGEST,
           marker: { deliveryId: id, fence: 1, consumed: "generation-archive" },
         },
+        window: {
+          acceptedAt: "2026-08-30T11:00:00Z",
+          finalCandidateSha: "c".repeat(40),
+          externalVerification: {
+            outcome: "passed",
+            candidateSha: "c".repeat(40),
+            completedAt: "2026-08-30T11:16:20Z",
+            receipt: {
+              source: "delivery-journal/finish.line.recorded",
+              reference: "finish-line-result:" + "d".repeat(64),
+              digest: "e".repeat(64),
+            },
+          },
+          firstMergeReadyReportAfterExternalVerificationAt: "2026-08-30T11:16:40Z",
+          windowSeconds: 1000,
+          endpointEvidence: {
+            candidateSha: "c".repeat(40),
+            source: "managed-delivery-session-jsonl",
+            transcriptEventTimestamp: "2026-08-30T11:16:40.500Z",
+            jsonlRecordSha256: "f".repeat(64),
+          },
+        },
         score: {
           interventionCount: 0,
           policyRequiredInterruptionCount: 0,

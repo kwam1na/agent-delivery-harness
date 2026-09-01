@@ -463,7 +463,7 @@
     },
     {
       "id": "manual-choreography-baseline-frozen",
-      "statement": "The quantitative manual-choreography baseline (operator-intervention counts and blocked-versus-progressing wall-clock on one code, one docs, and one operations Athena delivery, scored on Claude Code under the plan's operator-intervention rubric) is frozen in qualifications/manual-choreography-baseline.json.",
+      "statement": "The quantitative manual-choreography baseline (operator-intervention counts and blocked-versus-progressing wall-clock from acceptance through the first merge-ready report after external verification on one code, one docs, and one operations Athena delivery, scored on Claude Code under the plan's operator-intervention rubric) is frozen in qualifications/manual-choreography-baseline.json.",
       "classification": "changed-by-this-plan",
       "verification": {
         "kind": "executable",

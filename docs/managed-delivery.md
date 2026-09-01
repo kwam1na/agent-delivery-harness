@@ -435,6 +435,34 @@ the comparison set; an absent or non-affirmative record excludes it silently.
 An empty measurement list therefore means *no shadow delivery has been observed
 consuming a projection* — never *no producer exists*.
 
+The gate record must also carry `openPreM1Blockers` explicitly. The scorer checks
+that field before it enumerates `deliveries`: a missing list or a non-empty list
+returns an incomplete verdict with `pre_m1_blockers_unresolved`, even when the
+record already contains three otherwise admissible deliveries. Only an explicit
+empty list establishes that the pre-M1 blockers are cleared.
+
+Every baseline and shadow score uses the same wall-clock boundary: acceptance
+through the **first merge-ready report after external verification** of the final
+candidate. A local `pr:athena` or other preparation-gate report before hosted
+checks does not close the window. Eventual merge and post-report observation or
+idle time do not extend it. The scorer requires each delivery's blocked and
+progressing seconds to fill that exact timestamp-derived window, so a planted
+post-report wait makes the record incomplete rather than diluting blocked share.
+The window also binds one final candidate SHA across the external-verification
+receipt and the immutable report record. The receipt carries its completion
+timestamp, durable source/reference, and digest; the report carries its exact
+transcript timestamp, source, and record hash. The report must follow
+verification, and the window endpoint must be the whole-second floor of that
+report timestamp.
+
+For a managed shadow delivery, the existing `finish.line.recorded` journal
+result and CLI result digest are the receipt source; the retained host transcript
+supplies the completion and first-report timestamps. The journal itself carries
+no trustworthy wall-clock timestamp. If either the journal digest or retained
+transcript evidence is unavailable, scoring fails closed as incomplete. The
+scorer does not synthesize a timestamp and this requirement introduces no new
+telemetry service or authority.
+
 `npm run score:milestone` reads this repository's frozen baseline and gate
 record; adding `--write` refreshes its repository-local verdict exactly as
 before. To score an adopter-owned record without copying either input, provide
