@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
-import { PROJECTION_DIR } from "../host/claude-code.ts";
+import { PROJECTION_DIR } from "../host/projection.ts";
 import { SHADOW_MILESTONE_GATE_RECORD_SPEC } from "../host/consumption-gate-record.ts";
 import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec-port.ts";
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
@@ -859,7 +859,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
       // record the exact read, after which the product only adjudicates it.
       await consumeProjection(session);
       expect(JSON.parse(readFileSync(authorityObservation, "utf8"))).toMatchObject({
-        source: "claude-code-post-tool-use-read/1",
+        spec: "projection-consumption-observation/1",
         deliveryId: session.deliveryId,
         fence: session.fence,
       });

@@ -18,13 +18,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PROJECTION_DIR, materializeProjection } from "./claude-code.ts";
+import { materializeProjection } from "./claude-code.ts";
+import { PROJECTION_DIR } from "./projection.ts";
 import {
   SHADOW_MILESTONE_GATE_RECORD_SPEC,
   emitProjectionConsumptionRecord,
-  PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
-  projectionConsumptionObservationFile,
 } from "./consumption-gate-record.ts";
+import {
+  PROJECTION_CONSUMPTION_OBSERVATION_SPEC,
+  projectionConsumptionObservationFile,
+} from "../projection-consumption-observation.ts";
 import { createExecPort } from "./exec-port.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -98,7 +101,7 @@ function observeConsumption(bench: Workbench, deliveryId: string, fence: number,
   writeFileSync(
     path.join(bench.bindingDir, projectionConsumptionObservationFile(fence)),
     `${JSON.stringify({
-      source: PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
+      spec: PROJECTION_CONSUMPTION_OBSERVATION_SPEC,
       deliveryId,
       fence,
       entry,
@@ -471,7 +474,38 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(planted.ok && !planted.emitted, JSON.stringify(planted)).toBe(true);
     expect(readFileSync(gateRecordPath, "utf8")).toBe(before);
 
-    // Even the qualified source is refused if its digest is not the
+    // The retired provider-specific envelope is not a second accepted
+    // spelling of the neutral contract, even when every run binding matches.
+    const receipt = JSON.parse(readFileSync(path.join(bench.bindingDir, "projection-receipt.json"), "utf8")) as {
+      projectionDigest: string;
+    };
+    writeFileSync(
+      path.join(bench.bindingDir, projectionConsumptionObservationFile(1)),
+      `${JSON.stringify({
+        source: "claude-code-post-tool-use-read/1",
+        deliveryId: "dlv-shadow-event-mismatch",
+        fence: 1,
+        entry: "workflows/delivery-v1.json",
+        canonicalProjectionPath: realpathSync(
+          path.join(bench.worktreeDir, PROJECTION_DIR, "workflows", "delivery-v1.json"),
+        ),
+        projectionDigest: receipt.projectionDigest,
+        hostInvocationId: "toolu_legacy_shape",
+        observedAt: "2026-08-30T12:00:00Z",
+      })}\n`,
+    );
+    const providerSpecific = await emitProjectionConsumptionRecord({
+      gateRecordPath,
+      worktreeDir: bench.worktreeDir,
+      bindingDir: bench.bindingDir,
+      deliveryId: "dlv-shadow-event-mismatch",
+      fence: 1,
+      category: "code",
+    });
+    expect(providerSpecific.ok && !providerSpecific.emitted, JSON.stringify(providerSpecific)).toBe(true);
+    expect(readFileSync(gateRecordPath, "utf8")).toBe(before);
+
+    // Even a neutral observation is refused if its digest is not the
     // receipt-reverified projection digest for this exact run.
     observeConsumption(bench, "dlv-shadow-event-mismatch", 1);
     const observationPath = path.join(bench.bindingDir, projectionConsumptionObservationFile(1));
