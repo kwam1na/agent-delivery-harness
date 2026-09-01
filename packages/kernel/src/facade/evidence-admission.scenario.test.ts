@@ -48,6 +48,7 @@ import {
   buildDisposableRepository,
   disposableHarnessConfig,
   disposablePolicyBinding,
+  disposablePolicyBindingForInstallation,
   fixtureProviderBindingCapability,
   fixtureProviderReview,
   ingestFixtureProviderReview,
@@ -143,6 +144,15 @@ afterAll(async () => {
 
 /** Registers one delivery and binds a fresh host-created worktree to it. */
 async function openDelivery(name: string): Promise<{ deliveryId: string; worktree: string; fence: number; workspaceId: string }> {
+  // Each call starts a NEW delivery. Recompile the disposable policy against
+  // the installation's current epoch; in-flight deliveries retain their
+  // original facade and binding for drift assertions.
+  facade = createManagedDeliveryFacade({
+    repoDir,
+    policyBinding: disposablePolicyBindingForInstallation(installationPath),
+    installation: { installationPath, receiptDir },
+    hostVersion: "2.1.97",
+  });
   const presented = await facade.presentContract({ contract: DISPOSABLE_CONTRACT, expiry: EXPIRY });
   expect(presented.ok, JSON.stringify(presented)).toBe(true);
   if (!presented.ok) throw new Error("unreachable");

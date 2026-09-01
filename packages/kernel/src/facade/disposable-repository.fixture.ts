@@ -218,7 +218,7 @@ export function disposableHarnessConfig(): HarnessConfig {
 }
 
 /** The explicit disposable call-site binding for facade characterization. */
-export function disposablePolicyBinding(repositoryId = "disposable-skeleton"): CompiledAdopterPolicyBinding {
+export function disposablePolicyBinding(repositoryId = "disposable-skeleton", productTrustRevocationEpoch = 0): CompiledAdopterPolicyBinding {
   const personaSources = Object.fromEntries(
     Object.entries(DISPOSABLE_PERSONA_TRUSTED_BASE_PATHS).map(([personaId, trustedBasePath]) => {
       const bytes = PERSONA_MARKDOWN[trustedBasePath] as string;
@@ -228,7 +228,7 @@ export function disposablePolicyBinding(repositoryId = "disposable-skeleton"): C
   return {
     compiledPolicy: compileDisposableCompiledPolicy({
       repositoryId,
-      productTrustRevocationEpoch: 0,
+      productTrustRevocationEpoch,
       repositoryAuthorityRevocationEpoch: 0,
       personaBytes: Object.fromEntries(Object.entries(personaSources).map(([personaId, source]) => [personaId, source.bytes])),
       admission: CONFIG_INPUT,
@@ -240,6 +240,15 @@ export function disposablePolicyBinding(repositoryId = "disposable-skeleton"): C
     },
     outcomeAuthorities: DISPOSABLE_OUTCOME_AUTHORITIES,
   };
+}
+
+/** Rebinds a NEW qualification delivery to the installation's current trust epoch. */
+export function disposablePolicyBindingForInstallation(
+  installationPath: string,
+  repositoryId = "disposable-skeleton",
+): CompiledAdopterPolicyBinding {
+  const trust = JSON.parse(readFileSync(path.join(installationPath, "trust", "product-trust.json"), "utf8")) as { revocationEpoch: number };
+  return disposablePolicyBinding(repositoryId, trust.revocationEpoch);
 }
 
 const git = (cwd: string, ...args: string[]): void => {
