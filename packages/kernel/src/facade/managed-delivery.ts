@@ -714,7 +714,7 @@ export interface ManagedDeliveryFacade {
     readonly nativeRunId: string;
     readonly finalPassId: string;
     readonly lensId: string;
-    /** Distinct read-only snapshot created and retired by the operator-owned host. */
+    /** Host-created snapshot outside model/reviewer writable roots; the trusted host owns its lifecycle. */
     readonly reviewWorkspaceDir: string;
     /** Instructions joined with trusted persona, contract, and sensor bytes by the binding. */
     readonly reviewInstructionsBytes: string;
@@ -3223,7 +3223,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         return refuse("provider_review_workspace_invalid", "The host-created review snapshot is absent or unresolved.", "Create a distinct linked review snapshot before preparing the handoff.");
       }
       if (reviewRoot === mutableRoot || reviewRoot.startsWith(`${mutableRoot}${path.sep}`) || mutableRoot.startsWith(`${reviewRoot}${path.sep}`)) {
-        return refuse("provider_review_workspace_invalid", "The review snapshot overlaps the mutable delivery worktree.", "Create a distinct read-only snapshot outside the delivery worktree's writable grant.");
+        return refuse("provider_review_workspace_invalid", "The review snapshot overlaps the mutable delivery worktree.", "Have the trusted operator-owned host create a distinct snapshot outside every model/reviewer writable root.");
       }
       const commonReview = await git(reviewRoot, "rev-parse", "--path-format=absolute", "--git-common-dir");
       const commonMutable = await git(mutableRoot, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -3332,6 +3332,11 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       }
       const handoff = stored.handoff;
       const currentTrust = await readTrust();
+      const trustEpochFailure = (): FacadeFailure => refuse(
+        "provider_trust_epoch_mismatch",
+        "The product trust revocation epoch advanced after this provider binding was prepared.",
+        "Discard this callback. Use the existing operator-authorized takeover into a fresh host-created workspace and prepare review again, or cancel this delivery and start a replacement.",
+      );
       if (!capabilityShape(invocationCapability) || invocationCapability.id !== stored.invocationCapability.id ||
         capabilityDigest({
           domain: "review-invocation",
@@ -3360,7 +3365,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         );
       }
       if (currentTrust === undefined || currentTrust.revocationEpoch !== handoff.productTrustRevocationEpoch) {
-        return refuse("provider_trust_epoch_mismatch", "The product trust revocation epoch advanced after this provider binding was prepared.", "Re-bind the workspace and prepare a fresh native review invocation.");
+        return trustEpochFailure();
       }
 
       const parsed = parseProviderReviewResult(resultBytes);
@@ -3394,11 +3399,42 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const normalizedResultBytes = `${JSON.stringify(result, null, 2)}\n`;
       const artifactDigest = sha256Hex(normalizedResultBytes);
       const providerRunKey = providerRunKeyOf(result);
+      const runSuspendedFailure = (): FacadeFailure => refuse(
+        "provider_result_run_suspended",
+        `Provider run ${result.provider.runId}/${result.provider.finalPassId} is suspended by a conflicting replay.`,
+        "Complete a coherent fresh run under new native run and final-pass identities.",
+      );
+      const ensureProviderRunSuspended = async (): Promise<{ readonly ok: true } | FacadeFailure> => {
+        // A conflict marker is itself journal-fenced. Two distinct conflicts
+        // may observe one revision; the loser reloads and appends against the
+        // next revision until THIS exact tuple is durably observable.
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const observed = await guarded.store.read();
+          if (!observed.ok) {
+            return refuse("journal_unreadable", "The delivery journal is unreadable while suspending a conflicted provider run.", "Inspect the durable journal file.");
+          }
+          if (suspendedProviderRunKeysOf(viewsOf(observed.entries)).has(providerRunKey)) return { ok: true };
+          const appended = await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
+            code: "review.result-replay-conflict",
+            summary: `handoff ${result.handoffId} was replayed with different provider-result bytes`,
+            providerRunKey,
+          });
+          if (!appended.ok) continue;
+        }
+        const observed = await guarded.store.read();
+        if (observed.ok && suspendedProviderRunKeysOf(viewsOf(observed.entries)).has(providerRunKey)) return { ok: true };
+        return refuse(
+          "journal_rejected",
+          `The conflict marker for provider run ${result.provider.runId}/${result.provider.finalPassId} could not be made durable.`,
+          "Reload the standing delivery journal; no result from this conflicted tuple may be accepted.",
+        );
+      };
       const replayAgainst = async (views: readonly JournalEntryView[]): Promise<
         | { readonly ok: true; readonly replay: "identical"; readonly disposition: "approved" | "changes_requested" }
         | FacadeFailure
         | undefined
       > => {
+        if (suspendedProviderRunKeysOf(views).has(providerRunKey)) return runSuspendedFailure();
         const existingAttempt = recordedProviderAttemptsOf(views).find(
           (candidate) => candidate.attemptId === result.reviewer.attemptId,
         );
@@ -3409,22 +3445,12 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           existingAttempt.personaDigest !== result.reviewer.personaDigest ||
           existingAttempt.artifactDigest !== artifactDigest;
         if (conflict) {
-          await appendEntry(guarded.store, deliveryId, "blocker.recorded", {
-            code: "review.result-replay-conflict",
-            summary: `handoff ${result.handoffId} was replayed with different provider-result bytes`,
-            providerRunKey,
-          });
+          const suspended = await ensureProviderRunSuspended();
+          if (!suspended.ok) return suspended;
           return refuse(
             "provider_result_replay_conflict",
             `Handoff ${result.handoffId} already has a different immutable result.`,
             "Treat the native run as conflicted and complete a fresh run under a new handoff.",
-          );
-        }
-        if (suspendedProviderRunKeysOf(views).has(providerRunKey)) {
-          return refuse(
-            "provider_result_run_suspended",
-            `Provider run ${result.provider.runId}/${result.provider.finalPassId} is suspended by a conflicting replay.`,
-            "Complete a coherent fresh run under new native run and final-pass identities.",
           );
         }
         const accepted = await acceptedProviderResultsOf(deliveryId, views);
@@ -3445,7 +3471,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (current === undefined) return refuse("no_candidate", "No candidate is checkpointed.", "Checkpoint a candidate first.");
       const captures = await captureProviderPair(workspace.worktreeDir, stored.reviewWorkspaceDir);
       if (!captures.ok) {
-        return refuseResult("provider_result_review_workspace_unavailable", "The mutable candidate or host-created review snapshot is missing or invalid at ingestion.", "Retain the exact read-only review snapshot until its native result is ingested.");
+        return refuseResult("provider_result_review_workspace_unavailable", "The mutable candidate or host-created review snapshot is missing or invalid at ingestion.", "The trusted operator-owned host must retain the exact reviewer-read-only snapshot until its native result is ingested.");
       }
       const mutableCapture = { candidate: captures.mutable };
       const capture = { candidate: captures.review };
@@ -3490,6 +3516,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           `The provider run root is unavailable: ${allocation.reason}.`,
           "Complete a fresh run with a safe native run identity.",
         );
+      }
+      const acceptanceTrust = await readTrust();
+      if (acceptanceTrust === undefined || acceptanceTrust.revocationEpoch !== handoff.productTrustRevocationEpoch) {
+        return trustEpochFailure();
       }
       // The normalized bytes may be written first, but do not exist as
       // accepted evidence until this ONE append succeeds. The journal entry is
