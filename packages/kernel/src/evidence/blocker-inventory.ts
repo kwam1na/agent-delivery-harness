@@ -43,6 +43,12 @@ export const DELIVERY_BLOCKER_REMEDIATIONS: Readonly<Record<string, string>> = O
     "Findings keep recurring; resolve them outside the loop — the bounded blocker exists so the loop cannot spin unobserved.",
   "review.floor-unmet":
     "Complete both mandatory lenses as distinct attempts with independently constructed contexts on the exact candidate.",
+  "review.provider-result-invalid":
+    "Have the qualified host binding emit a complete provider-review-result/1 envelope, then ingest a fresh native run.",
+  "review.result-replay-conflict":
+    "Treat the native run as conflicted and complete a fresh review under a new binding-owned handoff.",
+  "review.provider-result-unqualified":
+    "Complete one binding-owned native provider run over every mandatory lens on the exact current candidate.",
   "outcome.criterion-unverified":
     "Satisfy the criterion's sensor on the exact candidate, or carry an approved waiver for it, then re-validate.",
   "outcome.blanket-waiver":

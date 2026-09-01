@@ -66,6 +66,11 @@ import {
   mintGrantAttestation,
 } from "../packages/kernel/src/host/claude-code.ts";
 import { projectionConsumptionObservationFile } from "../packages/kernel/src/host/consumption-gate-record.ts";
+import {
+  formatQualificationFindings,
+  runProductQualification,
+  type NativeReviewInput,
+} from "./qualify-product.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
@@ -89,6 +94,53 @@ export interface LiveQualification {
 
 const hostVersion = (): string =>
   execFileSync("claude", ["--version"], { encoding: "utf8" }).trim().split(/\s+/)[0] ?? "unknown";
+
+/**
+ * Operator-owned native review callback for the packed product lane. The
+ * facade prepared the handoff and output path before this function is called;
+ * this test harness alone launches Claude and writes its unmodified envelope.
+ */
+export function runClaudeCodeProviderReview(input: NativeReviewInput): Promise<void> {
+  process.stderr.write(
+    `claude provider review ${input.repositoryId}/${input.handoff.reviewer.lensId}: handoff ${input.handoffPath}\n` +
+      `claude provider review ${input.repositoryId}: native result ${input.nativeResultPath}\n`,
+  );
+  return new Promise((resolve, reject) => {
+    execFile(
+      "claude",
+      [
+        "-p",
+        input.handoff.promptContextBytes,
+        "--restricted",
+        "--output-format",
+        "json",
+        "--session-id",
+        input.handoff.nativeSessionId,
+        // A reviewer receipt must describe observation, not a second editing
+        // agent. Keep the authenticated native host's own tool boundary, but
+        // expose only its read tools so the disposable qualification root and
+        // candidate cannot be mutated by the review invocation.
+        "--tools",
+        "Read,Grep,Glob",
+        "--permission-mode",
+        "dontAsk",
+        "--settings",
+        input.settingsPath,
+        "--setting-sources",
+        "",
+      ],
+      { cwd: input.worktreeDir, timeout: 600_000, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error !== null) {
+          reject(new Error(`Claude Code provider review failed for ${input.repositoryId}: ${stderr.trim() || error.message}`));
+          return;
+        }
+        writeFileSync(input.nativeResultPath, stdout, { mode: 0o600 });
+        resolve();
+      },
+    );
+  });
+}
 
 /**
  * Runs one non-interactive session in a disposable directory with the
@@ -503,6 +555,22 @@ async function main(): Promise<number> {
         `Set ${OPT_IN_VARIABLE}=1 to opt in. It is never part of \`npm run check\`.\n`,
     );
     return 2;
+  }
+  if (process.argv.includes("--provider-delivery")) {
+    const result = await runProductQualification({
+      sourceRoot: REPO_ROOT,
+      hostVersion: hostVersion(),
+      nativeReview: runClaudeCodeProviderReview,
+      retainWorkDir: true,
+      log: (line) => process.stdout.write(`  ${line}\n`),
+    });
+    if (result.findings.length > 0) {
+      process.stderr.write(`qualify-claude-code-session: provider delivery has ${result.findings.length} finding(s)\n`);
+      process.stderr.write(`${formatQualificationFindings(result.findings)}\n`);
+      return 1;
+    }
+    process.stdout.write(`${JSON.stringify(result.observations, null, 2)}\n`);
+    return 0;
   }
   const qualification = await qualifyClaudeCodeSession();
   process.stdout.write(`${JSON.stringify(qualification, null, 2)}\n`);

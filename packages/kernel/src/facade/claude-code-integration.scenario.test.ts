@@ -43,6 +43,7 @@ import {
   GREET_RIGHT,
   buildDisposableRepository,
   disposableHarnessConfig,
+  fixtureProviderBindingCapability,
   typedStageResultBytes,
 } from "./disposable-repository.fixture.ts";
 
@@ -200,6 +201,7 @@ async function openSession(attestationExpiry: string = EXPIRY): Promise<Session>
     hostTaskId: `host-${sequence}`,
     observedAt: NOW,
     attestationExpiry,
+    providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
   });
   must(bound, "bindWorkspace");
   return { deliveryId: confirmed.deliveryId, worktree, fence: bound.fence };
@@ -579,6 +581,7 @@ describe("a stale session and a fresh one", () => {
       hostTaskId: `host-${sequence}-fresh`,
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(session.deliveryId),
     });
     must(rebound, "rebind");
     expect(rebound.fence).toBeGreaterThan(session.fence);

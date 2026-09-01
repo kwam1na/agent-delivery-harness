@@ -35,6 +35,7 @@ import {
   DISPOSABLE_CONTRACT,
   buildDisposableRepository,
   disposableHarnessConfig,
+  fixtureProviderBindingCapability,
 } from "./disposable-repository.fixture.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -152,6 +153,7 @@ const bindFreshWorktree = async (facade: ManagedDeliveryFacade, deliveryId: stri
     hostTaskId: `host-task-${worktreeCounter}`,
     observedAt: NOW,
     attestationExpiry: EXPIRY,
+    providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
   });
 };
 

@@ -25,6 +25,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { DISPOSABLE_REVIEW_LENSES } from "../packages/kernel/src/policy/disposable.ts";
 import {
   DISPOSABLE_SPECS,
   FORBIDDEN_PRODUCT_EXECUTABLES,
@@ -53,6 +54,37 @@ interface ProductQualificationRecord {
     };
   };
   packedSurfaceFindings: { observation: string; disposition: string }[];
+  authenticatedHostAcceptance: {
+    statement: string;
+    driver: string;
+    command: string;
+    providerVersion: string;
+    generationDigest: string;
+    findings: number;
+    repositories: {
+      repositoryId: string;
+      providerRunId: string;
+      finalPassId: string;
+      authorityRoot: string;
+      manifestPath: string;
+      manifestSha256: string;
+      trackedRecordPath: string;
+      trackedRecordSha256: string;
+      trackedCommit: string;
+      reviews: {
+        lensId: string;
+        nativeSessionId: string;
+        handoffPath: string;
+        authorityBindingPath: string;
+        nativeResultPath: string;
+        nativeResultSha256: string;
+        promptContextDigest: string;
+        contextDigest: string;
+        attemptId: string;
+        acceptedArtifactDigest: string;
+      }[];
+    }[];
+  };
   fixtureLeg: { sensors: { property: string; sensor: string }[] };
   notProvenHere: string[];
   knownLimitations: string[];
@@ -62,7 +94,7 @@ const record = JSON.parse(
   readFileSync(path.join(REPO_ROOT, "qualifications", "product-qualification.json"), "utf8"),
 ) as ProductQualificationRecord;
 
-const LEGS = ["packed", "fixture"];
+const LEGS = ["packed", "fixture", "live"];
 
 describe("the product qualification record", () => {
   it("carries a decidable gate verdict in which every criterion is met and names its leg", () => {
@@ -100,6 +132,43 @@ describe("the product qualification record", () => {
     // Every declared repository delivered under its own gate configuration.
     expect(observed.distinctGateConfigDigests).toBe(DISPOSABLE_SPECS.length);
     expect(observed.findings).toBe(0);
+  });
+
+  it("records the authenticated native-result acceptance without substituting a fixture", () => {
+    const live = record.authenticatedHostAcceptance;
+    expect(live.statement.length).toBeGreaterThan(40);
+    expect(live.command).toContain(live.driver);
+    expect(live.providerVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(live.generationDigest).toBe(record.packedLeg.observed.generationDigest);
+    expect(live.findings).toBe(0);
+    expect(live.repositories.map((entry) => entry.repositoryId).sort()).toEqual(
+      DISPOSABLE_SPECS.map((entry) => entry.repositoryId).sort(),
+    );
+    for (const entry of live.repositories) {
+      expect(entry.providerRunId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(entry.finalPassId).toBe(`pass-${entry.providerRunId}`);
+      expect(entry.authorityRoot).toContain("provider-review-authority");
+      expect(entry.reviews.map((review) => review.lensId).sort()).toEqual(
+        DISPOSABLE_REVIEW_LENSES.map((lens) => lens.lensId).sort(),
+      );
+      expect(new Set(entry.reviews.map((review) => review.nativeSessionId)).size).toBe(entry.reviews.length);
+      for (const review of entry.reviews) {
+        expect(review.nativeSessionId).toMatch(/^[0-9a-f-]{36}$/);
+        expect(review.handoffPath).toContain("provider-review-handoffs");
+        expect(review.authorityBindingPath).toContain(entry.authorityRoot);
+        expect(review.nativeResultPath).toContain("native-provider-results");
+        expect(review.nativeResultSha256).toMatch(/^[0-9a-f]{64}$/);
+        expect(review.promptContextDigest).toMatch(/^[0-9a-f]{64}$/);
+        expect(review.contextDigest).toMatch(/^[0-9a-f]{64}$/);
+        expect(review.attemptId).toMatch(/^attempt-[0-9a-f]+$/);
+        expect(review.acceptedArtifactDigest).toMatch(/^[0-9a-f]{64}$/);
+      }
+      expect(entry.manifestPath).toContain(entry.providerRunId);
+      expect(entry.manifestSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(entry.trackedRecordPath).toMatch(/\/record--[0-9a-f]{64}\.json$/);
+      expect(entry.trackedRecordSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(entry.trackedCommit).toMatch(/^[0-9a-f]{40}$/);
+    }
   });
 
   it("records the POLICY each repository ran under, not only its name", () => {

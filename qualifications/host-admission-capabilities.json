@@ -1,7 +1,7 @@
 {
   "schemaVersion": "host-admission-capabilities/1",
   "description": "Graded capability record for trusted host-control admission, per exact host version, against the capability ladder: Tier 0 read-only inspection only; Tier 1 mutation floor (deny-until-attested grant enforcement, worktree-materialized digest-receipted projection, binding attestation, isolated operator-confirmation channel, fence-revocation cancellation, fresh-worktree-only resume); Tier 2 trusted graceful lifecycle events; Tier 3 graceful termination provenance with verified descendant teardown, enabling same-worktree resume. Facts probed on a real host carry live-probe or recorded-observation provenance; properties the product binding owns on any host are proven by the frozen fixtures in fixtures/host-admission-fixtures.json against the model-external admission validator.",
-  "gradedAt": "2026-08-31T20:10:00Z",
+  "gradedAt": "2026-09-01T02:35:00Z",
   "platform": "macOS 15.6.1 arm64",
   "verificationKinds": [
     "live-probe",
@@ -18,13 +18,13 @@
         "reason": "Tier 1 mutation floor: host-enforceable and live-probed (deny-until-attested interceptor; candidate-scope exclusion at admission); Tier 2: SessionEnd lifecycle hook live-probed firing on clean non-interactive end; Tier 3: refused \u2014 a detached background child survived a clean host end, so descendant teardown is unverified and same-worktree resume stays closed.",
         "reverification": {
           "kind": "recorded-observation",
-          "hostVersion": "2.1.251",
+          "hostVersion": "2.1.252",
           "outcome": "unverified",
-          "surface": "claude --help and the claude subcommand surface at 2.1.251 for the admission flags, and claude --settings <file> doctor for the hook events, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
-          "method": "the admission surface was re-enumerated at 2.1.251 and every part this grade names is still present. The flags are in --help. The hook events are NOT — --help names neither PreToolUse nor SessionEnd — so they were read off a different surface: a settings file carrying an unknown hook event is rejected by name and the rejection enumerates the valid events, both of these among them, while a well-formed PreToolUse hook in the same position is accepted. The TIER VERDICT ITSELF WAS NOT RE-OBSERVED. Both legs that decide it \u2014 a SessionEnd hook firing on a clean non-interactive end, and a detached background child's liveness after that end \u2014 require a real session turn, and this host offers no model-free execution surface: there is no counterpart to the sandbox subcommand that let the Codex claim be re-driven without a model. Driving them would mean launching an authenticated host, which this product must never do. The tier therefore stands on its 2.1.97 observation and is stated as standing on it.",
-          "observedAt": "2026-08-31T15:40:00Z",
+          "surface": "Claude Code 2.1.252 admission surface: current --help/settings validation plus the authenticated strict-sandbox characterization recorded under commonGitAuthorityPathProtected",
+          "method": "the strict admission surface was re-enumerated and live-probed at 2.1.252, including --restricted, the sandbox settings, exact allow/deny filesystem controls, and empty ambient setting sources. The TIER VERDICT ITSELF WAS NOT RE-OBSERVED. Both lifecycle legs that decide it — a SessionEnd hook firing on a clean non-interactive end, and a detached background child's liveness after that end — remain on their 2.1.97 observation. The current filesystem probe therefore updates the mutation floor without silently re-grading graceful lifecycle or descendant teardown.",
+          "observedAt": "2026-09-01T02:32:00Z",
           "reason": "the deciding legs are only reachable by launching an authenticated host session, which is an operator-only lane",
-          "scope": "the tier verdict and the two lifecycle legs beneath it. Four capability entries below carry their own outcome — the two lifecycle legs, the candidate-planted-settings entry, and the common-Git authority position. THE REMAINING ENTRIES WERE NOT RE-OBSERVED AT ALL and stand on the version this host entry is keyed at: readOnlyInspection, denyUntilAttestedGrant, worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume, sameWorktreeResume, and the approvalAssertionSource probe. That is a deliberate boundary on this re-verification, not a claim about them: the fixture-verified ones are product properties no host version moves, and the rest belong to the re-grade this observation is a baseline for."
+          "scope": "the host tier only. The strict filesystem floor is current through commonGitAuthorityPathProtected. Lifecycle and descendant teardown remain unverified at 2.1.252, which narrows resume. The entries not re-observed are readOnlyInspection, denyUntilAttestedGrant, worktreeMaterializedProjection, bindingAttestation, isolatedOperatorConfirmationChannel, fenceRevocationCancellation, freshWorktreeOnlyResume, sameWorktreeResume, and approvalAssertionSource."
         }
       },
       "capabilities": {
@@ -127,22 +127,22 @@
           }
         },
         "commonGitAuthorityPathProtected": {
-          "status": "unsupported",
-          "mechanism": "DECLARED, not absent: this host offers no OS-level filesystem sandbox behind an admitted session, so the only path boundary is the binding's own PreToolUse interceptor, and that interceptor extracts write paths from tool input only for the file-writing tools (Write, Edit, MultiEdit, NotebookEdit — packages/kernel/src/host/hook-main.ts). A shell invocation carries no such member, so its filesystem writes are capability-gated and not path-gated: an admitted session holding the shell capability reaches the common-Git authority path and the delivery journal directly, and the payload grammar only enforces a record's internal consistency. This is the DEFAULT posture rather than a corner case, because the shipped mutation-stage grant allows the shell capability to every ordinary stage session. The operator's position is to accept and declare it: closing it belongs to the host's own permission/sandbox system, not to this integration. Dropping the shell capability from the mutation-stage default was rejected because every gate loop runs its build, test, and version-control commands through it, so the grant would return per repository — the same exposure with more ceremony; requiring a host sandbox capability before the mutation lane qualifies was rejected because no such capability exists on this host, and the requirement would disqualify the proving host outright.",
+          "status": "supported-with-required-admission-flags",
+          "mechanism": "Claude Code 2.1.252's OS sandbox is a required admission layer, not an optional hardening. The binding composes --restricted with sandbox.enabled=true, failIfUnavailable=true, allowUnsandboxedCommands=false, excludedCommands=[], the grant's exact absolute writable roots, broad workspace and ambient-temp denies, explicit protected-descendant/common-Git/installation-authority denies, and file-tool Read/Edit denies for both authority roots. The digest-bound settings and grant identity are bound into the installation-owned root capability state before tools. Common-Git journal state and provider capability/handoff bindings are outside the admitted model filesystem; no direct API or unsandboxed fallback exists.",
           "verification": {
             "kind": "recorded-observation",
-            "surface": "the shipped interceptor's write-path member map (packages/kernel/src/host/hook-main.ts) and the shipped mutation-stage grant's allowed capabilities (packages/kernel/src/policy/compile.ts); claude --help and settings/permissions documentation (v2.1.97) for the absence of an OS-level session sandbox",
-            "method": "source and CLI surface enumeration: the write-path map names only the file-writing tools, the shipped stage grant lists the shell capability, and the host exposes no admission parameter placing an admitted session under an OS filesystem sandbox. No probe is claimed — the exposure follows from the shipped configuration, not from an observation of a host defence failing.",
+            "surface": "the prior 2.1.97 shipped interceptor and mutation-stage grant, before the strict Claude OS-sandbox admission was available and required",
+            "method": "historical source and host-surface inventory. This observation explains the former unsupported posture; the 2.1.252 live re-verification below supersedes it for current admission.",
             "observedAt": "2026-08-31T06:56:00Z"
           },
           "reverification": {
-            "kind": "recorded-observation",
-            "hostVersion": "2.1.251",
+            "kind": "live-probe",
+            "hostVersion": "2.1.252",
             "outcome": "holds",
-            "surface": "the shipped interceptor's write-path member map (packages/kernel/src/host/hook-main.ts) and the shipped mutation-stage grant's allowed capabilities (packages/kernel/src/policy/compile.ts) at this candidate's base; claude --help at 2.1.251, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
-            "method": "source and CLI surface re-enumeration, re-run because the grading above was reasoned from the shipped grant at 2.1.97 and must not be carried forward on it. Every leg still holds: the write-path map still names only Write, Edit, MultiEdit and NotebookEdit, none of which a shell invocation carries; the shipped stage grant still allows the shell capability; and 2.1.251 still exposes no admission parameter placing an admitted session under an OS filesystem sandbox — the flag naming one is rejected as an unknown option, alongside the control that a real flag with a bad value is rejected by name instead, so the parser is not simply refusing everything. WHAT DID CHANGE, and is recorded here rather than acted on: 2.1.251 ships a --restricted admission flag whose documented behaviour confines the file tools to the working directories and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files. That is a host-side path boundary the 2.1.97 surface did not offer. Whether it actually denies a shell write to the common-Git authority path is NOT known: deciding it requires a real session turn, which is an operator-only lane on this host. The status stands unsupported because the admission surface this product ships does not pass --restricted, not because the flag was probed and found wanting.",
-            "observedAt": "2026-08-31T15:19:00Z",
-            "scope": "this one capability only, against the admission surface the product currently ships. The --restricted lane named above is unexamined, not refuted."
+            "surface": "authenticated claude -p under --restricted and one CLI --settings file with sandbox enabled, fail-if-unavailable, strict no-unsandboxed mode, no excluded commands, exact allow/deny filesystem rules, and empty ambient setting sources; macOS Seatbelt was active",
+            "method": "paired controls in a disposable linked-worktree/common-Git setup: the exact allowed-root Bash and file-tool writes succeeded; unlisted workspace, protected descendant, common Git, installation-style authority, sibling, system TMPDIR and /tmp writes failed with OS operation-not-permitted and left no side effect; authority Read/Glob attempts were denied. Absolute paths, shell indirection, and symlink escape were exercised. A native PreToolUse hook then rewrote an ordinary Bash call to target authority with dangerouslyDisableSandbox=true; debug output proved the field was injected, and the host ignored the escape and Seatbelt denied the write. The sandbox-visible TMPDIR target was pre-created and its write was also denied. Product sensors pin the exact settings projection and refuse capability state in common Git.",
+            "observedAt": "2026-09-01T02:30:00Z",
+            "scope": "the required Claude 2.1.252 sandbox admission surface and model filesystem boundary only; lifecycle tier and descendant teardown remain on their separately stated evidence."
           }
         },
         "gracefulLifecycleEvents": {
@@ -258,7 +258,7 @@
       "deliveryLaneBinding": {
         "status": "present",
         "module": "packages/kernel/src/host/claude-code.ts",
-        "detail": "a host-binding module exists and composes this host's admission surface: session settings wiring the model-external interceptor and the lifecycle hook, the candidate-writable scope exclusion this record graded, the worktree-materialized projection, and the binding-minted attestation. Composition returns data; the product does not launch the host."
+        "detail": "a host-binding module exists and composes this host's admission surface: --restricted; strict fail-closed OS sandbox settings projected from the exact grant; common-Git, installation-authority, protected-descendant and ambient-temp denies; the model-external interceptor and lifecycle hook; empty ambient setting sources; the worktree-materialized projection; and the binding-minted attestation. Composition returns data; the product does not launch the host, own tasks or subagents, or manage worktrees."
       }
     },
     {
@@ -540,7 +540,7 @@
     },
     {
       "id": "common-git-authority-not-writable",
-      "statement": "the common-Git authority path is not writable from an admitted invocation ON A HOST THAT SANDBOXES IT — which is a per-host position, not a product property, and every host in this record states its own: Codex denies the write through its OS sandbox, and Claude Code declares the write reachable from the shell capability its ordinary stage sessions hold",
+      "statement": "the common-Git authority path is not writable from an admitted invocation under each per-host position: Codex through its OS sandbox and Claude Code 2.1.252 through the required strict --restricted sandbox composition",
       "proof": "live-probe",
       "refs": [
         "codex-cli.commonGitAuthorityPathProtected",

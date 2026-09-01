@@ -1,22 +1,22 @@
 {
   "schemaVersion": "claude-code-integration/1",
   "description": "Qualification record for the Claude Code-native delivery integration's two layers: the trusted model-external binding that applies and attests the grant, workspace, fence, and run-pinned projection BEFORE admission, and the in-session projection that reads checkpoints, consumes immutable context, and submits normalized results AFTER it. Live legs were driven against a real authenticated Claude Code session by the qualification harness, never by the product. Product-owned properties are proven by in-process sensors named here. Nothing is claimed beyond what ran.",
-  "recordedAt": "2026-08-31T15:45:00Z",
+  "recordedAt": "2026-09-01T02:35:00Z",
   "platform": "macOS 15.6.1 arm64",
   "host": {
     "hostId": "claude-code",
     "hostVersion": "2.1.97",
     "tier": 2,
-    "admissionSurface": "session-scoped --settings composed by the binding (grant-derived permission allow rules, model-external PreToolUse interceptor, SessionEnd lifecycle hook) with --setting-sources set to the empty selection, so every ambient scope is excluded and the binding's digest-bound settings file is the session's only settings source",
+    "admissionSurface": "session-scoped --settings composed by the binding (grant-derived permission rules, strict fail-closed OS sandbox, model-external PreToolUse interceptor, SessionEnd lifecycle hook) with --restricted and --setting-sources set to the empty selection, so every ambient scope is excluded and the binding's digest-bound settings file is the session's only settings source",
     "reverification": {
       "kind": "recorded-observation",
-      "hostVersion": "2.1.251",
+      "hostVersion": "2.1.252",
       "outcome": "unverified",
-      "surface": "claude --help and claude plugin list at 2.1.251 for the flags and the discovery inventory, and claude --settings <file> doctor for the hook events, run with HOME and CLAUDE_CONFIG_DIR pointed at disposable directories so no operator configuration was read or written",
-      "method": "the admission surface this record composes is intact at 2.1.251: --settings, --setting-sources (still exactly user, project and local, still accepting the empty selection this binding admits with) and --plugin-dir are all in --help, the PreToolUse and SessionEnd hook events are still recognized by the settings validator (which is where they were read — --help names no hook event), and the scope selection was observed neutralizing a candidate-planted project-scope settings file with the un-neutralized control alongside it. THE TIER VERDICT WAS NOT RE-OBSERVED, AND NEITHER WERE THE LIVE PROBES BELOW. Every live leg in this record — the deny-until-attested legs included — was driven through a real authenticated session, and re-driving them would mean launching an authenticated host, which this product must never do; there is no model-free execution surface on this host to substitute for one. They all stand on their 2.1.97 observations and are stated as standing on them, rather than being deflected to the graded record, which carries no re-verification for them either. What the graded record does carry is the per-claim outcomes for the claims that were re-observed, including the one probe answer that changed at 2.1.251.",
-      "observedAt": "2026-08-31T15:40:00Z",
-      "reason": "the live legs are only reachable by launching an authenticated host session, which is an operator-only lane",
-      "scope": "the host tier verdict and the admission surface it was taken on. This record's own live probes are covered by the same unreached outcome; the graded capability record carries per-capability outcomes for the four claims re-observed there, and names the entries it left unexamined."
+      "surface": "authenticated claude -p with --restricted, exact tool grant, empty ambient setting sources, sandbox.enabled=true, failIfUnavailable=true, allowUnsandboxedCommands=false, excludedCommands=[], and exact filesystem allow/deny rules on macOS Seatbelt",
+      "method": "the current admission surface and filesystem boundary were re-driven. Exact allowed-root controls succeeded; unlisted workspace, protected descendant, common Git, installation-style authority, sibling, system TMPDIR, /tmp, symlink escape, and authority file-tool reads were denied. A host PreToolUse hook forced dangerouslyDisableSandbox=true into an ordinary Bash invocation and debug output proved the field was injected; the host ignored the escape and Seatbelt denied the authority write. The pre-created sandbox-visible TMPDIR target was also denied. The older Tier 2 lifecycle and descendant-teardown observations were not re-driven, so fresh-worktree-only resume remains the conservative posture.",
+      "observedAt": "2026-09-01T02:30:00Z",
+      "reason": "sandbox admission is current; lifecycle-tier regrading is a separate operator-owned probe",
+      "scope": "the strict filesystem admission surface at 2.1.252. Tier 2 lifecycle semantics retain their separately stated older evidence and do not gain a current-version claim here."
     }
   },
   "terminationProvenance": {
@@ -243,7 +243,7 @@
     "same-workspace resume — unreachable on this host version by construction, and exercised only through a host graded with verified descendant teardown in the fixture leg"
   ],
   "knownLimitations": [
-    "The delivery journal is not defended against a granted shell capability on this host, and that is the DEFAULT posture rather than a corner case: the shipped stage grant allows Bash, so every ordinary stage session holds it. The interceptor extracts write paths only for the file-writing tools, so a Bash invocation's filesystem writes are capability-gated but not path-gated; a session can append a journal entry directly, and the payload grammar only enforces a record's internal consistency. The graded record now DECLARES this rather than leaving it as an absent claim: it carries commonGitAuthorityPathProtected for Claude Code with status unsupported, alongside the supported claim for Codex's OS sandbox. That distinction is the point — an absent claim and a declared limitation read identically to a sensor and very differently to an operator. The operator's position is to accept and declare: closing this belongs to the host's own permission system, not to this integration, and the shipped mutation-stage grant keeps Bash as a recorded decision, because every gate loop runs its build, test, and version-control commands through it.",
-    "A superseded session is closed by two locks — its fence-scoped binding state is voided at rebind, and its own admitted fence is baked into its hook command — but both live in files the same shipped stage grant's Bash capability can reach. They defend against superseded-session CONFUSION, which is what the resume path needs; against an ordinary stage session on this host they are not a boundary, for the reason above."
+    "The commonGitAuthorityPathProtected claim is supported-with-required-admission-flags on Claude Code 2.1.252 only. A host version that cannot apply the exact sandbox settings, silently falls back, permits an unsandboxed retry, or widens the filesystem grant is not admitted; there is no direct-API or weaker-host fallback.",
+    "The host lifecycle tier and descendant teardown were not re-probed at 2.1.252. That uncertainty can only narrow resume: same-workspace resume remains closed and operator-authorized takeover into a fresh worktree is required."
   ]
 }

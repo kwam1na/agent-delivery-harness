@@ -88,7 +88,7 @@ so they can be checked:
 > THIS INVENTORY GRANTS NOTHING. It describes what an operation costs and where
 > it is reachable.
 
-Each of the **37** operations in `FACADE_OPERATIONS` declares four things:
+Each of the **38** operations in `FACADE_OPERATIONS` declares four things:
 
 | Axis | Values |
 |---|---|
@@ -105,17 +105,19 @@ The surfaces are the part worth reading twice. `cli` and `mcp` are the
 model-visible tool surfaces. `binding-channel` is the isolated interactive
 channel the qualified host binding owns, outside the model-visible tool and shell
 surface — the two confirmation operations live there and only there.
-`integration-event` is the trusted host-runtime lifecycle integration, which is
-how graceful-termination provenance enters and why it is never a model-callable
-operation. `facade` means library call by an embedding product surface, reachable
-from no tool at all.
+`integration-event` is the trusted host-runtime integration used for graceful
+termination provenance. `facade` means library call by an embedding product
+surface. Provider-review preparation and ingestion are facade calls, but the
+inventory grants them no trust: their runtime authority is the host-retained
+capability lifecycle described below.
 
-`checkFacadeSurfaceInvariants` holds five positions over that inventory —
+`checkFacadeSurfaceInvariants` holds six positions over that inventory —
 confirmations stay off the tool surfaces, the MCP surface stays read-only,
-termination provenance stays non-callable, no operation is declared twice, and a
-fence-bearing operation cannot declare that it moves no revision. It is a sensor
-over the inventory, run from the kernel's own suite and from the MCP contract
-suite; it is not a runtime guard, and no production code calls it.
+termination provenance stays off model-visible surfaces, no operation is
+declared twice, and a fence-bearing operation cannot declare that
+it moves no revision. It is a sensor over the inventory, run from the kernel's
+own suite and from the MCP contract suite; it is not a runtime guard, and no
+production code calls it.
 
 ## Durable state, and the reducers under it
 
@@ -178,6 +180,76 @@ In both arms the compiler binds the digest from the *resolved charter*, never
 the digest the document claimed, and it never reads charter prose. The snapshot
 is immutable, so one identity cannot resolve to different bytes across a
 delivery's life — including across a pause.
+
+### Native provider review results
+
+Review evidence enters through one host-neutral contract, one native invocation
+per reviewer. At workspace binding the operator-owned host supplies a random
+root capability and retains it outside model prompts, settings, CLI, and MCP;
+only its identity and digest are stored in installation-owned authority outside
+the admitted model filesystem. Before each native review, the host supplies
+that root proof plus a fresh invocation capability.
+`prepareProviderReviewHandoff` verifies the standing fence/workspace and
+sandbox/grant digest, binds the expected native session/run, one exact lens,
+the trusted persona bytes, the accepted contract, exact-candidate sensor
+evidence, and the review instructions into one prompt byte string, then stores
+only the invocation capability identity and digest in the same authority root.
+The raw secrets are never stored.
+
+The host submits those exact prompt bytes to one native reviewer and retains
+the unmodified envelope. Its adapter first verifies the submitted bytes against
+the handoff, then combines the binding-owned identities with the model-authored
+verdict/findings and preserves the exact raw envelope bytes/digest.
+`ingestProviderReviewResult` requires the invocation proof, compares every
+binding, recaptures the candidate, and fails closed on forged, partial, failed,
+stale, moved, or incoherent results. A delayed callback from a superseded
+workspace cannot satisfy either the new fence/workspace or the rotated root.
+Two policy lenses therefore require two distinct native child sessions inside
+one exact provider run and final pass; lens IDs never synthesize reviewer
+independence, and mixed run/pass tuples are refused.
+
+Claude's native envelope may contain the conclusion as bare JSON or as exactly
+one `json`-labelled block surrounded by its review summary. Zero, malformed, or
+multiple blocks are refused as ambiguous; the surrounding prose never becomes
+evidence.
+
+An accepted result is normalized into the existing content-addressed result
+store before one `attempt.artifact.recorded` append names both its digest and
+attempt. That append is the sole acceptance/replay authority: attempts and
+provider results are derived from journal entries, with no `attempts/` or
+`provider-results/` sidecar authority. Missing or tampered accepted bytes fail
+closed without reopening the handoff or appending a replacement acceptance. A
+provider-run copy may be retained only after acceptance and is
+non-authoritative. The existing review-floor reducer consumes the derived
+attempts, and `admit` remains the only manifest builder. Identical replay is
+idempotent; a different result for the same accepted handoff is a typed,
+journaled conflict.
+
+The root and per-invocation capability bindings live under the existing
+installation-owned authority root, outside common Git. The composed Claude
+session is restricted and fail-closed: sandbox startup must succeed,
+unsandboxed retries and excluded commands are disabled, common Git and the
+authority root are denied to Bash and file tools, ambient temp writes are
+denied, and the grant's exact writable roots and protected descendants are
+projected into the OS sandbox. The digest-bound settings and grant identity are
+part of the standing capability binding. Public workspace and handoff files
+carry no capability binding that imported model code could replace.
+
+The authenticated Claude acceptance lane is operator-owned and opt-in:
+
+```sh
+QUALIFY_CLAUDE_CODE_SESSION=1 node --import tsx scripts/qualify-claude-code-session.ts --provider-delivery
+```
+
+It packs and installs the product, prints the exact handoff and native-result
+path for every reviewer invocation in each disposable repository, runs Claude
+once per reviewer with `--restricted`, the exact bound prompt, and the
+binding-composed settings,
+then sends those untouched native envelope bytes through the shared
+adapter and ingestion seam before review reduction, admission, tracked-record
+verification, and the finish line. The printed work directory is retained for
+inspection. This harness launches Claude with the operator's credentials; the
+product does not.
 
 **Which arm this repository uses.** Its own policy at
 `.agents/policy/repository-policy.json` uses the digest-pinned repository-owned

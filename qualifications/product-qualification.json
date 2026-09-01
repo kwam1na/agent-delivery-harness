@@ -1,7 +1,7 @@
 {
   "schemaVersion": "product-qualification/1",
-  "description": "The release-level product qualification: the composed product installed into clean disposable repositories from PACKED ARTIFACTS ONLY, driving scoped intake through the full checkpoint path to merge-ready under two distinct repository policies. Every claim below names the leg that proved it. The packed leg is re-executable — `npm run qualify:product` reproduces it end to end — and the fixture leg names in-process sensors that exist and run on every CI leg. Claims that neither leg establishes are listed under notProvenHere rather than implied by silence.",
-  "recordedAt": "2026-08-31T11:30:00Z",
+  "description": "The release-level product qualification: the composed product installed into clean disposable repositories from PACKED ARTIFACTS ONLY, driving scoped intake through the full checkpoint path to merge-ready under two distinct repository policies. Every claim below names the leg that proved it. The packed leg is re-executable — `npm run qualify:product` reproduces it end to end — the fixture leg names in-process sensors that exist and run on every CI leg, and the authenticated-host leg records an operator-owned native Claude result flowing through the same packed path. Claims that no leg establishes are listed under notProvenHere rather than implied by silence.",
+  "recordedAt": "2026-09-01T02:55:00Z",
   "platform": "macOS 15.6.1 arm64",
   "gateVerdict": {
     "decision": "proceed",
@@ -18,7 +18,21 @@
         "statement": "an already-scoped contract reaches merge-ready through plan, implement, trusted sensor, two-lens review, compound, admission, neutral tracked record, and finish line",
         "outcome": "met",
         "leg": "packed",
-        "evidence": "both disposable repositories completed the frozen checkpoint path and reported state `completed`, with a non-empty discharged-obligation set and an operator-intervention counter of zero"
+        "evidence": "both disposable repositories completed the frozen checkpoint path and reported state `completed`, with a non-empty discharged-obligation set and an operator-intervention counter of zero. Each policy lens ran as a distinct native invocation under an installation-owned capability outside the admitted filesystem grant; the installed Claude adapter preserved the exact raw envelope bytes and required the exact bound persona, contract, sensor evidence, and review-instruction bytes to be the prompt context the host submitted. One atomic journal append per result fed the sole manifest builder, admission gate, tracked-record verifier, and finish line."
+      },
+      {
+        "id": "provider-result-ingestion",
+        "statement": "each completed native-provider reviewer result is capability-bound to exact provider/session/workspace/fence/trust/candidate/persona/prompt context and reaches the existing evidence gate without sidecar authority or a second manifest path",
+        "outcome": "met",
+        "leg": "packed",
+        "evidence": "for both repositories the packed product required an installation-owned root proof and fresh invocation proof, prepared one handoff per policy reviewer, adapted exact Claude-native envelopes, and accepted each normalized result only through its single attempt.artifact.recorded journal append. The authority root and invocation bindings sit outside common Git and outside the exact sandbox grant admitted for the native invocation. Attempts/replay are derived from the journal with no attempts/ or provider-results/ sidecar authority before the existing recorder and single delivery-evidence/1 manifest builder. Source sensors falsify forged root/invocation proofs, wrong workspace/fence/session/provider/trust/persona/submitted prompt context, partial/failed/moved/conflicting results, missing or tampered accepted-result bytes, mixed provider-run triples, and changes-requested approval."
+      },
+      {
+        "id": "authenticated-native-provider-acceptance",
+        "statement": "an authenticated Claude Code review reaches merge-ready from its retained raw native result through shared ingestion, the existing attempt journal and sole manifest builder, admission, and tracked-record verification",
+        "outcome": "met",
+        "leg": "live",
+        "evidence": "Claude Code 2.1.252 reviewed both exact candidates through four native UUID child sessions: one outcome-correctness and one testing-policy invocation per repository, sharing exactly one provider run and final pass inside each delivery. Every untouched outer envelope and SHA-256 is retained; every accepted normalized result carries its raw bytes/digest, exact consumed persona+contract+sensor+instruction prompt digest, session/run, workspace, fence, and candidate. Installation-owned root/invocation bindings are retained outside the admitted filesystem grant. Each delivery journal contains exactly two attempt.artifact.recorded entries and one evidence.reference.recorded entry; the sole manifest contains both provider-result and reviewer-approval artifacts with the common run provenance; tracked records verified; and each journal reached one completed transition. Earlier live refusals remain retained and accepted nothing. The operator-owned driver launched the native sessions; the product only decided and recorded evidence."
       },
       {
         "id": "outcome-only-iterative-scoping",
@@ -90,8 +104,8 @@
     "driver": "scripts/qualify-product.ts",
     "sourceAccess": "the driver imports nothing from packages/. It reaches the product twice, both times through an artifact: the npm-packed tarball install tree supplies the operator-facing installer — resolved through the package's own `exports` map rather than by joining a path into its src/, so what the lane drives is the published surface and not merely the shipped layout — and the installed generation root supplies the product that drives the deliveries.",
     "observed": {
-      "generationDigest": "616af8ce4bb692bbc8c9ea61b6a68d0d225c1a913bf7bf90cfbdf0444c8b9d85",
-      "installationId": "install-7ddd848e70798366f39f6d256b0f90f9",
+      "generationDigest": "32f870562ef8a52056332350601f657cc2d403f3d6fdfd2f7a33c2b60da267aa",
+      "installationId": "install-75f784e2b0db741bb6f12f3070f6f000",
       "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
       "compositionProfile": "confirmation-fixture",
       "repositoriesDelivered": [
@@ -146,15 +160,108 @@
         }
       ],
       "retainedGenerations": [
-        "616af8ce4bb692bbc8c9ea61b6a68d0d225c1a913bf7bf90cfbdf0444c8b9d85",
-        "5e7d3bdf8343c78f9cad91c3b2bcf45c534dd4adaf2839d01d4e6a8da906c92f",
-        "4ee1ce51d7984a22efd14e1b6c50fa8bd630dca2d5cb67b7451824dd9c2f3867"
+        "32f870562ef8a52056332350601f657cc2d403f3d6fdfd2f7a33c2b60da267aa",
+        "8a3462e96719fb55896fd4ac8ea5da2de84e09672982012094d01246c309ced6",
+        "5c35391ebb3503d69c87b021216d0b79a051bea8c691c6af699e8843afa6078e"
       ]
     },
     "crossPlatform": "the same lane runs as a release-workflow step on ubuntu-latest, and that run is the cross-platform evidence this gate requires. PENDING FOR THIS RECORD: the Linux leg for this candidate had not reported when these observations were written, so the digest above is the macOS one only and no second platform is claimed here. Nothing in the lane compares the two digests; the comparison is the operator's, and this field is where it lands.",
-    "hostVersion": "2.1.97 (the graded version, not the installed one — see hostVersionCurrency)",
+    "hostVersion": "2.1.252",
     "hostLane": "in-process. The driver stands in for the host task the way the walking skeleton's scenario sensor does: it creates the worktrees and submits the typed stage results a host would. The product launches nothing either way, which is what the process inventory above records.",
-    "hostVersionCurrency": "The value above is the version qualifications/host-admission-capabilities.json grades, and it is what this lane passes to the facade. The Claude Code CLI installed on the recording machine is 2.1.251 — four releases newer — so any Claude Code capability read through that graded record is a claim about 2.1.97 and not about the installed CLI. This lane asserts NO live Claude Code capability: it launches no host session and drives the facade in-process, so the version is a parameter it passes rather than a surface it probed. The currency gap itself is tracked separately as V26-1506 and is not addressed here."
+    "hostVersionCurrency": "The ordinary packed lane and the authenticated acceptance both carry Claude Code 2.1.252 into their reviewer results and manifests. The strict filesystem admission floor is reverified at that version. The older Tier 2 lifecycle and descendant-teardown observations were not re-driven and do not silently gain a current-version claim; same-workspace resume remains closed."
+  },
+  "authenticatedHostAcceptance": {
+    "statement": "operator-owned Claude Code reviews over the packed generation ran one native invocation per policy reviewer and reached completed delivery through capability-checked ingestion, journal-authoritative attempts, the sole manifest builder, admission, tracked-record verification, and finish line",
+    "driver": "scripts/qualify-claude-code-session.ts --provider-delivery",
+    "command": "QUALIFY_CLAUDE_CODE_SESSION=1 node --import tsx scripts/qualify-claude-code-session.ts --provider-delivery",
+    "providerVersion": "2.1.252",
+    "generationDigest": "32f870562ef8a52056332350601f657cc2d403f3d6fdfd2f7a33c2b60da267aa",
+    "installationId": "install-75f784e2b0db741bb6f12f3070f6f000",
+    "workflowGraphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+    "retainedRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu",
+    "findings": 0,
+    "repositories": [
+      {
+        "repositoryId": "disposable-alpha",
+        "deliveryId": "dlv-7c949d310a5a",
+        "providerRunId": "8c6d93a5-98cf-413a-a64d-1295d953afa5",
+        "finalPassId": "pass-8c6d93a5-98cf-413a-a64d-1295d953afa5",
+        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/installation/provider-review-authority/deliveries/dlv-7c949d310a5a",
+        "journalEvidenceRecordId": "416a7f3b71a616fde92465604bd8c9cbac970bd4b650d52b8961d6279054b87a",
+        "journalManifestDigest": "ba215d1f20b4e7f9ebe33f7afd554c6e000e8a4aa5fcf1648ae7e49ee144060e",
+        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/8c6d93a5-98cf-413a-a64d-1295d953afa5/manifest.json",
+        "manifestSha256": "a7acbc5c93c53bd21ca2c03c5357389aad030533a6f6c8536d0baea511eb39f6",
+        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/worktree-disposable-alpha/telemetry/delivery-runs/record--0b8cab69851f83498a8616af7c084d8e15cca6ce388bf87642f114b6a6f6f9d4.json",
+        "trackedRecordSha256": "7e70302c2af014ac35be7e4bd2339c698e1a3f07c2a3571c6326bec79e5b7e34",
+        "trackedCommit": "c7a7be1c4a6b709d0f49f0904c2767f75c81db97",
+        "reviews": [
+          {
+            "lensId": "lens.outcome-correctness",
+            "nativeSessionId": "d895e219-fdd5-4371-a547-d7cc0bc759e9",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-7c949d310a5a/binding/provider-review-handoffs/handoff-b019b12f47153f54.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/installation/provider-review-authority/deliveries/dlv-7c949d310a5a/handoffs/handoff-b019b12f47153f54.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/native-provider-results/disposable-alpha/handoff-b019b12f47153f54.json",
+            "nativeResultSha256": "dbac42e3fb5da7d49d58a66131bfbd50d1c56a2b92c96c198a1cadcc22412464",
+            "promptContextDigest": "4046d68cc9fee844dc39a2fecf96bbadb1c409d9964c70ee97eee8ea47874f53",
+            "contextDigest": "9f898457f82ee2d2f501c2f0d742f1cad0d396dfa91e7f385b9f5295b667d678",
+            "attemptId": "attempt-8160c74013153e5f",
+            "acceptedArtifactDigest": "54725f64cf9b32334181a7c9b903f4542cad35d105dadf4776c9fd940ef97069"
+          },
+          {
+            "lensId": "lens.testing-policy",
+            "nativeSessionId": "086d8836-2769-4ccd-9d2b-d1a22274f123",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/repo-disposable-alpha/.git/managed-delivery/deliveries/dlv-7c949d310a5a/binding/provider-review-handoffs/handoff-cc9fa363972ea120.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/installation/provider-review-authority/deliveries/dlv-7c949d310a5a/handoffs/handoff-cc9fa363972ea120.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/native-provider-results/disposable-alpha/handoff-cc9fa363972ea120.json",
+            "nativeResultSha256": "a9872b4361f1117565957b177fae20204a3d9596b813a07be133310270a890b9",
+            "promptContextDigest": "bc2a28f219fe9eba8b61ad34c801f145e57ba750bb080adb246a93cf0c277a3d",
+            "contextDigest": "6bb0d2555f347d0383061c2e6e275918aaaadc866e498b68eb77a0f0ab5e57ac",
+            "attemptId": "attempt-707568a94fbd5b4d",
+            "acceptedArtifactDigest": "74085cfce0c7eb201ffe53825fa1b0608ac80bd9054fa4813fe77e940ef9f756"
+          }
+        ]
+      },
+      {
+        "repositoryId": "disposable-beta",
+        "deliveryId": "dlv-539a3e6f628a",
+        "providerRunId": "6eb21db0-b359-4abd-9df4-d739fe6becfc",
+        "finalPassId": "pass-6eb21db0-b359-4abd-9df4-d739fe6becfc",
+        "authorityRoot": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/installation/provider-review-authority/deliveries/dlv-539a3e6f628a",
+        "journalEvidenceRecordId": "7b99c8515c3bea87cb9a54ff9ec3a2daacf541f7fab2b37de23e0885e1e1eb61",
+        "journalManifestDigest": "68f879434af1d4b97ec740aadf7f81639bfe4c62d169d429c6715307a78f5d34",
+        "manifestPath": "/private/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/delivery-harness/runs/claude-code.ce-code-review/6eb21db0-b359-4abd-9df4-d739fe6becfc/manifest.json",
+        "manifestSha256": "18d7d69cbc89ba127a870d3af1236100e43be7ec6e9407af4e733ee7677ebd77",
+        "trackedRecordPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/worktree-disposable-beta/audit/runs/record--eaaaa952fa8df6f7b6dcd8756ac13a6919c69751411378f4234789cc709d23a7.json",
+        "trackedRecordSha256": "66ed193aa8c8314cd16f181bdcad8d30e2f635f616243e7097160f7adf44fffa",
+        "trackedCommit": "4d29d212bb81fde07d7f5f94fde39b38693f3f01",
+        "reviews": [
+          {
+            "lensId": "lens.outcome-correctness",
+            "nativeSessionId": "08e3a5b9-ecbb-4921-9351-9ab8e4de9b3b",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-539a3e6f628a/binding/provider-review-handoffs/handoff-2995f26b3637b513.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/installation/provider-review-authority/deliveries/dlv-539a3e6f628a/handoffs/handoff-2995f26b3637b513.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/native-provider-results/disposable-beta/handoff-2995f26b3637b513.json",
+            "nativeResultSha256": "fd079d4c368ee2628ac6e74214354528f1eaef75f21952f6429f87cd251a3b72",
+            "promptContextDigest": "345220bb071e4e5841647d0500a617c2fb9c5af0257350ce225bf53c397f546c",
+            "contextDigest": "bc2dfd8425a645fac4bef22fe3353d95a46d29c95fc2dee74137a1fedd8472ab",
+            "attemptId": "attempt-3c1d2f36683b4660",
+            "acceptedArtifactDigest": "94e32df7879521f045c7571d3fb1ae743bfa4b8f18b1a9eb750528c362edb4f1"
+          },
+          {
+            "lensId": "lens.testing-policy",
+            "nativeSessionId": "b766182e-4711-420d-a40e-4cd701b5b39a",
+            "handoffPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/repo-disposable-beta/.git/managed-delivery/deliveries/dlv-539a3e6f628a/binding/provider-review-handoffs/handoff-8ecfd5bbf12b6298.json",
+            "authorityBindingPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/installation/provider-review-authority/deliveries/dlv-539a3e6f628a/handoffs/handoff-8ecfd5bbf12b6298.json",
+            "nativeResultPath": "/var/folders/ch/xhf_9c0n7x9cncpqgw6jwl0c0000gn/T/dh-product-qualification-kpcvzu/native-provider-results/disposable-beta/handoff-8ecfd5bbf12b6298.json",
+            "nativeResultSha256": "950dded79c6f8c20b74af045cb058c50bb0788e9346ae074709ef443e2b16c07",
+            "promptContextDigest": "dbdc3322bfa22a10535461e73557337d4c4de5ee903f3b050884a0578bc10b5f",
+            "contextDigest": "4d25a8de686ecc0e688a1f82260c7a1aa3df9e0988139e2436e75d3f1d3e37fb",
+            "attemptId": "attempt-2038cd09349b45d6",
+            "acceptedArtifactDigest": "6f6be033932f3b524e65641570910e007b59494a592322ce967b419e40ca56fc"
+          }
+        ]
+      }
+    ]
   },
   "packedSurfaceFindings": [
     {
@@ -201,6 +308,10 @@
         "sensor": "packages/kernel/src/facade/evidence-admission.scenario.test.ts"
       },
       {
+        "property": "Claude and Codex-shaped native results share one closed host-neutral handoff/result contract and only Claude supplies a native-envelope adapter",
+        "sensor": "packages/kernel/src/host/provider-review-result.test.ts"
+      },
+      {
         "property": "host interruption and fresh-task resume across checkpoints",
         "sensor": "packages/kernel/src/facade/checkpoint-recovery.scenario.test.ts"
       },
@@ -211,7 +322,7 @@
     ]
   },
   "notProvenHere": [
-    "A LIVE authenticated host lane driving these disposable repositories on any host. The Claude Code host integration is separately qualified against a real session in qualifications/claude-code-integration.json at Tier 2 against host version 2.1.97; this lane drives the same facade in-process and re-establishes none of those live probes.",
+    "A live authenticated provider-result lane on any host other than Claude Code. The Codex-shaped fixture proves the shared contract only; it is not a native Codex result and is not counted as one.",
     "A Codex delivery lane, of any kind. Codex CAPABILITIES are graded in qualifications/host-admission-capabilities.json (codex-cli, Tier 1 mutation floor live-probed model-free; Tier 2 lifecycle and Tier 3 descendant teardown provisional), so the Codex surface is not unknown. What does not exist in this repository is a Codex host-binding module or a qualified Codex delivery integration to drive a lane with — that is V26-1478, which this ticket lists as a blocker and which is still open. The second-host half of the release claim therefore belongs to V26-1478 and was deliberately not attempted here; the ticket's own carve-out (a sub-Tier-1 second host runs as capability verification only) does not create a delivery lane where no binding exists.",
     "Advancing the shipped reviewer persona set alone through the agent-skills corpus validation and release build. That advance happens in the agent-skills repository, and its effect here is the three re-stamped composition digest constants — inherent to a digest-pinned composition, not per-persona coupling.",
     "Replacing one host integration alone, and the planted duplicated-workflow coupling that must fail. Both need a second host integration to replace or duplicate against.",
@@ -226,7 +337,8 @@
     "Each disposable repository's tracked harness.config.ts resolves defineHarnessConfig from the npm-tarball tree rather than the generation root, so the config object crossing into the generation-root facade is minted by a second kernel module instance. That is the adopter's real shape — an adopter installs the package and imports it from node_modules — but it means the config-construction half of the product is exercised only through the tarball.",
     "The product half of 'packed artifacts only' is a composition generation packed from the source checkout and imported by a checkout-shaped path inside the generation root. The kernel's npm `exports` map and `files` list are therefore exercised for the INSTALLER half but not for the product half; `sensor:standalone` is what covers those for every package, and this lane does not duplicate it.",
     "Several judgements inside the heavy lane are not extracted and so are not falsifiable by the fast suite: the three-generations-distinct check in the lifecycle step, the internals of the outcome-only scoping turn, and the emitted-hook-command wrapper — reading the composed settings file, slicing the host's appended arguments off the vector, executing it, and the bind probe's control half. The RULE the wrapper feeds is extracted and falsified in both directions; its wiring is not. All of them are reachable only from a full `npm run qualify:product` run, which is the pre-existing posture for everything inside driveRepository; the checked-in record — zero findings, with beta recorded under intakeMode outcome-only and seven negative probes satisfied — is the evidence that they ran. Deliberately not counted: a numeral here is the part nobody checks.",
-    "The packed leg proves the emitted hook command runs the staged interceptor and denies an unattested session. It does not run a LIVE host session: no host process reads the composed settings file and invokes the command through its own hook machinery, so what is established is that the command an installed generation emits is executable and refuses, not that this host's hook plumbing invokes it as written.",
+    "The packed leg proves the emitted hook command runs the staged interceptor and denies an unattested session. The separate authenticated lane proves Claude emitted the retained review envelopes under the strict composed sandbox, while the one-off sandbox characterization proves OS containment. Neither makes host launch or hook driving a product responsibility.",
+    "The packed provider-result leg uses a structurally native Claude result envelope written by the qualification fixture, not an authenticated Claude session. It proves packed reachability and the full handoff-to-ingestion-to-gate wiring; the explicit operator lane separately establishes that Claude itself emitted the retained envelopes.",
     "The facade's own `hook_entry_missing` refusal is unexercised. Every guarded operation reloads the delivery's pinned generation and re-verifies its digest closure, so a generation missing the staged hook entry is already refused as `trust_ineligible` — which is what the bind probe pins, because it is what fires. The hook-entry branch keeps the resolution total for a race after that verification, and no sensor here reaches it."
   ]
 }

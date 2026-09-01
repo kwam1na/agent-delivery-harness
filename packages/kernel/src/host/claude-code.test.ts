@@ -179,7 +179,14 @@ describe("composeClaudeCodeSession", () => {
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
       fence: 1,
-      grant: { allowedCapabilities: ["Bash", "Read", "Write"] },
+      workspaceRoot: bench.worktreeDir,
+      commonGitDir: path.join(bench.repoDir, ".git"),
+      authorityDir: path.join(path.dirname(bench.worktreeDir), "provider-review-authority"),
+      grant: {
+        allowedCapabilities: ["Bash", "Read", "Write"],
+        writablePaths: ["src"],
+        protectedPaths: ["src/protected", ".git"],
+      },
     });
     expect(session.ok, JSON.stringify(session)).toBe(true);
     if (!session.ok) return;
@@ -196,6 +203,30 @@ describe("composeClaudeCodeSession", () => {
     const settings = JSON.parse(readFileSync(session.settingsPath, "utf8")) as Record<string, unknown>;
     // The host's own permission system enforces the grant's capability set.
     expect((settings["permissions"] as { allow: string[] }).allow).toEqual(["Bash", "Read", "Write"]);
+    const sandbox = settings["sandbox"] as {
+      enabled: boolean;
+      failIfUnavailable: boolean;
+      allowUnsandboxedCommands: boolean;
+      excludedCommands: string[];
+      filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
+    };
+    expect(sandbox).toMatchObject({
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      excludedCommands: [],
+    });
+    expect(sandbox.filesystem.allowWrite).toEqual([path.join(bench.worktreeDir, "src")]);
+    expect(sandbox.filesystem.denyWrite).toEqual(expect.arrayContaining([
+      path.join(bench.worktreeDir, "src", "protected"),
+      path.join(bench.repoDir, ".git"),
+      path.join(path.dirname(bench.worktreeDir), "provider-review-authority"),
+    ]));
+    expect(sandbox.filesystem.denyRead).toEqual(expect.arrayContaining([
+      path.join(bench.repoDir, ".git"),
+      path.join(path.dirname(bench.worktreeDir), "provider-review-authority"),
+    ]));
+    expect(session.cliArgs).toContain("--restricted");
     const hooks = settings["hooks"] as Record<string, unknown>;
     expect(Object.keys(hooks)).toContain("PreToolUse");
     expect(Object.keys(hooks)).toContain("SessionEnd");
@@ -322,7 +353,10 @@ describe("the binding-written discovery configuration", () => {
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
       fence: 1,
-      grant: { allowedCapabilities: ["Read"] },
+      workspaceRoot: bench.worktreeDir,
+      commonGitDir: path.join(bench.repoDir, ".git"),
+      authorityDir: bench.bindingDir,
+      grant: { allowedCapabilities: ["Read"], writablePaths: ["src"], protectedPaths: [".git", PROJECTION_DIR] },
     });
     expect(session.ok).toBe(true);
     if (!session.ok) return;
@@ -357,7 +391,10 @@ describe("the binding-written discovery configuration", () => {
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
       fence: 1,
-      grant: { allowedCapabilities: ["Read"] },
+      workspaceRoot: bench.worktreeDir,
+      commonGitDir: path.join(bench.repoDir, ".git"),
+      authorityDir: bench.bindingDir,
+      grant: { allowedCapabilities: ["Read"], writablePaths: ["src"], protectedPaths: [".git", PROJECTION_DIR] },
     });
     expect(session.ok).toBe(true);
     if (!session.ok) return;
@@ -394,7 +431,10 @@ describe("tearDownProjection", () => {
       statePath: path.join(bench.bindingDir, "state.json"),
       hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
       fence: 1,
-      grant: { allowedCapabilities: ["Read"] },
+      workspaceRoot: bench.worktreeDir,
+      commonGitDir: path.join(bench.repoDir, ".git"),
+      authorityDir: bench.bindingDir,
+      grant: { allowedCapabilities: ["Read"], writablePaths: ["src"], protectedPaths: [".git", PROJECTION_DIR] },
     });
     expect(session.ok).toBe(true);
 

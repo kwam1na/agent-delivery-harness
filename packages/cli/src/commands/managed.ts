@@ -2,7 +2,7 @@
  * `managed` — the host-facing slice of the managed-delivery facade: the
  * typed status/resume surface and the checkpoint operations an active host
  * task drives (`status`, `next`, stage results, the trusted sensor, review
- * attempts, admission, the tracked record, the finish line, and
+ * reduction, admission, the tracked record, the finish line, and
  * `explain-blocker`).
  *
  * WHAT IS DELIBERATELY NOT HERE. The operator confirmations — contract
@@ -40,7 +40,6 @@ const MANAGED_OPERATIONS: readonly string[] = Object.freeze([
   "submit-plan",
   "checkpoint",
   "run-sensor",
-  "submit-review",
   "reduce-review",
   "compound",
   "admit",
@@ -396,38 +395,6 @@ export const managedCommand: CommandDescriptor = {
         const sensed = await facade.runSensor({ deliveryId, fence: invokingFence });
         if (!sensed.ok) return { kind: "blocked", blockers: [...sensed.blockers] };
         return { kind: "ok", summary: `sensor ${sensed.outcome}; delivery is ${sensed.state}` };
-      }
-      case "submit-review": {
-        const attemptId = flag(rest, "--attempt");
-        const lensId = flag(rest, "--lens");
-        const verdict = flag(rest, "--verdict");
-        const contextFile = flag(rest, "--context-file");
-        const artifactFile = flag(rest, "--artifact-file");
-        if (
-          attemptId === undefined ||
-          lensId === undefined ||
-          (verdict !== "approved" && verdict !== "findings") ||
-          contextFile === undefined ||
-          artifactFile === undefined
-        ) {
-          return {
-            kind: "usage",
-            message: "submit-review requires --attempt <id> --lens <id> --verdict <approved|findings> --context-file <path> --artifact-file <path>.",
-          };
-        }
-        let contextBytes: string;
-        let artifactBytes: string;
-        try {
-          contextBytes = await readFile(path.resolve(context.rootDir, contextFile), "utf8");
-          artifactBytes = await readFile(path.resolve(context.rootDir, artifactFile), "utf8");
-        } catch (error) {
-          return { kind: "usage", message: `submit-review could not read its files: ${error instanceof Error ? error.message : String(error)}` };
-        }
-        const invokingFence = requireFence();
-        if (typeof invokingFence !== "number") return invokingFence;
-        const submitted = await facade.submitReviewAttempt({ deliveryId, attemptId, lensId, verdict, contextBytes, artifactBytes, fence: invokingFence });
-        if (!submitted.ok) return { kind: "blocked", blockers: [...submitted.blockers] };
-        return { kind: "ok", summary: `attempt ${attemptId} recorded for ${lensId}` };
       }
       case "reduce-review": {
         const invokingFence = requireFence();
