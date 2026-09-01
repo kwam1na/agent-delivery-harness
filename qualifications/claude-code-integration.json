@@ -1,7 +1,7 @@
 {
   "schemaVersion": "claude-code-integration/1",
   "description": "Qualification record for the Claude Code-native delivery integration's two layers: the trusted model-external binding that applies and attests the grant, workspace, fence, and run-pinned projection BEFORE admission, and the in-session projection that reads checkpoints, consumes immutable context, and submits normalized results AFTER it. Live legs were driven against a real authenticated Claude Code session by the qualification harness, never by the product. Product-owned properties are proven by in-process sensors named here. Nothing is claimed beyond what ran.",
-  "recordedAt": "2026-09-01T04:49:00Z",
+  "recordedAt": "2026-09-01T05:17:16Z",
   "platform": "macOS 15.6.1 arm64",
   "host": {
     "hostId": "claude-code",
@@ -13,8 +13,8 @@
       "hostVersion": "2.1.252",
       "outcome": "unverified",
       "surface": "authenticated claude -p with --restricted, exact tool grant, empty ambient setting sources, sandbox.enabled=true, failIfUnavailable=true, allowUnsandboxedCommands=false, excludedCommands=[], and exact filesystem allow/deny rules on macOS Seatbelt",
-      "method": "the current strict admission surface and filesystem boundary remain established by the retained Seatbelt characterization. This candidate's authenticated default lane additionally proved the exact-Read PostToolUse observation wiring, but that callback-focused lane did not recombine every tier decision under the full strict-sandbox admission profile, so it does not silently re-grade the host tier.",
-      "observedAt": "2026-09-01T04:48:10Z",
+      "method": "the current strict admission surface and filesystem boundary remain established by the retained Seatbelt characterization. This candidate's authenticated exact-Read leg additionally used the existing binding composer and its returned --restricted, digest-bound strict-sandbox settings, empty ambient setting sources, and exact tool grant to prove the PostToolUse observation wiring. The other five host-behavior probes retain their historical configurations and provenance, so this callback-focused refresh does not silently re-grade the host tier.",
+      "observedAt": "2026-09-01T05:16:31Z",
       "reason": "the callback-focused authenticated lane proves projection consumption, not a new full-profile tier grade",
       "scope": "the strict filesystem admission surface remains current at 2.1.252; the new exact-Read PostToolUse observation is recorded separately below and does not widen same-workspace resume."
     }
@@ -103,9 +103,9 @@
       "conclusive": true,
       "verification": {
         "kind": "live-probe",
-        "surface": "claude -p (v2.1.252) with the binding-composed exact-Read PostToolUse hook and empty ambient setting sources",
-        "method": "an ordinary delivery prompt named no projection path; the host completed an exact Read of the receipted workflow source and the binding-owned observation file recorded that canonical entry and invocation",
-        "observedAt": "2026-09-01T04:48:09Z"
+        "surface": "claude -p (v2.1.252) with --restricted, the binding-composed digest-bound strict sandbox and exact-Read PostToolUse hook, the exact tool grant, and empty ambient setting sources",
+        "method": "an ordinary delivery prompt named no projection path; the operator-owned qualifier passed the existing binding composer's returned admission vector unchanged, added the exact tool grant, and the host completed an exact Read of the receipted workflow source; the binding-owned observation file recorded that canonical entry and invocation",
+        "observedAt": "2026-09-01T05:16:30Z"
       }
     }
   ],
@@ -114,8 +114,8 @@
     "optIn": "QUALIFY_CLAUDE_CODE_SESSION=1",
     "excludedFromCheck": "the lane drives a real authenticated host session and is never part of npm run check",
     "userConfigurationUntouched": "the lane admits every session with --setting-sources set to the empty selection, so no ambient setting scope — user, project, or local — is read, and the binding wrote nothing outside its disposable directory. It does NOT isolate the host's own state: the session authenticates with, and writes its project history and transcripts into, the operator's real Claude Code configuration directory, exactly as any session that operator runs does.",
-    "settingsComposition": "the lane writes its settings file in the binding's shape and with the binding's admission flags rather than calling composeClaudeCodeSession, which requires a materialized projection the early probes deliberately do not have. It composes the same PreToolUse interceptor, exact-Read PostToolUse observation hook, and optional SessionEnd hook; the host module and qualifier-level falsifier pin those callback shapes.",
-    "runs": "the exact 2026-09-01T04:48:09Z authenticated run reported all six probes satisfied on Claude Code 2.1.252. This candidate refresh binds the newly affected projection-consumption probe — the ordinary delivery turn's completed exact Read of `workflows/delivery-v1.json` — while the other five keep their existing recorded provenance and no new full-profile tier grade is claimed."
+    "settingsComposition": "the projection-consumption leg materializes the projection, calls the existing composeClaudeCodeSession binding helper, passes its returned --restricted, digest-bound strict-sandbox settings and empty setting sources unchanged, and adds only the exact host tool grant and non-interactive permission mode owned by the qualifier. The other five host-behavior probes keep their historical hook-only settings because this refresh does not re-grade lifecycle. The host module and qualifier-level falsifier pin the strict exact-Read leg's argument, sandbox, authority-denial, and callback shapes.",
+    "runs": "the exact 2026-09-01T05:16:30Z authenticated command reported all six probes satisfied on Claude Code 2.1.252. This candidate refresh binds only the projection-consumption leg — the ordinary delivery turn's completed exact Read of `workflows/delivery-v1.json` under the actual strict binding profile — while the other five keep their existing recorded provenance and no new full-profile tier grade is claimed."
   },
   "fixtureLegs": [
     {

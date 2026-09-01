@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { mintGrantAttestation } from "../packages/kernel/src/host/claude-code.ts";
 import { projectionConsumptionObservationFile } from "../packages/kernel/src/host/consumption-gate-record.ts";
-import { writeSettings } from "./qualify-claude-code-session.ts";
+import { composeQualificationSession } from "./qualify-claude-code-session.ts";
 
 interface HookSettings {
   readonly hooks?: {
@@ -31,7 +31,7 @@ const dispatchPostToolUse = (settings: HookSettings, input: Record<string, unkno
 };
 
 describe("authenticated qualifier hook composition", () => {
-  it("records no consumption without PostToolUse and records one completed exact Read through the composed hook", () => {
+  it("uses the strict binding admission vector and records one completed exact Read through its composed hook", async () => {
     const root = mkdtempSync(path.join(realpathSync(tmpdir()), "qualifier-post-tool-use-"));
     try {
       const bindingDir = path.join(root, "binding");
@@ -72,12 +72,23 @@ describe("authenticated qualifier hook composition", () => {
           entries: [{ path: "workflows/delivery-v1.json" }],
         })}\n`,
       );
+      const session = await composeQualificationSession({
+        bindingDir,
+        statePath,
+        workspaceRoot: root,
+        commonGitDir: path.join(root, ".git"),
+        grant,
+      });
+      const boundExpectation = {
+        ...expectation,
+        discoveryConfigurationDigest: session.discoveryConfigurationDigest,
+      };
       writeFileSync(
         statePath,
         `${JSON.stringify({
-          expectation,
+          expectation: boundExpectation,
           grant,
-          attestation: mintGrantAttestation({ grant, expectation, expiry: "2099-01-01T00:00:00Z" }),
+          attestation: mintGrantAttestation({ grant, expectation: boundExpectation, expiry: "2099-01-01T00:00:00Z" }),
           workspaceRoot: root,
           observationPath: path.join(bindingDir, "activity.json"),
           projectionConsumptionPath: observationPath,
@@ -85,9 +96,39 @@ describe("authenticated qualifier hook composition", () => {
           deliveryId: expectation.deliveryId,
         })}\n`,
       );
-
-      const settingsPath = writeSettings({ bindingDir, statePath, allow: ["Read"] });
-      const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as HookSettings;
+      const settings = JSON.parse(readFileSync(session.settingsPath, "utf8")) as HookSettings & {
+        readonly sandbox: {
+          readonly enabled: boolean;
+          readonly failIfUnavailable: boolean;
+          readonly excludedCommands: readonly string[];
+          readonly allowUnsandboxedCommands: boolean;
+          readonly filesystem: {
+            readonly allowWrite: readonly string[];
+            readonly denyWrite: readonly string[];
+            readonly denyRead: readonly string[];
+          };
+        };
+      };
+      expect(session.cliArgs).toEqual([
+        "--restricted",
+        "--settings",
+        session.settingsPath,
+        "--setting-sources",
+        "",
+        "--tools",
+        "Read",
+        "--permission-mode",
+        "dontAsk",
+      ]);
+      expect(settings.sandbox).toMatchObject({
+        enabled: true,
+        failIfUnavailable: true,
+        excludedCommands: [],
+        allowUnsandboxedCommands: false,
+      });
+      expect(settings.sandbox.filesystem.allowWrite).toEqual([]);
+      expect(settings.sandbox.filesystem.denyWrite).toEqual(expect.arrayContaining([root, bindingDir]));
+      expect(settings.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining([bindingDir]));
       const input = {
         tool_name: "Read",
         tool_use_id: "toolu_qualifier_exact_read",
