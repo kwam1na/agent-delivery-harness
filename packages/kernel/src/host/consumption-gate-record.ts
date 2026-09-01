@@ -50,7 +50,7 @@
  * The writer consumes one host-neutral observation contract. A host without a
  * qualified adapter simply produces no affirmative evidence.
  */
-import { open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { PROJECTION_DIR, readConsumptionMarker, verifyProjection } from "./projection.ts";
@@ -308,28 +308,36 @@ async function resolveGateRecordTarget(
   let repositoryRoot: string;
   let gateRecordParent: string;
   let gateRecordPath: string;
+  let recordLink: Awaited<ReturnType<typeof lstat>>;
+  let recordStat: Awaited<ReturnType<typeof stat>>;
   try {
-    [repositoryRoot, gateRecordParent, gateRecordPath] = await Promise.all([
-      realpath(input.repositoryRoot),
+    repositoryRoot = await realpath(input.repositoryRoot);
+    const expectedParent = path.join(repositoryRoot, ".agents", "policy");
+    const expectedRecord = path.join(expectedParent, SHADOW_MILESTONE_GATE_RECORD_PATH.split("/").at(-1)!);
+    [gateRecordParent, gateRecordPath, recordLink, recordStat] = await Promise.all([
       realpath(path.dirname(input.gateRecordPath)),
       realpath(input.gateRecordPath),
+      lstat(expectedRecord),
+      stat(expectedRecord),
     ]);
+    if (
+      gateRecordParent !== expectedParent ||
+      gateRecordPath !== expectedRecord ||
+      !recordLink.isFile() ||
+      recordLink.isSymbolicLink() ||
+      recordStat.nlink !== 1
+    ) {
+      return fail(
+        "gate_record_repository_mismatch",
+        `${input.gateRecordPath} is not the single-link protected gate record at ${expectedRecord}; the writer refuses a same-repository alias before changing either record`,
+      );
+    }
   } catch (error) {
     return fail(
       "gate_record_unreadable",
       `${input.gateRecordPath} cannot be resolved inside its repository: ${
         error instanceof Error ? error.message : String(error)
       }`,
-    );
-  }
-  const isInsideRepository = (candidate: string): boolean => {
-    const relative = path.relative(repositoryRoot, candidate);
-    return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-  };
-  if (!isInsideRepository(gateRecordParent) || !isInsideRepository(gateRecordPath)) {
-    return fail(
-      "gate_record_repository_mismatch",
-      `${input.gateRecordPath} resolves outside repository ${repositoryRoot}; the writer refuses a symlinked cross-repository gate target before changing either record`,
     );
   }
   return { repositoryRoot, gateRecordPath };
@@ -340,6 +348,12 @@ async function writeEntry(
   record: ProjectionConsumptionRecord,
   lockPath: string,
 ): Promise<EmitProjectionConsumptionResult> {
+  // The first check happened before claiming the lock. Repeat it while the
+  // lock is held before reading and immediately before publishing, so a
+  // same-repository symlink or hardlink swap never redirects this writer into
+  // a model-writable inode between those operations.
+  const beforeRead = await resolveGateRecordTarget(input);
+  if ("ok" in beforeRead) return beforeRead;
   const loaded = await readGateRecord(input);
   if ("ok" in loaded) return loaded;
 
@@ -373,6 +387,8 @@ async function writeEntry(
   // new one, never a partial write.
   const tempPath = `${input.gateRecordPath}.${path.basename(lockPath)}.tmp`;
   try {
+    const beforePublish = await resolveGateRecordTarget(input);
+    if ("ok" in beforePublish) return beforePublish;
     await writeFile(tempPath, `${JSON.stringify({ ...document, deliveries }, null, 2)}\n`);
     await rename(tempPath, input.gateRecordPath);
   } catch (error) {

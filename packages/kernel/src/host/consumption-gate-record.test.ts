@@ -12,7 +12,7 @@
  * Written RED before `consumption-gate-record.ts` existed.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -74,8 +74,10 @@ async function gateRecordFile(
   deliveries: unknown[] = [],
   repositoryId = "athena",
 ): Promise<string> {
-  const dir = await mkdtemp(path.join(scratch, `${name}-policy-`));
+  const root = await mkdtemp(path.join(scratch, `${name}-policy-`));
+  const dir = path.join(root, ".agents", "policy");
   const file = path.join(dir, "shadow-milestone-gate-record.json");
+  mkdirSync(dir, { recursive: true });
   writeFileSync(
     file,
     `${JSON.stringify(
@@ -130,7 +132,7 @@ const emit = (
 ) =>
   emitProjectionConsumptionRecord({
     ...input,
-    repositoryRoot: input.repositoryRoot ?? path.dirname(input.gateRecordPath),
+    repositoryRoot: input.repositoryRoot ?? path.resolve(input.gateRecordPath, "..", "..", ".."),
     expectedRepositoryId: input.expectedRepositoryId ?? "athena",
   });
 
@@ -643,8 +645,7 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(materialized.ok).toBe(true);
     observeConsumption(bench, "dlv-shadow-harness", 1);
 
-    const dir = await mkdtemp(path.join(scratch, "other-consumer-policy-"));
-    const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
+    const gateRecordPath = await gateRecordFile("other-consumer", [], "agent-delivery-harness");
     writeFileSync(
       gateRecordPath,
       `${JSON.stringify(
@@ -728,8 +729,7 @@ describe("emitProjectionConsumptionRecord", () => {
     observeConsumption(bench, "dlv-shadow-version", 1);
 
     for (const spec of ["athena-shadow-milestone-gate-record/2", "shadow-milestone-gate-record/1", "notes/1"]) {
-      const dir = await mkdtemp(path.join(scratch, "version-guard-policy-"));
-      const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
+      const gateRecordPath = await gateRecordFile("version-guard", []);
       writeFileSync(gateRecordPath, `${JSON.stringify({ spec, deliveries: [] }, null, 2)}\n`);
       const emitted = await emit({
         gateRecordPath,
@@ -758,8 +758,7 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(materialized.ok).toBe(true);
     observeConsumption(bench, "dlv-shadow-3", 1);
 
-    const dir = await mkdtemp(path.join(scratch, "wrong-artifact-policy-"));
-    const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
+    const gateRecordPath = await gateRecordFile("wrong-artifact", []);
     writeFileSync(gateRecordPath, `${JSON.stringify({ spec: "something-else/1", deliveries: [] }, null, 2)}\n`);
 
     const emitted = await emit({
@@ -776,6 +775,56 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(deliveriesIn(gateRecordPath)).toEqual([]);
   });
 
+  it("refuses same-repository policy aliases before creating a lock or changing model-writable bytes", async () => {
+    for (const kind of ["directory-symlink", "file-symlink", "hardlink"] as const) {
+      const bench = await workbench(`same-repository-${kind}`);
+      const materialized = await materializeProjection({
+        worktreeDir: bench.worktreeDir,
+        generationRoot: bench.generationRoot,
+        deliveryId: `dlv-shadow-${kind}`,
+        fence: 1,
+        bindingDir: bench.bindingDir,
+        exec,
+      });
+      expect(materialized.ok).toBe(true);
+      observeConsumption(bench, `dlv-shadow-${kind}`, 1);
+
+      const gateRecordPath = await gateRecordFile(`same-repository-${kind}`);
+      const repositoryRoot = path.resolve(gateRecordPath, "..", "..", "..");
+      const modelWritableRecord = path.join(repositoryRoot, "src", "policy", path.basename(gateRecordPath));
+      mkdirSync(path.dirname(modelWritableRecord), { recursive: true });
+      const protectedBefore = readFileSync(gateRecordPath, "utf8");
+
+      if (kind === "directory-symlink") {
+        writeFileSync(modelWritableRecord, protectedBefore);
+        await rm(path.join(repositoryRoot, ".agents"), { recursive: true, force: true });
+        symlinkSync(path.join(repositoryRoot, "src"), path.join(repositoryRoot, ".agents"), "dir");
+      } else if (kind === "file-symlink") {
+        writeFileSync(modelWritableRecord, protectedBefore);
+        await rm(gateRecordPath);
+        symlinkSync(modelWritableRecord, gateRecordPath, "file");
+      } else {
+        linkSync(gateRecordPath, modelWritableRecord);
+      }
+      const modelWritableBefore = readFileSync(modelWritableRecord, "utf8");
+
+      const emitted = await emit({
+        gateRecordPath,
+        worktreeDir: bench.worktreeDir,
+        bindingDir: bench.bindingDir,
+        deliveryId: `dlv-shadow-${kind}`,
+        fence: 1,
+        category: "code",
+      });
+
+      expect(emitted.ok, `${kind} was accepted`).toBe(false);
+      if (!emitted.ok) expect(emitted.blockers.map((blocker) => blocker.code)).toEqual(["gate_record_repository_mismatch"]);
+      expect(readFileSync(modelWritableRecord, "utf8")).toBe(modelWritableBefore);
+      expect(existsSync(`${gateRecordPath}.lock`)).toBe(false);
+      expect(existsSync(`${modelWritableRecord}.lock`)).toBe(false);
+    }
+  });
+
   it("refuses a missing gate record rather than creating one", async () => {
     const bench = await workbench("missing-artifact");
     const materialized = await materializeProjection({
@@ -789,8 +838,8 @@ describe("emitProjectionConsumptionRecord", () => {
     expect(materialized.ok).toBe(true);
     observeConsumption(bench, "dlv-shadow-4", 1);
 
-    const dir = await mkdtemp(path.join(scratch, "missing-artifact-policy-"));
-    const gateRecordPath = path.join(dir, "shadow-milestone-gate-record.json");
+    const gateRecordPath = await gateRecordFile("missing-artifact", []);
+    await rm(gateRecordPath);
     const emitted = await emit({
       gateRecordPath,
       worktreeDir: bench.worktreeDir,
