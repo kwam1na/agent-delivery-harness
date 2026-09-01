@@ -229,6 +229,7 @@ describe("composeClaudeCodeSession", () => {
     expect(session.cliArgs).toContain("--restricted");
     const hooks = settings["hooks"] as Record<string, unknown>;
     expect(Object.keys(hooks)).toContain("PreToolUse");
+    expect(Object.keys(hooks)).toContain("PostToolUse");
     expect(Object.keys(hooks)).toContain("SessionEnd");
     expect(JSON.stringify(hooks)).toContain("hook-main.ts");
 

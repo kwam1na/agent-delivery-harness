@@ -11,10 +11,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { digestCanonical } from "../digest.ts";
-import { PROJECTION_DIR } from "./claude-code.ts";
 import {
   decideHookInvocation,
-  projectionEntryTouched,
+  exactWorkflowSourceRead,
   renderHookDecision,
   type HookBindingState,
 } from "./hook-main.ts";
@@ -542,123 +541,96 @@ describe("renderHookDecision", () => {
   });
 });
 
-describe("projectionEntryTouched", () => {
-  const root = "/work/tree";
-  // What the materialization receipt lists: FILES only. No directory and no
-  // glob is ever a receipted entry, which is the fact the lockout case below
-  // turns on.
-  const receipted = ["consumption.json", "workflows/delivery-v1.json", "skills/deliver-work/SKILL.md"];
-  const touched = (toolInput: Record<string, unknown>) => projectionEntryTouched(root, toolInput, receipted);
+describe("exactWorkflowSourceRead", () => {
+  const observedState: HookBindingState = { ...state, deliveryId: expectation.deliveryId };
+  const receipt = {
+    deliveryId: expectation.deliveryId,
+    projectionDigest: expectation.projectionDigest,
+    entries: ["workflows/delivery-v1.json"],
+  } as const;
+  const read = (input: Record<string, unknown>) => exactWorkflowSourceRead(observedState, input, receipt);
 
-  it("names the receipted entry a file-naming member resolves to", () => {
-    expect(touched({ file_path: "/work/tree/.managed-projection/skills/deliver-work/SKILL.md" })).toBe(
-      "skills/deliver-work/SKILL.md",
-    );
-    expect(touched({ path: ".managed-projection/workflows/delivery-v1.json" })).toBe("workflows/delivery-v1.json");
-    expect(touched({ notebook_path: ".managed-projection/consumption.json" })).toBe("consumption.json");
+  it("binds only the host's exact completed Read invocation to the canonical workflow source", () => {
+    expect(
+      read({
+        tool_name: "Read",
+        tool_use_id: "toolu_read_workflow",
+        tool_input: { file_path: "/work/tree/.managed-projection/workflows/delivery-v1.json" },
+      }),
+    ).toEqual({
+      deliveryId: expectation.deliveryId,
+      fence: expectation.invocationFence,
+      hostInvocationId: "toolu_read_workflow",
+      canonicalProjectionPath: "/work/tree/.managed-projection/workflows/delivery-v1.json",
+      projectionDigest: expectation.projectionDigest,
+    });
   });
 
-  it("names nothing for a RECEIPTED path a session merely mentions", () => {
-    // The case that stayed open until the member restriction landed, and the
-    // one worth asserting most: receipted paths are NOT secret —
-    // consumption.json is constant and every skills/ and workflows/ entry is
-    // enumerable from the pinned generation — so containment alone cannot
-    // stop a session from naming a real one in free text. Only the member
-    // restriction can, and each payload here names a genuinely receipted
-    // entry, so the assertion fails the moment that restriction is dropped.
-    const real = ".managed-projection/skills/deliver-work/SKILL.md";
-    expect(touched({ command: "echo hi", description: real })).toBeUndefined();
-    expect(touched({ command: `cat ${real}` })).toBeUndefined();
-    expect(touched({ pattern: ".managed-projection/workflows/delivery-v1.json", path: "src" })).toBeUndefined();
-    expect(touched({ file_path: "/work/tree/src/greet.mjs", old_string: real })).toBeUndefined();
-    expect(touched({ prompt: `read ${real}` })).toBeUndefined();
+  it("rejects a planted path-only claim and every mismatched host/read/receipt binding", () => {
+    const pathOnly = { tool_input: { file_path: "/work/tree/.managed-projection/workflows/delivery-v1.json" } };
+    expect(read(pathOnly)).toBeUndefined();
+    expect(read({ ...pathOnly, tool_name: "Grep", tool_use_id: "toolu_grep" })).toBeUndefined();
+    expect(
+      read({
+        tool_name: "Read",
+        tool_use_id: "toolu_other",
+        tool_input: { file_path: "/work/tree/.managed-projection/consumption.json" },
+      }),
+    ).toBeUndefined();
+    expect(
+      exactWorkflowSourceRead(observedState, { ...pathOnly, tool_name: "Read", tool_use_id: "toolu_wrong" }, {
+        ...receipt,
+        projectionDigest: "b".repeat(64),
+      }),
+    ).toBeUndefined();
   });
 
-  it("names nothing the receipt does not list, so no unadmissible name burns the one-shot slot", () => {
-    // THE LOCKOUT. The observation is recorded once per fence, so a name that
-    // could never be admitted must not consume that slot. A Grep over the
-    // skills directory names a DIRECTORY; the receipt lists files only.
-    // Recording it would leave the honest Read that follows locked out and
-    // the delivery excluded — and searching a directory before reading a file
-    // in it is ordinary agent behavior.
-    expect(touched({ pattern: "finish line", path: ".managed-projection/skills" })).toBeUndefined();
-    expect(touched({ path: ".managed-projection/workflows" })).toBeUndefined();
-    expect(touched({ file_path: ".managed-projection/skills/invented.md" })).toBeUndefined();
-    expect(touched({ file_path: ".managed-projection" })).toBeUndefined();
-    // ...and the honest read that follows still names its entry.
-    expect(touched({ file_path: ".managed-projection/skills/deliver-work/SKILL.md" })).toBe(
-      "skills/deliver-work/SKILL.md",
-    );
-  });
-
-  it("names nothing for anything outside the projection subtree", () => {
-    // A sibling whose name merely starts with the subtree's, a traversal back
-    // out, the ambient vendored generation, another tree's projection, and
-    // non-string arguments all name no entry — otherwise ordinary work, or a
-    // delivery that never opened the subtree, would read as a projection touch.
-    expect(touched({ file_path: "/work/tree/src/greet.mjs" })).toBeUndefined();
-    expect(touched({ file_path: "/work/tree/.managed-projection-notes/consumption.json" })).toBeUndefined();
-    expect(touched({ file_path: "/work/tree/.managed-projection/../src/a.ts" })).toBeUndefined();
-    expect(touched({ file_path: "/work/tree/.agent-skills/workflows/delivery-v1.json" })).toBeUndefined();
-    expect(touched({ file_path: "/elsewhere/.managed-projection/consumption.json" })).toBeUndefined();
-    expect(touched({ count: 3, enabled: true, file_path: "" })).toBeUndefined();
-  });
-
-  it("sees nothing when the run reaches its workflow without naming a path", () => {
-    // THE KNOWN UNDER-OBSERVATION, pinned so it cannot be forgotten or
-    // quietly claimed away. A skill invocation names a skill, not a file, and
-    // a shell command carrying arguments does not resolve as a path — so a
-    // run that reaches its workflow source ONLY in those ways is invisible
-    // here and its delivery is EXCLUDED rather than affirmed. That is the
-    // safe direction.
-    //
-    // It is NOT a forecast that the milestone is unscoreable. A live probe
-    // against this host observed the opposite: an ordinary delivery turn
-    // named receipted entries through Read/file_path repeatedly, and the
-    // observation was recorded. What remains true is the narrow statement
-    // these two payloads make, and the live lane's consumption probe is what
-    // keeps the broader claim honest for any binding.
-    expect(touched({ skill: "deliver-work", args: "execute" })).toBeUndefined();
-    expect(touched({ command: "cat .managed-projection/workflows/delivery-v1.json" })).toBeUndefined();
-  });
-
-  it("names the entry when the host reports the path through a symlinked root", () => {
-    // REGRESSION, found by a live host probe and invisible to every fixture
-    // that came before it: the host reports paths in resolved form while the
-    // workspace root arrives as the operator wrote it. Under a symlinked
-    // parent — the macOS system temp root is one, `/var` -> `/private/var` —
-    // a lexical comparison turns every genuine read into an apparent escape
-    // and observes NOTHING. That failure is silent by construction, because
-    // an unobserved consumption is spelled exactly like an honest absence.
-    const real = mkdtempSync(path.join(realpathSync(tmpdir()), "projection-symlink-"));
-    const link = `${real}-link`;
-    mkdirSync(path.join(real, PROJECTION_DIR, "workflows"), { recursive: true });
-    writeFileSync(path.join(real, PROJECTION_DIR, "workflows", "delivery-v1.json"), "{}\n");
-    symlinkSync(real, link);
-    try {
-      // Workspace root reached through the link; the host names the resolved
-      // path, exactly as it did in the probe.
-      expect(
-        projectionEntryTouched(link, { file_path: path.join(real, PROJECTION_DIR, "workflows", "delivery-v1.json") }, [
-          "workflows/delivery-v1.json",
-        ]),
-      ).toBe("workflows/delivery-v1.json");
-      // And the converse pairing, so neither direction regresses.
-      expect(
-        projectionEntryTouched(real, { file_path: path.join(link, PROJECTION_DIR, "workflows", "delivery-v1.json") }, [
-          "workflows/delivery-v1.json",
-        ]),
-      ).toBe("workflows/delivery-v1.json");
-      // Resolving must not smuggle in a path outside the subtree.
-      expect(projectionEntryTouched(link, { file_path: path.join(real, "elsewhere.md") }, ["elsewhere.md"])).toBeUndefined();
-    } finally {
-      unlinkSync(link);
-      rmSync(real, { recursive: true, force: true });
+  it("rejects every partial Read spelling, including a zero offset", () => {
+    const fullRead = {
+      tool_name: "Read",
+      tool_use_id: "toolu_partial",
+      tool_input: { file_path: "/work/tree/.managed-projection/workflows/delivery-v1.json" },
+    };
+    for (const partial of [
+      { limit: 1 },
+      { offset: 1 },
+      { offset: 0 },
+      { start_line: 1 },
+      { end_line: 1 },
+    ]) {
+      expect(read({ ...fullRead, tool_input: { ...fullRead.tool_input, ...partial } })).toBeUndefined();
     }
   });
 
-  it("names nothing when the receipt is unavailable", () => {
-    // Fail-safe: no receipt, no admissible name, no observation.
-    expect(projectionEntryTouched(root, { file_path: ".managed-projection/consumption.json" }, [])).toBeUndefined();
+  it("rejects a symlink alias and a workflow entry swapped to a symlink", () => {
+    const root = mkdtempSync(path.join(realpathSync(tmpdir()), "exact-workflow-read-"));
+    const workflowDir = path.join(root, ".managed-projection", "workflows");
+    const direct = path.join(workflowDir, "delivery-v1.json");
+    const alias = path.join(workflowDir, "workflow-alias.json");
+    const original = path.join(workflowDir, "delivery-v1.original.json");
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(direct, "{}\n");
+    symlinkSync(direct, alias);
+    const physicalState: HookBindingState = { ...observedState, workspaceRoot: root };
+    const invocation = (file_path: string) => ({
+      tool_name: "Read",
+      tool_use_id: "toolu_alias",
+      tool_input: { file_path },
+    });
+    try {
+      // An alias resolving to the same bytes is still not the direct path.
+      expect(exactWorkflowSourceRead(physicalState, invocation(alias), receipt)).toBeUndefined();
+      expect(exactWorkflowSourceRead(physicalState, invocation(direct), receipt)).toMatchObject({ canonicalProjectionPath: direct });
+
+      // A later swap means even the direct spelling no longer names a direct
+      // projection file, and the old physical target is rejected as well.
+      unlinkSync(direct);
+      writeFileSync(original, "{}\n");
+      symlinkSync(original, direct);
+      expect(exactWorkflowSourceRead(physicalState, invocation(direct), receipt)).toBeUndefined();
+      expect(exactWorkflowSourceRead(physicalState, invocation(original), receipt)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

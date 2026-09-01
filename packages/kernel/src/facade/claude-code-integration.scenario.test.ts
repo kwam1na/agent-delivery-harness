@@ -23,7 +23,7 @@
  * verified teardown, so the gate is the grade, not a hard-coded refusal.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -781,6 +781,13 @@ describe("the in-session projection's immutable context", () => {
 });
 
 describe("the binding-sourced projection-consumption gate record", () => {
+  // Landing dependency: V26-1518 moves the hook runtime and binding-owned
+  // state outside an admitted agent's Bash write reach. Rebase this scenario
+  // onto that change before turning this into an executable integration probe:
+  // a direct Bash launch of hook-main must leave binding evidence unchanged,
+  // while the genuine Claude Code callback still records the exact read.
+  it.todo("V26-1518: agent Bash cannot mint hook evidence while the genuine host callback can");
+
   /** The consuming repository's gate-record artifact, in the shape its guard reads. */
   const gateRecord = (name: string): string => {
     const dir = path.join(scratch, `gate-record-${name}`);
@@ -812,20 +819,25 @@ describe("the binding-sourced projection-consumption gate record", () => {
    * in the session writes the observation, and no test fixture stands in for
    * it — the point of the record is that this fact was observed, not assumed.
    */
-  const intercept = async (session: Session, invocation: unknown): Promise<string> => {
+  const intercept = async (session: Session, event: "pre-tool-use" | "post-tool-use", invocation: unknown): Promise<string> => {
     const statePath = await bindingStatePath(session.deliveryId);
     return execFileSync(
       path.join(REPO_ROOT, "node_modules", ".bin", "tsx"),
-      [path.join(REPO_ROOT, "packages", "kernel", "src", "host", "hook-main.ts"), "pre-tool-use", statePath, String(session.fence)],
+      [path.join(REPO_ROOT, "packages", "kernel", "src", "host", "hook-main.ts"), event, statePath, String(session.fence)],
       { input: JSON.stringify(invocation), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
     );
   };
 
-  const consumeProjection = (session: Session): Promise<string> =>
-    intercept(session, {
+  const consumeProjection = async (session: Session): Promise<string> => {
+    const invocation = {
       tool_name: "Read",
-      tool_input: { file_path: path.join(session.worktree, PROJECTION_DIR, "workflows", "delivery-v1.json") },
-    });
+      tool_input: { file_path: realpathSync(path.join(session.worktree, PROJECTION_DIR, "workflows", "delivery-v1.json")) },
+      tool_use_id: `toolu_${session.deliveryId}`,
+    };
+    const admitted = await intercept(session, "pre-tool-use", invocation);
+    if (admitted.length > 0) return admitted;
+    return intercept(session, "post-tool-use", invocation);
+  };
 
   it("gives a shadow delivery an entry the guard admits, and two deliveries two distinct entries", async () => {
     const gateRecordPath = gateRecord("two-deliveries");
@@ -883,7 +895,7 @@ describe("the binding-sourced projection-consumption gate record", () => {
 
     // A grep over the skills directory: names a DIRECTORY, which the receipt
     // never lists, plus a free-text pattern naming a real receipted entry.
-    await intercept(session, {
+    await intercept(session, "pre-tool-use", {
       tool_name: "Grep",
       tool_input: {
         pattern: ".managed-projection/consumption.json",
