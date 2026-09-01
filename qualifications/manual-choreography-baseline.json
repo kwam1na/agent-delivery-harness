@@ -1,7 +1,7 @@
 {
   "schemaVersion": "manual-choreography-baseline/1",
-  "capturedAt": "2026-08-30T11:05:00Z",
-  "purpose": "The frozen quantitative baseline of manual delivery choreography on the proving host: operator-intervention counts and blocked-versus-progressing wall-clock shares for three real Athena deliveries executed with the current skills/harness choreography. The later single-host shadow comparison must measure a like-for-like set (same mix and count) against these numbers.",
+  "capturedAt": "2026-09-01T01:21:03Z",
+  "purpose": "The frozen quantitative baseline of manual delivery choreography on the proving host: operator-intervention counts and blocked-versus-progressing wall-clock shares for three real Athena deliveries executed with the current skills/harness choreography. Every window ends at the first merge-ready report after external verification, never at a local preparation gate, eventual merge, or post-report idle time. The later single-host shadow comparison must measure a like-for-like set (same mix, count, and endpoint) against these numbers.",
   "plan": {
     "repository": "athena",
     "path": "docs/plans/2026-08-29-001-feat-managed-agent-delivery-system-plan.md",
@@ -21,7 +21,8 @@
   },
   "reRecordTriggers": [
     "Host grading moves the proving host away from claude-code.",
-    "The operator-intervention rubric text in the plan is amended (its sha256 here stops matching)."
+    "The operator-intervention rubric text in the plan is amended (its sha256 here stops matching).",
+    "The acceptance-to-first-merge-ready-report-after-external-verification measurement boundary changes."
   ],
   "categoryDefinitions": {
     "code": "The deliverable changes product or application behavior.",
@@ -29,19 +30,32 @@
     "operations": "The deliverable changes the repository's delivery-operations machinery (gates, harness scripts, telemetry, remediation tooling) or performs an operational action."
   },
   "method": {
-    "evidence": "Claude Code session transcripts (JSONL event streams with per-event timestamps) for each delivery, cross-checked against the merged PR commits in the Athena repository.",
+    "evidence": "Retained Claude Code parent session transcripts (JSONL event streams with per-event timestamps) for each delivery, cross-checked against the final pull-request head, merged commit, and hosted GitHub Actions checks in the Athena repository. Each window pins the unique JSONL record that supplied its first merge-ready report after external verification by SHA-256. Each external-verification digest is SHA-256 over the newline-terminated, key-sorted compact JSON projection of the GitHub Actions job fields id, run_id, head_sha, name, status, conclusion, started_at, completed_at, and html_url, fetched locally from the immutable job URL at recapture.",
     "scoring": [
-      "The delivery window opens at the operator's scoped handoff message and closes at the PR merge event.",
+      "The delivery window opens when the operator's scoped handoff is accepted and closes at the first host report that the final candidate is merge-ready after external verification. A local pr:athena or other preparation-gate pass before hosted checks does not qualify. The recorded timestamps are the whole-second floors of the transcript event timestamps.",
       "An operator input is scored an intervention only when the host had stopped and the delivery could not proceed without it (re-prompting a stopped host, restarting after a host limit, manual stage invocation, answering a question the host was blocked on); operator inputs made while the host was actively progressing are recorded as steering or observation inputs, not interventions, matching the rubric's 'while the host could otherwise continue' boundary.",
-      "Blocked wall-clock is the sum, over interventions, of the idle gap from the host's last event to the operator input that restarted it (idle gaps are detected at 300-second granularity); all remaining window time is progressing, including waits on the host's own background tasks.",
+      "Blocked wall-clock is the sum, over interventions before the first merge-ready report after external verification, of the idle gap from the host's last event to the operator input that restarted it (idle gaps are detected at 300-second granularity); all remaining acceptance-to-report time is progressing, including waits on the host's own background tasks and hosted checks. Eventual merge and every post-report event are outside both figures.",
       "Policy-required interruptions are tracked separately per the rubric; the current choreography has no admission-grant, operator-confirmation, or sensitive-approval mechanism, so every scored event falls in the intervention or steering categories and the policy-required count is zero."
     ],
     "limitations": [
       "Transcripts do not record silently granted host permission prompts, so intervention counts are lower bounds under the rubric's permission-grant clause.",
-      "The three deliveries ran on 2026-08-22 under the then-active vendored skills generation; they predate Athena's switch to the qualified portable core (2026-08-29). The orchestration choreography (repository execute skill, pr:athena, operator-chaperoned merge) is unchanged, and no post-switch delivery on the proving host exists to score.",
-      "The docs delivery ran nested inside the code delivery's session, so their wall-clock windows overlap; each window is scored independently."
+      "The three deliveries ran in July and August 2026 under then-active vendored skills generations; they predate Athena's switch to the qualified portable core (2026-08-29). The orchestration choreography (repository delivery skill, pr:athena, hosted verification, operator-chaperoned merge) is unchanged, and no post-switch delivery on the proving host exists to score."
     ]
   },
+  "recaptureExclusions": [
+    {
+      "id": "athena-pr-784-pos-sync-review-convergence",
+      "pullRequest": 784,
+      "sessionId": "217226c7-3bad-4366-b724-1813982fc605",
+      "reason": "The retained session has a local pr:athena report at 2026-08-22T06:06:03.647Z before hosted verification, but no report after hosted verification of the final candidate and before merge. The first later delivery report is timestamped after the merge, so no qualifying endpoint can be derived honestly."
+    },
+    {
+      "id": "athena-pr-782-review-scope-doctrine",
+      "pullRequest": 782,
+      "sessionId": "217226c7-3bad-4366-b724-1813982fc605",
+      "reason": "The retained session's 2026-08-22T05:05:25.892Z report predates hosted verification and a 2026-08-22T05:16:14Z operator scope amendment that changed the candidate. No report after external verification of that final candidate appears before the 2026-08-22T05:38:11Z merge."
+    }
+  ],
   "mix": {
     "code": 1,
     "docs": 1,
@@ -52,7 +66,7 @@
     {
       "id": "athena-pr-783-harness-blockers",
       "category": "operations",
-      "description": "Make Athena's fail-closed delivery-harness blockers typed and self-remediating (delivery-operations machinery: gate scripts, telemetry, remediation surfaces). The worktree carried prior implementation work from an earlier session; this window scores the proving-host delivery from its scoped handoff (complete, validate, review, merge) to the merged PR.",
+      "description": "Make Athena's fail-closed delivery-harness blockers typed and self-remediating (delivery-operations machinery: gate scripts, telemetry, remediation surfaces). The worktree carried prior implementation work from an earlier session; this window scores the proving-host delivery from its accepted scoped handoff through the first report that hosted checks were fully green and the final PR was CLEAN.",
       "pullRequest": 783,
       "mergeCommit": "7e7c047ca2a1faf3831f8e3b5626a7f881113ee2",
       "evidence": {
@@ -61,9 +75,27 @@
         "transcriptProject": "-Users-kwamina-athena"
       },
       "window": {
-        "startedAt": "2026-08-22T03:47:02Z",
-        "endedAt": "2026-08-22T10:25:48Z",
-        "windowSeconds": 23926
+        "acceptedAt": "2026-08-22T03:47:02Z",
+        "finalCandidateSha": "4fb2f8b26fd705c73e07cf8e800117753b5e6e30",
+        "externalVerification": {
+          "outcome": "passed",
+          "candidateSha": "4fb2f8b26fd705c73e07cf8e800117753b5e6e30",
+          "completedAt": "2026-08-22T10:25:16Z",
+          "receipt": {
+            "source": "github-actions-job",
+            "reference": "https://github.com/kwam1na/athena/actions/runs/32566679297/job/97018291650",
+            "digest": "9a9f7dad9a6b7cd69e178a24dafb72d586e60d1b6817477e27b7f3c214971464"
+          }
+        },
+        "firstMergeReadyReportAfterExternalVerificationAt": "2026-08-22T10:25:45Z",
+        "windowSeconds": 23923,
+        "endpointEvidence": {
+          "candidateSha": "4fb2f8b26fd705c73e07cf8e800117753b5e6e30",
+          "source": "claude-code-session-jsonl",
+          "transcriptEventTimestamp": "2026-08-22T10:25:45.525Z",
+          "jsonlRecordSha256": "8d14aee4ff65f04141293229dd1b30c0d1a315e1405d9dd7e5413fb5544746f8",
+          "summary": "The first retained report after hosted verification states that CI is fully green and the PR state is CLEAN, then proceeds to merge. The merge event three seconds later and all subsequent session activity are excluded."
+        }
       },
       "score": {
         "interventionCount": 2,
@@ -90,25 +122,43 @@
           }
         ],
         "blockedSeconds": 8933,
-        "progressingSeconds": 14993,
-        "blockedShare": 0.3734
+        "progressingSeconds": 14990,
+        "blockedShare": 0.373406
       }
     },
     {
-      "id": "athena-pr-784-pos-sync-review-convergence",
+      "id": "athena-pr-674-landing-story",
       "category": "code",
-      "description": "POS sync-review convergence: drawer freshness, conflict settlement, expense open-work, obsolete-drawer repair (product behavior).",
-      "pullRequest": 784,
-      "mergeCommit": "db9e21c71f691f4b74a9845b7edebc4915a46a88",
+      "description": "Deliver the Osu Studio demo re-story and one-day landing story, including scoped public-layout navigation and presentation behavior changes.",
+      "pullRequest": 674,
+      "mergeCommit": "39c8fc76df33ad39fb29e3cfd46c5960c0cf1d0d",
       "evidence": {
         "host": "claude-code",
-        "sessionId": "217226c7-3bad-4366-b724-1813982fc605",
-        "transcriptProject": "-Users-kwamina-athena--claude-worktrees-subagent-orchestration-v26-7f93a1"
+        "sessionId": "80c839eb-3ea7-4af0-92d3-b05dc95f9023",
+        "transcriptProject": "-Users-kwamina-athena"
       },
       "window": {
-        "startedAt": "2026-08-22T03:53:33Z",
-        "endedAt": "2026-08-22T06:29:16Z",
-        "windowSeconds": 9343
+        "acceptedAt": "2026-07-18T01:12:44Z",
+        "finalCandidateSha": "eebfa9fd67da2a918b32472710aee1b285af40d4",
+        "externalVerification": {
+          "outcome": "passed",
+          "candidateSha": "eebfa9fd67da2a918b32472710aee1b285af40d4",
+          "completedAt": "2026-07-18T02:21:13Z",
+          "receipt": {
+            "source": "github-actions-job",
+            "reference": "https://github.com/kwam1na/athena/actions/runs/29625850894/job/88032965724",
+            "digest": "5fb8701be3be73ebc49461b536901a00a2d601aeef3de4bf3b58d6aa0bff1642"
+          }
+        },
+        "firstMergeReadyReportAfterExternalVerificationAt": "2026-07-18T02:21:57Z",
+        "windowSeconds": 4153,
+        "endpointEvidence": {
+          "candidateSha": "eebfa9fd67da2a918b32472710aee1b285af40d4",
+          "source": "claude-code-session-jsonl",
+          "transcriptEventTimestamp": "2026-07-18T02:21:57.674Z",
+          "jsonlRecordSha256": "8d34eebbe36e64ab82c2f4907ad6676e3b749ec5069170f376c3a864875d2bb8",
+          "summary": "After the hosted checks are all green, the first retained report confirms MERGEABLE and CLEAN state and says the candidate is ready before proceeding to merge."
+        }
       },
       "score": {
         "interventionCount": 0,
@@ -117,48 +167,57 @@
         "policyRequiredInterruptions": [],
         "steeringInputs": [
           {
-            "at": "2026-08-22T04:02:39Z",
-            "summary": "Operator question about worktree topology, answered while background implementers kept progressing."
-          },
-          {
-            "at": "2026-08-22T04:02:53Z",
-            "summary": "Operator follow-up about PR integration shape, answered while background implementers kept progressing."
+            "at": "2026-07-18T02:01:09Z",
+            "summary": "The operator asked to address the root cause of a CI flake while the host was actively progressing and polling hosted checks; the host could otherwise continue, so this is steering rather than an intervention."
           }
         ],
         "blockedSeconds": 0,
-        "progressingSeconds": 9343,
+        "progressingSeconds": 4153,
         "blockedShare": 0.0
       }
     },
     {
-      "id": "athena-pr-782-review-scope-doctrine",
+      "id": "athena-pr-679-readme-focused-docs",
       "category": "docs",
-      "description": "Encode the diff-scoped review doctrine into the repository's standing code-review guidance (documentation-only change).",
-      "pullRequest": 782,
-      "mergeCommit": "78fd049a20cf120826a54b61888ec44cdc65d352",
+      "description": "Replace Athena's README wall of text with concise summaries linked to focused harness, Graphify, architecture, and deployment documentation.",
+      "pullRequest": 679,
+      "mergeCommit": "6351d79a17548641ee4d0b479755085cba96d246",
       "evidence": {
         "host": "claude-code",
-        "sessionId": "217226c7-3bad-4366-b724-1813982fc605",
-        "transcriptProject": "-Users-kwamina-athena--claude-worktrees-subagent-orchestration-v26-7f93a1"
+        "sessionId": "e1fdbabb-c545-4121-9efb-1239898f6cb8",
+        "transcriptProject": "-Users-kwamina-athena"
       },
       "window": {
-        "startedAt": "2026-08-22T04:52:26Z",
-        "endedAt": "2026-08-22T05:38:11Z",
-        "windowSeconds": 2745
+        "acceptedAt": "2026-07-19T00:33:53Z",
+        "finalCandidateSha": "8771ee5438a7f43960a95ade9cf133a450c46b4c",
+        "externalVerification": {
+          "outcome": "passed",
+          "candidateSha": "8771ee5438a7f43960a95ade9cf133a450c46b4c",
+          "completedAt": "2026-07-19T01:21:54Z",
+          "receipt": {
+            "source": "github-actions-job",
+            "reference": "https://github.com/kwam1na/athena/actions/runs/29668205615/job/88143075583",
+            "digest": "bb5b88a62cd14ba5e4f267b8dc321aa3bd901d77f9aaaf6e894ef40332d08b8f"
+          }
+        },
+        "firstMergeReadyReportAfterExternalVerificationAt": "2026-07-19T01:22:22Z",
+        "windowSeconds": 2909,
+        "endpointEvidence": {
+          "candidateSha": "8771ee5438a7f43960a95ade9cf133a450c46b4c",
+          "source": "claude-code-session-jsonl",
+          "transcriptEventTimestamp": "2026-07-19T01:22:22.941Z",
+          "jsonlRecordSha256": "0b3a2e27ce35d3db87cfeb76857e4a7f4c1278d1e79b65be8b99244ff52efb8b",
+          "summary": "After the post-rebase hosted checks are all green, the first retained report confirms CLEAN state, all checks passing, and the remote head matching local before proceeding to merge."
+        }
       },
       "score": {
         "interventionCount": 0,
         "interventions": [],
         "policyRequiredInterruptionCount": 0,
         "policyRequiredInterruptions": [],
-        "steeringInputs": [
-          {
-            "at": "2026-08-22T05:16:14Z",
-            "summary": "Operator scope amendment (record out-of-scope suggestions as deferred work) while auto-merge was armed; the wording was amended and the PR still merged on its own, so this is steering, not an intervention."
-          }
-        ],
+        "steeringInputs": [],
         "blockedSeconds": 0,
-        "progressingSeconds": 2745,
+        "progressingSeconds": 2909,
         "blockedShare": 0.0
       }
     }

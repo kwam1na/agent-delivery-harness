@@ -4,6 +4,7 @@
   "purpose": "The shadow milestone's measurement artifact for this repository: one entry per shadow delivery, carrying the binding-sourced projection-consumption record alongside the intervention and blocked-share measurements the milestone gate compares against the frozen manual-choreography baseline. A measurement artifact, not a journal. Entries are written by the product's binding, which ships at the product's pinned commit; this list is empty because no shadow delivery has run yet, not because no producer exists. Its location is already outside every execution grant's writable paths: .agents is an additionally protected path in all three checkpoint grants of .agents/policy/repository-policy.json, so no session may author an entry.",
   "recordedAt": "2026-08-31T06:40:00Z",
   "status": "awaiting-shadow-deliveries",
+  "openPreM1Blockers": [],
   "baseline": {
     "repository": "agent-delivery-harness",
     "path": "qualifications/manual-choreography-baseline.json",
@@ -23,7 +24,7 @@
     "gatingCriterion": "blockedVersusProgressingShare",
     "appliedCriteriaRecordedIn": "qualifications/shadow-milestone-gate-verdict.json — the scorer's verdict artifact, whose interventionReporting block records which criteria are applied and why; a reader of these declarations reaches the scorer's actual behaviour there rather than having to know it",
     "medianOperatorInterventionsAfterAcceptance": "reported in full and gates nothing. The baseline's own intervention counts are [2, 0, 0] — a median of 0, which is the floor of the metric. No non-negative count can be strictly lower, so a baseline sitting at the floor cannot demonstrate improvement in either direction. The baseline's limitations block concedes the counts are lower bounds: transcripts do not record silently granted host permission prompts, so the figure it reports is admittedly incomplete. Ceasing to gate on the figure is not licence to stop measuring it; it becomes gating again only once the baseline is re-recorded under a rubric wide enough to have headroom.",
-    "blockedVersusProgressingShare": "must not regress against the baseline's; the sole gating criterion",
+    "blockedVersusProgressingShare": "must not regress against the baseline's; the sole gating criterion. Both baseline and shadow use acceptance through the first merge-ready report after external verification. A local preparation-gate report cannot close the window, and eventual merge or post-report idle time cannot extend it. Each window must bind one final candidate SHA to an external-verification completion receipt/timestamp and an immutable first-report record hash/source; absent or disagreeing evidence is incomplete.",
     "policyRequiredInterruptions": "recorded and reported alongside interventions, never counted as interventions"
   },
   "consumptionRecordContract": {

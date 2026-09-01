@@ -55,6 +55,40 @@ type ScoreOverrides = Partial<{
   progressingSeconds: number;
 }>;
 
+type WindowOverrides = Partial<{
+  acceptedAt: string;
+  finalCandidateSha: string;
+  externalVerification: Record<string, unknown>;
+  firstMergeReadyReportAfterExternalVerificationAt: string;
+  windowSeconds: number;
+  observedSessionEndedAt: string;
+  endpointEvidence: Record<string, unknown>;
+}>;
+
+const measurementWindow = (overrides: WindowOverrides = {}): Record<string, unknown> => ({
+  acceptedAt: "2026-08-30T11:00:00Z",
+  finalCandidateSha: "c".repeat(40),
+  externalVerification: {
+    outcome: "passed",
+    candidateSha: "c".repeat(40),
+    completedAt: "2026-08-30T11:16:20Z",
+    receipt: {
+      source: "delivery-journal/finish.line.recorded",
+      reference: "finish-line-result:" + "d".repeat(64),
+      digest: "e".repeat(64),
+    },
+  },
+  firstMergeReadyReportAfterExternalVerificationAt: "2026-08-30T11:16:40Z",
+  windowSeconds: 1000,
+  endpointEvidence: {
+    candidateSha: "c".repeat(40),
+    source: "managed-delivery-session-jsonl",
+    transcriptEventTimestamp: "2026-08-30T11:16:40.500Z",
+    jsonlRecordSha256: "f".repeat(64),
+  },
+  ...overrides,
+});
+
 const score = (overrides: ScoreOverrides = {}): Record<string, unknown> => ({
   interventionCount: 0,
   policyRequiredInterruptionCount: 0,
@@ -63,7 +97,12 @@ const score = (overrides: ScoreOverrides = {}): Record<string, unknown> => ({
   ...overrides,
 });
 
-const entry = (id: string, category: string, overrides: ScoreOverrides = {}): Record<string, unknown> => ({
+const entry = (
+  id: string,
+  category: string,
+  overrides: ScoreOverrides = {},
+  windowOverrides: WindowOverrides = {},
+): Record<string, unknown> => ({
   id,
   category,
   countedInComparisonSet: true,
@@ -73,6 +112,7 @@ const entry = (id: string, category: string, overrides: ScoreOverrides = {}): Re
     projectionDigest: DIGEST,
     marker: { deliveryId: id, fence: 1, consumed: "generation-archive" },
   },
+  window: measurementWindow(windowOverrides),
   score: score(overrides),
 });
 
@@ -83,11 +123,16 @@ const syntheticBaseline = (deliveries: readonly ScoreOverrides[]): Record<string
   provingHost: "claude-code",
   operatorInterventionRubric: { sha256: "b".repeat(64) },
   mix: { code: 1, docs: 1, operations: 1, total: 3 },
-  deliveries: deliveries.map((overrides, index) => ({ id: `baseline-${index}`, score: score(overrides) })),
+  deliveries: deliveries.map((overrides, index) => ({
+    id: `baseline-${index}`,
+    window: measurementWindow(),
+    score: score(overrides),
+  })),
 });
 
 const gateRecord = (deliveries: readonly Record<string, unknown>[]): Record<string, unknown> => ({
   spec: "delivery-harness-shadow-milestone-gate-record/1",
+  openPreM1Blockers: [],
   baseline: { provingHost: "claude-code" },
   comparisonSetRequirement: { mix: { code: 1, docs: 1, operations: 1 }, total: 3 },
   deliveries: [...deliveries],
@@ -154,8 +199,8 @@ describe("the frozen baseline is characterized before anything is scored against
     expect(verdict.baseline.totalOperatorInterventions).toBe(2);
     expect(verdict.baseline.policyRequiredInterruptionCount).toBe(0);
     expect(verdict.baseline.blockedSeconds).toBe(8933);
-    expect(verdict.baseline.progressingSeconds).toBe(27081);
-    expect(verdict.baseline.blockedShare).toBeCloseTo(0.24804, 5);
+    expect(verdict.baseline.progressingSeconds).toBe(22052);
+    expect(verdict.baseline.blockedShare).toBeCloseTo(0.28830079, 8);
   });
 
   it("carries the rubric digest the operator scored against into the verdict", () => {
@@ -406,6 +451,26 @@ describe("the comparison set is enumerated off the record's own deliveries list"
     expect(verdict.incomplete.map((note) => note.code)).toContain("comparison_set_mix_mismatch");
     expect(verdict.status).toBe("incomplete");
     expect(verdict.shadow).toBeNull();
+  });
+});
+
+describe("the pre-M1 blocker gate is cleared before the comparison set is enumerated", () => {
+  it.each([
+    ["missing", undefined],
+    ["non-empty", [{ code: "cutover-authority-unresolved", message: "authority is not settled" }]],
+  ] as const)("returns one typed incomplete reason when openPreM1Blockers is %s", (_label, blockers) => {
+    const record = fullSet([{}, {}, {}]);
+    if (blockers === undefined) delete record["openPreM1Blockers"];
+    else record["openPreM1Blockers"] = blockers;
+
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.incomplete.map((note) => note.code)).toEqual(["pre_m1_blockers_unresolved"]);
+    expect(verdict.inputs.gateRecord.countedDeliveryIds).toEqual([]);
+    expect(verdict.inputs.gateRecord.perDeliveryScores).toEqual([]);
+    expect(verdict.shadow).toBeNull();
+    expect(verdict.criteria).toEqual([]);
   });
 });
 
@@ -704,6 +769,114 @@ describe("the gate can be lost", () => {
     );
     expect(verdict.status).toBe("pass");
     expect(verdict.criteria.find((row) => row.id === "blockedVersusProgressingShare")?.met).toBe(true);
+  });
+
+  it("cannot dilute a blocked share through a coordinated post-report endpoint extension", () => {
+    const postReportIdle = 7_200;
+    const deliveries = ["code", "docs", "operations"].map((category) =>
+      entry(
+        `shadow-${category}`,
+        category,
+        { blockedSeconds: 900, progressingSeconds: 100 },
+        { observedSessionEndedAt: "2026-08-30T13:16:40Z" },
+      ),
+    );
+    const verdict = scoreShadowMilestone(reachableBaseline, gateRecord(deliveries));
+
+    expect(verdict.status).toBe("fail");
+    expect(verdict.shadow?.blockedShare).toBeCloseTo(0.9, 10);
+
+    // Coordinate every mutable arithmetic field around the planted wait. The
+    // immutable report record still names 11:16:40, so extending the claimed
+    // endpoint to the session end must fail closed instead of manufacturing a
+    // pass.
+    for (const delivery of deliveries) {
+      (delivery["score"] as Record<string, unknown>)["progressingSeconds"] = 100 + postReportIdle;
+      const window = delivery["window"] as Record<string, unknown>;
+      window["firstMergeReadyReportAfterExternalVerificationAt"] = window["observedSessionEndedAt"];
+      window["windowSeconds"] = 1_000 + postReportIdle;
+    }
+    const diluted = scoreShadowMilestone(reachableBaseline, gateRecord(deliveries));
+    expect(diluted.status).toBe("incomplete");
+    expect(diluted.incomplete.map((note) => note.code)).toContain("measurement_missing");
+    expect(diluted.shadow).toBeNull();
+  });
+
+  it("rejects an explicitly local-gate report that predates external verification", () => {
+    const deliveries = ["code", "docs", "operations"].map((category) =>
+      entry(`shadow-${category}`, category, { progressingSeconds: 300 }, {
+        firstMergeReadyReportAfterExternalVerificationAt: "2026-08-30T11:05:00Z",
+        windowSeconds: 300,
+        endpointEvidence: {
+          candidateSha: "c".repeat(40),
+          source: "managed-delivery-session-jsonl",
+          transcriptEventTimestamp: "2026-08-30T11:05:00.500Z",
+          jsonlRecordSha256: "a".repeat(64),
+        },
+      }),
+    );
+
+    const verdict = scoreShadowMilestone(reachableBaseline, gateRecord(deliveries));
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+    expect(verdict.shadow).toBeNull();
+  });
+
+  it.each([
+    ["missing final candidate", (window: Record<string, unknown>): void => {
+      delete window["finalCandidateSha"];
+    }],
+    [
+      "missing verification receipt",
+      (window: Record<string, unknown>): void => {
+        delete (window["externalVerification"] as Record<string, unknown>)["receipt"];
+      },
+    ],
+    [
+      "failed external verification",
+      (window: Record<string, unknown>): void => {
+        (window["externalVerification"] as Record<string, unknown>)["outcome"] = "failed";
+      },
+    ],
+    [
+      "missing immutable report hash",
+      (window: Record<string, unknown>): void => {
+        delete (window["endpointEvidence"] as Record<string, unknown>)["jsonlRecordSha256"];
+      },
+    ],
+    [
+      "candidate identity mismatch",
+      (window: Record<string, unknown>): void => {
+        (window["externalVerification"] as Record<string, unknown>)["candidateSha"] = "b".repeat(40);
+      },
+    ],
+    [
+      "verification before acceptance",
+      (window: Record<string, unknown>): void => {
+        (window["externalVerification"] as Record<string, unknown>)["completedAt"] = "2026-08-30T10:59:59Z";
+      },
+    ],
+    [
+      "verification equal to acceptance",
+      (window: Record<string, unknown>): void => {
+        (window["externalVerification"] as Record<string, unknown>)["completedAt"] = "2026-08-30T11:00:00Z";
+      },
+    ],
+    [
+      "report equal to verification completion",
+      (window: Record<string, unknown>): void => {
+        (window["externalVerification"] as Record<string, unknown>)["completedAt"] = "2026-08-30T11:16:40.500Z";
+      },
+    ],
+  ] as const)("fails closed on %s endpoint evidence", (_label, mutate) => {
+    const record = fullSet([{}, {}, {}]);
+    const first = (record["deliveries"] as Record<string, unknown>[])[0]!;
+    mutate(first["window"] as Record<string, unknown>);
+
+    const verdict = scoreShadowMilestone(reachableBaseline, record);
+    expect(verdict.status).toBe("incomplete");
+    expect(verdict.incomplete.map((note) => note.code)).toContain("measurement_missing");
+    expect(verdict.shadow).toBeNull();
   });
 });
 

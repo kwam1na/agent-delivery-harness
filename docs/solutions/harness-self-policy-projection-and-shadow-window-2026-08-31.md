@@ -137,6 +137,36 @@ asking git. It reads as correct at a glance and made the pin unverifiable. The
 guard now resolves the id rather than eyeballing it. A full commit id is
 derived with `git rev-parse`, never extended from an abbreviation.
 
+The M1 measurement record is fail-closed in two additional places. First,
+`openPreM1Blockers` must exist and be an empty list before the scorer enumerates
+deliveries; a populated three-delivery set cannot hide a missing or unresolved
+milestone prerequisite. Second, both the frozen manual baseline and every
+shadow entry measure acceptance through the **first merge-ready report after
+external verification** of the final candidate. Local preparation-gate proof is
+too early; eventual merge and post-report idle are too late. The per-delivery
+timestamp window is part of the scored shape, and the blocked/progressing split
+must fill it exactly.
+
+Arithmetic agreement alone is insufficient: otherwise a scorer can move the
+endpoint, `windowSeconds`, and `progressingSeconds` together and turn a failing
+blocked share into a pass. The endpoint evidence now binds one final candidate
+SHA across the external-verification receipt and the immutable first-report
+record, orders acceptance before verification before report, and requires the
+window endpoint to equal the whole-second floor of the report event. For managed
+shadow runs, the existing `finish.line.recorded` result digest is the receipt
+and the retained host transcript supplies timestamps. Because the journal has
+no intrinsic wall-clock timestamp, losing that transcript makes the run
+unscorable; no timestamp is inferred and no new authority is introduced.
+
+Re-mining the retained Athena transcripts exposed why the endpoint qualification
+matters. PR783 has a qualifying pre-merge report after hosted checks and retains
+both interventions before it. PR784 has no post-verification report before
+merge. PR782's earlier local report is followed by an operator scope amendment,
+and no post-verification report of that final candidate appears before merge.
+The frozen baseline therefore records those two exclusions and replaces them
+with code PR674 and docs PR679, whose first CLEAN, all-checks-green reports are
+uniquely pinned by transcript event timestamp and JSONL-record SHA-256.
+
 The position carries one honest limit. CI checks out at depth 1, where a real
 base commit is simply absent, and git cannot distinguish that from a fabricated
 id. So the suite drives both branches through an injected resolver plus a

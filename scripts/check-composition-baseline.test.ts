@@ -215,6 +215,7 @@ describe("manual-choreography baseline", () => {
     const triggers = choreography.reRecordTriggers.join(" ");
     expect(triggers).toMatch(/proving host/u);
     expect(triggers).toMatch(/rubric/u);
+    expect(triggers).toMatch(/external-verification/u);
   });
 
   it("freezes at least three deliveries matching the declared mix", () => {
@@ -241,10 +242,25 @@ describe("manual-choreography baseline", () => {
 
   it("scores every delivery consistently: counts match events and the wall-clock adds up", () => {
     for (const delivery of choreography.deliveries) {
-      const started = Date.parse(delivery.window.startedAt);
-      const ended = Date.parse(delivery.window.endedAt);
+      const started = Date.parse(delivery.window.acceptedAt);
+      const ended = Date.parse(delivery.window.firstMergeReadyReportAfterExternalVerificationAt);
+      const verification = Date.parse(delivery.window.externalVerification.completedAt);
       expect(ended).toBeGreaterThan(started);
+      expect(verification).toBeGreaterThanOrEqual(started);
       expect(delivery.window.windowSeconds).toBe(Math.round((ended - started) / 1000));
+      const endpointEvent = Date.parse(delivery.window.endpointEvidence.transcriptEventTimestamp);
+      expect(endpointEvent).toBeGreaterThanOrEqual(verification);
+      expect(Math.floor(endpointEvent / 1000) * 1000).toBe(ended);
+      expect(endpointEvent - ended).toBeLessThan(1000);
+      expect(delivery.window.finalCandidateSha).toMatch(/^[0-9a-f]{40}$/);
+      expect(delivery.window.externalVerification.candidateSha).toBe(delivery.window.finalCandidateSha);
+      expect(delivery.window.endpointEvidence.candidateSha).toBe(delivery.window.finalCandidateSha);
+      expect(delivery.window.externalVerification.receipt.source).toBe("github-actions-job");
+      expect(delivery.window.externalVerification.receipt.reference).toMatch(/^https:\/\/github\.com\/kwam1na\/athena\/actions\/runs\//u);
+      expect(delivery.window.externalVerification.receipt.digest).toMatch(/^[0-9a-f]{64}$/);
+      expect(delivery.window.endpointEvidence.source).toBe("claude-code-session-jsonl");
+      expect(delivery.window.endpointEvidence.jsonlRecordSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(delivery.window.endpointEvidence.summary).toMatch(/(hosted|external)/iu);
       expect(delivery.score.interventionCount).toBe(delivery.score.interventions.length);
       expect(delivery.score.policyRequiredInterruptionCount).toBe(
         delivery.score.policyRequiredInterruptions.length,
@@ -265,6 +281,52 @@ describe("manual-choreography baseline", () => {
       );
       const share = delivery.score.blockedSeconds / delivery.window.windowSeconds;
       expect(Math.abs(delivery.score.blockedShare - share)).toBeLessThan(0.001);
+    }
+  });
+
+  it("pins the locally recaptured external-verification receipts", () => {
+    expect(
+      choreography.deliveries.map((delivery: any) => ({
+        pullRequest: delivery.pullRequest,
+        finalCandidateSha: delivery.window.finalCandidateSha,
+        mergeCommit: delivery.mergeCommit,
+        verificationCompletedAt: delivery.window.externalVerification.completedAt,
+        receiptDigest: delivery.window.externalVerification.receipt.digest,
+        reportRecordSha256: delivery.window.endpointEvidence.jsonlRecordSha256,
+      })),
+    ).toEqual([
+      {
+        pullRequest: 783,
+        finalCandidateSha: "4fb2f8b26fd705c73e07cf8e800117753b5e6e30",
+        mergeCommit: "7e7c047ca2a1faf3831f8e3b5626a7f881113ee2",
+        verificationCompletedAt: "2026-08-22T10:25:16Z",
+        receiptDigest: "9a9f7dad9a6b7cd69e178a24dafb72d586e60d1b6817477e27b7f3c214971464",
+        reportRecordSha256: "8d14aee4ff65f04141293229dd1b30c0d1a315e1405d9dd7e5413fb5544746f8",
+      },
+      {
+        pullRequest: 674,
+        finalCandidateSha: "eebfa9fd67da2a918b32472710aee1b285af40d4",
+        mergeCommit: "39c8fc76df33ad39fb29e3cfd46c5960c0cf1d0d",
+        verificationCompletedAt: "2026-07-18T02:21:13Z",
+        receiptDigest: "5fb8701be3be73ebc49461b536901a00a2d601aeef3de4bf3b58d6aa0bff1642",
+        reportRecordSha256: "8d34eebbe36e64ab82c2f4907ad6676e3b749ec5069170f376c3a864875d2bb8",
+      },
+      {
+        pullRequest: 679,
+        finalCandidateSha: "8771ee5438a7f43960a95ade9cf133a450c46b4c",
+        mergeCommit: "6351d79a17548641ee4d0b479755085cba96d246",
+        verificationCompletedAt: "2026-07-19T01:21:54Z",
+        receiptDigest: "bb5b88a62cd14ba5e4f267b8dc321aa3bd901d77f9aaaf6e894ef40332d08b8f",
+        reportRecordSha256: "0b3a2e27ce35d3db87cfeb76857e4a7f4c1278d1e79b65be8b99244ff52efb8b",
+      },
+    ]);
+  });
+
+  it("records why the superseded PR784 and PR782 rows could not supply an honest endpoint", () => {
+    expect(choreography.recaptureExclusions.map((row: any) => row.pullRequest)).toEqual([784, 782]);
+    for (const exclusion of choreography.recaptureExclusions) {
+      expect(exclusion.reason).toMatch(/external|hosted/u);
+      expect(exclusion.reason).toMatch(/no (report|qualifying endpoint)/iu);
     }
   });
 

@@ -20,6 +20,14 @@
  * must already carry a `score` block, scored by an operator against the
  * baseline's own rubric; if one does not, the result is INCOMPLETE, never a
  * verdict computed over the entries that happened to be scored.
+ * The score's wall-clock split must add up to the delivery's recorded window
+ * from acceptance through the FIRST merge-ready report AFTER EXTERNAL
+ * VERIFICATION. A local preparation-gate pass does not close the window.
+ * Eventual merge and every later session event are outside it; a score that
+ * folds them into progressing time is malformed rather than favourably diluted.
+ * The endpoint is candidate-bound: the final candidate, external-verification
+ * receipt, and immutable report record must agree on one Git identity, and
+ * their timestamps must establish acceptance -> verification -> report.
  *
  * LIKE-FOR-LIKE IS BY CONSTRUCTION, NOT BY ASSERTION. A counted entry's `score`
  * block uses the same member names and the same units as the baseline's own
@@ -111,6 +119,7 @@ export type ShadowScoreIncompleteCode =
   | "baseline_unrecognized"
   | "baseline_host_mismatch"
   | "gate_record_unrecognized"
+  | "pre_m1_blockers_unresolved"
   | "no_observed_consumption"
   | "comparison_set_incomplete"
   | "comparison_set_mix_mismatch"
@@ -168,8 +177,10 @@ export type ShadowMilestoneVerdict = {
     };
     readonly gateRecord: {
       readonly path: string;
+      readonly openPreM1Blockers: unknown;
       readonly countedDeliveryIds: readonly string[];
       readonly excludedDeliveries: readonly { readonly id: string; readonly reason: string }[];
+      readonly perDeliveryWindows: readonly Record<string, unknown>[];
       readonly perDeliveryScores: readonly Record<string, unknown>[];
     };
   };
@@ -200,7 +211,7 @@ export const INTERVENTION_REPORTING = Object.freeze({
     "Blocked share has real room to move and is measured from the same transcripts under the same rubric, so it carries the gate alone.",
   ]),
   stillCounted:
-    "Every orchestrator step-in the baseline's rubric counts is still counted and still reported — nudging a stalled agent, relaying a verdict that could not reach its recipient, correcting a tracker state, resuming after a limit, re-dispatching lost work. Ceasing to gate on the figure is not licence to stop measuring it.",
+    "Every orchestrator step-in the baseline's rubric counts before the first merge-ready report after external verification is still counted and still reported — nudging a stalled agent, relaying a verdict that could not reach its recipient, correcting a tracker state, resuming after a limit, re-dispatching lost work. Ceasing to gate on the figure is not licence to stop measuring it, and events after that report are outside the measurement rather than favourable progress.",
   policyRequiredInterruptions:
     "Still tracked separately and still counted into neither figure. A product that blocks correctly must not improve its own score by asking the operator to press a key.",
   howItBecomesGatingAgain:
@@ -237,12 +248,13 @@ export const MEASUREMENT_CONTRACT = Object.freeze({
     Object.freeze({
       name: "blockedSeconds / progressingSeconds",
       source: "host session transcript",
-      note: "blocked is the sum over interventions of the idle gap from the host's last event to the operator input that restarted it; all remaining window time is progressing",
+      note: "blocked is the sum over interventions of the idle gap from the host's last event to the operator input that restarted it; all remaining time from acceptance through the first merge-ready report after external verification is progressing, and no local preparation-gate pass or later idle time closes or extends the window",
     }),
   ]),
   preconditions: Object.freeze([
     "The host session transcript must survive the session. A disposable host configuration directory takes the transcript with it when it is removed, and the two wall-clock figures become unrecoverable — the delivery can then never be counted, whatever the binding observed.",
-    "The delivery window's start and end must be identifiable in the transcript: the operator's scoped handoff message opens it, the merge closes it.",
+    "The delivery window's start and end must be identifiable in the transcript: acceptance opens it and the first merge-ready report after external verification closes it. A local preparation-gate report does not qualify. Eventual merge, post-report observation, and post-report idle time are outside the measurement.",
+    "The final candidate SHA must agree across the window, the external-verification receipt, and the immutable merge-ready report record. The receipt needs a completion timestamp plus a durable source, reference, and digest; the report needs its exact transcript timestamp plus a durable source and record hash. If the managed-delivery journal or retained transcript cannot supply those facts, the measurement is incomplete rather than inferred.",
   ]),
 });
 
@@ -253,6 +265,15 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 
 const isNonNegativeFinite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+const isGitOid = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+
+const isSha256 = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+
+const isNonEmptyText = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0;
 
 /**
  * The median of a non-empty list. An even-sized list takes the mean of the two
@@ -305,7 +326,7 @@ function reduceScores(scores: readonly Record<string, any>[]): ShadowScoreFigure
  * The members every scored delivery must carry, on both sides. Absent or
  * malformed, the set is INCOMPLETE — the delivery is not scored as a zero.
  */
-function scoreDefect(id: string, score: unknown): string | undefined {
+function scoreDefect(id: string, score: unknown, window: unknown): string | undefined {
   if (typeof score !== "object" || score === null) {
     return `delivery ${id} is counted in the comparison set but carries no score block; it cannot be measured against the baseline`;
   }
@@ -321,6 +342,88 @@ function scoreDefect(id: string, score: unknown): string | undefined {
   }
   if ((block["blockedSeconds"] as number) + (block["progressingSeconds"] as number) === 0) {
     return `delivery ${id} has a zero-length delivery window, so it contributes no measurable blocked share`;
+  }
+  if (typeof window !== "object" || window === null) {
+    return `delivery ${id} carries no measurement window from acceptance through the first merge-ready report after external verification`;
+  }
+  const recordedWindow = window as Record<string, unknown>;
+  const acceptedAt = recordedWindow["acceptedAt"];
+  const finalCandidateSha = recordedWindow["finalCandidateSha"];
+  const externalVerification = recordedWindow["externalVerification"];
+  const firstMergeReadyReportAfterExternalVerificationAt =
+    recordedWindow["firstMergeReadyReportAfterExternalVerificationAt"];
+  const windowSeconds = recordedWindow["windowSeconds"];
+  const endpointEvidence = recordedWindow["endpointEvidence"];
+
+  if (!isGitOid(finalCandidateSha)) {
+    return `delivery ${id} carries no final candidate SHA for its measurement window`;
+  }
+  if (typeof externalVerification !== "object" || externalVerification === null) {
+    return `delivery ${id} carries no candidate-bound external-verification completion receipt and timestamp`;
+  }
+  const verification = externalVerification as Record<string, unknown>;
+  const verificationCandidateSha = verification["candidateSha"];
+  const verificationCompletedAt = verification["completedAt"];
+  const receipt = verification["receipt"];
+  if (
+    verification["outcome"] !== "passed" ||
+    !isGitOid(verificationCandidateSha) ||
+    typeof verificationCompletedAt !== "string" ||
+    !Number.isFinite(Date.parse(verificationCompletedAt)) ||
+    typeof receipt !== "object" ||
+    receipt === null
+  ) {
+    return `delivery ${id} carries no passing candidate-bound external-verification completion receipt and timestamp`;
+  }
+  const receiptRecord = receipt as Record<string, unknown>;
+  if (
+    !isNonEmptyText(receiptRecord["source"]) ||
+    !isNonEmptyText(receiptRecord["reference"]) ||
+    !isSha256(receiptRecord["digest"])
+  ) {
+    return `delivery ${id} carries no immutable external-verification receipt source, reference, and digest`;
+  }
+  if (typeof endpointEvidence !== "object" || endpointEvidence === null) {
+    return `delivery ${id} carries no immutable first post-verification merge-ready report record`;
+  }
+  const report = endpointEvidence as Record<string, unknown>;
+  const reportCandidateSha = report["candidateSha"];
+  const reportEventTimestamp = report["transcriptEventTimestamp"];
+  if (
+    !isGitOid(reportCandidateSha) ||
+    !isNonEmptyText(report["source"]) ||
+    typeof reportEventTimestamp !== "string" ||
+    !Number.isFinite(Date.parse(reportEventTimestamp)) ||
+    !isSha256(report["jsonlRecordSha256"])
+  ) {
+    return `delivery ${id} carries no immutable first post-verification merge-ready report hash, source, timestamp, and candidate`;
+  }
+  if (finalCandidateSha !== verificationCandidateSha || finalCandidateSha !== reportCandidateSha) {
+    return `delivery ${id} names different final candidates in its window, external-verification receipt, and merge-ready report`;
+  }
+  const acceptedInstant = typeof acceptedAt === "string" ? Date.parse(acceptedAt) : Number.NaN;
+  const reportInstant =
+    typeof firstMergeReadyReportAfterExternalVerificationAt === "string"
+      ? Date.parse(firstMergeReadyReportAfterExternalVerificationAt)
+      : Number.NaN;
+  const verificationInstant = Date.parse(verificationCompletedAt);
+  const reportEventInstant = Date.parse(reportEventTimestamp);
+  if (!Number.isFinite(acceptedInstant) || !Number.isFinite(reportInstant) || reportInstant <= acceptedInstant) {
+    return `delivery ${id} carries no ordered acceptedAt and firstMergeReadyReportAfterExternalVerificationAt instants`;
+  }
+  if (verificationInstant <= acceptedInstant || reportEventInstant <= verificationInstant) {
+    return `delivery ${id} does not order acceptance before external verification before its first merge-ready report`;
+  }
+  const flooredReportEventInstant = Math.floor(reportEventInstant / 1000) * 1000;
+  if (reportInstant !== flooredReportEventInstant) {
+    return `delivery ${id} window endpoint does not equal the whole-second floor of its immutable merge-ready report timestamp`;
+  }
+  const derivedWindowSeconds = (reportInstant - acceptedInstant) / 1000;
+  if (!isNonNegativeFinite(windowSeconds) || windowSeconds === 0 || windowSeconds !== derivedWindowSeconds) {
+    return `delivery ${id} windowSeconds does not equal its acceptance-to-first-merge-ready-report-after-external-verification interval`;
+  }
+  if ((block["blockedSeconds"] as number) + (block["progressingSeconds"] as number) !== windowSeconds) {
+    return `delivery ${id} blockedSeconds and progressingSeconds do not fill exactly the acceptance-to-first-merge-ready-report-after-external-verification window; post-report time cannot enter the score`;
   }
   return undefined;
 }
@@ -373,7 +476,7 @@ export function scoreShadowMilestone(
 
   const baselineDeliveries: any[] = Array.isArray(baseline?.deliveries) ? baseline.deliveries : [];
   for (const delivery of baselineDeliveries) {
-    const defect = scoreDefect(String(delivery?.id ?? "<unnamed>"), delivery?.score);
+    const defect = scoreDefect(String(delivery?.id ?? "<unnamed>"), delivery?.score, delivery?.window);
     if (defect !== undefined) incomplete.push({ code: "measurement_shape", message: `baseline: ${defect}` });
   }
   if (baselineDeliveries.length === 0) {
@@ -384,7 +487,22 @@ export function scoreShadowMilestone(
   }
 
   // ── The counted comparison set ─────────────────────────────────────────────
-  if (!Array.isArray(gateRecord?.deliveries)) {
+  // THIS CHECK PRECEDES ENUMERATION. The plan's residual blockers are a gate
+  // on whether M1 may be scored at all, not another attribute of a delivery.
+  // Missing is therefore not the same as cleared, and a record carrying three
+  // otherwise perfect entries still produces no counted set while any blocker
+  // remains open.
+  const openPreM1Blockers = gateRecord?.openPreM1Blockers;
+  const preM1BlockersCleared = Array.isArray(openPreM1Blockers) && openPreM1Blockers.length === 0;
+  if (!preM1BlockersCleared) {
+    incomplete.push({
+      code: "pre_m1_blockers_unresolved",
+      message: Array.isArray(openPreM1Blockers)
+        ? `the gate record still names ${openPreM1Blockers.length} open pre-M1 blocker(s); no delivery is enumerated until the list is explicitly empty`
+        : "the gate record does not carry an explicit openPreM1Blockers list; missing blocker state is unresolved, not clear",
+    });
+  }
+  if (preM1BlockersCleared && !Array.isArray(gateRecord?.deliveries)) {
     incomplete.push({
       code: "gate_record_unrecognized",
       message: `the gate record carries no deliveries list; the counted set is enumerated from that list and from nothing else`,
@@ -395,9 +513,11 @@ export function scoreShadowMilestone(
   // carries a binding-sourced record" claim comes to hold vacuously: when the
   // enumerating mechanism goes missing, the set is empty and the claim passes
   // for free.
-  const entries: any[] = Array.isArray(gateRecord?.deliveries) ? gateRecord.deliveries : [];
+  const entries: any[] =
+    preM1BlockersCleared && Array.isArray(gateRecord?.deliveries) ? gateRecord.deliveries : [];
   const countedDeliveryIds: string[] = [];
   const excludedDeliveries: { id: string; reason: string }[] = [];
+  const countedWindows: Record<string, any>[] = [];
   const countedScores: Record<string, any>[] = [];
   const countedByCategory = new Map<string, number>();
 
@@ -427,8 +547,11 @@ export function scoreShadowMilestone(
     countedDeliveryIds.push(id);
     const category = String(entry?.category ?? "<uncategorised>");
     countedByCategory.set(category, (countedByCategory.get(category) ?? 0) + 1);
-    const defect = scoreDefect(id, entry?.score);
-    if (defect === undefined) countedScores.push(entry.score as Record<string, any>);
+    const defect = scoreDefect(id, entry?.score, entry?.window);
+    if (defect === undefined) {
+      countedWindows.push(entry.window as Record<string, any>);
+      countedScores.push(entry.score as Record<string, any>);
+    }
     else incomplete.push({ code: "measurement_missing", message: defect });
   }
 
@@ -437,7 +560,7 @@ export function scoreShadowMilestone(
   const requiredMix: Record<string, unknown> = requirement.mix ?? {};
   const requiredTotal = Number(requirement.total ?? NaN);
 
-  if (countedDeliveryIds.length === 0) {
+  if (preM1BlockersCleared && countedDeliveryIds.length === 0) {
     // NOT a failure and NOT "nothing consumed". The measurement has not been
     // taken; that is all this says.
     incomplete.push({
@@ -445,14 +568,14 @@ export function scoreShadowMilestone(
       message:
         "no delivery has been observed consuming a projection, so there is no comparison set to score; this is the absence of a measurement, not a measured absence",
     });
-  } else if (!(countedDeliveryIds.length >= requiredTotal)) {
+  } else if (preM1BlockersCleared && !(countedDeliveryIds.length >= requiredTotal)) {
     // Negated `>=` so an unparseable total falls to the incomplete side.
     incomplete.push({
       code: "comparison_set_incomplete",
       message: `the comparison set holds ${countedDeliveryIds.length} of the ${requiredTotal} deliveries the baseline mix requires; a partial set yields no verdict, provisional or otherwise`,
     });
   }
-  for (const [category, count] of countedByCategory) {
+  for (const [category, count] of preM1BlockersCleared ? countedByCategory : []) {
     const allowed = Object.hasOwn(requiredMix, category) ? Number(requiredMix[category]) : undefined;
     if (allowed === undefined || !Number.isFinite(allowed)) {
       incomplete.push({
@@ -469,8 +592,8 @@ export function scoreShadowMilestone(
 
   // ── Figures ────────────────────────────────────────────────────────────────
   const baselineScorable = baselineDeliveries
-    .map((delivery) => delivery?.score)
-    .filter((score): score is Record<string, any> => scoreDefect("baseline", score) === undefined);
+    .filter((delivery) => scoreDefect("baseline", delivery?.score, delivery?.window) === undefined)
+    .map((delivery) => delivery.score as Record<string, any>);
   const baselineFigures =
     baselineScorable.length > 0
       ? reduceScores(baselineScorable)
@@ -547,8 +670,10 @@ export function scoreShadowMilestone(
       },
       gateRecord: {
         path: inputPaths.gateRecord,
+        openPreM1Blockers,
         countedDeliveryIds,
         excludedDeliveries,
+        perDeliveryWindows: countedWindows,
         // The per-delivery blocks the figures were reduced from, copied into
         // the verdict so the arithmetic is re-derivable from the artifact
         // alone rather than by re-reading a record that has since moved on.
