@@ -747,6 +747,21 @@ describe("durable checkpoints and host-driven recovery", () => {
   it("exports and deletes terminal delivery detail through the maintenance journal", async () => {
     expect(completedDeliveryId).toBeDefined();
 
+    // Retention and explanation are read-only decision surfaces too: a
+    // facade with rotated native binding material cannot inspect, export, or
+    // delete a delivery captured under the original binding.
+    const rotatedFacade = createManagedDeliveryFacade({
+      repoDir,
+      policyBinding: { ...disposablePolicyBinding(), outcomeAuthorities: ["rotated-owner"] },
+      installation: { installationPath, receiptDir },
+      hostVersion: "2.1.97",
+    });
+    for (const operation of ["exportDelivery", "deleteDelivery", "explainBlocker"] as const) {
+      const result = await rotatedFacade[operation]({ deliveryId: completedDeliveryId });
+      expect(result.ok, `${operation}: ${JSON.stringify(result)}`).toBe(false);
+      if (!result.ok) expect(result.blockers[0]?.code).toBe("policy_binding_mismatch");
+    }
+
     // A non-terminal delivery's detail is not deletable.
     const inFlight = await driveTo("planning");
     const early = await facade.deleteDelivery({ deliveryId: inFlight.deliveryId });

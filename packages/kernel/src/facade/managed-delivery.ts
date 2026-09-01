@@ -1803,6 +1803,33 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     };
   };
 
+  /** Read-only retention/explanation admission: the current facade may only
+   * inspect or remove a delivery whose two durable binding records agree with
+   * the exact binding captured by this facade. */
+  const verifyDeliveryBinding = async (deliveryId: string): Promise<{ ok: true } | FacadeFailure> => {
+    const dir = await deliveryDir(deliveryId);
+    const meta = await readJson<DeliveryMeta>(path.join(dir, "delivery.json"));
+    if (meta === undefined) {
+      return refuse("unknown_delivery", `No registered delivery ${deliveryId}.`, "Register a delivery through the contract handoff first.");
+    }
+    const reduced = await (await journalStoreFor(deliveryId)).state();
+    if (!reduced.ok) {
+      return refuse("journal_rejected", "The durable delivery journal does not reduce.", "Inspect the durable delivery journal file.");
+    }
+    if (
+      meta.policyBindingDigest !== policyBindingDigest ||
+      reduced.state.policyBindingDigest !== policyBindingDigest ||
+      meta.policyBindingDigest !== reduced.state.policyBindingDigest
+    ) {
+      return refuse(
+        "policy_binding_mismatch",
+        "The current compiled adopter policy binding does not match this delivery's recorded binding.",
+        "Use the exact binding captured at registration; drift requires a new owner-approved delivery.",
+      );
+    }
+    return { ok: true };
+  };
+
   // ── Intake plumbing ──────────────────────────────────────────────────────
 
   const intakePath = async (intakeId: string, suffix: string): Promise<string> =>
@@ -4828,6 +4855,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     async exportDelivery({ deliveryId }) {
       const context = await retentionContext();
       if (!("namespaceDir" in context)) return context;
+      const binding = await verifyDeliveryBinding(deliveryId);
+      if (!binding.ok) return binding;
       const outcome = await runDeliveryExport(context, deliveryId);
       if (!outcome.ok) return refuse(outcome.code, outcome.summary, outcome.remediation);
       return { ok: true, exportPath: outcome.exportPath, artifactDigest: outcome.artifactDigest };
@@ -4836,6 +4865,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     async deleteDelivery({ deliveryId }) {
       const context = await retentionContext();
       if (!("namespaceDir" in context)) return context;
+      const binding = await verifyDeliveryBinding(deliveryId);
+      if (!binding.ok) return binding;
       const outcome = await runDeliveryDeletion(context, deliveryId);
       if (!outcome.ok) return refuse(outcome.code, outcome.summary, outcome.remediation);
       return { ok: true, preservedAuditRecords: outcome.preservedAuditRecords };
@@ -4984,6 +5015,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
     },
 
     async explainBlocker({ deliveryId }) {
+      const binding = await verifyDeliveryBinding(deliveryId);
+      if (!binding.ok) return binding;
       const store = await journalStoreFor(deliveryId);
       const read = await store.read();
       if (!read.ok) return refuse("journal_unreadable", "The delivery journal is unreadable.", "Inspect the durable journal file.");
