@@ -32,9 +32,23 @@ import { digestCanonical, sha256Hex } from "../digest.ts";
 import type { AdmissionExpectation } from "../binding/host-admission.ts";
 import { listArchiveEntries, readArchiveEntry } from "../workflow/archive.ts";
 import type { ExecPort } from "./exec-port.ts";
-
-/** The projection subtree inside the worktree — a protected authority path. */
-export const PROJECTION_DIR = ".managed-projection";
+import {
+  CONSUMPTION_MARKER_FILE,
+  PROJECTION_DIR,
+  PROJECTION_RECEIPT_FILE,
+  projectionDigestOf,
+  type ProjectionReceipt,
+} from "./projection.ts";
+export {
+  CONSUMPTION_MARKER_FILE,
+  PROJECTION_DIR,
+  PROJECTION_RECEIPT_FILE,
+  readConsumptionMarker,
+  verifyProjection,
+  type ConsumptionMarker,
+  type ReadConsumptionMarkerResult,
+  type VerifyProjectionResult,
+} from "./projection.ts";
 
 /** Where the pinned generation stores the exact skills release archive. */
 export const GENERATION_SKILLS_ARCHIVE = "skills/agent-skills-core-v1.zip";
@@ -42,7 +56,6 @@ export const GENERATION_SKILLS_ARCHIVE = "skills/agent-skills-core-v1.zip";
 /** The archive prefixes the projection materializes: workflow text + graph. */
 export const PROJECTION_ENTRY_PREFIXES = Object.freeze(["skills/", "workflows/", "schemas/workflow-"]);
 
-export const PROJECTION_RECEIPT_FILE = "projection-receipt.json";
 export const WORKTREE_EXCLUDES_FILE = "worktree-excludes";
 
 /**
@@ -58,9 +71,6 @@ export const WORKTREE_EXCLUDES_FILE = "worktree-excludes";
  */
 export const sessionSettingsFile = (fence: number): string => `settings-${fence}.json`;
 export const bindingStateFile = (fence: number): string => `state-${fence}.json`;
-/** The binding's per-run consumption marker, inside the receipted subtree. */
-export const CONSUMPTION_MARKER_FILE = "consumption.json";
-
 const OWNER_DIR = 0o700;
 const OWNER_FILE = 0o600;
 const READONLY_FILE = 0o444;
@@ -92,12 +102,6 @@ const fail = (code: HostBindingBlockerCode, message: string): HostBindingFailure
   blockers: [{ code, message }],
 });
 
-interface ProjectionReceipt {
-  readonly deliveryId: string;
-  readonly projectionDigest: string;
-  readonly entries: readonly { readonly path: string; readonly sha256: string }[];
-}
-
 export interface MaterializeProjectionInput {
   readonly worktreeDir: string;
   /** The pinned generation root (digest-addressed, already trust-checked). */
@@ -118,9 +122,6 @@ export interface MaterializeProjectionInput {
 export type MaterializeProjectionResult =
   | { readonly ok: true; readonly projectionDigest: string; readonly excludesPath: string }
   | HostBindingFailure;
-
-const projectionDigestOf = (entries: readonly { path: string; sha256: string }[]): string =>
-  digestCanonical([...entries].sort((a, b) => compareUtf16CodeUnits(a.path, b.path)));
 
 /**
  * Materializes the run-pinned projection into the worktree and configures the
@@ -227,108 +228,6 @@ export async function materializeProjection(input: MaterializeProjectionInput): 
   await chmod(receiptPath, OWNER_FILE);
 
   return { ok: true, projectionDigest: receipt.projectionDigest, excludesPath };
-}
-
-export type VerifyProjectionResult =
-  | {
-      readonly ok: true;
-      readonly projectionDigest: string;
-      /** The receipted entry paths, in the receipt's own order. */
-      readonly entries: readonly string[];
-    }
-  | HostBindingFailure;
-
-/**
- * The canonical-recheck half: recompute the projection digest from the
- * worktree bytes and require it to match the materialization receipt. Any
- * byte inside the receipted set not matching its digest fails closed.
- */
-export async function verifyProjection(input: {
-  readonly worktreeDir: string;
-  readonly bindingDir: string;
-}): Promise<VerifyProjectionResult> {
-  let receiptText: string;
-  try {
-    receiptText = await readFile(path.join(input.bindingDir, PROJECTION_RECEIPT_FILE), "utf8");
-  } catch {
-    return fail("projection_receipt_missing", "no projection receipt; nothing can be verified against it");
-  }
-  let receipt: ProjectionReceipt;
-  try {
-    receipt = JSON.parse(receiptText) as ProjectionReceipt;
-  } catch {
-    return fail("projection_receipt_corrupt", "the projection receipt is not JSON");
-  }
-  if (!Array.isArray(receipt.entries) || typeof receipt.projectionDigest !== "string") {
-    return fail("projection_receipt_corrupt", "the projection receipt is outside its shape");
-  }
-  if (projectionDigestOf(receipt.entries) !== receipt.projectionDigest) {
-    return fail("projection_receipt_corrupt", "the projection receipt does not bind its own entries");
-  }
-
-  for (const entry of receipt.entries) {
-    let bytes: Uint8Array;
-    try {
-      bytes = await readFile(path.join(input.worktreeDir, PROJECTION_DIR, ...entry.path.split("/")));
-    } catch {
-      return fail("projection_digest_mismatch", `receipted projection file ${entry.path} is missing from the worktree`);
-    }
-    const digest = sha256Hex(bytes);
-    if (digest !== entry.sha256) {
-      return fail(
-        "projection_digest_mismatch",
-        `projection file ${entry.path} hashes to ${digest}, not the receipted ${entry.sha256}; mid-run tampering fails closed`,
-      );
-    }
-  }
-  return {
-    ok: true,
-    projectionDigest: receipt.projectionDigest,
-    entries: receipt.entries.map((entry) => entry.path),
-  };
-}
-
-// ── The consumption marker's read-back half ─────────────────────────────────
-
-export interface ConsumptionMarker {
-  readonly deliveryId: string;
-  readonly fence: number;
-  readonly consumed: string;
-}
-
-export type ReadConsumptionMarkerResult = ({ readonly ok: true } & ConsumptionMarker) | HostBindingFailure;
-
-/**
- * Reads the per-run consumption marker back out of the worktree. Callers pair
- * it with a fence-bound submission: the marker names the delivery and fence
- * the projection was materialized for, so a submission arriving against
- * different bytes than the ones this run injected is detectable on its own,
- * independently of the receipt digest.
- */
-export async function readConsumptionMarker(input: { readonly worktreeDir: string }): Promise<ReadConsumptionMarkerResult> {
-  let text: string;
-  try {
-    text = await readFile(path.join(input.worktreeDir, PROJECTION_DIR, CONSUMPTION_MARKER_FILE), "utf8");
-  } catch {
-    return fail("consumption_marker_missing", "the worktree carries no per-run consumption marker; nothing was materialized here");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return fail("consumption_marker_corrupt", "the consumption marker is not JSON");
-  }
-  const marker = parsed as Partial<ConsumptionMarker>;
-  if (
-    typeof marker !== "object" ||
-    marker === null ||
-    typeof marker.deliveryId !== "string" ||
-    typeof marker.fence !== "number" ||
-    typeof marker.consumed !== "string"
-  ) {
-    return fail("consumption_marker_corrupt", "the consumption marker is outside its shape");
-  }
-  return { ok: true, deliveryId: marker.deliveryId, fence: marker.fence, consumed: marker.consumed };
 }
 
 // ── The binding-written discovery-configuration set ─────────────────────────

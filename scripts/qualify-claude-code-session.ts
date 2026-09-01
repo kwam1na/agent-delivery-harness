@@ -68,7 +68,7 @@ import {
   materializeProjection,
   mintGrantAttestation,
 } from "../packages/kernel/src/host/claude-code.ts";
-import { projectionConsumptionObservationFile } from "../packages/kernel/src/host/consumption-gate-record.ts";
+import { projectionConsumptionObservationFile } from "../packages/kernel/src/projection-consumption-observation.ts";
 import {
   formatQualificationFindings,
   runProductQualification,

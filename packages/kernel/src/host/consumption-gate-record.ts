@@ -19,8 +19,8 @@
  *   - the projection digest, from the materialization receipt in the binding's
  *     own directory, re-verified against the worktree bytes;
  *   - the marker, read back out of the receipted projection subtree; and
- *   - the qualified Claude Code interceptor's post-invocation observation of
- *     THIS run's exact Read of the canonical workflow graph.
+ *   - a qualified host adapter's post-invocation observation of THIS run's
+ *     exact read of the canonical workflow graph.
  *
  * THE THIRD FACT IS THE ONLY ONE ABOUT THE RUN. The first two are both true
  * the instant materialization returns: the receipt matches the bytes the
@@ -47,48 +47,18 @@
  * consumption record — plus the identity and admission flag that record
  * justifies, and preserves every other byte of the artifact it finds.
  *
- * THIS WRITER INTENTIONALLY ADMITS ONLY THE QUALIFIED CLAUDE CODE SURFACE.
- * It does not provide a generic cross-host observation contract or parity
- * layer: unsupported hosts simply have no affirmative evidence.
+ * The writer consumes one host-neutral observation contract. A host without a
+ * qualified adapter simply produces no affirmative evidence.
  */
 import { open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { PROJECTION_DIR, readConsumptionMarker, verifyProjection } from "./claude-code.ts";
+import { PROJECTION_DIR, readConsumptionMarker, verifyProjection } from "./projection.ts";
+import {
+  parseProjectionConsumptionObservation,
+  projectionConsumptionObservationFile,
+} from "../projection-consumption-observation.ts";
 import { WORKFLOW_GRAPH_ENTRY } from "../workflow/graph.ts";
-
-/**
- * THE BINDING-TO-WRITER OBSERVATION CONTRACT.
- *
- * One file per fence in the binding's own directory, written by the binding's
- * model-external surface and never by a session: the worktree is
- * session-writable, this directory is not.
- *
- * The file is accepted only when it carries the qualified Claude Code
- * PostToolUse Read event shape below. The writer deliberately offers no
- * fallback for another host.
- */
-export interface ProjectionConsumptionObservation {
-  /** Only the qualified Claude Code post-read interceptor may mint this. */
-  readonly source?: typeof PROJECTION_CONSUMPTION_OBSERVATION_SOURCE;
-  readonly deliveryId?: string;
-  readonly fence?: number;
-  /** The canonical workflow graph entry, derived from the binding receipt. */
-  readonly entry?: string;
-  /** The exact canonical path the host's Read invocation completed against. */
-  readonly canonicalProjectionPath?: string;
-  /** The digest the binding receipt bound when this post-read event arrived. */
-  readonly projectionDigest?: string;
-  /** The host-generated identity of the completed Read invocation. */
-  readonly hostInvocationId?: string;
-  readonly observedAt?: string;
-}
-
-/** The sole evidence producer this writer admits; unsupported hosts stay out. */
-export const PROJECTION_CONSUMPTION_OBSERVATION_SOURCE = "claude-code-post-tool-use-read/1";
-
-export const projectionConsumptionObservationFile = (fence: number): string =>
-  `projection-consumption-${fence}.json`;
 
 /**
  * The gate-record artifact spec, matched by SUFFIX.
@@ -214,17 +184,18 @@ export async function emitProjectionConsumptionRecord(
 
   // The only fact here that the run had to DO something to produce. Without
   // it the two checks above affirm materialization, not consumption.
-  let observation: ProjectionConsumptionObservation;
+  let observation;
   try {
-    observation = JSON.parse(
+    observation = parseProjectionConsumptionObservation(JSON.parse(
       await readFile(
         path.join(input.bindingDir, projectionConsumptionObservationFile(input.fence)),
         "utf8",
       ),
-    ) as ProjectionConsumptionObservation;
+    ));
   } catch {
     return unobserved("projection-not-consumed");
   }
+  if (observation === undefined) return unobserved("projection-not-consumed");
   let canonicalWorkflowPath: string;
   try {
     canonicalWorkflowPath = await realpath(
@@ -234,7 +205,6 @@ export async function emitProjectionConsumptionRecord(
     return unobserved("projection-not-consumed");
   }
   if (
-    observation.source !== PROJECTION_CONSUMPTION_OBSERVATION_SOURCE ||
     observation.deliveryId !== input.deliveryId ||
     observation.fence !== input.fence ||
     observation.entry !== WORKFLOW_GRAPH_ENTRY ||

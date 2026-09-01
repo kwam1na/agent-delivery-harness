@@ -104,7 +104,6 @@ import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence
 import { decideFinishLine, type ExternalVerification } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
-  PROJECTION_RECEIPT_FILE,
   bindingStateFile,
   composeClaudeCodeSession,
   discoveryConfigurationDigestOf,
@@ -112,15 +111,14 @@ import {
   gradedDescendantTeardown,
   materializeProjection,
   mintGrantAttestation,
-  readConsumptionMarker,
   tearDownProjection,
-  verifyProjection,
 } from "../host/claude-code.ts";
+import { PROJECTION_RECEIPT_FILE, readConsumptionMarker, verifyProjection } from "../host/projection.ts";
 import {
   emitProjectionConsumptionRecord,
-  projectionConsumptionObservationFile,
   type ProjectionConsumptionUnobserved,
 } from "../host/consumption-gate-record.ts";
+import { projectionConsumptionObservationFile } from "../projection-consumption-observation.ts";
 import { createExecPort, type ExecPort } from "../host/exec-port.ts";
 import {
   createProviderReviewHandoff,

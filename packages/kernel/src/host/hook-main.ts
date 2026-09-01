@@ -31,11 +31,8 @@ import {
   type CheckpointAdmissionExpectation,
 } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
-import { PROJECTION_DIR } from "./claude-code.ts";
-import {
-  PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
-  projectionConsumptionObservationFile,
-} from "./consumption-gate-record.ts";
+import { PROJECTION_DIR } from "./projection.ts";
+import { PROJECTION_CONSUMPTION_OBSERVATION_SPEC } from "../projection-consumption-observation.ts";
 import { WORKFLOW_GRAPH_ENTRY } from "../workflow/graph.ts";
 
 export interface HookBindingState {
@@ -497,7 +494,7 @@ async function main(argv: readonly string[]): Promise<number> {
           writeFileSync(
             state.projectionConsumptionPath,
             `${JSON.stringify({
-              source: PROJECTION_CONSUMPTION_OBSERVATION_SOURCE,
+              spec: PROJECTION_CONSUMPTION_OBSERVATION_SPEC,
               ...read,
               entry: WORKFLOW_GRAPH_ENTRY,
               observedAt,

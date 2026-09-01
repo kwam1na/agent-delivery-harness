@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { mintGrantAttestation } from "../packages/kernel/src/host/claude-code.ts";
-import { projectionConsumptionObservationFile } from "../packages/kernel/src/host/consumption-gate-record.ts";
+import { projectionConsumptionObservationFile } from "../packages/kernel/src/projection-consumption-observation.ts";
 import { composeQualificationSession } from "./qualify-claude-code-session.ts";
 
 interface HookSettings {
@@ -140,7 +140,7 @@ describe("authenticated qualifier hook composition", () => {
 
       dispatchPostToolUse(settings, input);
       expect(JSON.parse(readFileSync(observationPath, "utf8"))).toMatchObject({
-        source: "claude-code-post-tool-use-read/1",
+        spec: "projection-consumption-observation/1",
         deliveryId: expectation.deliveryId,
         entry: "workflows/delivery-v1.json",
         hostInvocationId: "toolu_qualifier_exact_read",

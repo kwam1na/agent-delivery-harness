@@ -788,14 +788,21 @@ export {
 } from "./workflow/graph.ts";
 export {
   HOST_BINDING_BLOCKER_CODES,
-  PROJECTION_DIR,
   composeClaudeCodeSession,
   materializeProjection,
   mintGrantAttestation,
-  verifyProjection,
   type HostBindingBlocker,
   type HostBindingBlockerCode,
 } from "./host/claude-code.ts";
+export {
+  PROJECTION_DIR,
+  PROJECTION_RECEIPT_FILE,
+  readConsumptionMarker,
+  verifyProjection,
+  type ConsumptionMarker,
+  type ReadConsumptionMarkerResult,
+  type VerifyProjectionResult,
+} from "./host/projection.ts";
 // The binding's writer: an observed projection consumption becomes a durable
 // gate-record entry, or nothing at all.
 export {
@@ -803,14 +810,18 @@ export {
   SHADOW_MILESTONE_GATE_RECORD_SPEC,
   SHADOW_MILESTONE_GATE_RECORD_SPEC_SUFFIX,
   emitProjectionConsumptionRecord,
-  projectionConsumptionObservationFile,
   type ConsumptionGateRecordBlockerCode,
-  type ProjectionConsumptionObservation,
   type EmitProjectionConsumptionInput,
   type EmitProjectionConsumptionResult,
   type ProjectionConsumptionRecord,
   type ProjectionConsumptionUnobserved,
 } from "./host/consumption-gate-record.ts";
+export {
+  PROJECTION_CONSUMPTION_OBSERVATION_SPEC,
+  parseProjectionConsumptionObservation,
+  projectionConsumptionObservationFile,
+  type ProjectionConsumptionObservation,
+} from "./projection-consumption-observation.ts";
 export { createExecPort, type ExecInvocation, type ExecOutcome, type ExecPort } from "./host/exec-port.ts";
 export {
   checkReviewFloor,
