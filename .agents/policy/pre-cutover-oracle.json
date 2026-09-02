@@ -23,7 +23,7 @@
       { "phase": "record", "command": "delivery-harness record" },
       { "phase": "verify", "command": "delivery-harness verify" }
     ],
-    "standaloneCommands": ["check", "managed", "maintain"],
+    "standaloneCommands": ["check", "managed", "maintain", "emit", "runs"],
     "checkSuiteConstituents": ["typecheck", "sensor", "sensor:cli", "test"],
     "recordWrittenOnlyAfterGate": true
   },

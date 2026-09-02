@@ -6,13 +6,13 @@
   "inputs": {
     "repository-policy.json": "ce4bb9dda563f3eb02ff01779a9f50bd5a655d307f0f9fed8f874751c1ca19d3",
     "adapters.json": "73101bb8787e69995eddd81780f4a360a9dce2c6b821bd65cff79027ce8c2e61",
-    "pre-cutover-oracle.json": "c754b5debe0689e35ff0e7a24000c379ab81ed4341331d8ba635381139e81289",
+    "pre-cutover-oracle.json": "649568cc3ab015441a1f2951c9c9f04f3a75fe28add68ab42bbd68d7cd8be7d5",
     "compiled-snapshot.json": "d564d8b4d6574a20f04b876be627ec78f0a8809155e584426c40cb5995a508d8",
     "compiledDigest": "7cd5c7698ce2706fdb34374d46a468a2b69c7cbd32a23b7e9a448a91a8b2e34e"
   },
   "results": {
     "compile": "ok: the declarative document plus the sixteen typed adapters compile through this repository's own policy compiler with zero rejections, and the recorded snapshot is byte-equal to a fresh compile",
-    "phaseParity": "ok: the oracle's six delivery-loop phases plus its three standalone commands are exactly the live CLI command registry, and the check aggregate still chains typecheck, sensor, sensor:cli, and test",
+    "phaseParity": "ok: the oracle's six delivery-loop phases plus its five standalone commands are exactly the live CLI command registry, and the check aggregate still chains typecheck, sensor, sensor:cli, and test",
     "obligationParity": "ok: the one live gate obligation (review.green) is activated by the declarative document, and its activation kind, freshness, provider policy, attestation floor, waiver posture, provider set, payload specs, and waivable/non-waivable code partition all match the frozen oracle",
     "blockerVocabulary": "ok: the oracle's preparation failure classes and delivery-record drift classes are the live kernel constants",
     "leafMapping": "ok: each proposed leaf maps to exactly one adapter, no adapter is mapped twice, and neither the npm run check aggregate nor the release-checks workflow is registered as a leaf",

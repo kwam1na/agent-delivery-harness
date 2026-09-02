@@ -111,6 +111,28 @@ export function invokedDirectly(argvEntry: string | undefined, moduleHref: strin
   return canonicalEntryPath(argvEntry) === canonicalEntryPath(modulePath);
 }
 
+/**
+ * Reads the whole of stdin as UTF-8.
+ *
+ * `emit` takes its payload here, and the one thing that must never happen is a
+ * hang: a terminal with no pipe attached would otherwise leave the command
+ * waiting forever for a line nobody is going to type. A TTY stdin therefore
+ * reads as empty, and the store refuses the empty payload with a diagnostic,
+ * which is a far better answer than silence.
+ */
+export function readStdinText(input: NodeJS.ReadableStream & { isTTY?: boolean }): Promise<string> {
+  if (input.isTTY === true) return Promise.resolve("");
+  return new Promise((resolve) => {
+    let text = "";
+    input.setEncoding("utf8");
+    input.on("data", (chunk: string) => {
+      text += chunk;
+    });
+    input.once("error", () => resolve(text));
+    input.once("end", () => resolve(text));
+  });
+}
+
 export function defaultRuntime(): CliRuntime {
   return {
     cwd: process.cwd(),
@@ -120,6 +142,7 @@ export function defaultRuntime(): CliRuntime {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
     promptForWaiver: readlineWaiverPrompt,
+    readStdin: () => readStdinText(process.stdin),
   };
 }
 

@@ -19,7 +19,7 @@ turn this page into a second source of agent instructions.
 ```
 .agent-skills/       the installed workflow-skill release, exposed under .agents/skills and .claude/skills
 packages/kernel      the whole decision surface — pure where it matters
-packages/cli         the nine-command operator surface
+packages/cli         the eleven-command operator surface
 packages/mcp         a read-only MCP projection of the CLI
 packages/conformance the 89-vector golden kit and its generator
 packages/action      the GitHub Action that verifies the tracked record

@@ -1,0 +1,541 @@
+/**
+ * The run surface, driven the way an operator drives it.
+ *
+ * Every scenario here runs the real CLI against a real temporary git
+ * repository and reads the real store back off disk. Nothing stubs git and
+ * nothing stubs the store: the whole point of this unit is that a run journal
+ * written in one worktree, by two different writers, on two different code
+ * paths, is one coherent thing an operator can read.
+ */
+import { execFile } from "node:child_process";
+import { lstat, mkdtemp, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  createRunStore,
+  defineHarnessConfig,
+  gitNamespaceClearedEnvironment,
+  resolveRunStoreLocation,
+  runGitDirect,
+  type HarnessConfig,
+  type RunEvent,
+} from "@agent-delivery-harness/kernel";
+import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
+
+const exec = promisify(execFile);
+const cleanups: string[] = [];
+afterAll(() => {
+  while (cleanups.length > 0) {
+    const dir = cleanups.pop();
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const TREE_SHA = "a".repeat(40);
+const OTHER_TREE_SHA = "b".repeat(40);
+/** Written as a code point so the escape itself never sits in this source. */
+const ESC = String.fromCharCode(27);
+
+async function git(cwd: string, ...args: readonly string[]): Promise<string> {
+  const { stdout } = await exec("git", [...args], { cwd });
+  return stdout.trim();
+}
+
+const PROVIDER_ID = "claude-code.ce-code-review";
+const STRUCTURAL_WAIVABLE = ["review_evidence_missing", "stale_evidence", "evidence_not_green", "unresolved_actionable_findings"];
+const STRUCTURAL_NONWAIVABLE = [
+  "ambiguous_records",
+  "malformed_record",
+  "unknown_provider",
+  "live_provider_missing",
+  "ambiguous_live_provider",
+  "live_provider_failed",
+  "resolution_not_allowed",
+];
+
+function makeConfig(): HarnessConfig {
+  return defineHarnessConfig({
+    gateId: "run.surface.gate",
+    baseRef: "origin/main",
+    acceptedEnvelopeSpecs: ["delivery-evidence/1"],
+    identityVersions: ["deliverable-tree/v1"],
+    computingIdentityVersion: "deliverable-tree/v1",
+    reviewNeutral: [{ prefix: "docs/reports/" }, { prefix: "docs/solutions/" }, { prefix: "telemetry/delivery-runs/" }],
+    recordNeutral: [{ prefix: "telemetry/delivery-runs/" }],
+    pathClassification: {
+      generated: [{ kind: "prefix", value: "generated/" }],
+      test: [{ kind: "glob", value: "**/*.test.ts" }],
+      lockfile: [{ kind: "glob", value: "**/package-lock.json" }],
+    },
+    sensitivePaths: [],
+    activationThreshold: 1,
+    providers: [{ id: PROVIDER_ID, findingCodes: [] }],
+    agentEnvSignals: ["CLAUDE_CODE"],
+    ciPolicies: [],
+    ciPolicyEnvKey: "DH_CI_POLICY",
+    preparationWiringPaths: ["harness.config.ts"],
+    obligations: [
+      {
+        id: "review.green",
+        activation: { kind: "relevant_change" },
+        freshness: "exact_candidate",
+        providers: [PROVIDER_ID],
+        acceptedPayloadSpecs: ["review.green/1"],
+        allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
+        humanWaiverAllowed: true,
+        minimumAttestationLevel: "self",
+        ciDelegationPolicyIds: [],
+        remediation: { default: [{ id: "submit-evidence", kind: "manual_action", summary: "Submit review evidence." }] },
+        waivableCodes: [...STRUCTURAL_WAIVABLE],
+        nonWaivableCodes: [...STRUCTURAL_NONWAIVABLE],
+      },
+    ],
+    deliveryRecordPath: "telemetry/delivery-runs/record.json",
+    deliveryRecordVerification: { baseMovement: "stale" },
+  });
+}
+
+/** A repository whose HEAD may or may not carry a `harness.config.ts`, so the presence check has something to say. */
+async function initRepo(options: { readonly withConfig?: boolean } = {}): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dh-run-"));
+  cleanups.push(dir);
+  await git(dir, "init", "--quiet", "--initial-branch", "main");
+  await git(dir, "config", "user.email", "harness@example.invalid");
+  await git(dir, "config", "user.name", "Delivery Harness");
+  await git(dir, "config", "commit.gpgsign", "false");
+  if (options.withConfig !== false) writeFileSync(path.join(dir, "harness.config.ts"), "export default {};\n", "utf8");
+  writeFileSync(path.join(dir, "src.txt"), "hello\n", "utf8");
+  await git(dir, "add", "-A");
+  await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "root");
+  await git(dir, "branch", "origin/main");
+  return dir;
+}
+
+interface Invocation {
+  readonly code: number;
+  readonly out: string;
+  readonly err: string;
+}
+
+async function cli(dir: string, argv: readonly string[], overrides: Partial<CliRuntime> = {}): Promise<Invocation> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const runtime: CliRuntime = {
+    cwd: dir,
+    env: {},
+    stdinIsTTY: false,
+    stdoutIsTTY: false,
+    stdout: (text) => out.push(text),
+    stderr: (text) => err.push(text),
+    loadConfig: async () => makeConfig(),
+    ...overrides,
+  };
+  const code = await runCli(argv, runtime);
+  return { code, out: out.join(""), err: err.join("") };
+}
+
+/** `emit` with its payload on stdin, which is the shape the skills use. */
+async function emit(dir: string, argv: readonly string[], payload?: unknown): Promise<Invocation> {
+  return cli(dir, ["emit", ...argv], {
+    ...(payload === undefined ? {} : { readStdin: async () => JSON.stringify(payload) }),
+  });
+}
+
+async function storeOf(
+  dir: string,
+): Promise<{ readonly runsDir: string; readonly commonDir: string; readonly worktreeKey: string }> {
+  const location = await resolveRunStoreLocation({ cwd: dir, run: runGitDirect, env: gitNamespaceClearedEnvironment() });
+  if (!location.ok) throw new Error(location.reason);
+  return { runsDir: location.runsDir, commonDir: location.commonDir, worktreeKey: location.worktreeKey };
+}
+
+async function journalOf(dir: string, runId: string): Promise<readonly RunEvent[]> {
+  const { commonDir } = await storeOf(dir);
+  const read = await createRunStore(commonDir).read(runId);
+  if (!read.ok) throw new Error(`journal unreadable: ${JSON.stringify(read.rejections)}`);
+  return read.events;
+}
+
+async function notesOf(dir: string, runId: string): Promise<readonly unknown[]> {
+  const { commonDir } = await storeOf(dir);
+  return createRunStore(commonDir).readNotes(runId);
+}
+
+/** The run id `emit run.started` allocated, taken from the store rather than parsed out of prose. */
+async function startRun(dir: string, extra: readonly string[] = []): Promise<string> {
+  const result = await emit(dir, ["run.started", ...extra], {
+    host: "vitest",
+    workflow: { releaseId: "test-release", profile: "linear" },
+  });
+  expect(result.code, result.err).toBe(EXIT_OK);
+  const { commonDir, worktreeKey } = await storeOf(dir);
+  const current = await createRunStore(commonDir).current(worktreeKey);
+  if (!current.ok || current.runId === undefined) throw new Error("run.started left no current run");
+  return current.runId;
+}
+
+/**
+ * A journal that satisfies every condition the complete rule states except the
+ * two CLI completions, with `gate.reported` in its ordered place: Athena's
+ * finished state, and the one status the config-presence note attaches to.
+ */
+async function executorOnlyRun(dir: string): Promise<string> {
+  const runId = await startRun(dir);
+  const steps: readonly (readonly [string, unknown])[] = [
+    ["ticket.read", { ticket: "V26-1549", tracker: "linear" }],
+    ["posture.declared", { posture: "test-first" }],
+    [
+      "lens.selected",
+      { mandated: ["lens.outcome-correctness", "lens.adversarial-testing"], selected: [], rationale: "the shipped pair" },
+    ],
+    ["review.round.opened", { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] }],
+    [
+      "review.round.closed",
+      {
+        round: 1,
+        candidateTreeSha: TREE_SHA,
+        outcome: "aligned",
+        findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+        cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+      },
+    ],
+    ["gate.reported", { command: "npm run check", outcome: "pass", durationMs: 5 }],
+    ["pr.opened", { url: "https://example.invalid/pr/1", candidateTreeSha: TREE_SHA }],
+    ["run.ended", { result: "complete", cost: { unit: "usd", total: 0, reportedBy: "vitest" } }],
+  ];
+  for (const [kind, payload] of steps) {
+    const result = await emit(dir, [kind], payload);
+    expect(result.code, `${kind}: ${result.err}`).toBe(EXIT_OK);
+  }
+  return runId;
+}
+
+// ── The scripted loop ────────────────────────────────────────────────────────
+
+describe("emit, the boundary wrap, and runs", () => {
+  it("writes a three-event journal across both writers and reads it back", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+
+    const checked = await cli(dir, ["check"]);
+    expect(checked.code, checked.err).toBe(EXIT_OK);
+
+    const ended = await emit(dir, ["run.ended"], {
+      result: "complete",
+      cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+    });
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+
+    const events = await journalOf(dir, runId);
+    expect(events.map((event) => event.kind)).toEqual(["run.started", "command.completed", "run.ended"]);
+    expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(events[0]!.actor.role).toBe("executor");
+    expect(events[1]!.actor.role).toBe("cli");
+    expect(events[1]!.payload).toMatchObject({ command: "check", outcome: "ok" });
+    expect(events[2]!.actor.role).toBe("executor");
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    // The writer label is what keeps a CLI completion distinguishable from an
+    // executor's claim to have run the same command.
+    expect(shown.out).toMatch(/command\.completed +cli\b/);
+    expect(shown.out).toMatch(/run\.started +executor\b/);
+  });
+
+  it("emits in a directory with no harness.config.ts", async () => {
+    const dir = await initRepo({ withConfig: false });
+    const runId = await startRun(dir);
+    const ended = await emit(dir, ["run.ended"], {
+      result: "complete",
+      cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+    });
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+    expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started", "run.ended"]);
+  });
+
+  it("keeps a run in the worktree it started in", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const other = path.join(path.dirname(dir), `${path.basename(dir)}-wt`);
+    cleanups.push(other);
+    await git(dir, "worktree", "add", "--quiet", "-b", "side", other);
+
+    // Whatever `check` decides in B, it decides it about B. The run store is
+    // shared — one common directory — but the pointer is per-worktree, so B
+    // resolves no current run and A's journal never learns B ran anything.
+    await cli(other, ["check"]);
+    expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started"]);
+  });
+
+  it("refuses a second run.started without --force and names the displaced run with it", async () => {
+    const dir = await initRepo();
+    const first = await startRun(dir);
+
+    const refused = await emit(dir, ["run.started"], {
+      host: "vitest",
+      workflow: { releaseId: "test-release", profile: "linear" },
+    });
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect((await journalOf(dir, first)).map((event) => event.kind)).toEqual(["run.started"]);
+
+    const second = await startRun(dir, ["--force"]);
+    expect(second).not.toBe(first);
+    expect((await journalOf(dir, second))[0]!.payload).toMatchObject({ displacedRunId: first });
+  });
+
+  it("stops appending once the run has ended, and starts cleanly afterwards", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const ended = await emit(dir, ["run.ended"], {
+      result: "complete",
+      cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+    });
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+
+    await cli(dir, ["check"]);
+    await cli(dir, ["verify"]);
+    expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started", "run.ended"]);
+    expect(await notesOf(dir, runId)).toEqual([]);
+
+    const next = await startRun(dir);
+    expect(next).not.toBe(runId);
+    expect((await journalOf(dir, next))[0]!.payload).not.toHaveProperty("displacedRunId");
+  });
+
+  // ── Refusals ───────────────────────────────────────────────────────────────
+
+  it("refuses an unknown kind, a malformed payload, and command.completed, noting each once", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+
+    const unknown = await emit(dir, ["not.a.kind"], { anything: true });
+    expect(unknown.code).toBe(EXIT_POLICY);
+    expect(unknown.err).toContain("not.a.kind");
+
+    const malformed = await emit(dir, ["ticket.read"], { ticket: 17, tracker: "linear" });
+    expect(malformed.code).toBe(EXIT_POLICY);
+
+    const completion = await emit(dir, ["command.completed"], { command: "gate", outcome: "ok", durationMs: 1 });
+    expect(completion.code).toBe(EXIT_POLICY);
+
+    expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started"]);
+    const notes = (await notesOf(dir, runId)) as readonly { kind: string; code: string }[];
+    expect(notes.map((note) => note.kind)).toEqual(["not.a.kind", "ticket.read", "command.completed"]);
+  });
+
+  it("leaves a wrapped command's outcome and exit code untouched when the store fails", async () => {
+    const dir = await initRepo();
+    const clean = await cli(dir, ["check"]);
+
+    const runId = await startRun(dir);
+    const { runsDir, worktreeKey } = await storeOf(dir);
+    // A pointer the store must refuse to read: the append can never happen,
+    // and `check` must not notice.
+    const pointerPath = path.join(runsDir, "current", worktreeKey);
+    await unlink(pointerPath);
+    await symlink("/dev/null", pointerPath);
+
+    const sabotaged = await cli(dir, ["check"]);
+    expect(sabotaged.code).toBe(clean.code);
+    expect(sabotaged.out).toBe(clean.out);
+    expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started"]);
+  });
+
+  it("resolves the store under the invoking worktree even with GIT_DIR planted", async () => {
+    const dir = await initRepo();
+    const elsewhere = await initRepo();
+    const saved = { dir: process.env["GIT_DIR"], common: process.env["GIT_COMMON_DIR"] };
+    process.env["GIT_DIR"] = path.join(elsewhere, ".git");
+    process.env["GIT_COMMON_DIR"] = path.join(elsewhere, ".git");
+    try {
+      const runId = await startRun(dir);
+      await cli(dir, ["check"]);
+      const events = await journalOf(dir, runId);
+      expect(events.map((event) => event.kind)).toEqual(["run.started", "command.completed"]);
+      expect(events[0]!.repo.commonDir).toBe((await storeOf(dir)).commonDir);
+      // The other repository's store was never touched.
+      expect(await createRunStore((await storeOf(elsewhere)).commonDir).list()).toEqual([]);
+    } finally {
+      if (saved.dir === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved.dir;
+      if (saved.common === undefined) delete process.env["GIT_COMMON_DIR"];
+      else process.env["GIT_COMMON_DIR"] = saved.common;
+    }
+  });
+
+  it("exits with the policy code when there is no repository and no resolvable run", async () => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), "dh-norepo-"));
+    cleanups.push(outside);
+    const listed = await cli(outside, ["runs", "list"]);
+    expect(listed.code).toBe(EXIT_POLICY);
+    expect(listed.err).toContain("git repository");
+
+    const dir = await initRepo();
+    const noPointer = await emit(dir, ["ticket.read"], { ticket: "V26-1549", tracker: "linear" });
+    expect(noPointer.code).toBe(EXIT_POLICY);
+    expect(noPointer.err).toContain("no current run");
+    expect(await createRunStore((await storeOf(dir)).commonDir).list()).toEqual([]);
+
+    const unknownRun = await emit(dir, ["ticket.read", "--run", "run-deadbeefdeadbeef"], {
+      ticket: "V26-1549",
+      tracker: "linear",
+    });
+    expect(unknownRun.code).toBe(EXIT_POLICY);
+    expect(await createRunStore((await storeOf(dir)).commonDir).list()).toEqual([]);
+  });
+
+  it("rejects a missing kind, a missing subcommand, and an unknown flag as usage", async () => {
+    const dir = await initRepo();
+    expect((await cli(dir, ["emit"])).code).toBe(EXIT_USAGE);
+    expect((await cli(dir, ["runs"])).code).toBe(EXIT_USAGE);
+    expect((await cli(dir, ["runs", "show"])).code).toBe(EXIT_USAGE);
+    expect((await emit(dir, ["run.started", "--nope"], {})).code).toBe(EXIT_USAGE);
+  });
+
+  // ── The viewer ─────────────────────────────────────────────────────────────
+
+  it("lists each run's status and size and the store's total", async () => {
+    const dir = await initRepo();
+    const first = await startRun(dir);
+    await emit(dir, ["run.ended"], { result: "partial", cost: { unit: "usd", total: 0, reportedBy: "vitest" } });
+    const second = await startRun(dir);
+
+    const listed = await cli(dir, ["runs", "list"]);
+    expect(listed.code, listed.err).toBe(EXIT_OK);
+    expect(listed.out).toContain(first);
+    expect(listed.out).toContain(second);
+    expect(listed.out).toContain("incomplete");
+    expect(listed.out).toMatch(/\bopen\b/);
+    const { runsDir } = await storeOf(dir);
+    const total =
+      (await stat(path.join(runsDir, `${first}.jsonl`))).size + (await stat(path.join(runsDir, `${second}.jsonl`))).size;
+    expect(listed.out).toContain(`${total} bytes`);
+  });
+
+  it("labels gate.reported as executor-written and names the CLI completions it lacks", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const reported = await emit(dir, ["gate.reported"], { command: "npm run pr:athena", outcome: "pass", durationMs: 12 });
+    expect(reported.code, reported.err).toBe(EXIT_OK);
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(shown.out).toMatch(/gate\.reported +executor\b/);
+    const missing = shown.out.split("\n").find((line) => line.includes("missing:")) ?? "";
+    expect(missing).toContain("command.completed:gate");
+    expect(missing).toContain("command.completed:record");
+  });
+
+  it("names only the record completion when the gate completion is present", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    await cli(dir, ["gate"]);
+    expect((await journalOf(dir, runId)).some((event) => event.payload["command"] === "gate")).toBe(true);
+    const shown = await cli(dir, ["runs", "show", runId]);
+    const missing = shown.out.split("\n").find((line) => line.includes("missing:")) ?? "";
+    expect(missing).toContain("command.completed:record");
+    expect(missing).not.toContain("command.completed:gate");
+  });
+
+  it("adds the config-presence note only where the config file is, and never imports it", async () => {
+    const dir = await initRepo({ withConfig: false });
+    const runId = await executorOnlyRun(dir);
+
+    const without = await cli(dir, ["runs", "show", runId]);
+    expect(without.code, without.err).toBe(EXIT_OK);
+    expect(without.out).toContain("complete-executor-only");
+    expect(without.out).not.toContain("harness.config.ts present");
+
+    // A config that would throw the moment anything imported it.
+    await writeFile(path.join(dir, "harness.config.ts"), "throw new Error('imported');\n", "utf8");
+    const withConfig = await cli(dir, ["runs", "show", runId]);
+    expect(withConfig.code, withConfig.err).toBe(EXIT_OK);
+    expect(withConfig.out).toContain("harness.config.ts present");
+    expect(withConfig.out).toContain(dir);
+    expect((await lstat(path.join(dir, "harness.config.ts"))).isFile()).toBe(true);
+  });
+
+  it("prints a labeled treeSha line from prepare, and records the completion", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const prepared = await cli(dir, ["prepare"]);
+    expect(prepared.code, prepared.err).toBe(EXIT_OK);
+    const labeled = prepared.out.split("\n").find((line) => line.trim().startsWith("treeSha "));
+    expect(labeled, prepared.out).toBeDefined();
+    const treeSha = labeled!.trim().slice("treeSha ".length);
+    expect(treeSha).toMatch(/^[0-9a-f]{40,64}$/);
+    // The same value the round rows and `findByCandidateTreeSha` bind to.
+    expect(prepared.out).toContain(`tree ${treeSha}`);
+    expect((await journalOf(dir, runId))[1]!.payload).toMatchObject({ command: "prepare", outcome: "ok" });
+  });
+
+  it("carries the self-attestation, observability, and unbound labels on any journal", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.out).toContain("self-attested");
+    expect(shown.out).toContain("observability, not evidence");
+    expect(shown.out).toContain("unbound to a record");
+  });
+
+  it("binds a round to its candidate in the envelope and in the round row", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const opened = await cli(dir, [
+      "emit",
+      "review.round.opened",
+      "--json",
+      JSON.stringify({ round: 1, candidateTreeSha: OTHER_TREE_SHA, lenses: ["lens.outcome-correctness"] }),
+    ]);
+    expect(opened.code, opened.err).toBe(EXIT_OK);
+
+    const events = await journalOf(dir, runId);
+    expect(events[1]!.candidateTreeSha).toBe(OTHER_TREE_SHA);
+    const { commonDir } = await storeOf(dir);
+    expect(await createRunStore(commonDir).findByCandidateTreeSha(OTHER_TREE_SHA)).toEqual({ runId, alsoMatching: [] });
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.out).toMatch(new RegExp(`round 1.*${OTHER_TREE_SHA}`));
+  });
+
+  // ── Neutralization ─────────────────────────────────────────────────────────
+
+  it("renders executor free text inert and on one line", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const coloured = await emit(dir, ["lens.selected"], {
+      mandated: ["lens.outcome-correctness", "lens.adversarial-testing"],
+      selected: [],
+      rationale: `${ESC}[31mred${ESC}[0m rationale`,
+    });
+    expect(coloured.code, coloured.err).toBe(EXIT_OK);
+    const decided = await emit(dir, ["decision.recorded"], {
+      fork: "branch name",
+      choice: "chose one\n  4  2026-01-01T00:00:00Z  command.completed  cli  gate ok",
+    });
+    expect(decided.code, decided.err).toBe(EXIT_OK);
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(shown.out).not.toContain(ESC);
+    expect(shown.out).toContain("red rationale");
+    // The forged row is text inside one row, never a row of its own.
+    expect(shown.out.split("\n").filter((line) => /^\s*4\s/.test(line))).toEqual([]);
+    expect(shown.out).toMatch(/chose one 4 2026-01-01T00:00:00Z command\.completed cli gate ok/);
+  });
+
+  it("echoes a hostile unknown kind exactly as the note records it", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const refused = await emit(dir, [`${ESC}[31mnope${ESC}[0m`], { anything: true });
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect(refused.err).not.toContain(ESC);
+
+    const notes = (await notesOf(dir, runId)) as readonly { kind: string }[];
+    expect(notes).toHaveLength(1);
+    expect(refused.err).toContain(notes[0]!.kind);
+  });
+});

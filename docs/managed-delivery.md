@@ -494,6 +494,57 @@ the comparison set; an absent or non-affirmative record excludes it silently.
 An empty measurement list therefore means *no shadow delivery has been observed
 consuming a projection* — never *no producer exists*.
 
+## Run surface
+
+A delivery run leaves its most valuable data in the coding host's transcript:
+which lenses the executor chose and why, how many review rounds ran and on
+which candidate, what the gate and the recorder did, and what it cost. The run
+surface moves that out of the transcript and into a small append-only journal
+per run.
+
+**Two writers, one journal.** The seven candidate-facing commands — `prepare`,
+`review-context`, `submit-evidence`, `gate`, `record`, `verify`, and the
+`check` preflight — append their own `command.completed` automatically whenever
+a run is current for the invoking worktree. The executor writes everything else
+through `emit`: the run's start and end, the ticket it read, the posture it
+declared, the lenses it selected and why, each review round with its candidate
+and its findings, the pull request, blockers, decisions, and compounding. The
+writer is stamped by the writing process, never by an argument: the store
+refuses an event claiming to be CLI-written on any kind other than
+`command.completed`, and `emit` refuses `command.completed` outright. An
+adopter whose gate is not a product command reports it as `gate.reported`,
+which never substitutes for the CLI-written completion.
+
+**Where it lives, and why that is safe.** One journal per run under the
+repository's git common directory, so a run outlives the worktree it ran in.
+That location is readable and writable by anything the owner executes in any
+worktree of the repository, candidate scripts included — which is admissible
+for exactly one reason: **nothing authoritative reads it.** No admission, no
+gate, no record decision consults a run event. Automatic emission is
+best-effort and can never change a command's outcome or its exit code, and a
+refused append lands one bounded line in the run's note rather than anywhere a
+reader could mistake for evidence.
+
+**Reading it back.** `runs list` reports each run's completeness status, whether
+it is still open, its size, and the store's total. `runs show <id>` renders the
+timeline — every event labeled with its writer's role, the rounds with the
+candidate each was bound to, the decisions, the refused appends — and a
+completeness readout. That readout is labeled three ways every time it is
+printed: **self-attested**, **observability, not evidence**, and **unbound to a
+record**. The viewer supplies no record tree SHA, so every rule the completeness
+contract phrases over a record's candidate is evaluated over any paired round
+instead. Executor-written free text reaches the terminal only through the
+kernel's display neutralizer with its whitespace collapsed, so a rationale
+carrying an escape sequence renders inert and one carrying a newline cannot
+forge a row.
+
+`emit` and `runs` are a **config-free** command class: dispatched before
+`harness.config.ts` is loaded, with their own context type, so they run in a
+repository that has no config at all and no other command's `config_unloadable`
+timing moves. The one thing they may do with a config is ask whether the file
+exists at a worktree root, which is how `runs show` adds its presence note to
+an executor-only journal; the module is never imported.
+
 ## Where to next
 
 - [The agent guide](agent-guide.md) — module boundaries and sensors, for an
