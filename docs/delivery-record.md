@@ -148,11 +148,11 @@ Both anchors are matched literally, never case-folded, and nothing else moves:
 a regular file under `.claude/skills/`, a symlink there resolving anywhere else
 (outside that root, above it, through `..`, or to an absolute path), a case
 alias of either anchor, the `.claude/skills` prefix committed as a single
-symlink, and every entry under `.claude` outside `skills/` — `.claude/settings.json`
-and `.claude/hooks/*` among them — all still raise
-`record_protected_authority_path`. A verifier that can only enumerate path names, never modes and targets, judges
-on the path alone and so admits nothing either: the exception is reachable only
-from the tree evidence that decides it.
+symlink, and every entry under `.claude` outside `skills/` —
+`.claude/settings.json` and `.claude/hooks/*` among them — all still raise
+`record_protected_authority_path`. A verifier that can only enumerate path
+names, never modes and targets, judges on the path alone and so admits nothing
+either: the exception is reachable only from the tree evidence that decides it.
 
 What the exception decides is the committed shape of the entry — its mode, and
 where its own target resolves as a path. It does not follow that path through
