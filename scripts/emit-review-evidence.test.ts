@@ -271,6 +271,17 @@ function harness(fixture: Fixture, ...args: readonly string[]): Promise<RunResul
 const approvedBy = (charters: readonly string[]): { id: string; result: string }[] =>
   charters.map((id) => ({ id, result: "approved" }));
 
+/** A deferred scope-expansion finding — the one disposition RG-7 lets green carry. */
+const deferral = (id: string, deferredIssueId: string): Record<string, unknown> => ({
+  id,
+  severity: "P2",
+  scope: "expansion",
+  actionable: true,
+  blocking: false,
+  disposition: "deferred",
+  deferredIssueId,
+});
+
 const greenOutcome = {
   spec: "review-outcome/1",
   verdict: "green",
@@ -349,6 +360,16 @@ describe("emitting a manifest", () => {
       // The provider triple is the gate's, resolved from the config it serves.
       expect(manifest.provider.id).toBe(FIXTURE_PROVIDER_ID);
       expect(claim.obligation).toBe("review.green");
+
+      // The zero point of the telemetry derivation. It is asserted here and a
+      // non-zero point is asserted (and submitted) below, because a constant
+      // agrees with whichever single sample a suite happens to carry.
+      expect(claim.payload.telemetry).toEqual({
+        iterationCount: 1,
+        findingCounts: { P0: 0, P1: 0, P2: 0, P3: 0 },
+        deferredExpansionCount: 0,
+        deferredIssueIds: [],
+      });
     },
   );
 
@@ -392,16 +413,19 @@ describe("the review outcome the emitter is given", () => {
         spec: "review-outcome/1",
         verdict: "green",
         reviewers: approvedBy(FIXTURE_CHARTERS),
+        // Deliberately more than one of everything the derivation does: two
+        // severities beyond the deferred ones, three deferrals naming two
+        // distinct ids, emitted out of order and with one repeated. A tally
+        // that assigns instead of increments, an id list that neither sorts
+        // nor deduplicates, and a constant lifted from a single sample each
+        // disagree with what RG-8 re-derives from these six rows.
         findings: [
-          {
-            id: "f-1",
-            severity: "P2",
-            scope: "expansion",
-            actionable: true,
-            blocking: false,
-            disposition: "deferred",
-            deferredIssueId: "V26-1541",
-          },
+          deferral("f-1", "V26-1541"),
+          deferral("f-2", "V26-1467"),
+          deferral("f-3", "V26-1541"),
+          { id: "f-4", severity: "P2", scope: "adjacent", actionable: true, blocking: false, disposition: "resolved" },
+          { id: "f-5", severity: "P3", scope: "adjacent", actionable: true, blocking: false, disposition: "pre_existing" },
+          { id: "f-6", severity: "P1", scope: "in_contract", actionable: false, blocking: false, disposition: "advisory" },
         ],
       });
       expect(emitted.code, `emit failed: ${emitted.stderr}`).toBe(0);
@@ -410,9 +434,9 @@ describe("the review outcome the emitter is given", () => {
       const telemetry = manifest.claims[0]!.payload.telemetry;
       // Derived, not stated: RG-8 re-derives these and RG-9 ties the iteration
       // count to the run history, so a constant here cannot survive submission.
-      expect(telemetry.findingCounts).toEqual({ P0: 0, P1: 0, P2: 1, P3: 0 });
-      expect(telemetry.deferredExpansionCount).toBe(1);
-      expect(telemetry.deferredIssueIds).toEqual(["V26-1541"]);
+      expect(telemetry.findingCounts).toEqual({ P0: 0, P1: 1, P2: 4, P3: 1 });
+      expect(telemetry.deferredExpansionCount).toBe(3);
+      expect(telemetry.deferredIssueIds).toEqual(["V26-1467", "V26-1541"]);
       expect(telemetry.iterationCount).toBe(manifest.runHistory.length);
 
       const submitted = await harness(fixture, "submit-evidence", "--manifest", manifestPath);
@@ -466,6 +490,51 @@ describe("the review outcome the emitter is given", () => {
       // And nothing was recorded, so the gate is still blocked.
       const gated = await harness(fixture, "gate");
       expect(gated.code, "the gate does not admit on a refused manifest").toBe(1);
+    },
+  );
+
+  it(
+    "carries a reviewer that did not finish as one, even when the outcome says green",
+    { timeout: 300_000 },
+    async () => {
+      // The greenwashing case, and the one an always-green emitter passes for.
+      // A lens that crashed or ran out of time has not reviewed anything; RG-3
+      // exists to refuse exactly that, and it can only refuse what the manifest
+      // reports. An emitter that folded these two results into `completed` —
+      // or worse, stamped approvals for them — would reach an ADMITTED gate on
+      // a review two thirds of which never happened.
+      const fixture = await createFixture();
+      const prepared = await harness(fixture, "prepare");
+      expect(prepared.code, `prepare failed: ${prepared.stderr}`).toBe(0);
+
+      const emitted = await emit(fixture, {
+        spec: "review-outcome/1",
+        verdict: "green",
+        reviewers: [
+          { id: "alpha-lens", result: "approved" },
+          { id: "beta-lens", result: "failed" },
+          { id: "zeta-lens", result: "timed-out" },
+        ],
+        findings: [],
+      });
+      expect(emitted.code, `emit failed: ${emitted.stderr}`).toBe(0);
+      const manifestPath = emitted.stdout.trim();
+      const manifest = await readManifest(manifestPath);
+      const reviewers = manifest.claims[0]!.payload.reviewers;
+
+      expect(reviewers.selected).toEqual([...FIXTURE_CHARTERS]);
+      expect(reviewers.completed).toEqual(["alpha-lens"]);
+      expect(reviewers.failed).toEqual(["beta-lens"]);
+      expect(reviewers.timedOut).toEqual(["zeta-lens"]);
+      // Only the reviewer that approved leaves a stamp.
+      expect(manifest.artifacts.map((artifact) => artifact.path)).toEqual(["reviewers/alpha-lens.json"]);
+
+      const submitted = await harness(fixture, "submit-evidence", "--manifest", manifestPath);
+      expect(submitted.code, "the recorder refuses a degraded reviewer set").toBe(1);
+      expect(`${submitted.stdout}${submitted.stderr}`).toContain("reviewer_set_incomplete");
+
+      const gated = await harness(fixture, "gate");
+      expect(gated.code, "the gate does not admit on a review two lenses did not finish").toBe(1);
     },
   );
 });
