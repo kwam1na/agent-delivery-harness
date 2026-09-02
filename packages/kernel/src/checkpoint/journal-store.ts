@@ -18,6 +18,10 @@
  * corrupt TERMINATED line is tampering, not interruption, and fails the whole
  * journal closed. In-process appends to one path are serialized so a racing
  * writer is rejected by revision discipline instead of corrupting the file.
+ * That whole body — read, decide, repair, extend, all inside the per-path
+ * critical section — lives in `append-only-file.ts` and is shared with the run
+ * store; the only thing THIS store contributes to it is the frozen reducer in
+ * the decision slot.
  *
  * SECRET DISCIPLINE. Before any byte becomes durable, secret-like values are
  * redacted inside the spine's bounded free-text members and rejected anywhere
@@ -27,8 +31,7 @@
  * Durability protections are the plan's owner-only discipline: directories
  * and files carry owner-only modes from first write.
  */
-import { appendFile, chmod, mkdir, readFile, truncate } from "node:fs/promises";
-import path from "node:path";
+import { appendDecided, parseJournalLines, readRawJournal } from "./append-only-file.ts";
 import type { SpineRejection } from "../spine/grammar.ts";
 import {
   reduceDeliveryJournal,
@@ -39,9 +42,6 @@ import {
   type MaintenanceJournalState,
 } from "../spine/reducer.ts";
 import { applySecretDiscipline } from "./redaction.ts";
-
-const OWNER_DIR = 0o700;
-const OWNER_FILE = 0o600;
 
 export type JournalAppendResult =
   | { readonly ok: true; readonly expectedRevision: number }
@@ -63,69 +63,19 @@ export type MaintenanceStateResult =
   | { readonly ok: true; readonly state: MaintenanceJournalState }
   | { readonly ok: false; readonly rejections: readonly SpineRejection[] };
 
-interface RawJournal {
-  readonly lines: readonly string[];
-  /** Byte length of the terminated prefix; equals the file size when clean. */
-  readonly terminatedByteLength: number;
-  readonly interruptedTail: boolean;
-}
-
-async function readRaw(journalPath: string): Promise<RawJournal> {
-  let text: string;
-  try {
-    text = await readFile(journalPath, "utf8");
-  } catch {
-    return { lines: [], terminatedByteLength: 0, interruptedTail: false };
-  }
-  const lastNewline = text.lastIndexOf("\n");
-  const terminated = lastNewline === -1 ? "" : text.slice(0, lastNewline + 1);
-  const interruptedTail = text.length > terminated.length;
-  return {
-    lines: terminated.split("\n").filter((line) => line.length > 0),
-    terminatedByteLength: Buffer.byteLength(terminated, "utf8"),
-    interruptedTail,
-  };
-}
+const parseRejections = (index: number): SpineRejection[] => [
+  {
+    code: "not_an_object",
+    pointer: `/${index}`,
+    message: "a terminated journal line is not JSON; the journal fails closed rather than skipping it",
+  },
+];
 
 function parseEntries(lines: readonly string[]): { ok: true; entries: unknown[] } | { ok: false; rejections: SpineRejection[] } {
-  const entries: unknown[] = [];
-  for (const [index, line] of lines.entries()) {
-    try {
-      entries.push(JSON.parse(line));
-    } catch {
-      return {
-        ok: false,
-        rejections: [
-          {
-            code: "not_an_object",
-            pointer: `/${index}`,
-            message: "a terminated journal line is not JSON; the journal fails closed rather than skipping it",
-          },
-        ],
-      };
-    }
-  }
-  return { ok: true, entries };
-}
-
-/**
- * In-process appends to one journal path run strictly one after another, so a
- * racing writer observes the loser's outcome through revision discipline —
- * never a torn or interleaved file.
- */
-const appendQueues = new Map<string, Promise<unknown>>();
-
-function serialized<T>(key: string, operation: () => Promise<T>): Promise<T> {
-  const previous = appendQueues.get(key) ?? Promise.resolve();
-  const current = previous.then(operation, operation);
-  appendQueues.set(
-    key,
-    current.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return current;
+  const parsed = parseJournalLines(lines);
+  return parsed.ok
+    ? { ok: true, entries: [...parsed.entries] }
+    : { ok: false, rejections: parseRejections(parsed.unparsableLineIndex) };
 }
 
 type Reduce<State> = (entries: readonly unknown[]) => { ok: true; state: State } | { ok: false; rejections: readonly SpineRejection[] };
@@ -146,7 +96,7 @@ function createStore<State>(journalPath: string, reduce: Reduce<State>): Store<S
     journalPath,
 
     async read() {
-      const raw = await readRaw(journalPath);
+      const raw = await readRawJournal(journalPath);
       const parsed = parseEntries(raw.lines);
       if (!parsed.ok) return { ok: false, rejections: parsed.rejections };
       return raw.interruptedTail
@@ -155,42 +105,36 @@ function createStore<State>(journalPath: string, reduce: Reduce<State>): Store<S
     },
 
     async state() {
-      const raw = await readRaw(journalPath);
+      const raw = await readRawJournal(journalPath);
       const parsed = parseEntries(raw.lines);
       if (!parsed.ok) return { ok: false, rejections: parsed.rejections };
       return reduce(parsed.entries);
     },
 
-    append(entry) {
-      return serialized(journalPath, async () => {
-        const disciplined = applySecretDiscipline(entry);
-        if (!disciplined.ok) {
-          return {
-            ok: false,
-            rejections: disciplined.matches.map((match) => ({
-              code: "secret_rejected" as const,
-              pointer: match.pointer,
-              message: `a ${match.id}-shaped secret has no place in this member; the append is refused before any byte is durable`,
-            })),
-          };
-        }
+    async append(entry) {
+      const outcome = await appendDecided<number, readonly SpineRejection[]>({
+        journalPath,
+        async decide(read) {
+          const disciplined = applySecretDiscipline(entry);
+          if (!disciplined.ok) {
+            return {
+              ok: false,
+              rejected: disciplined.matches.map((match) => ({
+                code: "secret_rejected" as const,
+                pointer: match.pointer,
+                message: `a ${match.id}-shaped secret has no place in this member; the append is refused before any byte is durable`,
+              })),
+            };
+          }
 
-        const raw = await readRaw(journalPath);
-        const parsed = parseEntries(raw.lines);
-        if (!parsed.ok) return { ok: false, rejections: parsed.rejections };
-        const reduced = reduce([...parsed.entries, disciplined.entry]);
-        if (!reduced.ok) return reduced;
-
-        await mkdir(path.dirname(journalPath), { recursive: true, mode: OWNER_DIR });
-        if (raw.interruptedTail) {
-          // The torn tail never committed — its writer never saw success — so
-          // truncating it removes no durable entry; accepted bytes are intact.
-          await truncate(journalPath, raw.terminatedByteLength);
-        }
-        await appendFile(journalPath, `${JSON.stringify(disciplined.entry)}\n`, { mode: OWNER_FILE, flag: "a" });
-        await chmod(journalPath, OWNER_FILE);
-        return { ok: true, expectedRevision: revisionOf(reduced.state) };
+          const parsed = await read();
+          if (!parsed.ok) return { ok: false, rejected: parseRejections(parsed.unparsableLineIndex) };
+          const reduced = reduce([...parsed.entries, disciplined.entry]);
+          if (!reduced.ok) return { ok: false, rejected: reduced.rejections };
+          return { ok: true, entry: disciplined.entry, accepted: revisionOf(reduced.state) };
+        },
       });
+      return outcome.ok ? { ok: true, expectedRevision: outcome.accepted } : { ok: false, rejections: outcome.rejected };
     },
   };
 }
