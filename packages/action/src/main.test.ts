@@ -954,12 +954,17 @@ describe("failure classes that only a repository can produce", () => {
   it("fails closed when the head's tree cannot be listed", TIMEOUT, async () => {
     const dir = await initRepo();
     const config = makeConfig();
+    // Discovery lists the HEAD COMMIT's tree; the identity computation lists a
+    // tree object. Both are `ls-tree -r -z --full-tree`, so the head sha is
+    // what separates them — matching on flags would fail the identity listing
+    // first and report a different failure than the one under test.
+    const headSha = await git(dir, "rev-parse", "HEAD");
     const { runtime } = await driveRuntime(dir, {
       config,
       // Everything stays real except the one listing, so the failure is the one
       // under test rather than a repository that was never usable.
       git: (real) => (command, options) =>
-        command.includes("ls-tree") && command.includes("--name-only")
+        command.includes("ls-tree") && command.includes(headSha)
           ? Promise.resolve({ exitCode: 128, stdout: "", stderr: "fatal: not a tree object" })
           : real(command, options),
     });

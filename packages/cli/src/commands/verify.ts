@@ -12,9 +12,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   deliveryRecordPathFor,
+  needsCommittedSymlinkTarget,
+  parseCandidateTreeListing,
   parseDeliveryRecord,
   runGitCommand,
   verifyDeliveryRecord,
+  type CandidateTreeEntry,
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
@@ -72,17 +75,32 @@ export const verifyCommand: CommandDescriptor = {
       return { kind: "blocked", blockers: [...parsed.blockers] };
     }
 
-    // The tracked tree's own paths, so this command rejects a candidate
+    // The tracked tree's own entries, so this command rejects a candidate
     // carrying a projection or discovery-configuration path exactly as the
-    // Action does. An unreadable listing supplies no paths rather than a
+    // Action does. An unreadable listing supplies no entries rather than a
     // false clean bill: the check simply does not run.
-    const listing = await runGitCommand(["git", "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD"], {
+    //
+    // Mode and object, not just the name: the one admitted exception under
+    // `.claude/skills/` turns on the entry being a symlink and on where its
+    // committed target resolves, and both facts live in the tree.
+    const listing = await runGitCommand(["git", "ls-tree", "-r", "-z", "--full-tree", "HEAD"], {
       cwd: context.rootDir,
     });
-    // NUL separation, like the Action: a path containing a newline is quoted
-    // under newline splitting, and the quoted form defeats the check.
-    const candidateTreePaths =
-      listing.exitCode === 0 ? listing.stdout.split("\u0000").filter((entry) => entry.length > 0) : [];
+    const candidateTreePaths: CandidateTreeEntry[] = [];
+    if (listing.exitCode === 0) {
+      for (const entry of parseCandidateTreeListing(listing.stdout)) {
+        if (!needsCommittedSymlinkTarget(entry)) {
+          candidateTreePaths.push(entry);
+          continue;
+        }
+        // The target read out of the committed blob, never off the filesystem:
+        // the working tree's link may differ from the one under review. A blob
+        // that will not read leaves the target absent, and an entry with no
+        // target cannot reach the exception.
+        const blob = await runGitCommand(["git", "cat-file", "blob", entry.objectSha], { cwd: context.rootDir });
+        candidateTreePaths.push(blob.exitCode === 0 ? { ...entry, symlinkTarget: blob.stdout } : entry);
+      }
+    }
 
     const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths });
     if (!check.ok) {

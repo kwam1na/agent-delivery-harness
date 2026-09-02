@@ -127,3 +127,29 @@ protected-authority-path violation, and the verification core rejects a
 candidate tree carrying one on the tree's own evidence — no product state
 consulted, so a reviewer and a CI job reach the same verdict. Membership is by
 path segment: `src/managed-projection-notes.md` merely names one of them.
+
+### The one exception: a tracked Claude skill exposure
+
+A committed entry under `.claude/skills/` is admitted when, and only when, both
+of these hold in the committed tree itself:
+
+1. its git mode is `120000` — the entry is a symlink, not a regular file; and
+2. its link target, read from the committed blob, resolved relative to the
+   entry's own directory and normalized, names something strictly inside
+   `.agent-skills/current/skills/`.
+
+That is the exposure the product's own workflow projection installs: the skill
+text lives in the tracked, receipted generation, and the entry under the host's
+directory is a pointer into it carrying no authority bytes of its own. Admitting
+it lets every adopter track the projection install the same way.
+
+Both anchors are matched literally, never case-folded, and nothing else moves:
+a regular file under `.claude/skills/`, a symlink there resolving anywhere else
+(outside that root, above it, through `..`, or to an absolute path), a case
+alias of either anchor, the `.claude/skills` prefix committed as a single
+symlink, and every entry under `.claude` outside `skills/` — `.claude/settings.json`
+and `.claude/hooks/*` among them — all still raise
+`record_protected_authority_path`. `.managed-projection/` admits nothing at all.
+A verifier that can only enumerate path names, never modes and targets, judges
+on the path alone and so admits nothing either: the exception is reachable only
+from the tree evidence that decides it.

@@ -21,6 +21,10 @@ import {
   parseDeliveryRecord,
   selectDeliveryRecordForIdentity,
   DELIVERY_OWNED_TREE_PREFIXES,
+  CLAUDE_SKILL_EXPOSURE_PREFIX,
+  parseCandidateTreeListing,
+  needsCommittedSymlinkTarget,
+  RECEIPTED_SKILLS_ROOT,
   verifyDeliveryRecord,
   type DeliveryRecord,
 } from "./delivery-record.ts";
@@ -359,9 +363,160 @@ describe("verifyDeliveryRecord", () => {
     // Two lists, one meaning: the grant protects them inside the run, the
     // external verifier rejects them in the committed tree. Drift between the
     // two would open exactly the gap this check exists to close.
+    //
+    // The membership is unchanged by the Claude skill-exposure exception below:
+    // that exception admits ONE tree-verifiable shape inside `.claude/skills/`
+    // and does not remove `.claude` from either list. The in-run grant still
+    // protects the whole prefix, because inside a run the projection install
+    // writes the exposure and the candidate never should.
     expect([...DELIVERY_OWNED_TREE_PREFIXES].sort()).toEqual(
       PORTABLE_STAGE_GRANT.protectedPaths.filter((path) => path !== ".git").slice().sort(),
     );
+    // The exception's two anchors, pinned literally so a rename cannot widen it.
+    expect(CLAUDE_SKILL_EXPOSURE_PREFIX).toBe(".claude/skills/");
+    expect(RECEIPTED_SKILLS_ROOT).toBe(".agent-skills/current/skills/");
+    expect(CLAUDE_SKILL_EXPOSURE_PREFIX.startsWith(`${DELIVERY_OWNED_TREE_PREFIXES[1]}/`)).toBe(true);
+  });
+
+  describe("the tracked Claude skill exposure", () => {
+    // One narrow exception to the frozen `.claude` prefix: a committed entry
+    // under `.claude/skills/` is admissible ONLY when it is a symlink (git mode
+    // 120000) whose target, resolved relative to the entry's own directory,
+    // lands inside `.agent-skills/current/skills/`. That is the exact shape the
+    // product's own projection install writes, and it is decidable from the
+    // committed tree alone — mode and blob, no filesystem read.
+
+    it("admits a symlink resolving into the receipted generation's skills root", () => {
+      const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, {
+        candidateTreePaths: [
+          "src/index.ts",
+          { path: ".claude/skills/execute-work", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/execute-work" },
+          // A nested exposure resolves against its own directory, not the root.
+          { path: ".claude/skills/vendor/plan-work", mode: "120000", symlinkTarget: "../../../.agent-skills/current/skills/plan-work" },
+          // A target that walks back through the root it already reached still
+          // lands inside it, and is the same admissible shape.
+          { path: ".claude/skills/review-work", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/./review-work" },
+        ],
+      });
+      expect(check.ok, JSON.stringify(check.blockers)).toBe(true);
+    });
+
+    it("rejects every other shape under .claude with the same blocker", () => {
+      const rejected: readonly { readonly why: string; readonly entry: unknown }[] = [
+        {
+          why: "a regular file under .claude/skills/",
+          entry: { path: ".claude/skills/execute-work/SKILL.md", mode: "100644" },
+        },
+        {
+          why: "an executable regular file under .claude/skills/",
+          entry: { path: ".claude/skills/run.sh", mode: "100755" },
+        },
+        {
+          why: "a symlink resolving outside the receipted skills root",
+          entry: { path: ".claude/skills/execute-work", mode: "120000", symlinkTarget: "../../.agent-skills/current/workflows/execute-work" },
+        },
+        {
+          why: "a symlink resolving into the generation but above its skills root",
+          entry: { path: ".claude/skills/current", mode: "120000", symlinkTarget: "../../.agent-skills/current" },
+        },
+        {
+          why: "a symlink escaping the repository with ..",
+          entry: { path: ".claude/skills/execute-work", mode: "120000", symlinkTarget: "../../../.agent-skills/current/skills/execute-work" },
+        },
+        {
+          why: "a symlink whose target traverses out of the skills root and back down a sibling",
+          entry: { path: ".claude/skills/execute-work", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/../../../secrets/x" },
+        },
+        {
+          why: "a symlink to an absolute path",
+          entry: { path: ".claude/skills/execute-work", mode: "120000", symlinkTarget: "/etc/agent-skills/current/skills/execute-work" },
+        },
+        {
+          why: "a symlink to the skills root itself, naming nothing inside it",
+          entry: { path: ".claude/skills/all", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/" },
+        },
+        {
+          why: "a symlink with no target read from the tree",
+          entry: { path: ".claude/skills/execute-work", mode: "120000" },
+        },
+        {
+          why: "an entry under .claude outside skills/",
+          entry: { path: ".claude/settings.json", mode: "100644" },
+        },
+        {
+          why: "a symlink under .claude outside skills/, however it resolves",
+          entry: { path: ".claude/hooks/pre", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/pre" },
+        },
+        {
+          why: "the `.claude/skills` directory prefix committed as a single symlink",
+          entry: { path: ".claude/skills", mode: "120000", symlinkTarget: "../.agent-skills/current/skills" },
+        },
+        {
+          why: "a case alias of the exposure prefix, which is not the shape the install writes",
+          entry: { path: ".Claude/Skills/execute-work", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/execute-work" },
+        },
+      ];
+      for (const { why, entry } of rejected) {
+        const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, {
+          candidateTreePaths: ["src/index.ts", entry as never],
+        });
+        expect(check.ok, why).toBe(false);
+        expect(check.blockers.map((blocker) => blocker.code), why).toContain("record_protected_authority_path");
+      }
+    });
+
+    it("still rejects a bare path string under .claude/skills, which carries no mode to judge", () => {
+      // The path form is what existing callers pass. It cannot witness a mode
+      // or a target, so it can never reach the exception — fail-closed.
+      const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, {
+        candidateTreePaths: [".claude/skills/execute-work"],
+      });
+      expect(check.ok).toBe(false);
+      expect(check.blockers.map((blocker) => blocker.code)).toContain("record_protected_authority_path");
+    });
+
+    it("reads mode, object and path out of a real ls-tree listing, and names the blobs it needs", () => {
+      const listing = [
+        "100644 blob 1111111111111111111111111111111111111111\tsrc/index.ts",
+        "120000 blob 2222222222222222222222222222222222222222\t.claude/skills/execute-work",
+        "100644 blob 3333333333333333333333333333333333333333\t.claude/settings.json",
+        // A path with an embedded space and one with a tab in its content-side
+        // name: NUL separation means neither is quoted, and the split is on the
+        // FIRST tab, so the path is preserved verbatim.
+        "120000 blob 4444444444444444444444444444444444444444\t.claude/skills/two words",
+        "120000 blob 5555555555555555555555555555555555555555\tdocs/link",
+      ].join("\u0000");
+      const entries = parseCandidateTreeListing(listing);
+      expect(entries.map((entry) => entry.path)).toEqual([
+        "src/index.ts",
+        ".claude/skills/execute-work",
+        ".claude/settings.json",
+        ".claude/skills/two words",
+        "docs/link",
+      ]);
+      expect(entries[1]).toEqual({
+        path: ".claude/skills/execute-work",
+        mode: "120000",
+        objectSha: "2222222222222222222222222222222222222222",
+      });
+      // Only the delivery-owned symlinks need a blob read: not the regular file
+      // under `.claude`, whose verdict its mode already settles, and not the
+      // symlink outside every delivery-owned prefix.
+      expect(entries.filter(needsCommittedSymlinkTarget).map((entry) => entry.path)).toEqual([
+        ".claude/skills/execute-work",
+        ".claude/skills/two words",
+      ]);
+    });
+
+    it("leaves entries outside the delivery-owned prefixes alone whatever their mode", () => {
+      const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, {
+        candidateTreePaths: [
+          { path: "node_modules-link", mode: "120000", symlinkTarget: "/anywhere/at/all" },
+          { path: "docs/.claudette/readme.md", mode: "100644" },
+        ],
+      });
+      expect(check.ok, JSON.stringify(check.blockers)).toBe(true);
+    });
   });
 
   it("fails on an identity token the config does not accept", () => {

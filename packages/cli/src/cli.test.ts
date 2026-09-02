@@ -8,7 +8,7 @@
  * verify core agree about one repository. Nothing here stubs git.
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1088,5 +1088,72 @@ describe("record refuses when the identity moves under it", () => {
     const recordDir = path.join(dir, "telemetry/delivery-runs");
     const written = await readdir(recordDir).catch(() => [] as string[]);
     expect(written.some((name) => name.includes("f".repeat(64)))).toBe(false);
+  });
+});
+
+// ── The tracked Claude skill exposure, over a real repository ────────────────
+
+describe("verify over a candidate carrying a Claude skill exposure", () => {
+  /**
+   * Drives the loop to a committed record and returns what `verify` said about
+   * it, so the two polarities differ only in what the tree carries under
+   * `.claude/skills/`.
+   */
+  async function loopToVerify(dir: string): Promise<{ readonly code: number; readonly err: string }> {
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime, err } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const manifestPath = await buildAcceptSubmission(dir, config, artifacts);
+    expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["gate"], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+    await commitRecord(dir);
+    return { code: await runCli(["verify"], runtime), err: err.join("") };
+  }
+
+  it("verifies a tree whose .claude/skills entries are symlinks into the receipted generation", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    // The shape the product's own projection install writes: the generation's
+    // skill directory tracked under `.agent-skills/current/skills/`, and a
+    // relative symlink under `.claude/skills/` exposing it to the host.
+    await mkdir(path.join(dir, ".agent-skills/current/skills/execute-work"), { recursive: true });
+    await writeFile(path.join(dir, ".agent-skills/current/skills/execute-work/SKILL.md"), "# execute work\n", "utf8");
+    await mkdir(path.join(dir, ".claude/skills"), { recursive: true });
+    await symlink("../../.agent-skills/current/skills/execute-work", path.join(dir, ".claude/skills/execute-work"));
+    await git(dir, "add", "-A", ".agent-skills", ".claude");
+    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "install the projection exposure");
+    // The exposure really is committed as a symlink; without that this test
+    // would be proving nothing about the mode the exception turns on.
+    expect(await git(dir, "ls-tree", "HEAD", ".claude/skills/execute-work")).toMatch(/^120000 blob /);
+
+    const verified = await loopToVerify(dir);
+    expect(verified.err).not.toContain("record_protected_authority_path");
+    expect(verified.code).toBe(EXIT_OK);
+  });
+
+  it("blocks a tree carrying a regular file under .claude/skills", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    await mkdir(path.join(dir, ".claude/skills"), { recursive: true });
+    await writeFile(path.join(dir, ".claude/skills/planted.md"), "# planted authority\n", "utf8");
+    await git(dir, "add", "-A", ".claude");
+    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "plant a regular file");
+
+    const verified = await loopToVerify(dir);
+    expect(verified.code).toBe(EXIT_POLICY);
+    expect(verified.err).toContain("record_protected_authority_path");
+  });
+
+  it("blocks a .claude/skills symlink resolving outside the receipted generation", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    await mkdir(path.join(dir, ".claude/skills"), { recursive: true });
+    await symlink("../../src.txt", path.join(dir, ".claude/skills/execute-work"));
+    await git(dir, "add", "-A", ".claude");
+    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "plant an outward symlink");
+    expect(await git(dir, "ls-tree", "HEAD", ".claude/skills/execute-work")).toMatch(/^120000 blob /);
+
+    const verified = await loopToVerify(dir);
+    expect(verified.code).toBe(EXIT_POLICY);
+    expect(verified.err).toContain("record_protected_authority_path");
   });
 });
