@@ -1,5 +1,5 @@
 /**
- * Delivery harness CLI: the nine-command operator surface.
+ * Delivery harness CLI: the eleven-command operator surface.
  *
  * THE COMMAND REGISTRY. `COMMANDS` is the single source of truth for which
  * commands exist. Every command module under `commands/` must appear here, and
@@ -12,15 +12,17 @@
  * in `boundary.ts`; each command is a thin, testable unit behind it.
  */
 import { checkCommand } from "./commands/check.ts";
+import { emitCommand } from "./commands/emit.ts";
 import { gateCommand } from "./commands/gate.ts";
 import { maintainCommand } from "./commands/maintain.ts";
 import { managedCommand } from "./commands/managed.ts";
 import { prepareCommand } from "./commands/prepare.ts";
 import { recordCommand } from "./commands/record.ts";
 import { reviewContextCommand } from "./commands/review-context.ts";
+import { runsCommand } from "./commands/runs.ts";
 import { submitEvidenceCommand } from "./commands/submit-evidence.ts";
 import { verifyCommand } from "./commands/verify.ts";
-import { runCliBoundary, type CliRuntime, type CommandDescriptor } from "./boundary.ts";
+import { runCliBoundary, type AnyCommandDescriptor, type CliRuntime } from "./boundary.ts";
 
 export const PACKAGE_NAME = "@agent-delivery-harness/cli";
 
@@ -30,8 +32,12 @@ export const PACKAGE_NAME = "@agent-delivery-harness/cli";
  * verify — with `check` as the standalone preflight and `managed` as the
  * host-facing managed-delivery checkpoint surface and `maintain` as the
  * installation-scoped maintenance lane.
+ *
+ * `emit` and `runs` come last because they are a different class: config-free
+ * commands, dispatched before `harness.config.ts` is loaded, that read and
+ * write the run store rather than anything a delivery decision depends on.
  */
-export const COMMANDS: readonly CommandDescriptor[] = [
+export const COMMANDS: readonly AnyCommandDescriptor[] = [
   prepareCommand,
   reviewContextCommand,
   submitEvidenceCommand,
@@ -41,22 +47,29 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   checkCommand,
   managedCommand,
   maintainCommand,
+  emitCommand,
+  runsCommand,
 ];
 
 export {
+  COMPLETION_WRAPPED_COMMANDS,
   EXIT_INTERRUPTED,
   EXIT_OK,
   EXIT_POLICY,
   EXIT_USAGE,
   CliInterruption,
+  isConfigFreeCommand,
   runCliBoundary,
   wireRepo,
   importHarnessConfig,
   commandBlocker,
+  type AnyCommandDescriptor,
   type CliRuntime,
   type CommandContext,
   type CommandDescriptor,
   type CommandResult,
+  type ConfigFreeCommandContext,
+  type ConfigFreeCommandDescriptor,
   type RepoWiring,
 } from "./boundary.ts";
 
@@ -69,6 +82,8 @@ export { verifyCommand } from "./commands/verify.ts";
 export { checkCommand } from "./commands/check.ts";
 export { managedCommand } from "./commands/managed.ts";
 export { maintainCommand } from "./commands/maintain.ts";
+export { emitCommand } from "./commands/emit.ts";
+export { runsCommand } from "./commands/runs.ts";
 
 /** Runs the CLI against a runtime and returns the process exit code. */
 export function runCli(argv: readonly string[], runtime: CliRuntime): Promise<number> {

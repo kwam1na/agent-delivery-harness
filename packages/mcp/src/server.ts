@@ -17,7 +17,7 @@
  * supply-chain reasons. The protocol layer lives in `stdio.ts`; this module is
  * transport-free so the parity suite drives the same code an agent reaches.
  *
- * A DELIBERATE SUBSET, IN TWO DIMENSIONS. Three of the CLI's nine commands are
+ * A DELIBERATE SUBSET, IN TWO DIMENSIONS. Three of the CLI's eleven commands are
  * exposed, and the third — `managed` — exposes only its read-only operations.
  * The rest are not tools, and a call naming one is an unknown tool: what a tool
  * call may reach is the registry below, never the CLI's. Exposing less than the

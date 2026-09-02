@@ -91,12 +91,19 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the nine-command operator surface and
+- **`@agent-delivery-harness/cli`** — the eleven-command operator surface and
   opt-in `delivery-provider-rails/1` stdio adapter:
   `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
   `check`, `managed` (the managed-delivery facade's host-facing checkpoint and
-  status surface), and `maintain` (the installation-scoped maintenance lane:
-  update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark).
+  status surface), `maintain` (the installation-scoped maintenance lane:
+  update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark), and
+  the config-free run-surface pair `emit` and `runs` — `emit` appends one
+  `run-event/1` event to the current delivery run's journal, `runs list` and
+  `runs show` render that journal back. The seven candidate-facing commands
+  append their own `command.completed` automatically whenever a run is current
+  for the invoking worktree. The run journal is self-attested observability
+  that no admission, gate, or record decision reads; see
+  [The managed delivery product](docs/managed-delivery.md#run-surface).
   `managed operations` prints the facade's own operation contract — each
   operation's capability class, invocation-fence rule, expected journal
   revision, and the surfaces that may reach it.
