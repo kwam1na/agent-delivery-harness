@@ -168,6 +168,31 @@ function pairRounds(events: readonly RunEvent[]): Pairing {
   return { paired, inverted };
 }
 
+/**
+ * Whether the journal carries one required entry, by that entry's own name.
+ *
+ * ONE PREDICATE, TWO READERS. `missing` below is this function's complement
+ * over the required list, and every other reader — the `runs show` readout's
+ * `present` row among them — answers from here too. Two entries are not plain
+ * kind lookups: a completion counts only where the CLI wrote it, so an
+ * executor's claim to have run a command is never read as the product's, and a
+ * closed round counts only where it pairs with an open of the same number that
+ * precedes it. Answering either of those twice is how a readout comes to name
+ * one entry as both present and missing.
+ */
+export function runJournalCarries(events: readonly RunEvent[], entry: RunJournalRequiredEntry): boolean {
+  switch (entry) {
+    case REQUIRED.gateCompletion:
+      return cliCompletion(events, "gate") !== undefined;
+    case REQUIRED.recordCompletion:
+      return cliCompletion(events, "record") !== undefined;
+    case REQUIRED.roundClosed:
+      return pairRounds(events).paired.length > 0;
+    default:
+      return indexBy(events, entry).length > 0;
+  }
+}
+
 // ── The evaluator ──────────────────────────────────────────────────────────
 
 /**
@@ -211,17 +236,13 @@ export function evaluateRunJournal(
   );
 
   // ── Required entries ─────────────────────────────────────────────────────
-  if (runStarted === undefined) missing.push(REQUIRED.runStarted);
-  if (ticketRead === undefined) missing.push(REQUIRED.ticketRead);
-  if (postureDeclared === undefined) missing.push(REQUIRED.postureDeclared);
-  if (lensSelected === undefined) missing.push(REQUIRED.lensSelected);
-  if (roundsOpened.length === 0) missing.push(REQUIRED.roundOpened);
-  if (paired.length === 0) missing.push(REQUIRED.roundClosed);
-  if (gateCompletion === undefined) missing.push(REQUIRED.gateCompletion);
-  if (recordCompletion === undefined) missing.push(REQUIRED.recordCompletion);
-  if (prOpened === undefined) missing.push(REQUIRED.prOpened);
-  if (runEnded === undefined) missing.push(REQUIRED.runEnded);
-  if (executorOnly && gateReported === undefined) missing.push(REQUIRED.gateReported);
+  //
+  // Named in the declared order, each answered by the one shared predicate.
+  // `gate.reported` is required only of an executor-only journal.
+  for (const entry of RUN_JOURNAL_REQUIRED_ENTRIES) {
+    if (entry === REQUIRED.gateReported && !executorOnly) continue;
+    if (!runJournalCarries(events, entry)) missing.push(entry);
+  }
 
   // ── Ordering constraints ─────────────────────────────────────────────────
   if (runStarted !== undefined && (runStarted.at !== 0 || indexBy(events, "run.started").length > 1)) {

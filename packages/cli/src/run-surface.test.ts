@@ -165,6 +165,28 @@ async function notesOf(dir: string, runId: string): Promise<readonly unknown[]> 
   return createRunStore(commonDir).readNotes(runId);
 }
 
+/**
+ * `runs show`'s two readout rows for one required entry. They are read as a
+ * pair on purpose: the rows are complementary by construction, so an entry may
+ * appear on exactly one of them.
+ */
+async function readoutRowsFor(dir: string, runId: string): Promise<{ readonly present: string; readonly missing: string }> {
+  const shown = await cli(dir, ["runs", "show", runId]);
+  expect(shown.code, shown.err).toBe(EXIT_OK);
+  const lines = shown.out.split("\n");
+  return {
+    present: lines.find((line) => line.includes("present:")) ?? "",
+    missing: lines.find((line) => line.includes("missing:")) ?? "",
+  };
+}
+
+/** A journal whose closed round does not pair: absent from `present`, named by `missing`. */
+async function expectRoundClosedAbsent(dir: string, runId: string): Promise<void> {
+  const { present, missing } = await readoutRowsFor(dir, runId);
+  expect(present).not.toContain("review.round.closed");
+  expect(missing).toContain("review.round.closed");
+}
+
 /** The run id `emit run.started` allocated, taken from the store rather than parsed out of prose. */
 async function startRun(dir: string, extra: readonly string[] = []): Promise<string> {
   const result = await emit(dir, ["run.started", ...extra], {
@@ -172,6 +194,12 @@ async function startRun(dir: string, extra: readonly string[] = []): Promise<str
     workflow: { releaseId: "test-release", profile: "linear" },
   });
   expect(result.code, result.err).toBe(EXIT_OK);
+  // The deny side of the stale-pointer report: every start on this path either
+  // took a free pointer or displaced a named run, and neither is the store-health
+  // alarm. Without this the alarm can fire unconditionally and stay green.
+  expect(result.out, "a start that displaced nothing unreadable must not raise the store-health alarm").not.toContain(
+    "stale pointer",
+  );
   const { commonDir, worktreeKey } = await storeOf(dir);
   const current = await createRunStore(commonDir).current(worktreeKey);
   if (!current.ok || current.runId === undefined) throw new Error("run.started left no current run");
@@ -609,13 +637,23 @@ describe("emit, the boundary wrap, and runs", () => {
   it("displaces a pointer whose journal is gone rather than allocating one run per retry", async () => {
     const dir = await initRepo();
     const first = await startRun(dir);
-    const { runsDir, commonDir } = await storeOf(dir);
+    const { runsDir, commonDir, worktreeKey } = await storeOf(dir);
     // A pruned store, a restored `.git`: the pointer survives, the journal
     // does not. `current` answers `undefined` here exactly as it does for no
     // pointer at all, so nothing but the pointer write can tell them apart.
     await unlink(path.join(runsDir, `${first}.jsonl`));
 
-    const second = await startRun(dir);
+    // Started directly rather than through `startRun`: this is the one start
+    // that SHOULD raise the store-health alarm, and the shared helper asserts
+    // the deny side.
+    const restarted = await emit(dir, ["run.started"], {
+      host: "vitest",
+      workflow: { releaseId: "test-release", profile: "linear" },
+    });
+    expect(restarted.code, restarted.err).toBe(EXIT_OK);
+    expect(restarted.out).toContain("stale pointer");
+    const pointer = await createRunStore(commonDir).current(worktreeKey);
+    const second = pointer.ok ? pointer.runId : undefined;
     expect(second).not.toBe(first);
     expect(await createRunStore(commonDir).list()).toEqual([second]);
   });
@@ -670,17 +708,26 @@ describe("emit, the boundary wrap, and runs", () => {
     // live between the read and the exclusive create is a genuine race and
     // must still be refused — a re-read that displaced anything, or a refused
     // pointer write reported as success, would let both of these exit 0.
-    const codes = (
-      await Promise.all([
-        cli(dir, ["emit", "run.started", "--json", payload], { loadConfig: undefined }),
-        cli(dir, ["emit", "run.started", "--json", payload], { loadConfig: undefined }),
-      ])
-    ).map((invocation) => invocation.code);
-    expect(codes.filter((code) => code === EXIT_OK)).toHaveLength(1);
+    //
+    // Raced four times over four repositories, not once. The loser is
+    // sometimes refused at the earlier pointer read rather than at the
+    // exclusive create, so a single race reaches the deny side most of the
+    // time but not every time; repeating it makes the row detect what it
+    // claims to detect on every run rather than on most of them.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const raced = attempt === 0 ? dir : await initRepo();
+      const codes = (
+        await Promise.all([
+          cli(raced, ["emit", "run.started", "--json", payload], { loadConfig: undefined }),
+          cli(raced, ["emit", "run.started", "--json", payload], { loadConfig: undefined }),
+        ])
+      ).map((invocation) => invocation.code);
+      expect(codes.filter((code) => code === EXIT_OK), `attempt ${attempt}`).toHaveLength(1);
 
-    const { commonDir, worktreeKey } = await storeOf(dir);
-    const current = await createRunStore(commonDir).current(worktreeKey);
-    expect(current.ok && current.runId !== undefined).toBe(true);
+      const { commonDir, worktreeKey } = await storeOf(raced);
+      const current = await createRunStore(commonDir).current(worktreeKey);
+      expect(current.ok && current.runId !== undefined).toBe(true);
+    }
   });
 
   it("counts a closed round as present only when a round of that number was opened", async () => {
@@ -698,11 +745,7 @@ describe("emit, the boundary wrap, and runs", () => {
     // `missing` pairs rounds; `present` must answer under the same rule, or the
     // readout names one entry on both rows and a reader cannot tell what the
     // run still owes.
-    const unpaired = await cli(dir, ["runs", "show", orphan]);
-    const unpairedPresent = unpaired.out.split("\n").find((line) => line.includes("present:")) ?? "";
-    const unpairedMissing = unpaired.out.split("\n").find((line) => line.includes("missing:")) ?? "";
-    expect(unpairedPresent).not.toContain("review.round.closed");
-    expect(unpairedMissing).toContain("review.round.closed");
+    await expectRoundClosedAbsent(dir, orphan);
 
     await emit(dir, ["run.ended"], { result: "partial", cost: { unit: "usd", total: 0, reportedBy: "vitest" } });
     const paired = await startRun(dir);
@@ -711,11 +754,57 @@ describe("emit, the boundary wrap, and runs", () => {
     ).toBe(EXIT_OK);
     expect((await emit(dir, ["review.round.closed"], closed)).code).toBe(EXIT_OK);
 
-    const shown = await cli(dir, ["runs", "show", paired]);
-    const present = shown.out.split("\n").find((line) => line.includes("present:")) ?? "";
-    const missing = shown.out.split("\n").find((line) => line.includes("missing:")) ?? "";
+    const { present, missing } = await readoutRowsFor(dir, paired);
     expect(present).toContain("review.round.closed");
     expect(missing).not.toContain("review.round.closed");
+
+    // The two discriminators the pairing rule is made of, each pinned by a
+    // journal that satisfies every OTHER condition. Without these the rule can
+    // lose the round comparison, or lose the ordering, and stay green.
+    //
+    // Mismatched number: round 2 opened, round 1 closed. Pairing on any opened
+    // round rather than the same one would report this closed round present.
+    await emit(dir, ["run.ended"], { result: "partial", cost: { unit: "usd", total: 0, reportedBy: "vitest" } });
+    const mismatched = await startRun(dir);
+    expect(
+      (await emit(dir, ["review.round.opened"], { round: 2, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code,
+    ).toBe(EXIT_OK);
+    expect((await emit(dir, ["review.round.closed"], closed)).code).toBe(EXIT_OK);
+    await expectRoundClosedAbsent(dir, mismatched);
+
+    // Wrong order: round 1 closed, then round 1 opened. Pairing without the
+    // "opened first" comparison would report this closed round present.
+    await emit(dir, ["run.ended"], { result: "partial", cost: { unit: "usd", total: 0, reportedBy: "vitest" } });
+    const inverted = await startRun(dir);
+    expect((await emit(dir, ["review.round.closed"], closed)).code).toBe(EXIT_OK);
+    expect(
+      (await emit(dir, ["review.round.opened"], { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code,
+    ).toBe(EXIT_OK);
+    await expectRoundClosedAbsent(dir, inverted);
+  });
+
+  it("keeps present and missing on one predicate when a round closes on both sides of its open", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const closed = {
+      round: 1,
+      candidateTreeSha: TREE_SHA,
+      outcome: "aligned",
+      findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+      cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+    };
+    // Closed, opened, closed. The evaluator pairs the FIRST close with the
+    // first open, finds it inverted, and reports the entry missing. A `present`
+    // row scanning every close for any earlier open finds the second one and
+    // names the same entry on both rows — the contradiction the readout's own
+    // comment forbids. One predicate, or the reader is told both things.
+    expect((await emit(dir, ["review.round.closed"], closed)).code).toBe(EXIT_OK);
+    expect(
+      (await emit(dir, ["review.round.opened"], { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code,
+    ).toBe(EXIT_OK);
+    expect((await emit(dir, ["review.round.closed"], closed)).code).toBe(EXIT_OK);
+
+    await expectRoundClosedAbsent(dir, runId);
   });
 
   it("says so when it displaces a pointer that names no readable run", async () => {
