@@ -147,7 +147,44 @@ const FIXTURE_CHARTERS = ["alpha-lens", "beta-lens", "zeta-lens"] as const;
 /** The fixture's own gate: its own provider id, so a hardcoded one cannot pass. */
 const FIXTURE_PROVIDER_ID = "fixture.review-provider";
 
-const FIXTURE_CONFIG = `import { defineHarnessConfig } from "@agent-delivery-harness/kernel";
+/**
+ * A provider and an obligation the review pair must not be confused with.
+ * Registered and declared FIRST, because "the first entry" and "the entry the
+ * review obligation names" are the same string in a config that has only one
+ * of each — which is every config this suite would otherwise evaluate.
+ */
+const DECOY_PROVIDER_ID = "decoy.sensor-provider";
+const DECOY_OBLIGATION_ID = "sensors.green";
+
+const FINDING_CODE_LISTS = `      waivableCodes: ["review_evidence_missing", "stale_evidence", "evidence_not_green", "unresolved_actionable_findings"],
+      nonWaivableCodes: [
+        "ambiguous_records",
+        "malformed_record",
+        "unknown_provider",
+        "live_provider_missing",
+        "ambiguous_live_provider",
+        "live_provider_failed",
+        "resolution_not_allowed",
+      ],`;
+
+const DECOY_OBLIGATION = `    {
+      id: ${JSON.stringify(DECOY_OBLIGATION_ID)},
+      activation: { kind: "relevant_change" },
+      freshness: "exact_candidate",
+      providers: [${JSON.stringify(DECOY_PROVIDER_ID)}],
+      acceptedPayloadSpecs: ["sensor.clean/1"],
+      allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
+      humanWaiverAllowed: true,
+      minimumAttestationLevel: "self",
+      ciDelegationPolicyIds: [],
+      remediation: {
+        default: [{ id: "run-the-sensor", kind: "manual_action", summary: "Run the sensor and submit its evidence." }],
+      },
+${FINDING_CODE_LISTS}
+    },
+`;
+
+const fixtureConfig = (decoys: boolean): string => `import { defineHarnessConfig } from "@agent-delivery-harness/kernel";
 
 export default defineHarnessConfig({
   gateId: "fixture.pr-admission",
@@ -177,9 +214,9 @@ export default defineHarnessConfig({
   ],
   ciPolicyEnvKey: "DELIVERY_HARNESS_CI_POLICY",
   preparationWiringPaths: ["harness.config.ts"],
-  providers: [{ id: ${JSON.stringify(FIXTURE_PROVIDER_ID)}, findingCodes: [] }],
+  providers: [${decoys ? `{ id: ${JSON.stringify(DECOY_PROVIDER_ID)}, findingCodes: [] }, ` : ""}{ id: ${JSON.stringify(FIXTURE_PROVIDER_ID)}, findingCodes: [] }],
   obligations: [
-    {
+${decoys ? DECOY_OBLIGATION : ""}    {
       id: "review.green",
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
@@ -194,16 +231,7 @@ export default defineHarnessConfig({
           { id: "run-the-review", kind: "manual_action", summary: "Run the code review and submit its evidence manifest." },
         ],
       },
-      waivableCodes: ["review_evidence_missing", "stale_evidence", "evidence_not_green", "unresolved_actionable_findings"],
-      nonWaivableCodes: [
-        "ambiguous_records",
-        "malformed_record",
-        "unknown_provider",
-        "live_provider_missing",
-        "ambiguous_live_provider",
-        "live_provider_failed",
-        "resolution_not_allowed",
-      ],
+${FINDING_CODE_LISTS}
     },
   ],
   deliveryRecordPath: "telemetry/delivery-runs/record.json",
@@ -231,7 +259,10 @@ interface Fixture {
  * A repository that consumes this checkout the way the getting-started guide
  * says to, carrying the emitter's real bytes and a charter set of its own.
  */
-async function createFixture(charters: readonly string[] = FIXTURE_CHARTERS): Promise<Fixture> {
+async function createFixture(
+  options: { charters?: readonly string[]; decoys?: boolean } = {},
+): Promise<Fixture> {
+  const charters = options.charters ?? FIXTURE_CHARTERS;
   const home = await scratchDir("dh-emit-home-");
   const env = fixtureEnv(home);
   const dir = await scratchDir("dh-emit-repo-");
@@ -257,7 +288,7 @@ async function createFixture(charters: readonly string[] = FIXTURE_CHARTERS): Pr
     path.join(dir, "node_modules", "@agent-delivery-harness", "kernel"),
   );
 
-  await writeFile(path.join(dir, "harness.config.ts"), FIXTURE_CONFIG, "utf8");
+  await writeFile(path.join(dir, "harness.config.ts"), fixtureConfig(options.decoys === true), "utf8");
   await mkdir(path.join(dir, PERSONA_DIR), { recursive: true });
   for (const charter of charters) {
     await writeFile(
@@ -425,6 +456,45 @@ describe("emitting a manifest", () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("zeta-lens");
     expect(result.stdout.trim()).toBe("");
+  });
+
+  it(
+    "names the review obligation's own provider, not whichever is registered first",
+    { timeout: 120_000 },
+    async () => {
+      // Membership in the registry is not enough on its own: in a config with
+      // one provider and one obligation, "the provider this obligation names"
+      // and "the first provider registered" are the same string, so both
+      // readings pass. This gate declares a sensor pair ahead of the review
+      // pair — what adding one sensor provider to a real config looks like —
+      // and only the obligation-directed reading survives it. Reading the
+      // registry positionally emits `decoy.sensor-provider`, which that gate
+      // refuses as `unregistered_provider` for the obligation claimed.
+      const fixture = await createFixture({ decoys: true });
+      const emitted = await emit(fixture, greenOutcome);
+      expect(emitted.code, `emit failed: ${emitted.stderr}`).toBe(0);
+
+      const manifest = await readManifest(emitted.stdout.trim());
+      expect(manifest.provider.id).toBe(FIXTURE_PROVIDER_ID);
+      expect(manifest.claims[0]!.obligation).toBe("review.green");
+    },
+  );
+
+  it("refuses an unusable outcome without printing a path", { timeout: 120_000 }, async () => {
+    // Both documents tell a reader to capture this command's stdout into
+    // `--manifest "$MANIFEST"`. A refusal that exited 0 printing nothing would
+    // hand the recorder an empty path instead of stopping the delivery.
+    const fixture = await createFixture();
+    for (const input of ["", "   \n", "{ not json"]) {
+      const result = await runCommand(TSX_BIN, ["scripts/emit-review-evidence.ts"], {
+        cwd: fixture.dir,
+        env: fixture.env,
+        input,
+      });
+      expect(result.code, `input ${JSON.stringify(input)} must be a usage error`).toBe(2);
+      expect(result.stdout.trim()).toBe("");
+      expect(result.stderr).toContain("emit-review-evidence:");
+    }
   });
 
   it("refuses an outcome naming one reviewer twice", { timeout: 120_000 }, async () => {
