@@ -94,7 +94,7 @@ export const DELIVERY_OWNED_TREE_PREFIXES: readonly string[] = Object.freeze([".
 /**
  * The one exception to the frozen `.claude` prefix, and its two anchors.
  *
- * The product's own workflow projection exposes its skills to Claude Code as
+ * The `agent-skills` generation install exposes its skills to Claude Code as
  * relative symlinks under `.claude/skills/` pointing into the tracked, receipted
  * generation at `.agent-skills/current/skills/`. That exposure carries no skill
  * text of its own: every byte a host would read lives in the generation the
@@ -514,8 +514,8 @@ function resolveTreeSymlink(fromPath: string, target: string): string | undefine
     resolved.push(segment);
   }
   // A target resolving to nothing names no entry. One ending in a separator
-  // resolves to the directory itself, and is refused a step later by the
-  // strictly-inside test rather than here.
+  // normalizes to the directory it names; when that directory is the skills
+  // root itself, the strictly-inside test refuses it a step later.
   return resolved.length === 0 ? undefined : resolved.join("/");
 }
 
@@ -565,10 +565,16 @@ export interface ListedTreeEntry extends CandidateTreeEntry {
 /**
  * Parses a NUL-separated `git ls-tree -r -z --full-tree <ref>` listing into its
  * entries. Pure string work, so the one reading of git's tree format is stated
- * once and both external verifiers share it. A record git could not format as
- * `<mode> <type> <object>\t<path>` is skipped rather than guessed at; the path
- * form of the check still covers whatever such an entry would have been, since
- * a missing entry cannot admit anything.
+ * once and every verifier shares it.
+ *
+ * A record git could not format as `<mode> <type> <object>\t<path>` is skipped
+ * rather than guessed at, and skipping is a real cost, not a free one: a
+ * skipped record is judged by nothing — neither the protected-path rule nor
+ * the Action's record discovery, both of which read this list — so it would be
+ * missed rather than blocked. It is accepted because `-z` output cannot
+ * produce one: git never quotes under NUL separation, the mode, type and
+ * object fields never contain a tab or a space, and the split takes the FIRST
+ * tab, so a path containing tabs still parses whole.
  *
  * NUL separation, never newline splitting: git quotes a path containing a
  * newline, and the quoted form no longer starts with the prefix it is inside.

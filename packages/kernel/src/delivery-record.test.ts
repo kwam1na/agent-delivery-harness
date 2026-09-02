@@ -393,8 +393,8 @@ describe("verifyDeliveryRecord", () => {
           { path: ".claude/skills/execute-work", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/execute-work" },
           // A nested exposure resolves against its own directory, not the root.
           { path: ".claude/skills/vendor/plan-work", mode: "120000", symlinkTarget: "../../../.agent-skills/current/skills/plan-work" },
-          // A target that walks back through the root it already reached still
-          // lands inside it, and is the same admissible shape.
+          // A `.` segment normalizes away without moving the resolution, so
+          // this is the same admissible shape written differently.
           { path: ".claude/skills/review-work", mode: "120000", symlinkTarget: "../../.agent-skills/current/skills/./review-work" },
         ],
       });
@@ -480,10 +480,11 @@ describe("verifyDeliveryRecord", () => {
         "100644 blob 1111111111111111111111111111111111111111\tsrc/index.ts",
         "120000 blob 2222222222222222222222222222222222222222\t.claude/skills/execute-work",
         "100644 blob 3333333333333333333333333333333333333333\t.claude/settings.json",
-        // A path with an embedded space and one with a tab in its content-side
-        // name: NUL separation means neither is quoted, and the split is on the
-        // FIRST tab, so the path is preserved verbatim.
+        // A path with an embedded space, and one with an embedded tab: NUL
+        // separation means neither is quoted, and the split is on the FIRST
+        // tab, so both paths are preserved verbatim.
         "120000 blob 4444444444444444444444444444444444444444\t.claude/skills/two words",
+        "120000 blob 6666666666666666666666666666666666666666\t.claude/skills/two\tnames",
         "120000 blob 5555555555555555555555555555555555555555\tdocs/link",
       ].join("\u0000");
       const entries = parseCandidateTreeListing(listing);
@@ -492,6 +493,7 @@ describe("verifyDeliveryRecord", () => {
         ".claude/skills/execute-work",
         ".claude/settings.json",
         ".claude/skills/two words",
+        ".claude/skills/two\tnames",
         "docs/link",
       ]);
       expect(entries[1]).toEqual({
@@ -505,6 +507,7 @@ describe("verifyDeliveryRecord", () => {
       expect(entries.filter(needsCommittedSymlinkTarget).map((entry) => entry.path)).toEqual([
         ".claude/skills/execute-work",
         ".claude/skills/two words",
+        ".claude/skills/two\tnames",
       ]);
     });
 

@@ -138,10 +138,11 @@ of these hold in the committed tree itself:
    entry's own directory and normalized, names something strictly inside
    `.agent-skills/current/skills/`.
 
-That is the exposure the product's own workflow projection installs: the skill
-text lives in the tracked, receipted generation, and the entry under the host's
-directory is a pointer into it carrying no authority bytes of its own. Admitting
-it lets every adopter track the projection install the same way.
+That is the exposure the `agent-skills` generation install writes — a different
+mechanism from the `.managed-projection/` subtree above, which admits nothing at
+all. The skill text lives in the tracked, receipted generation, and the entry
+under the host's directory is a pointer into it carrying no authority bytes of
+its own. Admitting it lets every adopter track that install the same way.
 
 Both anchors are matched literally, never case-folded, and nothing else moves:
 a regular file under `.claude/skills/`, a symlink there resolving anywhere else
