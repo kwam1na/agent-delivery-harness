@@ -3,19 +3,31 @@
  *
  * WHAT THIS PROVES, AND WHY IT IS SHAPED THIS WAY. The emitter is the thing
  * that decides what this repository's one obligation is told about the review
- * that ran, so the two failure modes worth pinning are the ones an
- * always-green emitter would survive:
+ * that ran, so the failure modes worth pinning are the ones an always-green
+ * emitter would survive. Each of these is a row, or a pair of rows, below:
  *
- *   - A hardcoded reviewer set. Every fixture below carries charters whose
+ *   - A hardcoded reviewer set. Every fixture here carries charters whose
  *     names do NOT appear under this repository's own `delivery/personas/`,
  *     and the disjointness is asserted rather than assumed — a fixture that
  *     agreed with the real directory would let a built-in list pass for
  *     resolution.
+ *   - A hardcoded gate binding, for the same reason and pinned the same way:
+ *     the fixture's provider id is not this repository's, and the binding
+ *     resolved from the real config must name a provider that config
+ *     registers. A binding frozen to the fixture's values would emit
+ *     manifests this repository's own gate refuses as `unregistered_provider`.
  *   - A hardcoded `verdict: "green"`. Both polarities run the real harness:
  *     a green outcome must reach an ADMITTED gate, and a non-green outcome
  *     must produce a manifest the harness REFUSES, with the gate still
  *     blocked afterwards. A green-only assertion is satisfied by an emitter
  *     that cannot express anything else.
+ *   - A degraded lens laundered into an approval. A reviewer that failed or
+ *     timed out has reviewed nothing, and RG-3 can only refuse what the
+ *     manifest reports — so both the result that says so and the duplicate-id
+ *     guard that stops a later result overwriting it are pinned.
+ *   - Telemetry as a constant. Two samples, a zero point and a six-finding
+ *     set, because a constant agrees with whichever single sample a suite
+ *     happens to carry.
  *
  * Nothing here re-implements the manifest contract. The judge is the shipped
  * recorder and evaluator, reached through the real CLI, from a fixture
@@ -30,8 +42,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
+import harnessConfig from "../harness.config.ts";
 import { PERSONA_DIR as SENSOR_PERSONA_DIR } from "./policy-projection-check.ts";
-import { CHARTER_EXTENSION, PERSONA_DIR, resolveReviewerCharters } from "./emit-review-evidence.ts";
+import {
+  CHARTER_EXTENSION,
+  PERSONA_DIR,
+  REVIEW_PAYLOAD_SPEC,
+  resolveGateBinding,
+  resolveReviewerCharters,
+} from "./emit-review-evidence.ts";
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CHECKOUT_ROOT = path.resolve(SCRIPTS_DIR, "..");
@@ -321,6 +340,28 @@ describe("the charter set the emitter reviews under", () => {
   });
 });
 
+describe("the gate binding the emitter answers as", () => {
+  it("names a provider this repository's own config registers", () => {
+    const binding = resolveGateBinding(harnessConfig);
+    // Asserted as ENV-1 asserts it at submission — membership in the config's
+    // own registrations — rather than against a literal copied from the
+    // config, which a binding frozen to any value would satisfy.
+    expect(harnessConfig.providers.map((provider) => provider.id)).toContain(binding.providerId);
+    const obligation = harnessConfig.obligations.find((entry) => entry.id === binding.obligationId);
+    expect(obligation, "the resolved obligation is one this gate declares").toBeDefined();
+    expect(obligation!.acceptedPayloadSpecs).toContain(REVIEW_PAYLOAD_SPEC);
+    expect(obligation!.providers).toContain(binding.providerId);
+  });
+
+  it("is not the fixtures' binding, so a hardcoded one cannot pass", () => {
+    // The mirror of the charter disjointness row. Without it the fixtures
+    // agree with themselves: every manifest assertion below would hold for an
+    // emitter that had frozen the binding to the fixture's own values, and
+    // that emitter's manifests are refused by this repository's real gate.
+    expect(resolveGateBinding(harnessConfig).providerId).not.toBe(FIXTURE_PROVIDER_ID);
+  });
+});
+
 describe("emitting a manifest", () => {
   it(
     "names every charter the tree carries, with one approval artifact each",
@@ -386,6 +427,28 @@ describe("emitting a manifest", () => {
     expect(result.stdout.trim()).toBe("");
   });
 
+  it("refuses an outcome naming one reviewer twice", { timeout: 120_000 }, async () => {
+    // The second door into the greenwash the degraded-reviewer row below
+    // closes: the reviewer lists are built from a Map, so a repeated id keeps
+    // the LAST entry. Without this guard an outcome naming a lens `failed` and
+    // then `approved` stamps it approved and the gate admits.
+    const fixture = await createFixture();
+    const result = await emit(fixture, {
+      spec: "review-outcome/1",
+      verdict: "green",
+      reviewers: [
+        { id: "alpha-lens", result: "failed" },
+        { id: "alpha-lens", result: "approved" },
+        { id: "beta-lens", result: "approved" },
+        { id: "zeta-lens", result: "approved" },
+      ],
+      findings: [],
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("alpha-lens");
+    expect(result.stdout.trim()).toBe("");
+  });
+
   it("refuses an outcome naming a reviewer no charter defines", { timeout: 120_000 }, async () => {
     const fixture = await createFixture();
     const result = await emit(fixture, {
@@ -437,7 +500,11 @@ describe("the review outcome the emitter is given", () => {
       expect(telemetry.findingCounts).toEqual({ P0: 0, P1: 1, P2: 4, P3: 1 });
       expect(telemetry.deferredExpansionCount).toBe(3);
       expect(telemetry.deferredIssueIds).toEqual(["V26-1467", "V26-1541"]);
-      expect(telemetry.iterationCount).toBe(manifest.runHistory.length);
+      // One emitter run is one evaluated pass, and RG-9 ties the two together.
+      // Stated as literals: comparing the two fields of one file to each other
+      // is an assertion that cannot fail.
+      expect(manifest.runHistory).toHaveLength(1);
+      expect(telemetry.iterationCount).toBe(1);
 
       const submitted = await harness(fixture, "submit-evidence", "--manifest", manifestPath);
       expect(submitted.code, `submit-evidence rejected: ${submitted.stdout}${submitted.stderr}`).toBe(0);
