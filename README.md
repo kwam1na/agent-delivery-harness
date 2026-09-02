@@ -141,6 +141,20 @@ npm run sensor:standalone # standalone-install sensor
 npm run qualify:provider  # exact installed-provider interoperability replay
 ```
 
+This repository's review evidence is emitted by a committed provider rather
+than by whatever script a delivery session happened to write:
+
+```
+npm run review:evidence   # a review outcome on stdin -> a delivery-evidence/1 manifest
+```
+
+It is a provider, not a sensor: it transcribes the review outcome it is given
+into the manifest `delivery-harness submit-evidence` consumes, resolving the
+reviewer set from [`delivery/personas/`](delivery/personas) and the obligation
+and provider from the config. A non-green outcome produces a manifest the
+recorder refuses. See
+[the provider guide](docs/provider-guide.md#this-repositorys-own-provider).
+
 Normative inputs are vendored, not referenced: the spec lives at
 [`docs/spec/delivery-evidence-1.md`](docs/spec/delivery-evidence-1.md) and the
 89-vector conformance kit at
