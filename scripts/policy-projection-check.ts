@@ -13,9 +13,9 @@
  * its own policy is compiled by. A delivery is judged by the trusted pre-run
  * copy of the compiled policy (`checkBoundPolicy`) produced by the compiler
  * bytes of the pinned composition generation the product was installed from —
- * never by the candidate worktree. A candidate edit to `.agents/policy/`, to
- * `delivery/personas/`, or to `packages/kernel/src/policy/` is a proposal for a
- * future owner-approved policy generation.
+ * never by the candidate worktree. A candidate edit to `.agents/policy/` or to
+ * `packages/kernel/src/policy/` is a proposal for a future owner-approved
+ * policy generation.
  *
  * This SENSOR deliberately compiles through the candidate tree's compiler,
  * which is the opposite choice and the correct one for a sensor: recompiling
@@ -31,12 +31,13 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 
 import {
   DELIVERY_RECORD_DRIFT_CLASSES,
   PREPARATION_FAILURE_CLASSES,
   compileRepositoryPolicy,
+  projectShippedPersonas,
 } from "@agent-delivery-harness/kernel";
 import { COMMANDS } from "@agent-delivery-harness/cli";
 
@@ -54,17 +55,37 @@ const SNAPSHOT_FILE = "compiled-snapshot.json";
 const REPORT_FILE = "comparison-report.json";
 
 /**
- * Where this repository's reviewer charters live. The compiler resolves a
- * repository-owned charter only against the digest the document pins, and the
- * facade reads those bytes from the trusted pre-run base — this sensor reads
- * them from the tree it is scanning, which is what lets it report a drift the
- * base would refuse.
+ * Where this repository's reviewer charters come from. Both lenses reference
+ * their charter by identity alone, which the compiler resolves only against
+ * charters of `origin: "composition"` — the authenticated set the installed
+ * release carries. So this sensor reads no charter of its own: it projects the
+ * installed generation's charter set through `projectShippedPersonas`, the
+ * same mechanism an embedding product uses, and hands the result to the
+ * compiler. A repository file cannot intercept an identity reference, which is
+ * exactly why the reference form was chosen.
  */
-export const PERSONA_DIR = "delivery/personas";
-export const PERSONA_FILES: Readonly<Record<string, string>> = Object.freeze({
-  "persona.outcome-correctness": "outcome-correctness.md",
-  "persona.testing-policy": "testing-policy.md",
-});
+export const INSTALLED_ARCHIVE_DIR = ".agent-skills/current";
+
+/**
+ * An `ArchiveEntryReader` over an extracted generation. The lifecycle installs
+ * a directory, not a zip, so reading an entry is reading a file — but the entry
+ * paths come from a document inside the archive, so each one is resolved and
+ * required to stay under the generation root before it is opened. Anything
+ * unreadable reads as absent, which is what the projection reports as a
+ * rejection rather than throwing.
+ */
+function installedArchiveReader(archiveDir: string) {
+  const root = path.resolve(archiveDir);
+  return (entryPath: string): Uint8Array | undefined => {
+    const resolved = path.resolve(root, entryPath);
+    if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) return undefined;
+    try {
+      return readFileSync(resolved);
+    } catch {
+      return undefined;
+    }
+  };
+}
 
 const ADJUDICATION_DISPOSITIONS = new Set([
   "accepted-projection",
@@ -108,7 +129,7 @@ export type PolicyProjectionCheckResult = {
 
 type PolicyProjectionOptions = {
   policyDir?: string;
-  personaDir?: string;
+  archiveDir?: string;
 };
 
 function sha256(bytes: Buffer | string) {
@@ -211,7 +232,7 @@ export async function runPolicyProjectionCheck(
     findings.push({ code, message });
   };
   const policyDir = options.policyDir ?? path.join(rootDir, POLICY_PROJECTION_DIR);
-  const personaDir = options.personaDir ?? path.join(rootDir, PERSONA_DIR);
+  const archiveDir = options.archiveDir ?? path.join(rootDir, INSTALLED_ARCHIVE_DIR);
 
   const bytes = new Map<string, Buffer>();
   const parsed = new Map<string, unknown>();
@@ -329,23 +350,21 @@ export async function runPolicyProjectionCheck(
     }
 
     // ── The compile, performed live against the recorded snapshot ─────────────
-    const personas: { personaId: string; digest: string; origin: "adopter" }[] = [];
-    for (const [personaId, fileName] of Object.entries(PERSONA_FILES)) {
-      try {
-        personas.push({
-          personaId,
-          digest: sha256(await readFile(path.join(personaDir, fileName))),
-          origin: "adopter",
-        });
-      } catch (error) {
+    // The charter set is the installed generation's, read through the archive
+    // port rather than assembled here: a defect in the installation is a
+    // reported finding about the installation, and the compiler then rejects
+    // every lens it left unresolvable, so neither diagnosis stands in for the
+    // other.
+    const projected = projectShippedPersonas(installedArchiveReader(archiveDir));
+    if (!projected.ok) {
+      for (const rejection of projected.rejections) {
         emit(
           "artifact_unreadable",
-          `${PERSONA_DIR}/${fileName} is missing, so reviewer charter ${personaId} cannot be resolved: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `the installed generation at ${INSTALLED_ARCHIVE_DIR} cannot supply its reviewer charters at ${rejection.pointer}: [${rejection.code}] ${rejection.message}`,
         );
       }
     }
+    const personas = projected.ok ? projected.personas : [];
     const compiled = compileRepositoryPolicy({
       document: parsed.get(DOCUMENT_FILE),
       adapters,

@@ -9,14 +9,12 @@
     {
       "lensId": "lens.outcome-correctness",
       "category": "outcome-correctness",
-      "personaId": "persona.outcome-correctness",
-      "personaDigest": "1acaa491ecdd8f94bd4ee34956626dc3b6135ba55e91c806d737f3ea73ca9984"
+      "personaId": "persona.outcome-correctness"
     },
     {
       "lensId": "lens.adversarial-testing",
       "category": "testing-policy",
-      "personaId": "persona.testing-policy",
-      "personaDigest": "47afafdc8605c0f739b6e7bd12d675d31a315e153063bc3560ef86926c102656"
+      "personaId": "persona.testing-policy"
     }
   ],
   "obligations": [{ "obligationId": "review.green" }],

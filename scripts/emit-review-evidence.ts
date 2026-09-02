@@ -19,10 +19,15 @@
  * WHAT IT RESOLVES RATHER THAN ASSERTS, because each of these is a way an
  * emitter can quietly stop describing this repository:
  *
- *   - The reviewer set is the charter directory's own contents. Adding or
- *     renaming a charter under `delivery/personas/` moves the reviewer set with
- *     it, and an outcome that leaves a charter unrepresented — or names a
- *     reviewer no charter defines — is refused rather than emitted.
+ *   - The reviewer set is the compiled policy's own activated lenses, and each
+ *     lens's charter is read from the installed generation the release
+ *     shipped it in, its bytes checked against the digest the compiled
+ *     snapshot resolved. Activating a lens moves the reviewer set with it; a
+ *     charter the installation does not carry, or whose bytes have drifted
+ *     from the compiled policy's, refuses the emission rather than reviewing
+ *     under a charter nobody approved. An outcome that leaves a lens
+ *     unrepresented — or names a reviewer no activated lens defines — is
+ *     refused rather than emitted.
  *   - The obligation and provider are read from the loaded config: the one
  *     obligation accepting `review.green/1`, and the one provider it names.
  *   - Every telemetry number is derived from the findings the outcome carries,
@@ -39,11 +44,13 @@
  *   delivery-harness submit-evidence --manifest "$MANIFEST"
  */
 import { realpathSync } from "node:fs";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  PERSONA_MANIFEST_ENTRY,
+  PERSONA_MANIFEST_SPEC,
   captureGitCandidate,
   createArtifactsPort,
   resolveRecordStorage,
@@ -52,15 +59,18 @@ import {
   type HarnessConfig,
 } from "@agent-delivery-harness/kernel";
 
-// ── The charter directory ────────────────────────────────────────────────────
+// ── The charters the compiled policy activates ───────────────────────────────
 
 /**
- * Where this repository's reviewer charters live. One charter is one lens, and
- * the file name is the reviewer id the evidence carries — the same directory
- * and convention `policy-projection-check.ts` compares the compiled policy's
- * lenses against.
+ * The compiled policy this repository is judged under, and the installed
+ * generation whose archive carries the charters its lenses reference by
+ * identity. One activated lens is one reviewer, and the basename of the
+ * charter path the archive's manifest declares is the reviewer id the evidence
+ * carries — the same two documents `policy-projection-check.ts` compiles the
+ * projection from.
  */
-export const PERSONA_DIR = "delivery/personas";
+export const COMPILED_SNAPSHOT_FILE = ".agents/policy/compiled-snapshot.json";
+export const INSTALLED_ARCHIVE_DIR = ".agent-skills/current";
 
 export const CHARTER_EXTENSION = ".md";
 
@@ -76,19 +86,126 @@ export const OUTCOME_SPEC = "review-outcome/1";
 /** This emitter's own version, carried in the manifest's provider triple. */
 export const EMITTER_VERSION = "1.0.0";
 
+/** Read one JSON document, or refuse with the role it plays rather than a raw path. */
+async function readJsonFile(filePath: string, role: string): Promise<unknown> {
+  let text: string;
+  try {
+    text = await readFile(filePath, "utf8");
+  } catch (error) {
+    throw new OutcomeError(`${role} is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new OutcomeError(`${role} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** One activated lens, resolved to the charter bytes the installation carries. */
+export interface ResolvedCharter {
+  /** The reviewer id the evidence carries: the charter path's basename. */
+  readonly reviewerId: string;
+  readonly personaId: string;
+  /** The archive-relative path the charter's bytes were read from. */
+  readonly entryPath: string;
+  /** The digest of those bytes, equal to the one the compiled policy resolved. */
+  readonly digest: string;
+}
+
 /**
- * The reviewers a review in `rootDir` must cover: every charter in the charter
- * directory, by file name, sorted. Resolution is by directory listing rather
- * than by a list held here, because a list held here is exactly how a renamed
- * charter leaves a lens unrepresented in the evidence while everything stays
- * green.
+ * The reviewers a review in `rootDir` must cover: the compiled policy's
+ * activated review lenses, each resolved to the charter the installed
+ * generation ships for it.
+ *
+ * Two resolutions rather than a list held here, because a list held here is
+ * exactly how an activated lens goes unrepresented in the evidence while
+ * everything stays green. The compiled snapshot decides WHICH lenses reviewed —
+ * the whole shipped set is seventeen charters and this repository activates two
+ * of them, so the archive alone would name fifteen reviewers that never ran.
+ * The archive decides WHAT each lens was told, and the snapshot's digest is
+ * checked against the bytes actually read, so a charter the installation does
+ * not carry, or one whose bytes have drifted from the policy the repository is
+ * judged under, refuses the emission instead of quietly reviewing under
+ * something else.
  */
+export async function resolveActivatedCharters(rootDir: string): Promise<ResolvedCharter[]> {
+  const snapshotPath = path.join(rootDir, COMPILED_SNAPSHOT_FILE);
+  const snapshot = await readJsonFile(snapshotPath, `the compiled policy snapshot at ${COMPILED_SNAPSHOT_FILE}`);
+  const compiled = isRecord(snapshot) ? snapshot["compiled"] : undefined;
+  const inner = isRecord(compiled) ? compiled["snapshot"] : undefined;
+  const lenses = isRecord(inner) ? inner["reviewLenses"] : undefined;
+  if (!Array.isArray(lenses)) {
+    throw new OutcomeError(`${COMPILED_SNAPSHOT_FILE} records no compiled review lenses to review under`);
+  }
+
+  const manifestPath = path.join(rootDir, INSTALLED_ARCHIVE_DIR, PERSONA_MANIFEST_ENTRY);
+  const manifest = await readJsonFile(
+    manifestPath,
+    `the charter manifest at ${INSTALLED_ARCHIVE_DIR}/${PERSONA_MANIFEST_ENTRY}`,
+  );
+  if (!isRecord(manifest) || manifest["schemaVersion"] !== PERSONA_MANIFEST_SPEC || !Array.isArray(manifest["personas"])) {
+    throw new OutcomeError(
+      `${INSTALLED_ARCHIVE_DIR}/${PERSONA_MANIFEST_ENTRY} is not a ${PERSONA_MANIFEST_SPEC} document declaring a charter list`,
+    );
+  }
+  const charterPaths = new Map<string, string>();
+  for (const entry of manifest["personas"]) {
+    if (isRecord(entry) && typeof entry["personaId"] === "string" && typeof entry["path"] === "string") {
+      charterPaths.set(entry["personaId"], entry["path"]);
+    }
+  }
+
+  const archiveRoot = path.resolve(path.join(rootDir, INSTALLED_ARCHIVE_DIR));
+  const resolved: ResolvedCharter[] = [];
+  const seen = new Set<string>();
+  for (const lens of lenses) {
+    if (!isRecord(lens) || typeof lens["personaId"] !== "string" || typeof lens["personaDigest"] !== "string") {
+      throw new OutcomeError("a compiled review lens names no reviewer charter and digest");
+    }
+    const personaId = lens["personaId"];
+    const digest = lens["personaDigest"];
+    const entryPath = charterPaths.get(personaId);
+    if (entryPath === undefined) {
+      throw new OutcomeError(
+        `the compiled policy activates a lens referencing charter ${personaId}, which the installed generation's manifest does not declare`,
+      );
+    }
+    // The path comes from a document inside the installation, so it is held
+    // inside it before it is opened.
+    const charterPath = path.resolve(archiveRoot, entryPath);
+    if (!charterPath.startsWith(`${archiveRoot}${path.sep}`)) {
+      throw new OutcomeError(`charter ${personaId} is declared at ${entryPath}, which leaves ${INSTALLED_ARCHIVE_DIR}`);
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(charterPath);
+    } catch (error) {
+      throw new OutcomeError(
+        `charter ${personaId} is declared at ${entryPath}, and the installed generation carries no such file: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const actual = sha256Hex(bytes);
+    if (actual !== digest) {
+      throw new OutcomeError(
+        `charter ${personaId} at ${entryPath} hashes to ${actual}, and the compiled policy was resolved against ${digest}`,
+      );
+    }
+    const base = path.basename(entryPath);
+    const reviewerId = base.endsWith(CHARTER_EXTENSION) ? base.slice(0, -CHARTER_EXTENSION.length) : base;
+    if (seen.has(reviewerId)) {
+      throw new OutcomeError(`two activated lenses resolve to reviewer ${reviewerId}; a reviewer reviews once`);
+    }
+    seen.add(reviewerId);
+    resolved.push({ reviewerId, personaId, entryPath, digest });
+  }
+  return resolved;
+}
+
+/** The reviewer ids of `resolveActivatedCharters`, sorted, as the evidence lists them. */
 export async function resolveReviewerCharters(rootDir: string): Promise<string[]> {
-  const entries = await readdir(path.join(rootDir, PERSONA_DIR), { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(CHARTER_EXTENSION))
-    .map((entry) => entry.name.slice(0, -CHARTER_EXTENSION.length))
-    .sort();
+  return (await resolveActivatedCharters(rootDir)).map((charter) => charter.reviewerId).sort();
 }
 
 // ── The review outcome ───────────────────────────────────────────────────────
@@ -166,7 +283,7 @@ export function parseReviewOutcome(document: unknown, charters: readonly string[
   const unknown = parsed.map((entry) => entry.id).filter((id) => !charterSet.has(id));
   if (unknown.length > 0) {
     throw new OutcomeError(
-      `the review outcome names ${unknown.length} reviewer(s) no charter in ${PERSONA_DIR} defines: ${unknown.join(", ")}`,
+      `the review outcome names ${unknown.length} reviewer(s) no activated review lens defines: ${unknown.join(", ")}`,
     );
   }
 
@@ -276,7 +393,9 @@ export async function emitReviewEvidence(rootDir: string, document: unknown): Pr
 
   const charters = await resolveReviewerCharters(rootDir);
   if (charters.length === 0) {
-    throw new OutcomeError(`no reviewer charters found in ${PERSONA_DIR}; a review with no reviewers is not a review`);
+    throw new OutcomeError(
+      `the compiled policy at ${COMPILED_SNAPSHOT_FILE} activates no review lens; a review with no reviewers is not a review`,
+    );
   }
   const outcome = parseReviewOutcome(document, charters);
   const binding = resolveGateBinding(config);

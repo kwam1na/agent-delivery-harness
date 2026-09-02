@@ -259,10 +259,12 @@ inspection. This harness launches Claude with the operator's credentials; the
 product does not.
 
 **Which arm this repository uses.** Its own policy at
-`.agents/policy/repository-policy.json` uses the digest-pinned repository-owned
-arm, against the two charters under `delivery/personas/`. The identity-only
-composition arm is exercised by tests in this repository and by no production
-caller here — see the next section for exactly what that means.
+`.agents/policy/repository-policy.json` uses the identity-only composition arm:
+both lenses name their charter by identity and pin no digest, so the bytes they
+are judged against are the installed generation's and no file in this
+repository can intercept the reference. It pinned repository-owned copies under
+a protected path of its own until the shipped set existed; those copies are
+retired.
 
 ### The shipped charter set
 
@@ -281,13 +283,14 @@ and no consumer logic moves. It is not a zero-byte advance — the pinned archiv
 metadata, and provenance digests are re-stamped on every advance, which is
 inherent to a digest-pinned composition.
 
-**`projectShippedPersonas` has no production caller in this repository.** It is
-exported from the kernel's public surface and reached only by its own suite and
-by the documentation-reference sensor. That is the intended library boundary, not
-an oversight and not a wiring that exists elsewhere: the one production path into
-`compileRepositoryPolicy` supplies repository-owned charters. An embedding
-product that wants the shipped set calls this function; nothing in this
-repository does yet.
+**`projectShippedPersonas` is how this repository resolves its own lenses.** The
+one production path into `compileRepositoryPolicy` here —
+[`scripts/policy-projection-check.ts`](../scripts/policy-projection-check.ts) —
+supplies the composition-origin charter set by projecting the installed
+generation under `.agent-skills/current` through this function over a
+directory-backed byte reader. An embedding product does the same over its own
+pinned archive; the port is what lets a zip and an extracted generation both be
+read without the policy layer growing a filesystem or a decompression edge.
 
 ## Hosts, grades, and what a grade buys
 
