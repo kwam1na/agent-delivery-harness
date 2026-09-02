@@ -93,7 +93,11 @@ async function listRuns(surface: RunSurface, context: ConfigFreeCommandContext):
   const current = await surface.store.current(surface.worktreeKey);
   const currentRunId = current.ok ? current.runId : undefined;
 
-  const lines: string[] = [`runs in ${oneLine(surface.runsDir, 400)}`];
+  // The status column carries a completeness verdict, so this readout is
+  // labeled exactly like `show`'s. `list` is the command an operator reaches
+  // for first, before it knows which id to show; an unlabeled `complete` here
+  // is the misreading the labels exist to prevent.
+  const lines: string[] = [`runs in ${oneLine(surface.runsDir, 400)}`, `  (${READOUT_LABELS})`];
   let total = 0;
   for (const runId of runIds) {
     const size = await sizeOf(surface.runsDir, runId);
