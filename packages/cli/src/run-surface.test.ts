@@ -899,6 +899,12 @@ describe("emit, the boundary wrap, and runs", () => {
         { round: 1, candidateTreeSha: TREE_SHA, outcome: hostile, findings: { P0: 0, P1: 0, P2: 0, P3: 0 }, cost },
       ],
       ["gate.reported", { command: hostile, outcome: "pass", durationMs: 5 }],
+      // `httpUrl` validates with `new URL` and stores the caller's original
+      // string, and `new URL` accepts a C0 escape in the path — it
+      // percent-encodes only in `href`. So a url is executor free text on the
+      // way to a terminal exactly like a rationale, and both lenses filed the
+      // arm that renders it as the one this row had left undriven.
+      ["pr.opened", { url: `https://example.invalid/${hostile}`, candidateTreeSha: TREE_SHA }],
       ["blocker.recorded", { code: hostile, summary: hostile }],
       ["decision.recorded", { fork: hostile, choice: hostile, cited: hostile }],
       ["compounding.recorded", { outcome: hostile, reference: hostile }],
