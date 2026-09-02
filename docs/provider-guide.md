@@ -78,6 +78,58 @@ required. The tracked delivery record is still produced by the ordinary
 `record` command; the rail creates neither a second evidence store nor a second
 telemetry stream.
 
+## This repository's own provider
+
+The gate in [`harness.config.ts`](../harness.config.ts) carries one obligation,
+and [`scripts/emit-review-evidence.ts`](../scripts/emit-review-evidence.ts) is
+what emits its evidence — the manual flow above, committed rather than
+re-derived per delivery. It is not a reviewer: it transcribes a concluded
+review outcome into a manifest bound to the candidate the recorder will
+re-capture, and prints the manifest path.
+
+The outcome arrives on standard input, so emitting needs no file outside the
+tree — which matters, because the harness refuses to capture a candidate while
+untracked files are present:
+
+```sh
+MANIFEST="$(npm run --silent review:evidence <<'JSON'
+{
+  "spec": "review-outcome/1",
+  "verdict": "green",
+  "reviewers": [
+    { "id": "outcome-correctness", "result": "approved" },
+    { "id": "testing-policy", "result": "approved" }
+  ],
+  "findings": []
+}
+JSON
+)"
+delivery-harness submit-evidence --manifest "$MANIFEST"
+```
+
+Three things it resolves rather than asserts, each of them a way a provider can
+quietly stop describing the repository it serves:
+
+- **The reviewer set is the charter directory.** `selected` is every charter
+  under [`delivery/personas/`](../delivery/personas), by file name — so adding
+  or renaming a lens moves the evidence with it. An outcome that leaves a
+  charter unrepresented, or names a reviewer no charter defines, is refused
+  before any manifest exists.
+- **The obligation and provider come from the config.** The one obligation
+  accepting `review.green/1`, and the one provider it names.
+- **Telemetry is derived from the findings**, the way RG-8 re-derives it.
+
+A reviewer's `result` is one of `approved`, `rejected`, `failed`, or
+`timed-out`; only `approved` stamps a reviewer-approval artifact, and the last
+two land in `failed` / `timedOut`, which RG-3 refuses. The `verdict` is
+transcribed, not asserted: a non-green outcome produces a manifest the recorder
+rejects on RG-1, which is the point — a provider that always claims green is not
+evidence of anything, and one that declined to emit at all would hide the review
+rather than report it. Both polarities are pinned by
+[`scripts/emit-review-evidence.test.ts`](../scripts/emit-review-evidence.test.ts),
+which runs the real recorder and evaluator over fixture repositories whose
+charter sets are deliberately not this repository's.
+
 ## Pinned provider interoperability qualification
 
 `npm run qualify:provider` replays the repository's one checked provider
