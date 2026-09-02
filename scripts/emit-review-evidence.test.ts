@@ -63,6 +63,7 @@ import {
   COMPILED_SNAPSHOT_FILE,
   INSTALLED_ARCHIVE_DIR,
   REVIEW_PAYLOAD_SPEC,
+  parseReviewOutcome,
   resolveGateBinding,
   resolveReviewerCharters,
 } from "./emit-review-evidence.ts";
@@ -666,6 +667,78 @@ describe("emitting a manifest", () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("invented-lens");
     expect(result.stdout.trim()).toBe("");
+  });
+});
+
+describe("an outcome that does not name its reviewers", () => {
+  // The executor writing this document knows what each lens reported; it does
+  // not know the reviewer ids, which are the basenames of charter paths inside
+  // an installed archive the compiled policy selects from. Every delivery that
+  // had to supply them re-derived them by reading the snapshot and the
+  // manifest by hand, which is the emitter's own resolution done a second time
+  // and by a party with no way to check it. So an outcome may carry results
+  // alone and take its ids from the resolution the emitter already performs.
+  //
+  // What it may NOT do is distinguish its reviewers without naming them.
+  // Assigning results to ids by position would let a document that says "one
+  // of these lenses failed" stamp the failure on whichever id happened to sort
+  // there, and RG-3 would refuse — or admit — the wrong reviewer. The rows
+  // below pin the acceptance and each way the assignment could go silently
+  // wrong.
+  const refuses = (reviewers: unknown, expected: string) => {
+    expect(() =>
+      parseReviewOutcome({ spec: "review-outcome/1", verdict: "green", reviewers, findings: [] }, [
+        ...FIXTURE_CHARTERS,
+      ]),
+    ).toThrow(expected);
+  };
+
+  it("takes its reviewer ids from the policy the emitter already resolves", { timeout: 120_000 }, async () => {
+    const fixture = await createFixture();
+    const emitted = await emit(fixture, {
+      spec: "review-outcome/1",
+      verdict: "green",
+      reviewers: FIXTURE_CHARTERS.map(() => ({ result: "approved" })),
+      findings: [],
+    });
+    expect(emitted.code, `emit failed: ${emitted.stderr}`).toBe(0);
+
+    // The evidence is indistinguishable from the named form: the same selected
+    // set, the same completed set, and one approval stamp per activated lens,
+    // each filed under the id the policy resolved rather than one the document
+    // supplied.
+    const manifest = await readManifest(emitted.stdout.trim());
+    const reviewers = manifest.claims[0]!.payload.reviewers;
+    expect(reviewers.selected).toEqual([...FIXTURE_CHARTERS]);
+    expect(reviewers.completed).toEqual([...FIXTURE_CHARTERS]);
+    expect(reviewers.failed).toEqual([]);
+    expect(reviewers.timedOut).toEqual([]);
+    expect(
+      manifest.artifacts
+        .filter((artifact) => artifact.role === "reviewer-approval")
+        .map((artifact) => artifact.path)
+        .sort(),
+    ).toEqual(FIXTURE_CHARTERS.map((charter) => `reviewers/${charter}.json`).sort());
+  });
+
+  it("refuses unnamed results that disagree, rather than letting position decide who failed", () => {
+    refuses([{ result: "approved" }, { result: "failed" }, { result: "approved" }], "disagree");
+  });
+
+  it("refuses a document that names some of its reviewers and not others", () => {
+    refuses([{ id: "alpha-lens", result: "approved" }, { result: "approved" }, { result: "approved" }], "names 1");
+  });
+
+  it("refuses more or fewer results than the policy selects, naming the set it selects", () => {
+    refuses([{ result: "approved" }, { result: "approved" }], "alpha-lens, beta-lens, zeta-lens");
+    refuses(FIXTURE_CHARTERS.map(() => ({ result: "approved" })).concat([{ result: "approved" }]), "4 result");
+  });
+
+  it("still refuses a named reviewer the policy does not select", () => {
+    // The naming form stays available — it is the only way to report reviewers
+    // that disagree — and it stays held to the policy's set in both
+    // directions, which the unnamed form must not become a way around.
+    refuses([...approvedBy(FIXTURE_CHARTERS), { id: "invented-lens", result: "approved" }], "invented-lens");
   });
 });
 
