@@ -68,14 +68,23 @@ export type SecretDisciplineResult =
  * Walks every string value of a journal entry: free-text members are redacted
  * in place, any other matching string rejects with its pointer. The input is
  * never mutated; the returned entry is a disciplined copy.
+ *
+ * The free-text set is the CALLER's, defaulting to the spine's own. The run
+ * family owns a different set of bounded free-text members and reuses these
+ * detection and redaction rules over it; the spine's set is untouched by that,
+ * because a family that could widen another family's redactable members would
+ * be a way to make a secret survive.
  */
-export function applySecretDiscipline(entry: unknown): SecretDisciplineResult {
+export function applySecretDiscipline(
+  entry: unknown,
+  freeTextMembers: ReadonlySet<string> = FREE_TEXT_MEMBERS,
+): SecretDisciplineResult {
   const matches: { pointer: string; id: string }[] = [];
   const redactions: string[] = [];
 
   const walk = (value: unknown, pointer: string, member: string | undefined): unknown => {
     if (typeof value === "string") {
-      if (member !== undefined && FREE_TEXT_MEMBERS.has(member)) {
+      if (member !== undefined && freeTextMembers.has(member)) {
         const outcome = redactSecretText(value);
         for (const id of outcome.redacted) if (!redactions.includes(id)) redactions.push(id);
         // Redaction tokens are longer than some credentials, and a bounded

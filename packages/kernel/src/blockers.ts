@@ -358,7 +358,13 @@ const BIDI_AND_ZERO_WIDTH = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u20
  */
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]/g;
 
-function neutralizeForDisplay(value: string): string {
+/**
+ * Exported for the run-surface CLI viewer, which renders executor-written free
+ * text — rationales, decisions, blocker summaries — to an operator's terminal
+ * and owes it exactly this treatment. Same function, same rules, one copy: a
+ * second neutralizer is a second place for a sequence to survive.
+ */
+export function neutralizeForDisplay(value: string): string {
   return value.replace(ANSI_SEQUENCE, "").replace(BIDI_AND_ZERO_WIDTH, "").replace(CONTROL_CHARACTERS, "");
 }
 

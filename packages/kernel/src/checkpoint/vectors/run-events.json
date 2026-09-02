@@ -1,0 +1,1320 @@
+{
+  "purpose": "Golden accept/reject vectors for the run-event/1 family. Hand-authored claims about the closed contract: every kind carries at least one accept and one reject vector, reject vectors name the codes the validator must report, and the family-level vectors cover the envelope rules that belong to no single kind. The implementation conforms to these vectors, never the reverse.",
+  "kinds": [
+    {
+      "kind": "run.started",
+      "accept": [
+        {
+          "name": "a ticketless run start carries neither member in envelope nor payload",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "run.started",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "host": "claude-code",
+              "workflow": {
+                "releaseId": "linear-2026-09-02",
+                "profile": "linear"
+              }
+            }
+          }
+        },
+        {
+          "name": "a forced restart names the run it displaced",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "run.started",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "ticket": "V26-1548",
+              "host": "claude-code",
+              "workflow": {
+                "releaseId": "linear-2026-09-02",
+                "profile": "linear"
+              },
+              "displacedRunId": "run-0000"
+            },
+            "ticket": "V26-1548"
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a run id carrying a dot, which would reach outside the store's file naming",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run.0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "run.started",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "host": "claude-code",
+              "workflow": {
+                "releaseId": "r",
+                "profile": "linear"
+              }
+            }
+          }
+        },
+        {
+          "name": "a ticket in the payload with no ticket in the envelope",
+          "codes": [
+            "unsupported_combination"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "run.started",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "ticket": "V26-1548",
+              "host": "claude-code",
+              "workflow": {
+                "releaseId": "r",
+                "profile": "linear"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "run.ended",
+      "accept": [
+        {
+          "name": "a complete run end with cost",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "run.ended",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "result": "complete",
+              "cost": {
+                "unit": "usd",
+                "total": 1.25,
+                "reportedBy": "claude-code"
+              }
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a result outside the closed enum",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "run.ended",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "result": "finished",
+              "cost": {
+                "unit": "usd",
+                "total": 1.25,
+                "reportedBy": "claude-code"
+              }
+            }
+          }
+        },
+        {
+          "name": "a run end with no cost",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "run.ended",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "result": "partial"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "ticket.read",
+      "accept": [
+        {
+          "name": "a tracked ticket read with its posture",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "ticket.read",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "ticket": "V26-1548",
+              "posture": "test-first",
+              "tracker": "linear"
+            },
+            "ticket": "V26-1548"
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "an envelope ticket differing from the payload's",
+          "codes": [
+            "unsupported_combination"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "ticket.read",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "ticket": "V26-1548",
+              "tracker": "linear"
+            },
+            "ticket": "V26-1549"
+          }
+        },
+        {
+          "name": "an over-long ticket",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "ticket.read",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "ticket": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+              "tracker": "linear"
+            },
+            "ticket": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "posture.declared",
+      "accept": [
+        {
+          "name": "a declared posture",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "posture.declared",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "posture": "test-first"
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a posture declaration with a stranger member",
+          "codes": [
+            "unknown_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "posture.declared",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "posture": "test-first",
+              "why": "because"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "lens.selected",
+      "accept": [
+        {
+          "name": "the mandated pair plus one executor-chosen lens",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "lens.selected",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "mandated": [
+                "lens.outcome-correctness",
+                "lens.adversarial-testing"
+              ],
+              "selected": [
+                "lens.outcome-correctness",
+                "lens.adversarial-testing",
+                "lens.security"
+              ],
+              "rationale": "the change touches a durable write path, so security joins the mandated pair"
+            }
+          }
+        },
+        {
+          "name": "a single-id mandate, storable so the evaluator can find the arity violation",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "lens.selected",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "mandated": [
+                "lens.outcome-correctness"
+              ],
+              "selected": [
+                "lens.outcome-correctness"
+              ],
+              "rationale": "recorded as emitted; arity is the evaluator's finding, not the validator's"
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a lens id outside the bounded charset",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "lens.selected",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "mandated": [
+                "Lens Outcome Correctness"
+              ],
+              "selected": [],
+              "rationale": "why"
+            }
+          }
+        },
+        {
+          "name": "a rationale that is not a string",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "lens.selected",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "mandated": [],
+              "selected": [],
+              "rationale": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "review.round.opened",
+      "accept": [
+        {
+          "name": "a first round bound to its candidate",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 1,
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "lenses": [
+                "lens.outcome-correctness"
+              ]
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "name": "a round bound to a sha256-format object id",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 2,
+              "candidateTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "lenses": []
+            },
+            "candidateTreeSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a round number of zero",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 0,
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "lenses": []
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "name": "an uppercase candidate tree sha",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 1,
+              "candidateTreeSha": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "lenses": []
+            },
+            "candidateTreeSha": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        },
+        {
+          "name": "a candidate tree sha in the payload with none in the envelope",
+          "codes": [
+            "unsupported_combination"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 1,
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "lenses": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "review.round.closed",
+      "accept": [
+        {
+          "name": "a converged round with findings and cost",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.closed",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 1,
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "outcome": "converged",
+              "findings": {
+                "P0": 0,
+                "P1": 1,
+                "P2": 2,
+                "P3": 0
+              },
+              "cost": {
+                "unit": "usd",
+                "total": 1.25,
+                "reportedBy": "claude-code"
+              }
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "findings missing a severity bucket",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.closed",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 1,
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "outcome": "converged",
+              "findings": {
+                "P0": 0,
+                "P1": 0,
+                "P2": 0
+              },
+              "cost": {
+                "unit": "usd",
+                "total": 1.25,
+                "reportedBy": "claude-code"
+              }
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "name": "a cost with no reporter",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "review.round.closed",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "round": 1,
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "outcome": "converged",
+              "findings": {
+                "P0": 0,
+                "P1": 0,
+                "P2": 0,
+                "P3": 0
+              },
+              "cost": {
+                "unit": "usd",
+                "total": 1
+              }
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "command.completed",
+      "accept": [
+        {
+          "name": "the gate command completing under the CLI writer",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "command.completed",
+            "actor": {
+              "role": "cli"
+            },
+            "attestation": "self",
+            "payload": {
+              "command": "gate",
+              "outcome": "ok",
+              "durationMs": 41230,
+              "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          }
+        },
+        {
+          "name": "a command blocked by policy",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "command.completed",
+            "actor": {
+              "role": "cli"
+            },
+            "attestation": "self",
+            "payload": {
+              "command": "record",
+              "outcome": "policy",
+              "durationMs": 812
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "an outcome outside the closed enum",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "command.completed",
+            "actor": {
+              "role": "cli"
+            },
+            "attestation": "self",
+            "payload": {
+              "command": "gate",
+              "outcome": "pass",
+              "durationMs": 1
+            }
+          }
+        },
+        {
+          "name": "a completion carrying argv it has no member for",
+          "codes": [
+            "unknown_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "command.completed",
+            "actor": {
+              "role": "cli"
+            },
+            "attestation": "self",
+            "payload": {
+              "command": "gate",
+              "outcome": "ok",
+              "durationMs": 1,
+              "argv": [
+                "gate",
+                "--json"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "gate.reported",
+      "accept": [
+        {
+          "name": "an adopter gate reported by the executor",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "gate.reported",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "command": "pr:athena",
+              "outcome": "pass",
+              "durationMs": 90000
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "an outcome from the CLI enum rather than the reported one",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "gate.reported",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "command": "pr:athena",
+              "outcome": "ok",
+              "durationMs": 1
+            }
+          }
+        },
+        {
+          "name": "a negative duration",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "gate.reported",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "command": "pr:athena",
+              "outcome": "fail",
+              "durationMs": -1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "pr.opened",
+      "accept": [
+        {
+          "name": "a pull request bound to the candidate it carries",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "pr.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "url": "https://github.com/owner/repo/pull/75",
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a javascript locator",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "pr.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "url": "javascript:alert(1)",
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "name": "a relative locator",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "pr.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "url": "/owner/repo/pull/75",
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "blocker.recorded",
+      "accept": [
+        {
+          "name": "a typed blocker with its summary",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "blocker.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "code": "config_unloadable",
+              "summary": "harness.config.ts is absent at the worktree root"
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a blocker with no summary",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "blocker.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "code": "config_unloadable"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "decision.recorded",
+      "accept": [
+        {
+          "name": "a named fork resolved by judgment",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "decision.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "fork": "branch name",
+              "choice": "claude/v26-1548-run-event-contract-store-resolver",
+              "cited": "AGENTS.md branch policy"
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a decision with no choice",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "decision.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "fork": "branch name"
+            }
+          }
+        },
+        {
+          "name": "an empty fork",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "decision.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "fork": "",
+              "choice": "a"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "compounding.recorded",
+      "accept": [
+        {
+          "name": "a recorded learning with its reference",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "compounding.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "outcome": "learning-recorded",
+              "reference": "V26-1560"
+            }
+          }
+        },
+        {
+          "name": "no durable learning",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "compounding.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "outcome": "no-durable-learning"
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "a compounding record with no outcome",
+          "codes": [
+            "missing_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "compounding.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "reference": "V26-1560"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "envelope": {
+    "accept": [],
+    "reject": [
+      {
+        "name": "an unknown kind, reported as an unknown kind whatever its payload",
+        "codes": [
+          "unknown_kind"
+        ],
+        "value": {
+          "version": "run-event/1",
+          "runId": "run-0001",
+          "seq": 1,
+          "at": "2026-09-02T10:00:00Z",
+          "repo": {
+            "commonDir": "/tmp/repo/.git"
+          },
+          "kind": "run.paused",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "anything": true
+          }
+        }
+      },
+      {
+        "name": "a foreign spec version",
+        "codes": [
+          "unsupported_spec"
+        ],
+        "value": {
+          "version": "run-event/2",
+          "runId": "run-0001",
+          "seq": 1,
+          "at": "2026-09-02T10:00:00Z",
+          "repo": {
+            "commonDir": "/tmp/repo/.git"
+          },
+          "kind": "run.started",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "host": "h",
+            "workflow": {
+              "releaseId": "r",
+              "profile": "p"
+            }
+          }
+        }
+      },
+      {
+        "name": "an event that is not an object",
+        "codes": [
+          "not_an_object"
+        ],
+        "value": "run.started"
+      },
+      {
+        "name": "an actor role outside the closed pair",
+        "codes": [
+          "malformed_member"
+        ],
+        "value": {
+          "version": "run-event/1",
+          "runId": "run-0001",
+          "seq": 1,
+          "at": "2026-09-02T10:00:00Z",
+          "repo": {
+            "commonDir": "/tmp/repo/.git"
+          },
+          "kind": "run.ended",
+          "actor": {
+            "role": "operator"
+          },
+          "attestation": "self",
+          "payload": {
+            "result": "complete",
+            "cost": {
+              "unit": "usd",
+              "total": 1.25,
+              "reportedBy": "claude-code"
+            }
+          }
+        }
+      },
+      {
+        "name": "an at that is not a UTC instant",
+        "codes": [
+          "malformed_member"
+        ],
+        "value": {
+          "version": "run-event/1",
+          "runId": "run-0001",
+          "seq": 1,
+          "at": "2026-09-02 10:00:00",
+          "repo": {
+            "commonDir": "/tmp/repo/.git"
+          },
+          "kind": "run.ended",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "result": "complete",
+            "cost": {
+              "unit": "usd",
+              "total": 1.25,
+              "reportedBy": "claude-code"
+            }
+          }
+        }
+      },
+      {
+        "name": "an envelope candidateTreeSha on a kind whose payload never names one",
+        "codes": [
+          "unsupported_combination"
+        ],
+        "value": {
+          "version": "run-event/1",
+          "runId": "run-0001",
+          "seq": 1,
+          "at": "2026-09-02T10:00:00Z",
+          "repo": {
+            "commonDir": "/tmp/repo/.git"
+          },
+          "kind": "posture.declared",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "posture": "test-first"
+          },
+          "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "name": "an over-long envelope ticket on a kind whose payload carries the same value",
+        "codes": [
+          "malformed_member"
+        ],
+        "value": {
+          "version": "run-event/1",
+          "runId": "run-0001",
+          "seq": 1,
+          "at": "2026-09-02T10:00:00Z",
+          "repo": {
+            "commonDir": "/tmp/repo/.git"
+          },
+          "kind": "ticket.read",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "ticket": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+            "tracker": "linear"
+          },
+          "ticket": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+        }
+      }
+    ]
+  }
+}

@@ -51,6 +51,7 @@ import {
   type JournalStore,
 } from "../checkpoint/journal-store.ts";
 import { evaluateCanonicalRecheck, type CompareCheck, type RecheckValues, type ValueCheck } from "../checkpoint/recheck.ts";
+import { resolveCommonDirectoryNamespace } from "../checkpoint/run-namespace.ts";
 import {
   deleteDelivery as runDeliveryDeletion,
   exportDelivery as runDeliveryExport,
@@ -223,7 +224,6 @@ const substrateRefusal = (blockers: readonly SubstrateBlocker[]): FacadeFailure 
 
 // ── Durable layout ─────────────────────────────────────────────────────────
 
-const NAMESPACE = "managed-delivery";
 const OWNER_DIR = 0o700;
 const OWNER_FILE = 0o600;
 
@@ -1222,9 +1222,18 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   let namespaceDirCache: string | undefined;
   const namespaceDir = async (): Promise<string> => {
     if (namespaceDirCache !== undefined) return namespaceDirCache;
-    const common = await git(input.repoDir, "rev-parse", "--path-format=absolute", "--git-common-dir");
-    if (common.code !== 0) throw new Error(`not a git repository: ${input.repoDir}`);
-    namespaceDirCache = path.join(common.out, NAMESPACE);
+    // The SAME resolver the run store uses, driven by the facade's injected
+    // exec port and given no environment override — so this stays exactly the
+    // one launch the process inventory has always recorded.
+    const resolved = await resolveCommonDirectoryNamespace({
+      cwd: input.repoDir,
+      run: async ({ cwd, args }) => {
+        const outcome = await exec.run({ command: "git", args: [...args], cwd });
+        return { code: outcome.code, stdout: outcome.stdout };
+      },
+    });
+    if (!resolved.ok) throw new Error(resolved.reason);
+    namespaceDirCache = resolved.namespaceDir;
     return namespaceDirCache;
   };
 
