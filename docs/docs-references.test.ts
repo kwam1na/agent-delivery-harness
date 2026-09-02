@@ -58,7 +58,8 @@ const DOCS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(DOCS_DIR, "..");
 
 /**
- * The documents this sensor owns: the README and the top-level guides. The
+ * The documents this sensor owns: the root agent instructions, the README, and
+ * the top-level guides. The
  * vendored spec and the vendored plan under `docs/spec/` and `docs/plans/` are
  * deliberately excluded — they are normative inputs reproduced verbatim, and
  * their internal references are the upstream author's, not this repository's to
@@ -66,6 +67,7 @@ const REPO_ROOT = path.resolve(DOCS_DIR, "..");
  * the gate already treats as review-neutral.
  */
 const scannedDocuments = (): readonly string[] => [
+  "AGENTS.md",
   "README.md",
   ...readdirSync(path.join(REPO_ROOT, "docs"))
     .filter((entry) => entry.endsWith(".md"))
@@ -106,6 +108,7 @@ describe("the documentation's references", () => {
     // The enumeration itself, pinned. A `docs/*.md` guide added without a
     // decision about whether its links are checked shows up here first.
     expect(scannedDocuments()).toEqual([
+      "AGENTS.md",
       "README.md",
       "docs/agent-guide.md",
       "docs/conformance.md",
@@ -127,7 +130,7 @@ describe("the documentation's references", () => {
     // and a partial drop is the only failure this guard uniquely catches: a
     // scan that stops matching entirely is already caught by the two
     // assertions below.
-    expect(references.length).toBeGreaterThanOrEqual(75);
+    expect(references.length).toBeGreaterThanOrEqual(81);
     // Partitioned from the very array the existence assertion consumes, NOT
     // re-enumerated. Re-enumerating would check a different set from the one
     // being guarded, and would stay green while `allReferences` silently

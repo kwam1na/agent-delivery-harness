@@ -32,7 +32,7 @@
     "scopeRule": "the projection root may exist only inside a managed delivery worktree; the repository root and every non-managed worktree must not carry one",
     "managedDeliveryWorktreePathShape": "the operator creates each managed delivery worktree at .worktrees/managed/<deliveryId> — a sibling path such as .worktrees/managed-<deliveryId> is not a managed delivery worktree and a projection there is a finding",
     "mechanism": "model-external and byte-neutral — the binding writes its session settings and the worktree-scoped excludes file into its own directory outside the working tree, points the managed worktree's worktree-scoped git configuration at them, and enables worktree configuration once in the shared repository config; no tracked byte of the repository is moved or edited, and the configuration takes effect in the managed worktree alone",
-    "whatIsNotSuppressed": "nothing needs suppressing here: this repository carries no ambient agent discovery layout for the projection to compete with, so an ambient root introduced before the cutover is drift rather than a quiet second source of agent instructions."
+    "whatIsNotSuppressed": "the repository's ambient discovery layout is the lifecycle-installed workflow release — .agent-skills/ with both its .agents/skills and .claude/skills exposures tracked, the latter under the narrow per-entry exception to the delivery-owned .claude prefix — together with the root AGENTS.md, which carries no skill text of its own and only points at those installed skills. It is not suppressed and does not need to be: it competes with the projection only on the ungraded additive-root axis recorded below, and any other ambient root introduced before the cutover is drift rather than a quiet second source of agent instructions."
   },
   "provingHost": "claude-code",
   "hosts": [
@@ -53,9 +53,9 @@
   ],
   "exclusivityPosition": {
     "duringShadowWindow": "non-blocking",
-    "reason": "both graded hosts are exclusivity-ungraded, and coexisting ambient discovery cannot corrupt authority while the shadow window holds none",
+    "reason": "both graded hosts are exclusivity-ungraded, and coexisting ambient discovery cannot corrupt authority while the shadow window holds none — the lifecycle-installed workflow release is exactly such a coexisting root, and the shadow window still holds no authority",
     "becomesBlockingAt": "the cutover's removal gate",
-    "beforeThatGate": "no tracked byte of an ambient discovery root exists or may appear"
+    "beforeThatGate": "the lifecycle-installed release under .agent-skills/, exposed at .agents/skills and .claude/skills, and the root AGENTS.md that points at it are the only ambient discovery roots whose bytes are tracked; no other tracked ambient root exists or may appear, and no tracked byte lies under the .managed-projection prefix or under any part of .claude the exception does not admit"
   },
   "consumptionRecord": {
     "requiredSource": "binding",
@@ -64,7 +64,7 @@
     "absentOrNegative": "excluded from the comparison set",
     "writtenInto": ".agents/policy/shadow-milestone-gate-record.json",
     "whatTheGuardChecks": "the record's declared source and its shape — the guard reads the gate-record artifact and cannot itself verify that the bytes came from the binding",
-    "whatProvenanceRestsOn": "two things outside the guard: the binding-side writer that emits the entry, and the protected-path property that keeps the artifact out of every session's reach. The writer ships in the product at the pinned commit, so an entry now has an admissible producer; the remaining rest-point is that .agents is an additionally protected path in every checkpoint grant of .agents/policy/repository-policy.json, so no execution grant may write the gate record and the only thing that can author an entry is the binding."
+    "whatProvenanceRestsOn": "two things outside the guard: the binding-side writer that emits the entry, and the protected-path property that keeps the artifact out of every session's reach. The writer ships in the product at the pinned commit, so an entry now has an admissible producer; the remaining rest-point is that .agents is an additionally protected path in every checkpoint grant of .agents/policy/repository-policy.json, so no execution grant may write the gate record and the only thing that can author an entry is the binding. That property is about execution grants, not about the repository: an operator working outside any grant does write under .agents — the tracker-properties document and the installed .agents/skills exposures are operator-written — and neither is the gate record this argument protects."
   },
   "characterization": {
     "method": "a disposable shadow install of the composed product followed by one projection materialization into a managed delivery worktree, one interception of a run naming a receipted projection entry, and one gate-record emission — all driven through the product's own installer, Claude Code binding, and model-external interceptor. The repository under characterization was a disposable clone in a temp directory, so no byte and no git configuration of the real repository was touched, and no host configuration outside the disposable directories was written.",

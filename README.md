@@ -192,11 +192,18 @@ managed delivery worktrees, while `npm run check`, the `delivery-harness` gate
 loop, and the hosted checks remain the only delivery authority. The two are
 compared, not merged.
 
-It carries **no ambient agent-discovery layout** — no `.claude`, no `.codex`, no
-vendored skills root — so introducing one is drift rather than configuration.
-Guidance for agents working here lives in
-[docs/agent-guide.md](docs/agent-guide.md), which is a document rather than a
-discovery root.
+Its agent-discovery layout is **installed, not hand-authored**: an operator runs
+the `agent-skills` lifecycle, which writes the `linear` profile release into
+`.agent-skills/` and exposes it as relative symlinks. Only that lifecycle writes
+it — `.agents/` stays protected in every checkpoint grant — so a hand-added
+skill or a second vendored skills root is still drift rather than configuration.
+Both exposures the install writes are tracked. `.claude/` is otherwise a
+delivery-owned path, and the skills exposure is its one admitted exception,
+decided on each entry's own committed bytes: mode `120000`, target resolving
+strictly inside `.agent-skills/current/skills/`. Guidance for
+agents working here lives in [`AGENTS.md`](AGENTS.md) and
+[docs/agent-guide.md](docs/agent-guide.md), which point at the installed skills
+rather than restating them.
 
 ## License
 

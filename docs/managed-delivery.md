@@ -430,12 +430,20 @@ settings and a worktree-scoped excludes file into its own directory outside the
 working tree and points the managed worktree's git configuration at them, so no
 tracked byte of the repository moves.
 
-This repository carries **no ambient agent-discovery layout at all** — no
-`.claude`, no `.codex`, no vendored skills root — and that is a position, not an
-accident, so introducing one before the cutover's removal gate is drift rather
-than a quiet second source of agent instructions. Guidance for agents working in
-this repository therefore lives in [the agent guide](agent-guide.md), which is a
-document, not a discovery root.
+The only agent-discovery layout this repository carries is the **installed**
+one: the `linear` profile release in `.agent-skills/`, exposed by the
+`agent-skills` lifecycle and separate from the managed projection root scoped
+above. Both its exposures — `.agents/skills` and `.claude/skills` — are
+tracked; the second is the one admitted exception to the delivery-owned
+`.claude/` prefix, granted per entry on its committed mode and link target. The
+projection root scoped above is a different path and is unaffected: no tracked
+byte lies under it. Adding a skill by hand, or a second
+vendored skills root, remains drift rather than a quiet second source of agent
+instructions. Guidance for agents working in this repository lives in
+[`AGENTS.md`](../AGENTS.md) — the one hand-authored root instruction file, which
+points at the installed skills rather than carrying skill text — and in
+[the agent guide](agent-guide.md), which is a document rather than a discovery
+root.
 
 Measurement is written by the binding and never by a session.
 `recordProjectionConsumption` is a `facade`-surface operation, and the artifact it

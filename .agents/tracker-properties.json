@@ -1,0 +1,14 @@
+{
+  "labels": [],
+  "project": "agent delivery harness",
+  "statuses": {
+    "backlog": "Backlog",
+    "canceled": "Canceled",
+    "done": "Done",
+    "inProgress": "In Progress",
+    "inReview": "In Review",
+    "todo": "Todo"
+  },
+  "team": "yaegars",
+  "template": null
+}

@@ -4,14 +4,20 @@ Guidance for an agent — or a person — changing this repository: where the mo
 boundaries are, which sensor owns which rule, and which claims are checked
 rather than merely written down.
 
-**This file is a document, not a discovery root.** This repository deliberately
-carries no ambient agent-discovery layout — no `.claude`, no `.codex`, no
-vendored skills directory — so creating one is drift rather than configuration.
-Read this page; do not turn it into a second source of agent instructions.
+**This file is a document, not a discovery root.** The repository's discovery
+layout is installed rather than hand-authored: an operator runs the
+`agent-skills` lifecycle, which lands the `linear` profile release in
+`.agent-skills/` and exposes it under `.agents/skills` and `.claude/skills`,
+both tracked (see [`AGENTS.md`](../AGENTS.md) for the narrow rule that admits
+the second). Only that lifecycle writes it, so a hand-added
+skill or a second vendored skills root is still drift. Read this page for what
+this repository owns; read `AGENTS.md` for which installed skill to use. Do not
+turn this page into a second source of agent instructions.
 
 ## The shape of the repository
 
 ```
+.agent-skills/       the installed workflow-skill release, exposed under .agents/skills and .claude/skills
 packages/kernel      the whole decision surface — pure where it matters
 packages/cli         the nine-command operator surface
 packages/mcp         a read-only MCP projection of the CLI
