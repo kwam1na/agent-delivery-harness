@@ -299,7 +299,21 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
     };
   }
 
-  const pointed = await store.setCurrent(surface.worktreeKey, runId, { force });
+  let pointed = await store.setCurrent(surface.worktreeKey, runId, { force });
+  // A STALE POINTER IS NOT A CONFLICT. `current` answers `undefined` both when
+  // no pointer exists and when one exists naming a journal this store can no
+  // longer read — a pruned store, a restored `.git`. In the second case the
+  // exclusive create below refuses, and without this the caller's only recourse
+  // is to retry, allocating one more orphan journal per attempt. Re-reading the
+  // pointer separates the two: a run that is now current is a genuine race and
+  // is still refused; a pointer that still names nothing is stale and is
+  // displaced, which is what the operator meant.
+  if (!pointed.ok && !force) {
+    const recheck = await store.current(surface.worktreeKey);
+    if (recheck.ok && recheck.runId === undefined) {
+      pointed = await store.setCurrent(surface.worktreeKey, runId, { force: true });
+    }
+  }
   if (!pointed.ok) {
     return {
       kind: "blocked",
@@ -308,7 +322,10 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
           code: "run_pointer_refused",
           summary: "The worktree pointer could not be written.",
           details: `run ${runId}: ${oneLine(pointed.rejections[0]?.message ?? "the pointer was refused", 200)}`,
-          remediation: { id: "name-the-run", summary: "Pass --run explicitly, or resolve the conflicting pointer." },
+          // `--run` cannot help here: `run.started` allocates rather than
+          // resolves, so it never reads that flag. `--force` is the one thing
+          // that displaces a pointer this command refused to overwrite.
+          remediation: { id: "force-the-start", summary: "Start the run with --force to displace the pointer that is already current." },
         }),
       ],
     };

@@ -529,9 +529,9 @@ reader could mistake for evidence.
 it is still open, its size, and the store's total. `runs show <id>` renders the
 timeline — every event labeled with its writer's role, the rounds with the
 candidate each was bound to, the decisions, the refused appends — and a
-completeness readout. That readout is labeled three ways every time it is
-printed: **self-attested**, **observability, not evidence**, and **unbound to a
-record**. The viewer supplies no record tree SHA, so every rule the completeness
+completeness readout. Both commands print a completeness verdict, so both
+carry the labels: three ways every time, **self-attested**, **observability,
+not evidence**, and **unbound to a record**. The viewer supplies no record tree SHA, so every rule the completeness
 contract phrases over a record's candidate is evaluated over any paired round
 instead. Executor-written free text reaches the terminal only through the
 kernel's display neutralizer with its whitespace collapsed, so a rationale

@@ -8,7 +8,7 @@
  * paths, is one coherent thing an operator can read.
  */
 import { execFile } from "node:child_process";
-import { lstat, mkdtemp, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +24,7 @@ import {
   type RunEvent,
 } from "@agent-delivery-harness/kernel";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
+import { buildRunEvent } from "./run-surface.ts";
 
 const exec = promisify(execFile);
 const cleanups: string[] = [];
@@ -268,6 +269,15 @@ describe("emit, the boundary wrap, and runs", () => {
     // resolves no current run and A's journal never learns B ran anything.
     await cli(other, ["check"]);
     expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started"]);
+
+    // The other half of the same sentence: separate pointers, ONE store. B
+    // reads A's run because they share a common directory; it is not current
+    // in B, because the pointer is not shared. A store resolved from the
+    // worktree's own git dir would pass the isolation half and fail this one.
+    const listed = await cli(other, ["runs", "list"]);
+    expect(listed.code, listed.err).toBe(EXIT_OK);
+    expect(listed.out).toContain(runId);
+    expect(listed.out).not.toMatch(new RegExp(`${runId}.*\\bcurrent\\b`));
   });
 
   it("refuses a second run.started without --force and names the displaced run with it", async () => {
@@ -280,6 +290,10 @@ describe("emit, the boundary wrap, and runs", () => {
     });
     expect(refused.code).toBe(EXIT_POLICY);
     expect((await journalOf(dir, first)).map((event) => event.kind)).toEqual(["run.started"]);
+    // The pointer is read BEFORE the journal is allocated, so the refusal
+    // leaves no second journal behind. Allocating first would list two.
+    const { commonDir } = await storeOf(dir);
+    expect(await createRunStore(commonDir).list()).toEqual([first]);
 
     const second = await startRun(dir, ["--force"]);
     expect(second).not.toBe(first);
@@ -324,6 +338,13 @@ describe("emit, the boundary wrap, and runs", () => {
     expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started"]);
     const notes = (await notesOf(dir, runId)) as readonly { kind: string; code: string }[];
     expect(notes.map((note) => note.kind)).toEqual(["not.a.kind", "ticket.read", "command.completed"]);
+
+    // And the viewer renders them, so a refused append is visible to an
+    // operator reading the run rather than only to something reading the store.
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(shown.out).toContain("refused appends:");
+    for (const note of notes) expect(shown.out).toContain(note.kind);
   });
 
   it("leaves a wrapped command's outcome and exit code untouched when the store fails", async () => {
@@ -385,6 +406,10 @@ describe("emit, the boundary wrap, and runs", () => {
     });
     expect(unknownRun.code).toBe(EXIT_POLICY);
     expect(await createRunStore((await storeOf(dir)).commonDir).list()).toEqual([]);
+    // No journal AND no note: a caller-chosen id must not be able to create a
+    // file anywhere in the store, which is the whole point of resolving the
+    // run before the kind is judged.
+    await expect(lstat(path.join((await storeOf(dir)).runsDir, "notes", "run-deadbeefdeadbeef.jsonl"))).rejects.toThrow();
   });
 
   it("rejects a missing kind, a missing subcommand, and an unknown flag as usage", async () => {
@@ -427,13 +452,22 @@ describe("emit, the boundary wrap, and runs", () => {
     const missing = shown.out.split("\n").find((line) => line.includes("missing:")) ?? "";
     expect(missing).toContain("command.completed:gate");
     expect(missing).toContain("command.completed:record");
+    // A gate reported before any round closed is a violated constraint, and
+    // the third readout row is where the operator learns that.
+    const violations = shown.out.split("\n").find((line) => line.includes("violations:")) ?? "";
+    expect(violations).toContain("gate-reported-before-closed-round");
   });
 
   it("names only the record completion when the gate completion is present", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
-    await cli(dir, ["gate"]);
-    expect((await journalOf(dir, runId)).some((event) => event.payload["command"] === "gate")).toBe(true);
+    const gated = await cli(dir, ["gate"]);
+    expect(gated.code).not.toBe(EXIT_OK);
+    const completion = (await journalOf(dir, runId)).find((event) => event.payload["command"] === "gate");
+    expect(completion, "gate wrote no completion").toBeDefined();
+    // The outcome is read off the exit code, not assumed: a wrap that always
+    // said "ok" would make every completion in every journal a false claim.
+    expect(completion!.payload["outcome"]).toBe("policy");
     const shown = await cli(dir, ["runs", "show", runId]);
     const missing = shown.out.split("\n").find((line) => line.includes("missing:")) ?? "";
     expect(missing).toContain("command.completed:record");
@@ -499,6 +533,109 @@ describe("emit, the boundary wrap, and runs", () => {
 
     const shown = await cli(dir, ["runs", "show", runId]);
     expect(shown.out).toMatch(new RegExp(`round 1.*${OTHER_TREE_SHA}`));
+  });
+
+  it("reads present off the journal rather than subtracting what is missing", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    await cli(dir, ["gate"]);
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    const present = shown.out.split("\n").find((line) => line.includes("present:")) ?? "";
+    expect(present).toContain("run.started");
+    expect(present).toContain("command.completed:gate");
+    // `gate.reported` is required only of an executor-only journal, so it is
+    // absent from `missing` here. A `present` computed by subtracting
+    // `missing` from the required list would name a gate.reported this
+    // journal never carried.
+    expect(present).not.toContain("gate.reported");
+    expect(present).not.toContain("ticket.read");
+  });
+
+  it("does not count an executor-written completion as a CLI completion", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const { commonDir } = await storeOf(dir);
+    // The store admits this — a completion claimed by an executor is a legal
+    // event. The readout must still refuse to read it as the product's.
+    const forged = await createRunStore(commonDir).append(
+      runId,
+      buildRunEvent({
+        runId,
+        commonDir,
+        kind: "command.completed",
+        role: "executor",
+        payload: { command: "gate", outcome: "ok", durationMs: 1 },
+      }),
+    );
+    expect(forged.ok, JSON.stringify(forged)).toBe(true);
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    const present = shown.out.split("\n").find((line) => line.includes("present:")) ?? "";
+    const missing = shown.out.split("\n").find((line) => line.includes("missing:")) ?? "";
+    expect(present).not.toContain("command.completed:gate");
+    expect(missing).toContain("command.completed:gate");
+  });
+
+  it("leaves a wrapped command untouched when the append itself is refused", async () => {
+    const dir = await initRepo();
+    const clean = await cli(dir, ["check"]);
+    const runId = await startRun(dir);
+    const { runsDir } = await storeOf(dir);
+    const journalPath = path.join(runsDir, `${runId}.jsonl`);
+    // The pointer resolves and the run is current, so the wrap gets all the
+    // way to `store.append` — the path an unreadable pointer never reaches —
+    // and is refused there.
+    await appendFile(journalPath, "not a run event\n", "utf8");
+    const before = await readFile(journalPath, "utf8");
+
+    const sabotaged = await cli(dir, ["check"]);
+    expect(sabotaged.code).toBe(clean.code);
+    expect(sabotaged.out).toBe(clean.out);
+    expect(sabotaged.err).toBe(clean.err);
+    expect(await readFile(journalPath, "utf8")).toBe(before);
+  });
+
+  it("displaces a pointer whose journal is gone rather than allocating one run per retry", async () => {
+    const dir = await initRepo();
+    const first = await startRun(dir);
+    const { runsDir, commonDir } = await storeOf(dir);
+    // A pruned store, a restored `.git`: the pointer survives, the journal
+    // does not. `current` answers `undefined` here exactly as it does for no
+    // pointer at all, so nothing but the pointer write can tell them apart.
+    await unlink(path.join(runsDir, `${first}.jsonl`));
+
+    const second = await startRun(dir);
+    expect(second).not.toBe(first);
+    expect(await createRunStore(commonDir).list()).toEqual([second]);
+  });
+
+  it("runs the config-free pair through the shipped loader seam", async () => {
+    const dir = await initRepo({ withConfig: false });
+    await writeFile(path.join(dir, "harness.config.ts"), "throw new Error('imported');\n", "utf8");
+    // No `loadConfig` override anywhere below: this is the real seam. A
+    // config-free command that fell through to the configured path would
+    // import that file, so these two exits are what the class buys.
+    const payload = JSON.stringify({ host: "vitest", workflow: { releaseId: "test-release", profile: "linear" } });
+    const started = await cli(dir, ["emit", "run.started", "--json", payload], { loadConfig: undefined });
+    expect(started.code, started.err).toBe(EXIT_OK);
+    const listed = await cli(dir, ["runs", "list"], { loadConfig: undefined });
+    expect(listed.code, listed.err).toBe(EXIT_OK);
+    // And the configured path in the same repository does not survive it,
+    // which is what makes the two exits above mean anything.
+    expect((await cli(dir, ["check"], { loadConfig: undefined })).code).not.toBe(EXIT_OK);
+  });
+
+  it("wraps only the commands on the completion allowlist", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    await cli(dir, ["maintain"]);
+    await cli(dir, ["managed"]);
+    expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started"]);
+
+    await cli(dir, ["check"]);
+    expect((await journalOf(dir, runId)).map((event) => event.payload["command"])).toContain("check");
   });
 
   // ── Neutralization ─────────────────────────────────────────────────────────
