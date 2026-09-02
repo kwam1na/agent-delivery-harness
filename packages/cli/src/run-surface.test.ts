@@ -23,6 +23,7 @@ import {
   type HarnessConfig,
   type RunEvent,
 } from "@agent-delivery-harness/kernel";
+import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { buildRunEvent } from "./run-surface.ts";
 
@@ -679,10 +680,28 @@ describe("emit, the boundary wrap, and runs", () => {
     const runId = await startRun(dir);
     await cli(dir, ["maintain"]);
     await cli(dir, ["managed"]);
+    await cli(dir, ["emit"]);
+    await cli(dir, ["runs", "list"]);
     expect((await journalOf(dir, runId)).map((event) => event.kind)).toEqual(["run.started"]);
 
-    await cli(dir, ["check"]);
-    expect((await journalOf(dir, runId)).map((event) => event.payload["command"])).toContain("check");
+    // The seven names, spelled here rather than read from the constant under
+    // test. Comparing the driven completions to `COMPLETION_WRAPPED_COMMANDS`
+    // would be a fixture agreeing with itself: dropping a member changes both
+    // sides and the row stays green, which is exactly how `record` could stop
+    // being wrapped — and `command.completed:record` is a required journal
+    // entry, so every journal in the repository would become permanently
+    // incomplete with nothing red.
+    const WRAPPED = ["check", "prepare", "review-context", "submit-evidence", "gate", "record", "verify"];
+    expect([...COMPLETION_WRAPPED_COMMANDS].sort()).toEqual([...WRAPPED].sort());
+
+    // Every member driven, not four of seven. The exit codes do not matter:
+    // the wrap runs whatever the command decided, as the `gate` row shows.
+    for (const command of WRAPPED) await cli(dir, [command]);
+    const completed = (await journalOf(dir, runId))
+      .filter((event) => event.kind === "command.completed")
+      .map((event) => event.payload["command"]);
+    expect([...new Set(completed)].sort()).toEqual([...WRAPPED].sort());
+    expect(completed).toHaveLength(WRAPPED.length);
   });
 
   it("reports a journal it cannot read rather than dropping it from the list", async () => {
@@ -850,6 +869,70 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(shown.out).toMatch(/chose one 4 2026-01-01T00:00:00Z command\.completed cli gate ok/);
   });
 
+  it("renders every hostile-capable field of every kind inert, not the two it was written for", async () => {
+    // The contract's `label` check bounds length and nothing else, so a
+    // rendered `host`, `tracker`, `posture`, gate `command`, blocker `code`,
+    // round `outcome`, cost `unit` and compounding `reference` are all
+    // executor free text on their way to a terminal, exactly like a
+    // `rationale`. Two kinds' worth of coverage samples that surface; a call
+    // site that stopped neutralizing anywhere else reached the operator with
+    // an escape and a row of its own. This row drives every arm that can carry
+    // one and asserts over the WHOLE rendered output.
+    const dir = await initRepo();
+    const hostile = `${ESC}[31mred${ESC}[0m\n  99  2026-01-01T00:00:00Z  command.completed  cli  gate ok`;
+    const cost = { unit: hostile, total: 0, reportedBy: hostile };
+    const started = await emit(dir, ["run.started"], {
+      host: hostile,
+      workflow: { releaseId: "test-release", profile: "linear" },
+    });
+    expect(started.code, started.err).toBe(EXIT_OK);
+
+    const steps: readonly (readonly [string, unknown])[] = [
+      ["ticket.read", { ticket: "V26-1549", tracker: hostile }],
+      ["posture.declared", { posture: hostile }],
+      [
+        "lens.selected",
+        { mandated: ["lens.outcome-correctness", "lens.adversarial-testing"], selected: [], rationale: hostile },
+      ],
+      [
+        "review.round.closed",
+        { round: 1, candidateTreeSha: TREE_SHA, outcome: hostile, findings: { P0: 0, P1: 0, P2: 0, P3: 0 }, cost },
+      ],
+      ["gate.reported", { command: hostile, outcome: "pass", durationMs: 5 }],
+      ["blocker.recorded", { code: hostile, summary: hostile }],
+      ["decision.recorded", { fork: hostile, choice: hostile, cited: hostile }],
+      ["compounding.recorded", { outcome: hostile, reference: hostile }],
+      ["run.ended", { result: "partial", cost }],
+    ];
+    for (const [kind, payload] of steps) {
+      const result = await emit(dir, [kind], payload);
+      expect(result.code, `${kind}: ${result.err}`).toBe(EXIT_OK);
+    }
+    const runId = (await createRunStore((await storeOf(dir)).commonDir).list())[0]!;
+    const events = await journalOf(dir, runId);
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(shown.out).not.toContain(ESC);
+    // The event rows are exactly the journal's own, one per event and no more:
+    // a field that opened a row of its own would add a sequence number the
+    // journal never wrote, whichever field the text came from.
+    const rowSeqs = shown.out
+      .split("\n")
+      .filter((line) => /^\s*\d+\s+\d{4}-\d{2}-\d{2}T/.test(line))
+      .map((line) => Number(line.trim().split(/\s+/)[0]!));
+    expect(rowSeqs).toEqual(events.map((event) => event.seq));
+    // Every rendered occurrence is collapsed onto its own row's text, so the
+    // count of "red" occurrences is the count of fields that rendered one.
+    expect(shown.out.match(/red 99 2026-01-01T00:00:00Z command\.completed cli gate ok/g) ?? []).not.toHaveLength(0);
+    expect(shown.out).not.toMatch(/\n\s*99\s/);
+
+    // `runs list` renders the same journal's status column and the store path.
+    const listed = await cli(dir, ["runs", "list"]);
+    expect(listed.code, listed.err).toBe(EXIT_OK);
+    expect(listed.out).not.toContain(ESC);
+  });
+
   it("echoes a hostile unknown kind exactly as the note records it", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
@@ -860,5 +943,13 @@ describe("emit, the boundary wrap, and runs", () => {
     const notes = (await notesOf(dir, runId)) as readonly { kind: string }[];
     expect(notes).toHaveLength(1);
     expect(refused.err).toContain(notes[0]!.kind);
+
+    // And the durable line is inert where an operator actually reads it. The
+    // note's `kind` is the one field on this row that an executor authored,
+    // and it reached the file precisely because the store would not take it.
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(shown.out).toContain("refused appends:");
+    expect(shown.out).not.toContain(ESC);
   });
 });
