@@ -23,12 +23,22 @@ Tracker properties for the exposed Linear adapter are declared in
 ## Bound the review loop
 
 The installed workflow's default bound applies here unchanged: a delivery
-obtains **at most three review rounds in total**, counted across every review
+obtains **at most four review rounds in total**, counted across every review
 loop it opens rather than per loop, declared before the first round and never
-re-declared. At the bound with open P0 or P1 findings — or with alignment
-reached but a required candidate change still unreviewed — the delivery stops
-as `partial` with the typed blocker `review.loop-bound-reached`, naming what is
+re-declared. At the bound with open P0 or P1 findings the delivery stops as
+`partial` with the typed blocker `review.loop-bound-reached`, naming what is
 open, and the operator decides.
+
+Where every lens is aligned at the bound and a required change would alter the
+candidate, the delivery obtains one **grace verification round** for that
+change — at most once per delivery, declared as the grace round when it is
+obtained, and, as the shipped workflow states it, the one round excepted from
+the count — under the same lens set and carry-forward rules as any other
+verification round. Only if that round does not align, or a further candidate
+change is required after it, does the delivery stop as `partial` with
+`review.loop-bound-reached` naming what is open. The grace round is not
+available with dissent open or where the latest round was blocked by a failed
+acquisition; those forms are terminal at the bound as above.
 
 A round's `candidateRef` is opaque and is never parsed. In this repository it
 resolves to the candidate tree the review context records: the tree SHA

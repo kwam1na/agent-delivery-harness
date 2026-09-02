@@ -12,7 +12,7 @@
       "outputs": [
         {
           "path": "skills/compound-delivery-kernel/SKILL.md",
-          "sha256": "d7a651c9392a36f923784771f24a532acca81fa223b865be46cba842c061e706"
+          "sha256": "b9beaeae3a346e1378cd168d53be48ece67a45ec676465a2cd38533603de8629"
         }
       ],
       "owner": "agent-skills-corpus",
@@ -185,7 +185,7 @@
       "outputs": [
         {
           "path": "skills/execute-work/SKILL.md",
-          "sha256": "33ee613ce298fb17935d6788a5485130c141dc82439eec2a501cb110be8ec3e4"
+          "sha256": "8c0a437cfa9812a0cb4f44b14a9db5c446b3b42406ccc4918f99eec7ed87a0db"
         }
       ],
       "owner": "agent-skills-corpus",
@@ -239,7 +239,7 @@
       "outputs": [
         {
           "path": "skills/obtain-review/SKILL.md",
-          "sha256": "2a855a78a0952b082cbb3deb1a2bb954fed7e1de6bc659ca8aaf12ed564be59b"
+          "sha256": "816485f621e18ec151519a4f231bc0d8b67fd701d100ede623ce6d6095d47334"
         }
       ],
       "owner": "delivery-agent/user-delegated",
@@ -743,7 +743,7 @@
       "outputs": [
         {
           "path": "skills/review-work/SKILL.md",
-          "sha256": "7858bf1bc9494bbb9f13a32bb472c6ea0614d9a7200d2e4e967f031ebecff152"
+          "sha256": "95c668f3e15a7de6bdd1987ffc8a3c010b64108d434addcc172fa23f4625100d"
         }
       ],
       "owner": "agent-skills-corpus",
