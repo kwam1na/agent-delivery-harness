@@ -32,7 +32,8 @@ open, and the operator decides.
 Where every lens is aligned at the bound and a required change would alter the
 candidate, the delivery obtains one **grace verification round** for that
 change — at most once per delivery, declared as the grace round when it is
-obtained, under the same lens set and carry-forward rules as any other
+obtained, and, as the shipped workflow states it, the one round excepted from
+the count — under the same lens set and carry-forward rules as any other
 verification round. Only if that round does not align, or a further candidate
 change is required after it, does the delivery stop as `partial` with
 `review.loop-bound-reached` naming what is open. The grace round is not
