@@ -11,11 +11,16 @@
  *     and the disjointness is asserted rather than assumed — a fixture that
  *     agreed with the real directory would let a built-in list pass for
  *     resolution.
- *   - A hardcoded gate binding, for the same reason and pinned the same way:
- *     the fixture's provider id is not this repository's, and the binding
- *     resolved from the real config must name a provider that config
- *     registers. A binding frozen to the fixture's values would emit
- *     manifests this repository's own gate refuses as `unregistered_provider`.
+ *   - A hardcoded gate binding, and the weaker readings that pass for
+ *     resolution. Three rows cross-check it: the binding resolved from the
+ *     real config names a provider that config registers, the fixture's
+ *     provider id is not this repository's, and — against a gate that
+ *     declares a decoy pair first — the binding follows the review
+ *     obligation rather than whatever is registered first. The first two
+ *     alone collapse in a config with one provider and one obligation, where
+ *     both readings name the same string. A binding frozen to the fixture's
+ *     values, or read positionally, emits manifests the gate it serves
+ *     refuses as `unregistered_provider`.
  *   - A hardcoded `verdict: "green"`. Both polarities run the real harness:
  *     a green outcome must reach an ADMITTED gate, and a non-green outcome
  *     must produce a manifest the harness REFUSES, with the gate still
@@ -28,6 +33,11 @@
  *   - Telemetry as a constant. Two samples, a zero point and a six-finding
  *     set, because a constant agrees with whichever single sample a suite
  *     happens to carry.
+ *
+ * One row is not about an always-green emitter but about the refusal surface
+ * either side of it: both this script's own usage and the provider guide tell
+ * a reader to capture its stdout into `--manifest "$MANIFEST"`, so every way
+ * of refusing has to exit non-zero with nothing on stdout.
  *
  * Nothing here re-implements the manifest contract. The judge is the shipped
  * recorder and evaluator, reached through the real CLI, from a fixture
