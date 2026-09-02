@@ -64,6 +64,8 @@ import {
   createBlocker,
   createInternalErrorBlocker,
   deliveryRecordPathFor,
+  needsCommittedSymlinkTarget,
+  parseCandidateTreeListing,
   parseDeliveryRecord,
   renderBlockers,
   runGitCommand,
@@ -73,6 +75,7 @@ import {
   type Blocker,
   type BlockerSource,
   type CandidateCommandRunner,
+  type CandidateTreeEntry,
   type DeliveryRecordCheck,
   type DeliveryRecordClaim,
   type DeliveryRecordFile,
@@ -169,9 +172,6 @@ export interface ActionResult {
 }
 
 // ── Blockers ─────────────────────────────────────────────────────────────────
-
-/** `git ls-tree -z` separates records with NUL, so a path containing a newline stays one record. */
-const NUL = "\u0000";
 
 const ACTION_SOURCE: BlockerSource = { kind: "command", id: "delivery-harness.action" };
 
@@ -476,8 +476,13 @@ interface DiscoveredRecords {
   /** Parse failures. Findings, never skips — see below. */
   readonly blockers: readonly Blocker[];
   readonly trackedCount: number;
-  /** Every tracked path in the head tree, for the protected-path check. */
-  readonly allPaths: readonly string[];
+  /**
+   * Every tracked entry in the head tree, for the protected-path check —
+   * mode and, for a delivery-owned symlink, the target read from its committed
+   * blob, because the one admitted exception under `.claude/skills/` turns on
+   * both and neither is visible in a name-only listing.
+   */
+  readonly allPaths: readonly CandidateTreeEntry[];
 }
 
 /**
@@ -505,7 +510,7 @@ async function readTrackedRecords(git: GitPort, headSha: string, config: Harness
   // from a root-level path of that name — a path/content confusion. The two
   // sides of this check must be anchored identically or they are not comparing
   // the same tree.
-  const listing = await git(["ls-tree", "-r", "--name-only", "-z", "--full-tree", headSha]);
+  const listing = await git(["ls-tree", "-r", "-z", "--full-tree", headSha]);
   if (listing.exitCode !== 0) {
     return {
       files: [],
@@ -528,8 +533,20 @@ async function readTrackedRecords(git: GitPort, headSha: string, config: Harness
     };
   }
 
-  const allPaths = listing.stdout.split(NUL).filter((entry) => entry.length > 0);
-  const paths = allPaths.filter((entry) => isRecordPath(entry, shape));
+  const listed = parseCandidateTreeListing(listing.stdout);
+  const allPaths: CandidateTreeEntry[] = [];
+  for (const entry of listed) {
+    if (!needsCommittedSymlinkTarget(entry)) {
+      allPaths.push(entry);
+      continue;
+    }
+    // Read out of the commit, like every other byte this verifier judges: the
+    // link under review is the one in the tree. A blob that will not read
+    // leaves the target absent, and an entry with no target cannot be admitted.
+    const link = await git(["cat-file", "blob", entry.objectSha]);
+    allPaths.push(link.exitCode === 0 ? { ...entry, symlinkTarget: link.stdout } : entry);
+  }
+  const paths = listed.map((entry) => entry.path).filter((entry) => isRecordPath(entry, shape));
   const files: DeliveryRecordFile[] = [];
   const blockers: Blocker[] = [];
   for (const recordPath of paths.sort()) {

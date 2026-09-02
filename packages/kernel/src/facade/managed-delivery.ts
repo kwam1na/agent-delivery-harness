@@ -61,11 +61,14 @@ import { createArtifactsPort } from "../artifacts.ts";
 import { runAdmission } from "../admission.ts";
 import {
   buildDeliveryRecord,
-  isDeliveryOwnedTreePath,
+  isDeliveryOwnedTreeEntry,
   deliveryRecordBytes,
   deliveryRecordPathFor,
+  needsCommittedSymlinkTarget,
+  parseCandidateTreeListing,
   parseDeliveryRecord,
   verifyDeliveryRecord,
+  type CandidateTreeEntry,
 } from "../delivery-record.ts";
 import { publishPreparationReceipt } from "../preparation.ts";
 import { discoverRecords, resolveRecordStorage } from "../records.ts";
@@ -1122,6 +1125,38 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   const git = async (cwd: string, ...args: string[]): Promise<{ code: number; out: string }> => {
     const outcome = await exec.run({ command: "git", args, cwd });
     return { code: outcome.code, out: outcome.stdout.trim() };
+  };
+
+  /**
+   * The committed tree's entries — path, mode, and, for a delivery-owned
+   * symlink, the target read untrimmed out of its own blob — for the
+   * protected-authority-path rule. `undefined` when the tree could not be
+   * listed, which the two call sites read differently: the verification
+   * checkpoint reports the external verification unavailable rather than
+   * passed, while the recording checkpoint — which listed the commit it has
+   * just written — treats it as no entries, exactly as it did before this
+   * helper existed. The pull-request Action still fails closed on an
+   * unlistable head, so the enforcement point is unaffected either way.
+   *
+   * `-z`, never newline splitting: git quotes a path containing a newline, and
+   * the quoted form no longer starts with the prefix it is inside. The blob is
+   * read without trimming because a symlink's target is exactly its blob's
+   * bytes, and trimming would let a target the external verifiers reject read
+   * as one they admit.
+   */
+  const candidateTreeEntries = async (cwd: string): Promise<CandidateTreeEntry[] | undefined> => {
+    const listed = await exec.run({ command: "git", args: ["ls-tree", "-r", "-z", "--full-tree", "HEAD"], cwd });
+    if (listed.code !== 0) return undefined;
+    const entries: CandidateTreeEntry[] = [];
+    for (const entry of parseCandidateTreeListing(listed.stdout)) {
+      if (!needsCommittedSymlinkTarget(entry)) {
+        entries.push(entry);
+        continue;
+      }
+      const blob = await exec.run({ command: "git", args: ["cat-file", "blob", entry.objectSha], cwd });
+      entries.push(blob.code === 0 ? { ...entry, symlinkTarget: blob.stdout } : entry);
+    }
+    return entries;
   };
 
   /**
@@ -4258,9 +4293,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // `-z` and NUL separation, never newline splitting: without it git
       // quotes a path containing a newline, and the quoted form no longer
       // starts with the delivery-owned segment it is inside.
-      const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
-      const candidateTreePaths = listed.out.split("\u0000").filter((entry) => entry.length > 0);
-      const owned = candidateTreePaths.filter(isDeliveryOwnedTreePath);
+      const candidateTreePaths = (await candidateTreeEntries(rootDir)) ?? [];
+      const owned = candidateTreePaths.filter(isDeliveryOwnedTreeEntry).map((entry) => entry.path);
       if (owned.length > 0) {
         const returned = await returnToValidation(
           "record.protected-authority-path",
@@ -4400,8 +4434,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         const parsed = parseDeliveryRecord(recordText);
         if (!parsed.ok) return refuseWith(parsed.blockers);
         recordedBaseTipSha = parsed.record.candidateBinding.baseTipSha;
-        const listed = await git(rootDir, "ls-tree", "-r", "--name-only", "-z", "--full-tree", "HEAD");
-        if (listed.code === 0) {
+        const candidateTreePaths = await candidateTreeEntries(rootDir);
+        if (candidateTreePaths !== undefined) {
           // The verifier's protected-authority-path rule does not run over a
           // tree it could not list, and half a verification is not a pass — so
           // a failed listing leaves the verification unavailable.
@@ -4410,7 +4444,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             parsed.record,
             { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
             { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
-            { candidateTreePaths: listed.out.split("\u0000").filter((entry) => entry.length > 0) },
+            { candidateTreePaths },
           );
           externalVerification = check.ok ? "passed" : "failed";
         }

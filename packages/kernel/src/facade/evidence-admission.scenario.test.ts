@@ -20,6 +20,9 @@
  *     live — the reviewed candidate reaches merge-ready through it. (The
  *     ordinary clean recording commit is the walking skeleton's scenario and is
  *     not re-driven here.)
+ *   - and the one admitted exception to that closed set — a candidate carrying
+ *     `.claude/skills` symlinks into the receipted `agent-skills` generation —
+ *     is recorded rather than refused;
  *   - and the blocker/remediation inventory is a readable audit surface for
  *     the whole loop.
  *
@@ -27,7 +30,7 @@
  * no agent process anywhere in it.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -463,6 +466,31 @@ describe("the recording discipline", () => {
     expect(entry, JSON.stringify(inventory.entries)).toBeDefined();
     expect(entry?.summary).toContain(".claude/settings.json");
     expect(entry?.remediation.length).toBeGreaterThan(0);
+  });
+
+  it("records a candidate whose .claude/skills entries are symlinks into the receipted generation", { timeout: 240_000 }, async () => {
+    const { deliveryId, worktree, fence } = await openDelivery("record-exposure");
+    // The one admitted shape under the frozen `.claude` prefix: the skill text
+    // in the tracked generation, and a relative symlink exposing it to the
+    // host. It belongs to the CANDIDATE — the `agent-skills` install writes it
+    // long before any recording commit — so it is committed here, with the
+    // work, rather than alongside the record. The product's own recording
+    // checkpoint has to admit it, or the local gate would refuse what the
+    // pull-request Action accepts.
+    mkdirSync(path.join(worktree, ".agent-skills", "current", "skills", "execute-work"), { recursive: true });
+    writeFileSync(path.join(worktree, ".agent-skills", "current", "skills", "execute-work", "SKILL.md"), "# execute work\n");
+    mkdirSync(path.join(worktree, ".claude", "skills"), { recursive: true });
+    symlinkSync("../../.agent-skills/current/skills/execute-work", path.join(worktree, ".claude", "skills", "execute-work"));
+
+    await planAndImplement(deliveryId, worktree, fence, GREET_RIGHT, "implement the contracted greeting");
+    await driveToRecording(deliveryId, worktree, fence, "e1");
+
+    const prepared = await facade.prepareTrackedRecord({ deliveryId, env: { CLAUDECODE: "1" }, fence });
+    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
+    commitAll(worktree, "tracked delivery record");
+
+    const confirmed = await facade.confirmTrackedRecord({ deliveryId, fence });
+    expect(confirmed.ok && confirmed.state === "ready", JSON.stringify(confirmed)).toBe(true);
   });
 
   it("returns to validation when the recording commit carries a non-neutral byte", { timeout: 240_000 }, async () => {

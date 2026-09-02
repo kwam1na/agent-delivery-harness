@@ -91,6 +91,35 @@ export type DeliveryRecordDriftClass = (typeof DELIVERY_RECORD_DRIFT_CLASSES)[nu
  */
 export const DELIVERY_OWNED_TREE_PREFIXES: readonly string[] = Object.freeze([".managed-projection", ".claude"]);
 
+/**
+ * The one exception to the frozen `.claude` prefix, and its two anchors.
+ *
+ * The `agent-skills` generation install exposes its skills to Claude Code as
+ * relative symlinks under `.claude/skills/` pointing into the tracked, receipted
+ * generation at `.agent-skills/current/skills/`. That exposure carries no skill
+ * text of its own: every byte a host would read lives in the generation the
+ * candidate already tracks, under a prefix this rule does not own. Committing it
+ * is therefore not the thing the rule forbids — planting authority text under
+ * the host's directory — and an adopter that installs the generation should not
+ * have to track the exposure differently from the way the product does.
+ *
+ * The exception is deliberately the narrowest shape that admits that install and
+ * nothing else, and it is decidable from the committed tree alone: the entry's
+ * git mode must be a symlink, and its target — resolved against the entry's own
+ * directory and normalized — must name something strictly inside the receipted
+ * skills root. No filesystem is read, no configuration is consulted, and no
+ * other delivery-owned prefix is affected. Everything else under `.claude`,
+ * including a regular file under `skills/` and a case alias of either anchor,
+ * stays a protected-authority-path violation.
+ */
+export const CLAUDE_SKILL_EXPOSURE_PREFIX = ".claude/skills/";
+
+/** The receipted generation's skills root a Claude skill exposure may name. */
+export const RECEIPTED_SKILLS_ROOT = ".agent-skills/current/skills/";
+
+/** The git tree mode of a symlink; the only mode the exception admits. */
+const SYMLINK_MODE = "120000";
+
 const DELIVERY_RECORD_SOURCE: BlockerSource = { kind: "delivery-record", id: "delivery-harness.delivery-record" };
 
 const RERECORD: Remediation = {
@@ -424,18 +453,159 @@ export interface DeliveryRecordCheck {
  */
 export interface VerifyDeliveryRecordOptions {
   /**
-   * The candidate tree's paths, when the caller can enumerate them. Supplied,
+   * The candidate tree's entries, when the caller can enumerate them. Supplied,
    * the verifier independently rejects any tree carrying a projection or
    * discovery-configuration path; omitted, that check simply does not run —
    * this core never reads a repository itself.
+   *
+   * A caller that reads the mode and, for a symlink, the committed target may
+   * pass `CandidateTreeEntry` instead of a bare path; only that richer form can
+   * witness the admitted Claude skill exposure. A bare path is judged on its
+   * path alone and stays blocked.
    */
-  readonly candidateTreePaths?: readonly string[];
+  readonly candidateTreePaths?: readonly (string | CandidateTreeEntry)[];
+}
+
+/**
+ * One committed tree entry, as `git ls-tree -r` reports it. A caller that can
+ * read the mode and — for a symlink — the target out of the committed blob
+ * passes this form; a caller that can only enumerate names passes the bare path
+ * string, which can never reach the Claude skill-exposure exception because it
+ * witnesses neither of the two facts that exception turns on.
+ */
+export interface CandidateTreeEntry {
+  readonly path: string;
+  /** The git tree mode, e.g. `100644` for a file or `120000` for a symlink. */
+  readonly mode?: string;
+  /** The link target read from the committed blob, when the entry is a symlink. */
+  readonly symlinkTarget?: string;
+}
+
+function pathOf(entry: string | CandidateTreeEntry): string {
+  return typeof entry === "string" ? entry : entry.path;
 }
 
 /** True when the path IS one of the delivery-owned sets, or lies inside one. */
 export function isDeliveryOwnedTreePath(repoPath: string): boolean {
   const folded = repoPath.toLowerCase();
   return DELIVERY_OWNED_TREE_PREFIXES.some((prefix) => folded === prefix || folded.startsWith(`${prefix}/`));
+}
+
+/**
+ * Resolves `target` against the directory of `fromPath` and normalizes it, or
+ * returns `undefined` when the target is absolute or walks above the repository
+ * root. Pure string work over the committed tree's POSIX paths — a `..` that
+ * escapes is a refusal, never a clamp to the root, because clamping is exactly
+ * how an outward link would be read as an inward one.
+ */
+function resolveTreeSymlink(fromPath: string, target: string): string | undefined {
+  if (target.length === 0 || target.startsWith("/")) return undefined;
+  const lastSlash = fromPath.lastIndexOf("/");
+  const segments = lastSlash === -1 ? [] : fromPath.slice(0, lastSlash).split("/");
+  const resolved: string[] = [];
+  for (const segment of segments) if (segment.length > 0 && segment !== ".") resolved.push(segment);
+  for (const segment of target.split("/")) {
+    if (segment.length === 0 || segment === ".") continue;
+    if (segment === "..") {
+      if (resolved.length === 0) return undefined;
+      resolved.pop();
+      continue;
+    }
+    resolved.push(segment);
+  }
+  // A target resolving to nothing names no entry. One ending in a separator
+  // normalizes to the directory it names; when that directory is the skills
+  // root itself, the strictly-inside test refuses it a step later.
+  return resolved.length === 0 ? undefined : resolved.join("/");
+}
+
+/**
+ * True when the entry is the one admitted Claude skill exposure: a symlink
+ * anywhere under `.claude/skills/` whose resolved target lies strictly inside
+ * `.agent-skills/current/skills/`. Both anchors are matched literally, never
+ * case-folded: the exception is granted to the exact shape the `agent-skills`
+ * generation install writes, and a case alias is not that shape.
+ *
+ * WHAT THIS DECIDES, AND WHAT IT DOES NOT. It decides the committed shape of
+ * the entry: its mode, and where its own target resolves as a path. It does
+ * not follow that path through any further committed symlink, does not require
+ * the target to exist in the tree, and does not re-check the receipt inside the
+ * generation. It cannot: `.agent-skills/current` is itself a tracked symlink
+ * pinning the active, digest-named generation, so following the path would
+ * reject the very install this admits.
+ *
+ * So what this admits is a POINTER, and the bytes it points at are reviewed the
+ * way every other tracked byte is — in the diff. A committed exposure is read
+ * by a host on checkout, with no install step in between, so the generation's
+ * own receipt is not what stops a candidate writing skill text there: the
+ * change lands under `.agent-skills/`, in the pull request, where a reviewer
+ * sees it. That is the trade this exception makes, deliberately.
+ */
+function isAdmittedClaudeSkillExposure(entry: string | CandidateTreeEntry): boolean {
+  if (typeof entry === "string") return false;
+  if (entry.mode !== SYMLINK_MODE) return false;
+  if (!entry.path.startsWith(CLAUDE_SKILL_EXPOSURE_PREFIX)) return false;
+  if (entry.path.length === CLAUDE_SKILL_EXPOSURE_PREFIX.length) return false;
+  if (entry.symlinkTarget === undefined) return false;
+  const resolved = resolveTreeSymlink(entry.path, entry.symlinkTarget);
+  if (resolved === undefined) return false;
+  return resolved.startsWith(RECEIPTED_SKILLS_ROOT) && resolved.length > RECEIPTED_SKILLS_ROOT.length;
+}
+
+/**
+ * True when the committed entry lands in a delivery-owned set AND is not the
+ * one admitted Claude skill exposure. This is the whole tree-side rule.
+ */
+export function isDeliveryOwnedTreeEntry(entry: string | CandidateTreeEntry): boolean {
+  if (!isDeliveryOwnedTreePath(pathOf(entry))) return false;
+  return !isAdmittedClaudeSkillExposure(entry);
+}
+
+/** One line of a `git ls-tree -r -z --full-tree` listing, already split out. */
+export interface ListedTreeEntry extends CandidateTreeEntry {
+  readonly mode: string;
+  readonly objectSha: string;
+}
+
+/**
+ * Parses a NUL-separated `git ls-tree -r -z --full-tree <ref>` listing into its
+ * entries. Pure string work, so the one reading of git's tree format is stated
+ * once and every verifier shares it.
+ *
+ * A record git could not format as `<mode> <type> <object>\t<path>` is skipped
+ * rather than guessed at, and skipping is a real cost, not a free one: a
+ * skipped record is judged by nothing — neither the protected-path rule nor
+ * the Action's record discovery, both of which read this list — so it would be
+ * missed rather than blocked. It is accepted because `-z` output cannot
+ * produce one: git never quotes under NUL separation, the mode, type and
+ * object fields never contain a tab or a space, and the split takes the FIRST
+ * tab, so a path containing tabs still parses whole.
+ *
+ * NUL separation, never newline splitting: git quotes a path containing a
+ * newline, and the quoted form no longer starts with the prefix it is inside.
+ */
+export function parseCandidateTreeListing(nulSeparated: string): readonly ListedTreeEntry[] {
+  const entries: ListedTreeEntry[] = [];
+  for (const line of nulSeparated.split("\u0000")) {
+    if (line.length === 0) continue;
+    const tab = line.indexOf("\t");
+    if (tab === -1) continue;
+    const fields = line.slice(0, tab).split(" ").filter((field) => field.length > 0);
+    if (fields.length < 3) continue;
+    const [mode, , objectSha] = fields as [string, string, string];
+    entries.push({ path: line.slice(tab + 1), mode, objectSha });
+  }
+  return entries;
+}
+
+/**
+ * True when this entry's committed link target must be read for the
+ * delivery-owned rule to be decidable — a symlink inside a delivery-owned
+ * prefix, the only entry the exception could ever admit. Stating it here keeps
+ * every verifier reading the same, minimal set of blobs.
+ */
+export function needsCommittedSymlinkTarget(entry: ListedTreeEntry): boolean {
+  return entry.mode === SYMLINK_MODE && isDeliveryOwnedTreePath(entry.path);
 }
 
 export function verifyDeliveryRecord(
@@ -508,13 +678,13 @@ export function verifyDeliveryRecord(
   // The delivery-owned path sets, judged on the tree's own evidence. This is
   // the verifier's independent half of the protected-authority-path rule: no
   // product state, no journal, no grant — just the committed paths.
-  for (const repoPath of options.candidateTreePaths ?? []) {
-    if (!isDeliveryOwnedTreePath(repoPath)) continue;
+  for (const entry of options.candidateTreePaths ?? []) {
+    if (!isDeliveryOwnedTreeEntry(entry)) continue;
     blockers.push(
       drBlocker(
         "record_protected_authority_path",
-        `The candidate tree carries ${JSON.stringify(repoPath)}, inside a delivery-owned projection or discovery-configuration path.`,
-        `delivery-owned prefixes: ${DELIVERY_OWNED_TREE_PREFIXES.join(", ")}`,
+        `The candidate tree carries ${JSON.stringify(pathOf(entry))}, inside a delivery-owned projection or discovery-configuration path.`,
+        `delivery-owned prefixes: ${DELIVERY_OWNED_TREE_PREFIXES.join(", ")}; the only admitted exception is a ${SYMLINK_MODE} symlink under ${CLAUDE_SKILL_EXPOSURE_PREFIX} resolving inside ${RECEIPTED_SKILLS_ROOT}`,
       ),
     );
   }
