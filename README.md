@@ -150,8 +150,12 @@ npm run review:evidence   # a review outcome on stdin -> a delivery-evidence/1 m
 
 It is a provider, not a sensor: it transcribes the review outcome it is given
 into the manifest `delivery-harness submit-evidence` consumes, resolving the
-reviewer set from [`delivery/personas/`](delivery/personas) and the obligation
-and provider from the config. A non-green outcome produces a manifest the
+reviewer set from the review lenses
+[the compiled policy](.agents/policy/compiled-snapshot.json) activates — each
+lens's charter read from the installed generation under
+[`.agent-skills/current`](.agent-skills) and its bytes checked against the
+digest the policy was compiled against — and the obligation and provider from
+the config. A non-green outcome produces a manifest the
 recorder refuses. See
 [the provider guide](docs/provider-guide.md#this-repositorys-own-provider).
 

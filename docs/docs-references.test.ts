@@ -287,10 +287,11 @@ describe("the computable counts the documentation states", () => {
   });
 
   it("states the reviewer charter set the pinned composition ships", () => {
-    // This resolves the real archive through the real mechanism, which is also
-    // the honest scope of the claim: `projectShippedPersonas` is a library
-    // boundary with no production caller in this repository, and this is a test
-    // caller. The documentation says so; this test is why it can.
+    // This resolves a pinned qualification fixture through the real mechanism.
+    // The count claimed in the documentation is a claim about what the pinned
+    // composition ships, so it is checked against that frozen archive rather
+    // than against the installed generation the projection sensor reads, which
+    // advances with each release.
     const archive = readFileSync(path.join(REPO_ROOT, "qualifications/fixtures/agent-skills-core-v1-composition.zip"));
     const projected = projectShippedPersonas((entry) => {
       try {

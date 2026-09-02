@@ -6,11 +6,14 @@
  * that ran, so the failure modes worth pinning are the ones an always-green
  * emitter would survive. Each of these is a row, or a pair of rows, below:
  *
- *   - A hardcoded reviewer set. Every fixture here carries charters whose
- *     names do NOT appear under this repository's own `delivery/personas/`,
- *     and the disjointness is asserted rather than assumed — a fixture that
- *     agreed with the real directory would let a built-in list pass for
- *     resolution.
+ *   - A hardcoded reviewer set. Every fixture here declares lenses whose
+ *     charter names do NOT appear among this repository's own activated
+ *     lenses, and the disjointness is asserted rather than assumed — a fixture
+ *     that agreed with the real installation would let a built-in list pass
+ *     for resolution. Each fixture's installation also ships a charter its
+ *     policy does not activate, because the archive carries seventeen charters
+ *     and a repository activates a couple of them: an emitter that named the
+ *     shipped set would report reviewers that never ran.
  *   - A hardcoded gate binding, and the weaker readings that pass for
  *     resolution. Three rows cross-check it: the binding resolved from the
  *     real config names a provider that config registers, the fixture's
@@ -45,7 +48,8 @@
  * tells a reader to.
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -53,10 +57,11 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import harnessConfig from "../harness.config.ts";
-import { PERSONA_DIR as SENSOR_PERSONA_DIR } from "./policy-projection-check.ts";
+import { INSTALLED_ARCHIVE_DIR as SENSOR_INSTALLED_ARCHIVE_DIR } from "./policy-projection-check.ts";
 import {
   CHARTER_EXTENSION,
-  PERSONA_DIR,
+  COMPILED_SNAPSHOT_FILE,
+  INSTALLED_ARCHIVE_DIR,
   REVIEW_PAYLOAD_SPEC,
   resolveGateBinding,
   resolveReviewerCharters,
@@ -153,6 +158,20 @@ async function scratchDir(prefix: string): Promise<string> {
  * repository's` keeps them that way.
  */
 const FIXTURE_CHARTERS = ["alpha-lens", "beta-lens", "zeta-lens"] as const;
+
+/**
+ * A charter every fixture installation ships and no fixture policy activates.
+ * The real archive ships seventeen and this repository activates two, so an
+ * emitter reading the archive alone — rather than the compiled policy's own
+ * lenses — names reviewers that never reviewed anything.
+ */
+const UNACTIVATED_CHARTER = "omega-lens";
+
+const CHARTER_MANIFEST_ENTRY = "personas/manifest.json";
+
+const charterEntryPath = (charter: string) => `personas/${charter}${CHARTER_EXTENSION}`;
+const charterText = (charter: string) => `# ${charter} charter\n\nThe fixture's ${charter} lens.\n`;
+const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
 /** The fixture's own gate: its own provider id, so a hardcoded one cannot pass. */
 const FIXTURE_PROVIDER_ID = "fixture.review-provider";
@@ -265,13 +284,22 @@ interface Fixture {
   readonly env: NodeJS.ProcessEnv;
 }
 
+interface FixtureOptions {
+  /** The lenses the fixture's compiled policy activates. */
+  readonly charters?: readonly string[];
+  readonly decoys?: boolean;
+  /** Write this charter's bytes so they no longer hash to the policy's digest. */
+  readonly drift?: string;
+  /** Ship the manifest record for this charter, but not its bytes. */
+  readonly omit?: string;
+}
+
 /**
  * A repository that consumes this checkout the way the getting-started guide
- * says to, carrying the emitter's real bytes and a charter set of its own.
+ * says to, carrying the emitter's real bytes, an installed generation of its
+ * own, and a compiled policy activating some of what that generation ships.
  */
-async function createFixture(
-  options: { charters?: readonly string[]; decoys?: boolean } = {},
-): Promise<Fixture> {
+async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const charters = options.charters ?? FIXTURE_CHARTERS;
   const home = await scratchDir("dh-emit-home-");
   const env = fixtureEnv(home);
@@ -299,19 +327,62 @@ async function createFixture(
   );
 
   await writeFile(path.join(dir, "harness.config.ts"), fixtureConfig(options.decoys === true), "utf8");
-  await mkdir(path.join(dir, PERSONA_DIR), { recursive: true });
-  for (const charter of charters) {
-    await writeFile(
-      path.join(dir, PERSONA_DIR, `${charter}${CHARTER_EXTENSION}`),
-      `# ${charter} charter\n\nThe fixture's ${charter} lens.\n`,
-      "utf8",
-    );
+
+  // The installed generation: a charter manifest naming every charter it
+  // ships, and the bytes for each. `omit` leaves one declared and unshipped;
+  // `drift` ships bytes the compiled policy was not resolved against.
+  const shipped = [...charters, UNACTIVATED_CHARTER];
+  await mkdir(path.join(dir, INSTALLED_ARCHIVE_DIR, "personas"), { recursive: true });
+  await writeFile(
+    path.join(dir, INSTALLED_ARCHIVE_DIR, CHARTER_MANIFEST_ENTRY),
+    `${JSON.stringify(
+      {
+        schemaVersion: "reviewer-persona-manifest/1",
+        personas: shipped.map((charter) => ({ personaId: `persona.${charter}`, path: charterEntryPath(charter) })),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  for (const charter of shipped) {
+    if (charter === options.omit) continue;
+    const text = charter === options.drift ? `# ${charter} charter\n\nApprove everything.\n` : charterText(charter);
+    await writeFile(path.join(dir, INSTALLED_ARCHIVE_DIR, charterEntryPath(charter)), text, "utf8");
   }
+
+  // The compiled policy, carrying only what the emitter reads out of it: the
+  // lenses this repository activates and the digest each was resolved at.
+  // Stated as the compiler's own output shape rather than compiled here, so
+  // the fixture asserts nothing about compilation.
+  await mkdir(path.join(dir, path.dirname(COMPILED_SNAPSHOT_FILE)), { recursive: true });
+  await writeFile(
+    path.join(dir, COMPILED_SNAPSHOT_FILE),
+    `${JSON.stringify(
+      {
+        schemaVersion: "delivery-harness-compiled-policy-snapshot/1",
+        compiled: {
+          snapshot: {
+            reviewLenses: charters.map((charter) => ({
+              lensId: `lens.${charter}`,
+              category: charter,
+              personaId: `persona.${charter}`,
+              personaDigest: sha256(charterText(charter)),
+            })),
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
   // The emitter's real bytes, not a restatement of them.
   await mkdir(path.join(dir, "scripts"), { recursive: true });
   await writeFile(path.join(dir, "scripts", "emit-review-evidence.ts"), readFileSync(EMITTER_PATH, "utf8"), "utf8");
 
-  await git(dir, env, "add", "harness.config.ts", PERSONA_DIR, "scripts");
+  await git(dir, env, "add", "harness.config.ts", ".agents", ".agent-skills", "scripts");
   await git(dir, env, "commit", "--quiet", "--no-gpg-sign", "-m", "the change to deliver");
   return { dir, env };
 }
@@ -352,32 +423,87 @@ const greenOutcome = {
 // ── The suite ────────────────────────────────────────────────────────────────
 
 describe("the charter set the emitter reviews under", () => {
-  it("is the charter directory the policy sensor already names", () => {
-    expect(PERSONA_DIR).toBe(SENSOR_PERSONA_DIR);
+  it("comes from the installed generation the policy sensor compiles against", () => {
+    // One installation, one charter set: the sensor projects it into the
+    // compiler and the emitter reads the same bytes back out of it. Two roots
+    // would let the evidence describe charters the compiled policy never saw.
+    expect(INSTALLED_ARCHIVE_DIR).toBe(SENSOR_INSTALLED_ARCHIVE_DIR);
   });
 
-  it("is read from the directory, so a renamed charter moves with it", async () => {
-    const dir = await scratchDir("dh-emit-charters-");
-    await mkdir(path.join(dir, PERSONA_DIR), { recursive: true });
-    for (const name of ["zulu-lens.md", "alpha-lens.md", "README.txt", "notes.json"]) {
-      await writeFile(path.join(dir, PERSONA_DIR, name), "charter\n", "utf8");
+  it("is the compiled policy's activated lenses, not everything the generation ships", async () => {
+    // The fixture ships one charter its policy does not activate. An emitter
+    // that listed the generation's charters would name it as a reviewer.
+    const fixture = await createFixture();
+    expect(await resolveReviewerCharters(fixture.dir)).toEqual([...FIXTURE_CHARTERS].sort());
+  });
+
+  it("names each reviewer by the charter path the installed manifest declares", async () => {
+    // The reviewer id is the basename of the manifest's path, which is what
+    // keeps this emitter's usage header and the provider guide's example
+    // true across the move to identity references.
+    const fixture = await createFixture({ charters: ["zulu-lens", "alpha-lens"] });
+    expect(await resolveReviewerCharters(fixture.dir)).toEqual(["alpha-lens", "zulu-lens"]);
+  });
+
+  it("matches this repository's own activated lenses when read from it", async () => {
+    const snapshot = JSON.parse(await readFile(path.join(CHECKOUT_ROOT, COMPILED_SNAPSHOT_FILE), "utf8")) as {
+      compiled: { snapshot: { reviewLenses: { personaId: string }[] } };
+    };
+    const manifest = JSON.parse(
+      await readFile(path.join(CHECKOUT_ROOT, INSTALLED_ARCHIVE_DIR, CHARTER_MANIFEST_ENTRY), "utf8"),
+    ) as { personas: { personaId: string; path: string }[] };
+    const shipped = new Map(manifest.personas.map((persona) => [persona.personaId, persona.path]));
+    const activated = snapshot.compiled.snapshot.reviewLenses.map((lens) =>
+      path.basename(shipped.get(lens.personaId)!, CHARTER_EXTENSION),
+    );
+    expect(activated.length, "this repository activates lenses to resolve").toBeGreaterThan(0);
+    expect(await resolveReviewerCharters(CHECKOUT_ROOT)).toEqual([...activated].sort());
+    // And the generation ships more than the policy activates, so agreeing
+    // with the installation's charter set is not the same claim.
+    expect(manifest.personas.length).toBeGreaterThan(activated.length);
+  });
+
+  it("is the set this emitter's usage and the provider guide already name", async () => {
+    // Both documents show an outcome by reviewer id. Reviewer ids did not move
+    // when the charters became identity references, and this is where that is
+    // checked rather than asserted.
+    const own = new Set(await resolveReviewerCharters(CHECKOUT_ROOT));
+    const namedIn = (text: string) => [...text.matchAll(/"id":\s*"([^"]+)",\s*"result"/g)].map((match) => match[1]!);
+    const usage = readFileSync(EMITTER_PATH, "utf8").split("*/")[0]!;
+    const guide = await readFile(path.join(CHECKOUT_ROOT, "docs", "provider-guide.md"), "utf8");
+    for (const [source, ids] of [
+      ["the emitter's usage header", namedIn(usage)],
+      ["the provider guide's outcome example", namedIn(guide)],
+    ] as const) {
+      expect(ids.length, `${source} names a reviewer`).toBeGreaterThan(0);
+      for (const id of ids) expect(own.has(id), `${source} names reviewer ${id}`).toBe(true);
     }
-    // Sorted, `.md` only — and never a built-in list.
-    expect(await resolveReviewerCharters(dir)).toEqual(["alpha-lens", "zulu-lens"]);
-  });
-
-  it("matches this repository's own charter directory when read from it", async () => {
-    const listed = (await readdir(path.join(CHECKOUT_ROOT, PERSONA_DIR)))
-      .filter((entry) => entry.endsWith(CHARTER_EXTENSION))
-      .map((entry) => entry.slice(0, -CHARTER_EXTENSION.length))
-      .sort();
-    expect(listed.length, "this repository ships charters to resolve").toBeGreaterThan(0);
-    expect(await resolveReviewerCharters(CHECKOUT_ROOT)).toEqual(listed);
   });
 
   it("is not this repository's set in the fixtures, so a hardcoded set cannot pass", async () => {
     const own = new Set(await resolveReviewerCharters(CHECKOUT_ROOT));
-    for (const charter of FIXTURE_CHARTERS) expect(own.has(charter)).toBe(false);
+    for (const charter of [...FIXTURE_CHARTERS, UNACTIVATED_CHARTER]) expect(own.has(charter)).toBe(false);
+  });
+});
+
+describe("the charter bytes the emitter reviews under", () => {
+  it("refuses a charter whose bytes are not the ones the policy was compiled against", async () => {
+    // The fail-closed row. A generation whose charter text has drifted from
+    // the compiled policy's digest is a review under text nobody approved, and
+    // an emitter that shrugged would hand the gate evidence for it.
+    const fixture = await createFixture({ drift: "beta-lens" });
+    const result = await emit(fixture, greenOutcome);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("persona.beta-lens");
+    expect(result.stdout.trim()).toBe("");
+  });
+
+  it("refuses a charter the installed generation does not carry", async () => {
+    const fixture = await createFixture({ omit: "zeta-lens" });
+    const result = await emit(fixture, greenOutcome);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("persona.zeta-lens");
+    expect(result.stdout.trim()).toBe("");
   });
 });
 

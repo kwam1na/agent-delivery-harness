@@ -20,6 +20,23 @@ them.
 Tracker properties for the exposed Linear adapter are declared in
 `.agents/tracker-properties.json`. Read that document; never write to it.
 
+## Bound the review loop
+
+The installed workflow's default bound applies here unchanged: a delivery
+obtains **at most three review rounds in total**, counted across every review
+loop it opens rather than per loop, declared before the first round and never
+re-declared. At the bound with open P0 or P1 findings — or with alignment
+reached but a required candidate change still unreviewed — the delivery stops
+as `partial` with the typed blocker `review.loop-bound-reached`, naming what is
+open, and the operator decides.
+
+A round's `candidateRef` is opaque and is never parsed. In this repository it
+resolves to the candidate tree the review context records: the tree SHA
+`delivery-harness review-context` reports as `candidate tree <sha>`, which is
+the same value `prepare` publishes and the delivery record carries as
+`treeSha`. Supply that resolution alongside the reference when a verification
+round spans two candidates.
+
 ## Both exposures are tracked
 
 The install writes two host exposures — `.agents/skills` and `.claude/skills` —

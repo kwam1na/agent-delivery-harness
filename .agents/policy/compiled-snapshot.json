@@ -8,7 +8,7 @@
     "repositoryAuthorityRevocationEpoch": 0
   },
   "inputDigests": {
-    "repository-policy.json": "5493d8704105325e452fca8cc2050f299e5c4b9fb0136e235724b33f8c30e044",
+    "repository-policy.json": "ce4bb9dda563f3eb02ff01779a9f50bd5a655d307f0f9fed8f874751c1ca19d3",
     "adapters.json": "73101bb8787e69995eddd81780f4a360a9dce2c6b821bd65cff79027ce8c2e61"
   },
   "compiled": {
@@ -30,13 +30,13 @@
           "lensId": "lens.outcome-correctness",
           "category": "outcome-correctness",
           "personaId": "persona.outcome-correctness",
-          "personaDigest": "1acaa491ecdd8f94bd4ee34956626dc3b6135ba55e91c806d737f3ea73ca9984"
+          "personaDigest": "a5d96a825150e40b840cd91b55c2d7480f5ee7e481004464062afb8ef5430e2c"
         },
         {
           "lensId": "lens.adversarial-testing",
           "category": "testing-policy",
           "personaId": "persona.testing-policy",
-          "personaDigest": "47afafdc8605c0f739b6e7bd12d675d31a315e153063bc3560ef86926c102656"
+          "personaDigest": "ad8a1577e9a5f6de5b0bc431b704dcb72aecd67652b8cd97f8d5706a61864aff"
         }
       ],
       "obligations": [
@@ -44,7 +44,7 @@
           "obligationId": "review.green"
         }
       ],
-      "policyDigest": "985f09682805ade3a128acf66e6e4d9caf342be33a63967b6e3d9db1d2229074"
+      "policyDigest": "a7b06df440edb153048815fdb15cf6d90588fa317e2db75c994bf7852e6f7a55"
     },
     "capabilities": [
       {
@@ -280,6 +280,6 @@
     "approvals": [],
     "tracker": "absent",
     "trackerAbsenceFallback": "proceed-without-tracker",
-    "compiledDigest": "1b5593f4e8e296b548d456c4f83b347531012e0cac8ed7cdd372dc11157a70fd"
+    "compiledDigest": "7cd5c7698ce2706fdb34374d46a468a2b69c7cbd32a23b7e9a448a91a8b2e34e"
   }
 }

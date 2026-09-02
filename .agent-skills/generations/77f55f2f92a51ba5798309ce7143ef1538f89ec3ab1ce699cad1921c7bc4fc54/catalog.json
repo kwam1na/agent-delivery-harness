@@ -1,0 +1,320 @@
+{
+  "schemaVersion": "agent-skills-catalog/1",
+  "skills": [
+    {
+      "capabilities": [
+        "delivery-posture"
+      ],
+      "dependencies": [],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "compound-delivery-kernel",
+      "path": "skills/compound-delivery-kernel/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "compound-delivery-kernel"
+    },
+    {
+      "capabilities": [
+        "compounding-workflow"
+      ],
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "compound-learning",
+      "path": "skills/compound-learning/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "compound-learning"
+    },
+    {
+      "degradedBehavior": "Decomposition remains complete and reports the undecomposed candidates plus every omitted mutation when the host-native tracker capability is unavailable.",
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        },
+        {
+          "id": "linear-tracker-adapter",
+          "requirement": "required"
+        },
+        {
+          "id": "plan-work",
+          "requirement": "routing"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "create-linear-ticket",
+      "path": "skills/create-linear-ticket/SKILL.md",
+      "profiles": [
+        "linear"
+      ],
+      "provenanceId": "create-linear-ticket"
+    },
+    {
+      "capabilities": [
+        "tracker-operations",
+        "workflow-routing"
+      ],
+      "degradedBehavior": "Optional tracking routes remain unavailable until an adopter selects a conforming tracker profile.",
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        },
+        {
+          "id": "compound-learning",
+          "requirement": "routing"
+        },
+        {
+          "id": "diagnose-work",
+          "requirement": "routing"
+        },
+        {
+          "id": "execute-work",
+          "requirement": "routing"
+        },
+        {
+          "id": "obtain-review",
+          "requirement": "routing"
+        },
+        {
+          "id": "plan-work",
+          "requirement": "routing"
+        },
+        {
+          "id": "review-work",
+          "requirement": "routing"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "deliver-work",
+      "path": "skills/deliver-work/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "deliver-work"
+    },
+    {
+      "capabilities": [
+        "diagnosis-workflow"
+      ],
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "diagnose-work",
+      "path": "skills/diagnose-work/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "diagnose-work"
+    },
+    {
+      "degradedBehavior": "Execution remains complete and reports every omitted tracking mutation when the host-native tracker capability is unavailable.",
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        },
+        {
+          "id": "compound-learning",
+          "requirement": "required"
+        },
+        {
+          "id": "create-linear-ticket",
+          "requirement": "routing"
+        },
+        {
+          "id": "execute-work",
+          "requirement": "required"
+        },
+        {
+          "id": "linear-tracker-adapter",
+          "requirement": "required"
+        },
+        {
+          "id": "obtain-review",
+          "requirement": "required"
+        },
+        {
+          "id": "review-work",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "execute-linear-ticket",
+      "path": "skills/execute-linear-ticket/SKILL.md",
+      "profiles": [
+        "linear"
+      ],
+      "provenanceId": "execute-linear-ticket"
+    },
+    {
+      "capabilities": [
+        "execution-workflow",
+        "tracker-operations"
+      ],
+      "degradedBehavior": "Core execution remains complete when optional tracking or optional sensors are unavailable, and reports the omitted operation honestly.",
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        },
+        {
+          "id": "plan-work",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "execute-work",
+      "path": "skills/execute-work/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "execute-work"
+    },
+    {
+      "capabilities": [
+        "tracker-adapter",
+        "tracker-operations"
+      ],
+      "degradedBehavior": "Core delivery remains complete and reports omitted optional tracking when the host-native Linear capability is unavailable.",
+      "dependencies": [
+        {
+          "id": "deliver-work",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [
+        "linear-mcp"
+      ],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "linear-tracker-adapter",
+      "path": "skills/linear-tracker-adapter/SKILL.md",
+      "profiles": [
+        "linear"
+      ],
+      "provenanceId": "linear-tracker-adapter"
+    },
+    {
+      "capabilities": [
+        "review-acquisition"
+      ],
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        },
+        {
+          "id": "review-work",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "obtain-review",
+      "path": "skills/obtain-review/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "obtain-review"
+    },
+    {
+      "capabilities": [
+        "planning-workflow",
+        "tracker-operations"
+      ],
+      "degradedBehavior": "Planning remains complete without optional tracking and reports unavailable optional sensors without replacing repository authority.",
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "plan-work",
+      "path": "skills/plan-work/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "plan-work"
+    },
+    {
+      "capabilities": [
+        "review-workflow"
+      ],
+      "dependencies": [
+        {
+          "id": "compound-delivery-kernel",
+          "requirement": "required"
+        }
+      ],
+      "externalTools": [],
+      "hosts": [
+        "claude-code",
+        "codex"
+      ],
+      "id": "review-work",
+      "path": "skills/review-work/SKILL.md",
+      "profiles": [
+        "core",
+        "linear"
+      ],
+      "provenanceId": "review-work"
+    }
+  ]
+}

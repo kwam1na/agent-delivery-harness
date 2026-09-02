@@ -4,11 +4,11 @@
   "comparisonAuthority": "npm run check plus the unchanged delivery-harness gate loop and the hosted checks in .github/workflows",
   "mode": "read-only",
   "inputs": {
-    "repository-policy.json": "5493d8704105325e452fca8cc2050f299e5c4b9fb0136e235724b33f8c30e044",
+    "repository-policy.json": "ce4bb9dda563f3eb02ff01779a9f50bd5a655d307f0f9fed8f874751c1ca19d3",
     "adapters.json": "73101bb8787e69995eddd81780f4a360a9dce2c6b821bd65cff79027ce8c2e61",
     "pre-cutover-oracle.json": "c754b5debe0689e35ff0e7a24000c379ab81ed4341331d8ba635381139e81289",
-    "compiled-snapshot.json": "9c75a842061ad0045252c4c735bfb6c24c4dbc37651bda6da6648824187c90a0",
-    "compiledDigest": "1b5593f4e8e296b548d456c4f83b347531012e0cac8ed7cdd372dc11157a70fd"
+    "compiled-snapshot.json": "d564d8b4d6574a20f04b876be627ec78f0a8809155e584426c40cb5995a508d8",
+    "compiledDigest": "7cd5c7698ce2706fdb34374d46a468a2b69c7cbd32a23b7e9a448a91a8b2e34e"
   },
   "results": {
     "compile": "ok: the declarative document plus the sixteen typed adapters compile through this repository's own policy compiler with zero rejections, and the recorded snapshot is byte-equal to a fresh compile",
@@ -20,16 +20,36 @@
     "authority": "ok: merge-ready is the only granted finish line, pr-creation the only granted authority, merge and deploy remain forbidden with their adapters registered discovery-only, and neither is a required capability",
     "generatedArtifactOwnership": "ok: the conformance vector tree is the live gate's only generated classification and is owned by its regeneration stage, and all four protected authority trees appear in every compiled checkpoint grant",
     "plantedCompileRejections": {
-      "duplicate-obligation": ["duplicate_obligation"],
-      "merge-granted-and-forbidden": ["contradictory_authority"],
-      "merge-finish-line-without-authority": ["contradictory_finish_line"],
-      "required-capability-without-adapter": ["capability_unavailable"],
-      "privileged-credential-in-model-grant": ["privileged_credential_in_model_grant"],
-      "unknown-document-member": ["unknown_member"],
-      "duplicate-adapter": ["duplicate_capability"],
-      "charter-digest-not-in-the-tree": ["persona_unresolvable"],
-      "testing-policy-lens-dropped": ["mandatory_lens_missing"],
-      "authority-without-an-adapter": ["prose_only_authority"]
+      "duplicate-obligation": [
+        "duplicate_obligation"
+      ],
+      "merge-granted-and-forbidden": [
+        "contradictory_authority"
+      ],
+      "merge-finish-line-without-authority": [
+        "contradictory_finish_line"
+      ],
+      "required-capability-without-adapter": [
+        "capability_unavailable"
+      ],
+      "privileged-credential-in-model-grant": [
+        "privileged_credential_in_model_grant"
+      ],
+      "unknown-document-member": [
+        "unknown_member"
+      ],
+      "duplicate-adapter": [
+        "duplicate_capability"
+      ],
+      "charter-identity-not-in-the-shipped-set": [
+        "persona_unresolvable"
+      ],
+      "testing-policy-lens-dropped": [
+        "mandatory_lens_missing"
+      ],
+      "authority-without-an-adapter": [
+        "prose_only_authority"
+      ]
     }
   },
   "adjudications": [
@@ -48,9 +68,9 @@
       "blocking": false
     },
     {
-      "id": "reviewer-charters-repository-owned",
-      "observed": "The document grammar requires a personaId on every review lens, and the compiler resolves identity-only references against charters shipped in the authenticated composition. The composition ships none today.",
-      "projection": "Both lenses reference repository-owned charters under delivery/personas/ with their bytes pinned by personaDigest, which is the reference form the compiler defines for adopter-owned charters and the path convention the facade already resolves from the trusted pre-run base. delivery is an additionally protected path in every checkpoint grant, so no model-driven stage can rewrite a charter it is judged against.",
+      "id": "reviewer-charters-referenced-by-identity",
+      "observed": "The document grammar requires a personaId on every review lens, and the compiler resolves identity-only references against charters shipped in the authenticated composition. The composition ships those charters, and this repository once carried thinner copies of two of them under a protected path of its own because it predated the shipped set.",
+      "projection": "Both lenses reference the shipped charters by identity alone, the reference form the compiler resolves only against charters of composition origin. The projection sensor supplies that set by projecting the installed generation under .agent-skills/current through projectShippedPersonas, so the bytes a lens is judged against are the authenticated archive's and no repository file can intercept an identity reference. The copies are retired: a repository-owned charter is selected only where the owner-approved document pins its digest, and this document pins none.",
       "disposition": "accepted-projection",
       "blocking": false
     },

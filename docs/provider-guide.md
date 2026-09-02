@@ -110,10 +110,15 @@ delivery-harness submit-evidence --manifest "$MANIFEST"
 Three things it resolves rather than asserts, each of them a way a provider can
 quietly stop describing the repository it serves:
 
-- **The reviewer set is the charter directory.** `selected` is every charter
-  under [`delivery/personas/`](../delivery/personas), by file name — so adding
-  or renaming a lens moves the evidence with it. An outcome that leaves a
-  charter unrepresented, or names a reviewer no charter defines, is refused
+- **The reviewer set is the compiled policy's activated lenses.** `selected` is
+  every review lens
+  [the compiled snapshot](../.agents/policy/compiled-snapshot.json) carries,
+  named by the basename of the charter path the installed generation's manifest
+  declares for it — so activating a lens moves the evidence with it. Each
+  charter is read from that generation and its bytes checked against the digest
+  the policy was compiled against; a charter the installation does not carry, or
+  one whose bytes have drifted, refuses the emission. An outcome that leaves a
+  lens unrepresented, or names a reviewer no activated lens defines, is refused
   before any manifest exists.
 - **The obligation and provider come from the config.** The one obligation
   accepting `review.green/1`, and the one provider it names.
