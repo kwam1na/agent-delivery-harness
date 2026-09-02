@@ -298,7 +298,7 @@ rather than a constant in the source:
 | Tier | What it means |
 |---|---|
 | 0 | Read-only inspection only. |
-| 1 | The mutation floor: deny-until-attested grant enforcement, a worktree-materialized digest-receipted projection, binding attestation, a qualified host-owned operator-confirmation producer, fence-revocation cancellation, and fresh-worktree-only resume. |
+| 1 | The mutation floor: deny-until-attested grant enforcement, a worktree-materialized digest-receipted projection, binding attestation, a qualified host-owned operator-confirmation producer, fence-revocation cancellation, and fresh-worktree-only resume. Its grant enforcement rests on host workspace scoping, whose boundary is stated below. |
 | 2 | Trusted graceful lifecycle events. |
 | 3 | Graceful termination provenance with verified descendant teardown — the grade that would enable same-worktree resume. |
 
@@ -312,6 +312,43 @@ The consuming code keys on the **affirmative** grade rather than on the absence
 of a negative one. Reading "not ungraded" as "capable" would invent a capability
 from a grading the code does not recognise; every doubt resolves to
 `unverified`.
+
+### The temporary-directory posture: accept, and scope it ourselves
+
+The grant enforcement the Tier 1 floor rests on assumes the host confines a
+session to its workspace. That control has a boundary, and the boundary is
+where this product usually lives.
+
+The OS sandbox grants the **system temporary directory** as a writable root
+*independently of the workspace*. A delivery workspace materialized under it is
+therefore scoped by nothing the host contributes: an out-of-workspace write
+under `$TMPDIR` succeeds, while the same write outside that directory is
+denied. That is not a corner case here — the disposable-repository
+qualification lane, the shadow-window characterizations, and the session
+qualifier all build their workspaces with `mkdtemp`, so the configuration in
+which the host's control silently does not apply is the configuration this
+project most often runs in.
+
+The posture is **accept**, and the reason is that refusing it would remove the
+product's most-exercised configuration without making anything safer. What
+acceptance costs is paid, not inherited: for such a workspace the **binding's
+own ambient-temp denial is the only thing scoping it**, standing in for a host
+control that does not reach. `composeClaudeCodeSession` therefore denies both
+`$TMPDIR` and `/tmp` on every session, temp-hosted or not.
+
+That denial's *spelling* is load-bearing. The OS boundary matches where a path
+**resolves**, and on the graded platform both `$TMPDIR` and `/tmp` are symlinks
+into `/private`. A denial written only as `/var/folders/…` names a path the
+kernel never checks — and reads, to any assertion looking for "a tmpdir entry",
+exactly like a control that is present and denies nothing. The live probe
+recorded for this host did see its ambient-temp writes denied, but it named
+every target in the written spelling, so it could not distinguish a denial that
+bites from a host that happened to canonicalize first; its record now says so.
+Emitting both spellings removes the dependence. Every composed root is therefore
+emitted under both the written and the resolved spelling when they differ, on
+the allow side as well as the deny side: the two spellings are the same
+directory, so nothing is widened, and protection is not left as the half that
+was not canonicalized.
 
 ### The granted-shell posture: accept and declare
 

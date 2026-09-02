@@ -10,7 +10,7 @@
  * Written RED before `claude-code.ts` existed.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -216,7 +216,11 @@ describe("composeClaudeCodeSession", () => {
       allowUnsandboxedCommands: false,
       excludedCommands: [],
     });
-    expect(sandbox.filesystem.allowWrite).toEqual([path.join(bench.worktreeDir, "src")]);
+    // The bench workspace is temp-hosted, so the granted root is emitted under
+    // both the written and the resolved spelling; the temporary-directory
+    // posture suite below owns that rule and its outside-the-temp-directory
+    // counterpart.
+    expect(sandbox.filesystem.allowWrite).toEqual(expect.arrayContaining([path.join(bench.worktreeDir, "src")]));
     expect(sandbox.filesystem.denyWrite).toEqual(expect.arrayContaining([
       path.join(bench.worktreeDir, "src", "protected"),
       path.join(bench.repoDir, ".git"),
@@ -710,5 +714,154 @@ describe("tearDownProjection, against the host's own workspace lifecycle", () =>
     expect(torn.ok, JSON.stringify(torn)).toBe(true);
     expect(existsSync(path.join(bench.bindingDir, "settings-1.json"))).toBe(false);
     expect(existsSync(path.join(bench.bindingDir, "worktree-excludes"))).toBe(false);
+  });
+});
+
+/**
+ * THE TEMPORARY-DIRECTORY POSTURE, IN BOTH DIRECTIONS.
+ *
+ * Written RED. The workspace-scoping control the Tier 1 mutation floor rests
+ * on does not extend to the system temporary directory: seatbelt grants that
+ * directory as a writable root independently of the workspace, so a delivery
+ * workspace materialized under it is scoped by NOTHING the host contributes.
+ * What scopes it is the ambient-temp denial this binding composes itself —
+ * which makes the exact spelling of that denial load-bearing rather than
+ * cosmetic.
+ *
+ * On macOS the temporary directory reached through `$TMPDIR` and `/tmp` is a
+ * symlink into `/private`, and the OS boundary matches on the resolved path.
+ * A denial emitted only as `/var/folders/…` or `/tmp` therefore names a path
+ * the kernel never checks, while an assertion that merely looks for "a tmpdir
+ * entry" passes. That is the shape of the original false negative: a control
+ * that reads as present and denies nothing.
+ */
+describe("composeClaudeCodeSession under the temporary directory", () => {
+  const canonicalOf = (target: string): string => {
+    try {
+      return realpathSync(target);
+    } catch {
+      return path.resolve(target);
+    }
+  };
+
+  /**
+   * Composition reads the excludes file the projection wrote, so every case
+   * runs against a materialized binding directory. The workspace root is the
+   * variable under test and is supplied separately: composition resolves and
+   * denies paths, it does not read the workspace.
+   */
+  const materializedBindingDir = async (label: string): Promise<string> => {
+    const bench = await workbench(`temp-posture-${label}`);
+    const materialized = await materializeProjection({
+      worktreeDir: bench.worktreeDir,
+      generationRoot: bench.generationRoot,
+      deliveryId: `dlv-temp-posture-${label}`,
+      fence: 1,
+      bindingDir: bench.bindingDir,
+      exec,
+    });
+    expect(materialized.ok, JSON.stringify(materialized)).toBe(true);
+    return bench.bindingDir;
+  };
+
+  const composeFor = async (input: { readonly bindingDir: string; readonly workspaceRoot: string }) => {
+    const session = await composeClaudeCodeSession({
+      bindingDir: input.bindingDir,
+      statePath: path.join(input.bindingDir, "state.json"),
+      hookCommand: ["node", "--import", "tsx", "hook-main.ts"],
+      fence: 1,
+      workspaceRoot: input.workspaceRoot,
+      commonGitDir: path.join(input.workspaceRoot, ".git"),
+      authorityDir: path.join(path.dirname(input.workspaceRoot), "provider-review-authority"),
+      grant: {
+        allowedCapabilities: ["Bash", "Read", "Write"],
+        writablePaths: ["src"],
+        protectedPaths: ["src/protected"],
+      },
+    });
+    expect(session.ok, JSON.stringify(session)).toBe(true);
+    if (!session.ok) throw new Error("composition failed");
+    const settings = JSON.parse(readFileSync(session.settingsPath, "utf8")) as {
+      permissions: { deny: string[] };
+      sandbox: { filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] } };
+    };
+    // The host permission matcher is composed from the same roots as the OS
+    // rules and is a second boundary, so it is surfaced here rather than left
+    // as the half nothing observes.
+    return { ...settings.sandbox.filesystem, permissionDeny: settings.permissions.deny };
+  };
+
+  it("denies the ambient temporary roots in the spelling the OS boundary actually matches", async () => {
+    const bindingDir = await materializedBindingDir("deny");
+    const workspaceRoot = path.dirname(bindingDir) + "/worktree";
+    const filesystem = await composeFor({ bindingDir, workspaceRoot });
+
+    // The false negative, pinned. Both the configured `$TMPDIR` and `/tmp`
+    // must be denied under their resolved spelling too; a sibling scratch
+    // directory reached by its real path is the write the original probe saw
+    // succeed.
+    for (const ambient of [tmpdir(), "/tmp"]) {
+      expect(filesystem.denyWrite).toContain(path.resolve(ambient));
+      expect(filesystem.denyWrite).toContain(canonicalOf(ambient));
+    }
+
+    // The workspace is itself temp-hosted here — the normal shape in this
+    // system — so every root derived from it must carry the same treatment.
+    // The spelling set is COMPUTED rather than counted: on a platform whose
+    // temporary directory is a real directory the two spellings coincide and
+    // there is exactly one, and a row that pinned the number would go red
+    // against a correct product on the Linux leg of the matrix.
+    const roots = [...new Set([path.resolve(workspaceRoot), canonicalOf(workspaceRoot)])];
+
+    // Bounded from ABOVE as well as below: the granted root under each
+    // spelling and nothing else, or the composed denial either swallows the
+    // delivery's own writes or hands over the whole worktree.
+    expect(new Set(filesystem.allowWrite)).toEqual(new Set(roots.map((root) => path.join(root, "src"))));
+
+    // Protection is not weakened to buy that. The broad workspace denial is
+    // what removes the host default and leaves the granted roots as the only
+    // writable descendants, and the protected descendant is the narrow deny
+    // above them; under one spelling each names a path the boundary never
+    // checks.
+    for (const root of roots) {
+      expect(filesystem.denyWrite).toContain(root);
+      expect(filesystem.denyWrite).toContain(path.join(root, "src", "protected"));
+    }
+
+    // `denyRead` carries ONLY the authority roots — no ambient-temp umbrella
+    // sits above it — so leaving that side uncanonicalized would read-deny the
+    // shared Git and installation authority under a path the OS boundary never
+    // matches, and nothing else here would notice.
+    for (const root of roots) {
+      expect(filesystem.denyRead).toContain(path.join(root, ".git"));
+      expect(filesystem.permissionDeny).toContain(`Read(${path.join(root, ".git")}/**)`);
+      expect(filesystem.permissionDeny).toContain(`Edit(${path.join(root, ".git")}/**)`);
+    }
+
+    // The authority root does NOT exist when a first bind composes its
+    // session — the installation writes that tree afterwards — so this is the
+    // fallback path, and it must canonicalize through the nearest ancestor
+    // that does resolve rather than settle for the written spelling.
+    const authority = path.join(path.dirname(workspaceRoot), "provider-review-authority");
+    expect(existsSync(authority)).toBe(false);
+    for (const root of [...new Set([path.resolve(authority), path.join(canonicalOf(path.dirname(authority)), path.basename(authority))])]) {
+      expect(filesystem.denyRead).toContain(root);
+      expect(filesystem.permissionDeny).toContain(`Read(${root}/**)`);
+    }
+  });
+
+  it("leaves a workspace outside the temporary directory exactly as it was", async () => {
+    // The repository root is a real, unsymlinked path: resolved and canonical
+    // spellings agree. A mechanism that widened every workspace would satisfy
+    // the assertions above just as well as a correct one, so this direction is
+    // what tells them apart.
+    const outside = path.resolve(HERE, "..", "..", "..", "..");
+    expect(canonicalOf(outside)).toBe(path.resolve(outside));
+    const filesystem = await composeFor({ bindingDir: await materializedBindingDir("outside"), workspaceRoot: outside });
+
+    expect(filesystem.allowWrite).toEqual([path.join(outside, "src")]);
+    expect(filesystem.denyWrite).toContain(path.join(outside, "src", "protected"));
+    expect(filesystem.denyWrite.filter((entry) => entry === path.join(outside, "src", "protected"))).toHaveLength(1);
+    expect(filesystem.denyRead).toContain(path.join(outside, ".git"));
   });
 });

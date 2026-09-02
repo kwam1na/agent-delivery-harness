@@ -23,7 +23,7 @@
  *     grant digest, workspace, projection digest, and the binding-written
  *     discovery configuration.
  */
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -441,15 +441,80 @@ export async function composeClaudeCodeSession(
   const authorityDir = path.resolve(input.authorityDir);
   const absolutePermissionPath = (target: string): string => `/${path.resolve(target).replace(/^\/+/, "")}`;
   const unique = (values: readonly string[]): string[] => [...new Set(values)].sort(compareUtf16CodeUnits);
-  const writableRoots = unique(input.grant.writablePaths.map((relative) => path.resolve(workspaceRoot, relative)));
-  const protectedRoots = unique(input.grant.protectedPaths.map((relative) => path.resolve(workspaceRoot, relative)));
-  const deniedAuthorityRoots = unique([commonGitDir, authorityDir]);
+
+  // THE TEMPORARY-DIRECTORY POSTURE: ACCEPT, AND MEAN IT.
+  //
+  // A delivery workspace under the system temporary directory is accepted
+  // rather than refused — it is the normal shape here, not an edge case: the
+  // disposable-repository lane, the shadow-window characterizations, and the
+  // session qualifier all build their workspaces with `mkdtemp` — and
+  // refusing it would take the product's most-exercised configuration away
+  // without making anything safer.
+  //
+  // What acceptance costs is stated rather than inherited. The host's own
+  // workspace-scoping control does NOT confine such a workspace: seatbelt
+  // grants the temporary directory as a writable root independently of the
+  // workspace, which is why an out-of-workspace write under `$TMPDIR` was
+  // first observed to succeed. The ambient-temp denials composed below are
+  // therefore the ONLY thing scoping a temp-hosted delivery — the product's
+  // boundary standing in for a host control that does not reach.
+  //
+  // Which makes their spelling load-bearing. `path.resolve` answers where a
+  // path is written; the OS boundary matches where it RESOLVES, and on macOS
+  // both `$TMPDIR` and `/tmp` are symlinks into `/private`. A denial emitted
+  // only as `/var/folders/…` names a path the kernel never checks while
+  // reading, to any assertion looking for "a tmpdir entry", exactly like a
+  // control that is present and denies nothing. Every composed root is
+  // therefore emitted under both spellings when they differ. Adding the
+  // resolved spelling of a granted root widens nothing — the two spellings
+  // are the same directory — and the same treatment on the deny side keeps
+  // protection from being the half that is left behind.
+  // Canonicalization is applied to the ROOTS, never to the grant-relative
+  // tails: a granted subdirectory need not exist yet, and `realpathSync` on a
+  // path that ends nowhere answers nothing. The differing component is the
+  // root's prefix, so resolving the roots and re-joining the same relative
+  // paths under each spelling covers both readings without depending on what
+  // has been created.
+  //
+  // A composed root need not EXIST yet, and the fallback matters as much as
+  // the happy path: this installation's review-authority tree is written
+  // after the session is composed, so an installation's first bind composes a
+  // denial for a directory that is not there. `realpathSync` answers only
+  // where a path ends, so falling back to the written spelling would leave
+  // the root holding the binding capability deny-listed under the one
+  // spelling the boundary never matches — precisely the half-canonicalized
+  // protection this whole change exists to remove. Canonicalize the nearest
+  // ancestor that does resolve and re-join the tail instead: the symlink that
+  // matters is always in the prefix.
+  const spellings = (target: string): readonly string[] => {
+    const resolved = path.resolve(target);
+    let ancestor = resolved;
+    const tail: string[] = [];
+    for (;;) {
+      try {
+        const canonical = path.join(realpathSync(ancestor), ...tail);
+        return canonical === resolved ? [resolved] : [resolved, canonical];
+      } catch {
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) return [resolved];
+        tail.unshift(path.basename(ancestor));
+        ancestor = parent;
+      }
+    }
+  };
+  const workspaceRoots = spellings(workspaceRoot);
+  const underWorkspace = (relatives: readonly string[]): string[] =>
+    unique(workspaceRoots.flatMap((root) => relatives.map((relative) => path.resolve(root, relative))));
+
+  const writableRoots = underWorkspace(input.grant.writablePaths);
+  const protectedRoots = underWorkspace(input.grant.protectedPaths);
+  const deniedAuthorityRoots = unique([commonGitDir, authorityDir].flatMap(spellings));
   const deniedWriteRoots = unique([
-    workspaceRoot,
+    ...workspaceRoots,
     ...protectedRoots,
     ...deniedAuthorityRoots,
-    path.resolve(tmpdir()),
-    path.resolve("/tmp"),
+    ...spellings(tmpdir()),
+    ...spellings("/tmp"),
   ]);
   const permissionDenials = deniedAuthorityRoots.flatMap((target) => [
     `Read(${absolutePermissionPath(target)}/**)`,
