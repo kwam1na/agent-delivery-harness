@@ -29,11 +29,10 @@
   "projection": {
     "root": ".managed-projection",
     "owner": "the product's Claude Code binding (materialization, digest receipt, per-run consumption marker, teardown)",
-    "managedDeliveryWorktreeRoot": ".worktrees/managed",
     "scopeRule": "the projection root may exist only inside a managed delivery worktree; the repository root and every non-managed worktree must not carry one",
     "managedDeliveryWorktreePathShape": "the operator creates each managed delivery worktree at .worktrees/managed/<deliveryId> — a sibling path such as .worktrees/managed-<deliveryId> is not a managed delivery worktree and a projection there is a finding",
     "mechanism": "model-external and byte-neutral — the binding writes its session settings and the worktree-scoped excludes file into its own directory outside the working tree, points the managed worktree's worktree-scoped git configuration at them, and enables worktree configuration once in the shared repository config; no tracked byte of the repository is moved or edited, and the configuration takes effect in the managed worktree alone",
-    "whatIsNotSuppressed": "nothing needs suppressing here: this repository carries no ambient agent discovery layout for the projection to compete with. The guard pins that emptiness rather than assuming it, so an ambient root introduced before the cutover is drift rather than a quiet second source of agent instructions."
+    "whatIsNotSuppressed": "nothing needs suppressing here: this repository carries no ambient agent discovery layout for the projection to compete with, so an ambient root introduced before the cutover is drift rather than a quiet second source of agent instructions."
   },
   "provingHost": "claude-code",
   "hosts": [
@@ -66,10 +65,6 @@
     "writtenInto": ".agents/policy/shadow-milestone-gate-record.json",
     "whatTheGuardChecks": "the record's declared source and its shape — the guard reads the gate-record artifact and cannot itself verify that the bytes came from the binding",
     "whatProvenanceRestsOn": "two things outside the guard: the binding-side writer that emits the entry, and the protected-path property that keeps the artifact out of every session's reach. The writer ships in the product at the pinned commit, so an entry now has an admissible producer; the remaining rest-point is that .agents is an additionally protected path in every checkpoint grant of .agents/policy/repository-policy.json, so no execution grant may write the gate record and the only thing that can author an entry is the binding."
-  },
-  "ambientDiscoveryLayout": {
-    "owner": "scripts/shadow-discovery-guard.ts",
-    "note": "the guard owns the root set and its pinned digest; they are not duplicated here so there is one place to change and one place to review"
   },
   "characterization": {
     "method": "a disposable shadow install of the composed product followed by one projection materialization into a managed delivery worktree, one interception of a run naming a receipted projection entry, and one gate-record emission — all driven through the product's own installer, Claude Code binding, and model-external interceptor. The repository under characterization was a disposable clone in a temp directory, so no byte and no git configuration of the real repository was touched, and no host configuration outside the disposable directories was written.",

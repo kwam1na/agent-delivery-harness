@@ -6,9 +6,8 @@ rather than merely written down.
 
 **This file is a document, not a discovery root.** This repository deliberately
 carries no ambient agent-discovery layout — no `.claude`, no `.codex`, no
-vendored skills directory — and a guard pins the digest of that emptiness while
-the shadow window holds, so creating one is drift rather than configuration. Read
-this page; do not turn it into a second source of agent instructions.
+vendored skills directory — so creating one is drift rather than configuration.
+Read this page; do not turn it into a second source of agent instructions.
 
 ## The shape of the repository
 
@@ -61,11 +60,11 @@ Every rule below is enforced by a sensor and falsified by a test.
 Mind the difference between the two. `npm run check` is `typecheck`, then the
 import-boundary sensor, then the CLI-inventory sensor, then the whole vitest
 suite — so it runs the first two sensor *scripts* below and every row's *test*.
-The policy-projection, shadow-window, and standalone-install scripts are not in
+The policy-projection and standalone-install scripts are not in
 `check`; their tests are, but a test proves the rules are falsifiable while the
-script is what reports against this working tree. Run those three yourself
-(`npm run sensor:policy`, `sensor:shadow`, `sensor:standalone`) before pushing a
-change that touches policy, the shadow window, or packaging.
+script is what reports against this working tree. Run those two yourself
+(`npm run sensor:policy`, `sensor:standalone`) before pushing a
+change that touches policy or packaging.
 
 | Sensor | What it holds |
 |---|---|
@@ -73,7 +72,6 @@ change that touches policy, the shadow window, or packaging.
 | `scripts/check-cli-inventory.ts` | Every module under `packages/cli/src/commands/` is registered, and every registration has a module. Empty registries and missing directories are findings, not passes. |
 | `scripts/check-release.ts` | One version across the root manifest and every workspace package, the kernel's version fingerprint in lockstep, license coherence checked against the real `npm pack` file list, and the publishability split. |
 | `scripts/policy-projection-check.ts` | This repository's own policy projection, its typed leaf adapters, the compiled snapshot, and a digest-pinned pre-cutover oracle, against the routing the repository actually performs. |
-| `scripts/shadow-discovery-guard.ts` | The five shadow-window positions: shadow posture, a pinned product commit that resolves, the empty ambient-discovery layout, projection scope, and binding-sourced consumption records only. |
 | `docs/docs-examples.test.ts` | Executes the getting-started guide verbatim. Its `sh` blocks are one shell session; its `ts` blocks become files. Flag tokens must match the CLI's usage text in **both** directions. |
 | `docs/docs-references.test.ts` | Every relative link in the README and the top-level guides resolves, and every sentence stating one of the counts it registers — in every document it scans — carries the value the tree computes. A computable number it has no pattern for is unguarded; adding a pattern is how you close that. |
 
