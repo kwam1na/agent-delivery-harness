@@ -96,6 +96,14 @@ export interface RunStore {
   readonly runsDir: string;
   allocate(): Promise<RunAllocateResult>;
   append(runId: string, event: RunEventInput): Promise<RunAppendResult>;
+  /**
+   * Records one bounded line for an append a CALLER refused before it reached
+   * `append` — today, exactly `emit`'s refusal of `command.completed`, which is
+   * writer-policy rather than a contract violation the validator could catch.
+   * The line is written by the same bounded writer a refused `append` uses, so
+   * there is one note format and one place that decides what a note may carry.
+   */
+  noteRefusal(runId: string, event: RunEventInput, rejection: RunStoreRejection): Promise<void>;
   read(runId: string): Promise<RunReadResult>;
   readNotes(runId: string): Promise<readonly unknown[]>;
   list(): Promise<readonly string[]>;
@@ -368,6 +376,10 @@ export function createRunStore(commonDir: string): RunStore {
       const first = outcome.rejected[0];
       if (first !== undefined) await note(runId, event, first, pattern);
       return { ok: false, rejections: outcome.rejected };
+    },
+
+    async noteRefusal(runId, event, rejection) {
+      await note(runId, event, rejection);
     },
 
     async read(runId) {

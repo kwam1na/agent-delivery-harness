@@ -34,9 +34,11 @@
         "verify",
         "check",
         "managed",
-        "maintain"
+        "maintain",
+        "emit",
+        "runs"
       ],
-      "cliCommandsNote": "The seven-command evidence loop was the recorded baseline surface; the walking skeleton added `managed` — the managed-delivery facade's host-facing checkpoint and status surface — and the facade unit added `maintain`, the installation-scoped maintenance lane whose every operation consumes a maintenance-lane sensitive assertion. Delivery-run ownership still lives in the checkpoint journal and facade modules, not in the evidence loop. The absent-command guard below still holds for top-level ordinary execution: none of those operations exists as a top-level command outside the facade surface.",
+      "cliCommandsNote": "The seven-command evidence loop was the recorded baseline surface; the walking skeleton added `managed` — the managed-delivery facade's host-facing checkpoint and status surface — and the facade unit added `maintain`, the installation-scoped maintenance lane whose every operation consumes a maintenance-lane sensitive assertion, and the run surface added the config-free pair `emit` and `runs`, which write and read the run-event journal and are dispatched before any config load. Delivery-run ownership still lives in the checkpoint journal and facade modules, not in the evidence loop: the run journal `emit` and `runs` reach is observability that nothing authoritative reads. The absent-command guard below still holds for top-level ordinary execution: none of those operations exists as a top-level command outside the facade surface.",
       "absentDeliveryRunCommands": [
         "start",
         "resume",
@@ -195,7 +197,7 @@
     },
     {
       "id": "harness-cli-evidence-loop-only",
-      "statement": "The CLI surface is exactly the evidence loop — prepare, review-context, submit-evidence, gate, record, verify, plus the check preflight. It registers no scoped work, persists no delivery checkpoints, exposes no resume/status/approval operation, and actions no finish line.",
+      "statement": "The CLI surface is exactly the evidence loop — prepare, review-context, submit-evidence, gate, record, verify, plus the check preflight — alongside the facade surfaces `managed` and `maintain` and the config-free run-surface pair `emit` and `runs`. It registers no scoped work, persists no delivery checkpoints, exposes no resume/status/approval operation, and actions no finish line; `emit` and `runs` write and read the run-event journal only, which no admission, gate, or record decision consults.",
       "classification": "changed-by-this-plan",
       "verification": {
         "kind": "executable",

@@ -815,6 +815,7 @@ export {
   RUN_JOURNAL_STATUSES,
   RUN_JOURNAL_VIOLATIONS,
   evaluateRunJournal,
+  runJournalCarries,
   type RunJournalEvaluation,
   type RunJournalRequiredEntry,
   type RunJournalStatus,

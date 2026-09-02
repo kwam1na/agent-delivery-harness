@@ -1011,7 +1011,7 @@ async function workspaceHas(runtime: ActionRuntime, repoRoot: string, relativePa
  *
  * The Action carries its own loader rather than importing the CLI's: the Action
  * is a wrapper over the *kernel*, and a dependency on the operator CLI would put
- * seven commands and an interactive prompt behind a read-only check. The
+ * eleven commands and an interactive prompt behind a read-only check. The
  * validation itself is the kernel's single implementation; only the import and
  * the blocker's source id are local, so the two loaders cannot disagree about
  * what a valid config is.

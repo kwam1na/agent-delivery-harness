@@ -23,9 +23,16 @@ export const prepareCommand: CommandDescriptor = {
       { config: context.config, candidate: capture.candidate },
       wiring.storageOptions,
     );
+    // The labelled line exists so a reader — an operator or a review round
+    // about to bind itself to this candidate — has one unambiguous token to
+    // copy. It is the same value the record carries as `treeSha` and the same
+    // value `review-context` reports as `candidate tree`.
     return {
       kind: "ok",
-      summary: `prepared ${context.config.gateId}: tree ${capture.candidate.treeSha} (${capture.candidate.mode}); receipt ${published.path}`,
+      summary: [
+        `prepared ${context.config.gateId}: tree ${capture.candidate.treeSha} (${capture.candidate.mode}); receipt ${published.path}`,
+        `  treeSha ${capture.candidate.treeSha}`,
+      ].join("\n"),
     };
   },
 };

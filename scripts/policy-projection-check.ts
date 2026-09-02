@@ -46,7 +46,7 @@ import harnessConfig from "../harness.config.ts";
 export const POLICY_PROJECTION_DIR = ".agents/policy";
 
 export const PRE_CUTOVER_ORACLE_DIGEST =
-  "c754b5debe0689e35ff0e7a24000c379ab81ed4341331d8ba635381139e81289";
+  "649568cc3ab015441a1f2951c9c9f04f3a75fe28add68ab42bbd68d7cd8be7d5";
 
 const DOCUMENT_FILE = "repository-policy.json";
 const ADAPTERS_FILE = "adapters.json";

@@ -1,9 +1,9 @@
 /**
  * The one boundary every CLI command runs behind.
  *
- * WHY ONE BOUNDARY. Seven commands, one place that loads config, wires the repo,
- * classifies exit codes, and renders failures. A command never touches
- * `process`, never prints a stack, never chooses an exit code of its own: it
+ * WHY ONE BOUNDARY. Nine config-loading commands, one place that loads config,
+ * wires the repo, classifies exit codes, and renders failures. A command never
+ * touches `process`, never prints a stack, never chooses an exit code of its own: it
  * returns a typed result and the boundary maps it. That is what keeps the three
  * exit semantics — policy block, usage error, interruption — identical across
  * commands, and what keeps every operator-facing byte flowing through the one
@@ -60,6 +60,7 @@ import {
   type ProviderRailInvocationResult,
   type ProviderRailSession,
 } from "./provider-rails.ts";
+import { buildRunEvent, resolveRunSurface } from "./run-surface.ts";
 
 // ── Exit codes ───────────────────────────────────────────────────────────────
 
@@ -142,6 +143,46 @@ export interface CommandDescriptor {
   run(context: CommandContext): Promise<CommandResult>;
 }
 
+// ── The config-free command class ────────────────────────────────────────────
+
+/**
+ * What a config-free command may reach. Deliberately much less than
+ * {@link CommandContext}: no config, no wiring, no provider rail, no artifacts
+ * port. A run event belongs to the repository, not to a configured gate, and
+ * `emit` has to work in a repository that has no `harness.config.ts` at all.
+ *
+ * The ONE thing a config-free command may do with `harness.config.ts` is ask
+ * whether the path exists (`lstat`, no follow) at a worktree root. It never
+ * imports it, loads it, or parses it — which is why the config loader is not
+ * reachable from here even as a seam.
+ */
+export interface ConfigFreeCommandContext {
+  readonly rootDir: string;
+  readonly env: EnvSnapshot;
+  /** Positional and flag arguments after the command name. */
+  readonly args: readonly string[];
+  /** The payload channel: everything on stdin, when a command reads one. */
+  readStdin(): Promise<string>;
+  /** Emits one line of operator-facing output to stdout. */
+  readonly write: (text: string) => void;
+}
+
+export interface ConfigFreeCommandDescriptor {
+  readonly name: string;
+  readonly sourceId: string;
+  readonly summary: string;
+  /** The discriminator the boundary dispatches on, before any config load. */
+  readonly configFree: true;
+  run(context: ConfigFreeCommandContext): Promise<CommandResult>;
+}
+
+/** Either command class; the registry holds both. */
+export type AnyCommandDescriptor = CommandDescriptor | ConfigFreeCommandDescriptor;
+
+export function isConfigFreeCommand(descriptor: AnyCommandDescriptor): descriptor is ConfigFreeCommandDescriptor {
+  return (descriptor as ConfigFreeCommandDescriptor).configFree === true;
+}
+
 // ── Runtime the boundary is driven with ──────────────────────────────────────
 
 export interface CliRuntime {
@@ -161,6 +202,8 @@ export interface CliRuntime {
   readonly artifacts?: ArtifactsPort;
   readonly liveResults?: readonly LiveProviderResult[];
   readonly signal?: AbortSignal;
+  /** Reads the whole of stdin, for the one command whose payload arrives there. */
+  readonly readStdin?: () => Promise<string>;
   /** Test/embedding seam. The ordinary runtime opens the provider's configured command. */
   readonly openProviderRail?: (input: {
     readonly providerId: string;
@@ -252,7 +295,7 @@ export async function wireRepo(rootDir: string, config: HarnessConfig): Promise<
 
 // ── The boundary ─────────────────────────────────────────────────────────────
 
-const USAGE = (commands: readonly CommandDescriptor[]): string =>
+const USAGE = (commands: readonly AnyCommandDescriptor[]): string =>
   [
     "Usage: delivery-harness <command> [options]",
     "",
@@ -261,13 +304,83 @@ const USAGE = (commands: readonly CommandDescriptor[]): string =>
   ].join("\n");
 
 /**
+ * THE WRAPPED COMMANDS, NAMED ONE BY ONE.
+ *
+ * Exactly the candidate-facing loop plus its preflight. `managed` and
+ * `maintain` are deliberately absent: they are host-facing and
+ * installation-scoped, and a completion event for them would describe
+ * something that is not a step of the delivery run the journal is about.
+ * `emit` and `runs` are absent because a viewer that recorded its own
+ * invocations would fill the journal it renders.
+ *
+ * An allowlist rather than a denylist: a command added to the registry is
+ * unwrapped until someone decides it belongs here, which is the direction that
+ * fails safe for a store nothing authoritative may read.
+ */
+export const COMPLETION_WRAPPED_COMMANDS: readonly string[] = [
+  "check",
+  "prepare",
+  "review-context",
+  "submit-evidence",
+  "gate",
+  "record",
+  "verify",
+];
+
+/** The four exit codes, as the closed outcome enum `command.completed` carries. */
+function outcomeOfExit(code: number): "ok" | "policy" | "usage" | "interrupted" {
+  if (code === EXIT_OK) return "ok";
+  if (code === EXIT_USAGE) return "usage";
+  if (code === EXIT_INTERRUPTED) return "interrupted";
+  return "policy";
+}
+
+/**
+ * Appends this invocation's `command.completed`, when — and only when — a run
+ * is current for the invoking worktree.
+ *
+ * BEST-EFFORT, TOTAL, AND SILENT. Every failure is swallowed: an unresolvable
+ * repository, a refused pointer, a store that will not accept the append. The
+ * caller has already decided the exit code, and a run journal that could
+ * change a gate's verdict would be evidence. It is not evidence, so it is not
+ * allowed to matter. A refused append still lands one bounded line in the
+ * run's note, which the store writes.
+ */
+async function recordCommandCompletion(input: {
+  readonly cwd: string;
+  readonly command: string;
+  readonly exitCode: number;
+  readonly durationMs: number;
+}): Promise<void> {
+  try {
+    const resolved = await resolveRunSurface(input.cwd);
+    if (!resolved.ok) return;
+    const { store, commonDir, worktreeKey } = resolved.surface;
+    const current = await store.current(worktreeKey);
+    if (!current.ok || current.runId === undefined) return;
+    await store.append(
+      current.runId,
+      buildRunEvent({
+        runId: current.runId,
+        commonDir,
+        kind: "command.completed",
+        role: "cli",
+        payload: { command: input.command, outcome: outcomeOfExit(input.exitCode), durationMs: input.durationMs },
+      }),
+    );
+  } catch {
+    // Deliberately silent. See the paragraph above.
+  }
+}
+
+/**
  * Runs one CLI invocation to an exit code. Total: it maps every command result
  * and every throw to one of the four codes, and renders every failure through
  * the neutralizing blocker renderer. Never throws.
  */
 export async function runCliBoundary(
   argv: readonly string[],
-  commands: readonly CommandDescriptor[],
+  commands: readonly AnyCommandDescriptor[],
   runtime: CliRuntime,
 ): Promise<number> {
   const [commandName, ...args] = argv;
@@ -283,6 +396,75 @@ export async function runCliBoundary(
     return EXIT_USAGE;
   }
 
+  // CONFIG-FREE COMMANDS ARE DISPATCHED FIRST, before any config load. That
+  // ordering is the whole point of the class: `emit` runs in a repository with
+  // no `harness.config.ts`, and no other command's `config_unloadable` timing
+  // moves because of it.
+  if (isConfigFreeCommand(descriptor)) {
+    return runConfigFreeCommand(descriptor, args, runtime);
+  }
+
+  const startedAt = Date.now();
+  const code = await runConfiguredCommand(descriptor, args, runtime);
+  if (COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)) {
+    await recordCommandCompletion({
+      cwd: runtime.cwd,
+      command: descriptor.name,
+      exitCode: code,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+  return code;
+}
+
+/** The config-free path: a typed result mapped to an exit code, and nothing else. */
+async function runConfigFreeCommand(
+  descriptor: ConfigFreeCommandDescriptor,
+  args: readonly string[],
+  runtime: CliRuntime,
+): Promise<number> {
+  try {
+    const result = await descriptor.run({
+      rootDir: runtime.cwd,
+      env: runtime.env,
+      args,
+      readStdin: runtime.readStdin ?? (async () => ""),
+      write: (text) => runtime.stdout(`${text}\n`),
+    });
+    if (result.kind === "ok") {
+      if (result.summary !== undefined && result.summary !== "") runtime.stdout(`${result.summary}\n`);
+      return EXIT_OK;
+    }
+    if (result.kind === "usage") {
+      runtime.stderr(`${result.message}\n`);
+      return EXIT_USAGE;
+    }
+    runtime.stderr(`${renderBlockers(result.blockers)}\n`);
+    return EXIT_POLICY;
+  } catch (error) {
+    if (error instanceof CliInterruption) {
+      runtime.stderr(`${error.message}\n`);
+      return EXIT_INTERRUPTED;
+    }
+    if (error instanceof BlockedError) {
+      runtime.stderr(`${renderBlockers(error.blockers)}\n`);
+      return EXIT_POLICY;
+    }
+    const blocker = createInternalErrorBlocker({
+      source: { kind: "command", id: descriptor.sourceId },
+      error,
+      reproduce: ["delivery-harness", descriptor.name],
+    });
+    runtime.stderr(`${renderBlockers([blocker])}\n`);
+    return EXIT_POLICY;
+  }
+}
+
+async function runConfiguredCommand(
+  descriptor: CommandDescriptor,
+  args: readonly string[],
+  runtime: CliRuntime,
+): Promise<number> {
   const loadConfig = runtime.loadConfig ?? importHarnessConfig;
   const artifacts = runtime.artifacts ?? createArtifactsPort();
 
