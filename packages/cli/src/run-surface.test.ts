@@ -8,7 +8,7 @@
  * paths, is one coherent thing an operator can read.
  */
 import { execFile } from "node:child_process";
-import { appendFile, lstat, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -434,6 +434,15 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(listed.out).toContain(second);
     expect(listed.out).toContain("incomplete");
     expect(listed.out).toMatch(/\bopen\b/);
+    // `list` prints a completeness verdict of its own, so it carries the same
+    // three labels `show` does — at this call site, not only in the constant.
+    expect(listed.out).toContain("self-attested");
+    expect(listed.out).toContain("observability, not evidence");
+    expect(listed.out).toContain("unbound to a record");
+    // The marker is pinned in the direction that says something: the run this
+    // worktree points at IS marked. A marker never printed passes only the
+    // negative assertion in the two-worktree row.
+    expect(listed.out).toMatch(new RegExp(`${second}.*\\bcurrent\\b`));
     const { runsDir } = await storeOf(dir);
     const total =
       (await stat(path.join(runsDir, `${first}.jsonl`))).size + (await stat(path.join(runsDir, `${second}.jsonl`))).size;
@@ -636,6 +645,94 @@ describe("emit, the boundary wrap, and runs", () => {
 
     await cli(dir, ["check"]);
     expect((await journalOf(dir, runId)).map((event) => event.payload["command"])).toContain("check");
+  });
+
+  it("reports a journal it cannot read rather than dropping it from the list", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const { runsDir } = await storeOf(dir);
+    // Group-readable: the store's owner-only discipline refuses it. A row that
+    // silently skipped an unreadable journal would hide exactly the run whose
+    // storage is in trouble.
+    await chmod(path.join(runsDir, `${runId}.jsonl`), 0o644);
+
+    const listed = await cli(dir, ["runs", "list"]);
+    expect(listed.code, listed.err).toBe(EXIT_OK);
+    expect(listed.out).toContain(runId);
+    expect(listed.out).toContain("unreadable");
+    await chmod(path.join(runsDir, `${runId}.jsonl`), 0o600);
+  });
+
+  it("lets exactly one of two concurrent run.started take the pointer", async () => {
+    const dir = await initRepo();
+    const payload = JSON.stringify({ host: "vitest", workflow: { releaseId: "test-release", profile: "linear" } });
+    // The deny side of the stale-pointer re-read. A pointer that has become
+    // live between the read and the exclusive create is a genuine race and
+    // must still be refused — a re-read that displaced anything, or a refused
+    // pointer write reported as success, would let both of these exit 0.
+    const codes = (
+      await Promise.all([
+        cli(dir, ["emit", "run.started", "--json", payload], { loadConfig: undefined }),
+        cli(dir, ["emit", "run.started", "--json", payload], { loadConfig: undefined }),
+      ])
+    ).map((invocation) => invocation.code);
+    expect(codes.filter((code) => code === EXIT_OK)).toHaveLength(1);
+
+    const { commonDir, worktreeKey } = await storeOf(dir);
+    const current = await createRunStore(commonDir).current(worktreeKey);
+    expect(current.ok && current.runId !== undefined).toBe(true);
+  });
+
+  it("counts a closed round as present only when a round of that number was opened", async () => {
+    const dir = await initRepo();
+    const orphan = await startRun(dir);
+    const closed = {
+      round: 1,
+      candidateTreeSha: TREE_SHA,
+      outcome: "aligned",
+      findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+      cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+    };
+    expect((await emit(dir, ["review.round.closed"], closed)).code).toBe(EXIT_OK);
+
+    // `missing` pairs rounds; `present` must answer under the same rule, or the
+    // readout names one entry on both rows and a reader cannot tell what the
+    // run still owes.
+    const unpaired = await cli(dir, ["runs", "show", orphan]);
+    const unpairedPresent = unpaired.out.split("\n").find((line) => line.includes("present:")) ?? "";
+    const unpairedMissing = unpaired.out.split("\n").find((line) => line.includes("missing:")) ?? "";
+    expect(unpairedPresent).not.toContain("review.round.closed");
+    expect(unpairedMissing).toContain("review.round.closed");
+
+    await emit(dir, ["run.ended"], { result: "partial", cost: { unit: "usd", total: 0, reportedBy: "vitest" } });
+    const paired = await startRun(dir);
+    expect(
+      (await emit(dir, ["review.round.opened"], { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code,
+    ).toBe(EXIT_OK);
+    expect((await emit(dir, ["review.round.closed"], closed)).code).toBe(EXIT_OK);
+
+    const shown = await cli(dir, ["runs", "show", paired]);
+    const present = shown.out.split("\n").find((line) => line.includes("present:")) ?? "";
+    const missing = shown.out.split("\n").find((line) => line.includes("missing:")) ?? "";
+    expect(present).toContain("review.round.closed");
+    expect(missing).not.toContain("review.round.closed");
+  });
+
+  it("says so when it displaces a pointer that names no readable run", async () => {
+    const dir = await initRepo();
+    const first = await startRun(dir);
+    const { runsDir } = await storeOf(dir);
+    await unlink(path.join(runsDir, `${first}.jsonl`));
+
+    const started = await emit(dir, ["run.started"], {
+      host: "vitest",
+      workflow: { releaseId: "test-release", profile: "linear" },
+    });
+    expect(started.code, started.err).toBe(EXIT_OK);
+    // There is no id to record — the pointer named nothing readable — so the
+    // summary is the only place this is reported, and a silent success would
+    // hide a store that needs attention.
+    expect(started.out).toContain("stale pointer");
   });
 
   // ── Neutralization ─────────────────────────────────────────────────────────

@@ -300,6 +300,7 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
   }
 
   let pointed = await store.setCurrent(surface.worktreeKey, runId, { force });
+  let displacedStale = false;
   // A STALE POINTER IS NOT A CONFLICT. `current` answers `undefined` both when
   // no pointer exists and when one exists naming a journal this store can no
   // longer read — a pruned store, a restored `.git`. In the second case the
@@ -312,6 +313,7 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
     const recheck = await store.current(surface.worktreeKey);
     if (recheck.ok && recheck.runId === undefined) {
       pointed = await store.setCurrent(surface.worktreeKey, runId, { force: true });
+      displacedStale = pointed.ok;
     }
   }
   if (!pointed.ok) {
@@ -331,8 +333,19 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
     };
   }
 
+  // A stale displacement has no id to record — the pointer named nothing this
+  // store could read, which is why it was displaceable at all — so the summary
+  // is the only place the operator learns it happened. It is also the only
+  // signal that the store itself needs attention: a pointer reaches this state
+  // through a pruned journal, a truncated write, or a permissions fault.
   return {
     kind: "ok",
-    summary: `started run ${runId}${displaced === undefined ? "" : ` (displaced ${displaced})`}`,
+    summary: `started run ${runId}${
+      displaced === undefined
+        ? displacedStale
+          ? " (displaced a stale pointer naming no readable run; the run store may need attention)"
+          : ""
+        : ` (displaced ${displaced})`
+    }`,
   };
 }

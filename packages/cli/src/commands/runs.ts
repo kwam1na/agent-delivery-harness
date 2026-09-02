@@ -184,13 +184,36 @@ function roundRows(events: readonly RunEvent[]): readonly string[] {
   });
 }
 
-/** Whether the journal actually carries one required entry, by that entry's own name. */
+/**
+ * Whether the journal actually carries one required entry, by that entry's own
+ * name — under the same rule `missing` is computed with, so the two rows can
+ * never disagree about the same entry.
+ *
+ * Two entries are not plain kind lookups. A completion counts only when the
+ * CLI wrote it, so an executor's claim to have run a command is not read as
+ * the product's. And a closed round counts only when a round with the same
+ * number was opened first, which is how the evaluator pairs them: an unpaired
+ * `review.round.closed` satisfies nothing, and reporting it as present beside
+ * a `missing` that still names it would tell a reader both things at once.
+ */
 function journalHas(events: readonly RunEvent[], entry: string): boolean {
   const completion = entry.startsWith("command.completed:") ? entry.slice("command.completed:".length) : undefined;
   if (completion !== undefined) {
     return events.some(
       (event) =>
         event.kind === "command.completed" && event.actor.role === "cli" && payloadOf(event)["command"] === completion,
+    );
+  }
+  if (entry === "review.round.closed") {
+    return events.some(
+      (closed, index) =>
+        closed.kind === "review.round.closed" &&
+        events
+          .slice(0, index)
+          .some(
+            (opened) =>
+              opened.kind === "review.round.opened" && payloadOf(opened)["round"] === payloadOf(closed)["round"],
+          ),
     );
   }
   return events.some((event) => event.kind === entry);
