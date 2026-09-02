@@ -367,8 +367,8 @@ describe("verifyDeliveryRecord", () => {
     // The membership is unchanged by the Claude skill-exposure exception below:
     // that exception admits ONE tree-verifiable shape inside `.claude/skills/`
     // and does not remove `.claude` from either list. The in-run grant still
-    // protects the whole prefix, because inside a run the projection install
-    // writes the exposure and the candidate never should.
+    // protects the whole prefix, because inside a run the `agent-skills`
+    // generation install writes the exposure and the candidate never should.
     expect([...DELIVERY_OWNED_TREE_PREFIXES].sort()).toEqual(
       PORTABLE_STAGE_GRANT.protectedPaths.filter((path) => path !== ".git").slice().sort(),
     );
@@ -383,7 +383,7 @@ describe("verifyDeliveryRecord", () => {
     // under `.claude/skills/` is admissible ONLY when it is a symlink (git mode
     // 120000) whose target, resolved relative to the entry's own directory,
     // lands inside `.agent-skills/current/skills/`. That is the exact shape the
-    // product's own projection install writes, and it is decidable from the
+    // `agent-skills` generation install writes, and it is decidable from the
     // committed tree alone — mode and blob, no filesystem read.
 
     it("admits a symlink resolving into the receipted generation's skills root", () => {

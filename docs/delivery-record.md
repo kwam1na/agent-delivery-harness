@@ -150,8 +150,7 @@ a regular file under `.claude/skills/`, a symlink there resolving anywhere else
 alias of either anchor, the `.claude/skills` prefix committed as a single
 symlink, and every entry under `.claude` outside `skills/` — `.claude/settings.json`
 and `.claude/hooks/*` among them — all still raise
-`record_protected_authority_path`. `.managed-projection/` admits nothing at all.
-A verifier that can only enumerate path names, never modes and targets, judges
+`record_protected_authority_path`. A verifier that can only enumerate path names, never modes and targets, judges
 on the path alone and so admits nothing either: the exception is reachable only
 from the tree evidence that decides it.
 
@@ -161,6 +160,11 @@ any further committed symlink, does not require the target to exist in the
 tree, and does not re-check the receipt inside the generation. It cannot:
 `.agent-skills/current` is itself a tracked symlink pinning the active,
 digest-named generation, so resolving through it would reject the very install
-this admits. The generation's contents remain governed by the `.agent-skills`
-lifecycle and its per-generation receipt — a separate rule this one neither
-owns nor weakens.
+this admits.
+
+What is admitted is therefore a pointer, and the bytes it points at are reviewed
+the way every other tracked byte is — in the diff. A committed exposure is read
+by a host on checkout with no install step in between, so the generation's own
+receipt is not what stops a candidate writing skill text there; the change lands
+under `.agent-skills/`, in the pull request, where a reviewer sees it. That is
+the trade this exception makes.

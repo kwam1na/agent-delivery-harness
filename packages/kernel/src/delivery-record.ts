@@ -100,7 +100,7 @@ export const DELIVERY_OWNED_TREE_PREFIXES: readonly string[] = Object.freeze([".
  * text of its own: every byte a host would read lives in the generation the
  * candidate already tracks, under a prefix this rule does not own. Committing it
  * is therefore not the thing the rule forbids — planting authority text under
- * the host's directory — and an adopter that installs the projection should not
+ * the host's directory — and an adopter that installs the generation should not
  * have to track the exposure differently from the way the product does.
  *
  * The exception is deliberately the narrowest shape that admits that install and
@@ -523,8 +523,8 @@ function resolveTreeSymlink(fromPath: string, target: string): string | undefine
  * True when the entry is the one admitted Claude skill exposure: a symlink
  * anywhere under `.claude/skills/` whose resolved target lies strictly inside
  * `.agent-skills/current/skills/`. Both anchors are matched literally, never
- * case-folded: the exception is granted to the exact shape the projection
- * install writes, and a case alias is not that shape.
+ * case-folded: the exception is granted to the exact shape the `agent-skills`
+ * generation install writes, and a case alias is not that shape.
  *
  * WHAT THIS DECIDES, AND WHAT IT DOES NOT. It decides the committed shape of
  * the entry: its mode, and where its own target resolves as a path. It does
@@ -532,9 +532,14 @@ function resolveTreeSymlink(fromPath: string, target: string): string | undefine
  * the target to exist in the tree, and does not re-check the receipt inside the
  * generation. It cannot: `.agent-skills/current` is itself a tracked symlink
  * pinning the active, digest-named generation, so following the path would
- * reject the very install this admits. The generation's own contents stay
- * governed by the `.agent-skills` lifecycle and its per-generation receipt,
- * which this rule does not own and this ticket does not change.
+ * reject the very install this admits.
+ *
+ * So what this admits is a POINTER, and the bytes it points at are reviewed the
+ * way every other tracked byte is — in the diff. A committed exposure is read
+ * by a host on checkout, with no install step in between, so the generation's
+ * own receipt is not what stops a candidate writing skill text there: the
+ * change lands under `.agent-skills/`, in the pull request, where a reviewer
+ * sees it. That is the trade this exception makes, deliberately.
  */
 function isAdmittedClaudeSkillExposure(entry: string | CandidateTreeEntry): boolean {
   if (typeof entry === "string") return false;

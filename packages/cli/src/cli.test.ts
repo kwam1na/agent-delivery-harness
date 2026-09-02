@@ -1114,7 +1114,7 @@ describe("verify over a candidate carrying a Claude skill exposure", () => {
 
   it("verifies a tree whose .claude/skills entries are symlinks into the receipted generation", { timeout: 60000 }, async () => {
     const dir = await initRepo();
-    // The shape the product's own projection install writes: the generation's
+    // The shape the `agent-skills` generation install writes: the generation's
     // skill directory tracked under `.agent-skills/current/skills/`, and a
     // relative symlink under `.claude/skills/` exposing it to the host.
     await mkdir(path.join(dir, ".agent-skills/current/skills/execute-work"), { recursive: true });
@@ -1122,7 +1122,7 @@ describe("verify over a candidate carrying a Claude skill exposure", () => {
     await mkdir(path.join(dir, ".claude/skills"), { recursive: true });
     await symlink("../../.agent-skills/current/skills/execute-work", path.join(dir, ".claude/skills/execute-work"));
     await git(dir, "add", "-A", ".agent-skills", ".claude");
-    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "install the projection exposure");
+    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "install the agent-skills exposure");
     // The exposure really is committed as a symlink; without that this test
     // would be proving nothing about the mode the exception turns on.
     expect(await git(dir, "ls-tree", "HEAD", ".claude/skills/execute-work")).toMatch(/^120000 blob /);
