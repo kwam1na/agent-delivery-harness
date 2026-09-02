@@ -41,9 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history: the shadow guard's suite reads the pinned product
-          # commit's TREE, and under the default depth-1 checkout that commit is
-          # simply absent — the row would excuse itself on every run.
+          # Full history: several suites resolve commits and merge bases
+          # (candidate identity, conformance, action verification) against
+          # ancestor history, and under the default depth-1 checkout those
+          # objects are simply absent.
           fetch-depth: 0
 
       - uses: actions/setup-node@v4

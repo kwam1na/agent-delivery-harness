@@ -130,14 +130,13 @@ npm test           # vitest (DELIVERY_HARNESS_MAX_WORKERS caps concurrency)
 npm run check      # typecheck, then those three, in order
 ```
 
-Three further sensors are **not** part of `npm run check` and are run on their
+Two further sensors are **not** part of `npm run check` and are run on their
 own. Each has a test under `npm test` that falsifies its rules, but the script
 itself — which is what reports against this working tree — only runs when you
 invoke it:
 
 ```
 npm run sensor:policy     # this repo's own policy projection vs its routing
-npm run sensor:shadow     # the shadow-window discovery and consumption guard
 npm run sensor:standalone # standalone-install sensor
 npm run qualify:provider  # exact installed-provider interoperability replay
 ```
@@ -194,9 +193,7 @@ loop, and the hosted checks remain the only delivery authority. The two are
 compared, not merged.
 
 It carries **no ambient agent-discovery layout** — no `.claude`, no `.codex`, no
-vendored skills root — and
-[`scripts/shadow-discovery-guard.ts`](scripts/shadow-discovery-guard.ts) pins the
-digest of that emptiness, so introducing one is drift rather than configuration.
+vendored skills root — so introducing one is drift rather than configuration.
 Guidance for agents working here lives in
 [docs/agent-guide.md](docs/agent-guide.md), which is a document rather than a
 discovery root.

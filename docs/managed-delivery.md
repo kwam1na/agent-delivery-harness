@@ -432,11 +432,9 @@ tracked byte of the repository moves.
 
 This repository carries **no ambient agent-discovery layout at all** — no
 `.claude`, no `.codex`, no vendored skills root — and that is a position, not an
-accident. [`scripts/shadow-discovery-guard.ts`](../scripts/shadow-discovery-guard.ts)
-hashes the tracked contents of those roots and pins the digest of the empty
-layout, so introducing one before the cutover's removal gate is drift rather than
-a quiet second source of agent instructions. Guidance for agents working in this
-repository therefore lives in [the agent guide](agent-guide.md), which is a
+accident, so introducing one before the cutover's removal gate is drift rather
+than a quiet second source of agent instructions. Guidance for agents working in
+this repository therefore lives in [the agent guide](agent-guide.md), which is a
 document, not a discovery root.
 
 Measurement is written by the binding and never by a session.
@@ -447,51 +445,6 @@ declared source is not the binding is a finding and excludes that delivery from
 the comparison set; an absent or non-affirmative record excludes it silently.
 An empty measurement list therefore means *no shadow delivery has been observed
 consuming a projection* — never *no producer exists*.
-
-The gate record must also carry `openPreM1Blockers` explicitly. The scorer checks
-that field before it enumerates `deliveries`: a missing list or a non-empty list
-returns an incomplete verdict with `pre_m1_blockers_unresolved`, even when the
-record already contains three otherwise admissible deliveries. Only an explicit
-empty list establishes that the pre-M1 blockers are cleared.
-
-Every baseline and shadow score uses the same wall-clock boundary: acceptance
-through the **first merge-ready report after external verification** of the final
-candidate. A local `pr:athena` or other preparation-gate report before hosted
-checks does not close the window. Eventual merge and post-report observation or
-idle time do not extend it. The scorer requires each delivery's blocked and
-progressing seconds to fill that exact timestamp-derived window, so a planted
-post-report wait makes the record incomplete rather than diluting blocked share.
-The window also binds one final candidate SHA across the external-verification
-receipt and the immutable report record. The receipt carries its completion
-timestamp, durable source/reference, and digest; the report carries its exact
-transcript timestamp, source, and record hash. The report must follow
-verification, and the window endpoint must be the whole-second floor of that
-report timestamp.
-
-For a managed shadow delivery, the existing `finish.line.recorded` journal
-result and CLI result digest are the receipt source; the retained host transcript
-supplies the completion and first-report timestamps. The journal itself carries
-no trustworthy wall-clock timestamp. If either the journal digest or retained
-transcript evidence is unavailable, scoring fails closed as incomplete. The
-scorer does not synthesize a timestamp and this requirement introduces no new
-telemetry service or authority.
-
-`npm run score:milestone` reads this repository's frozen baseline and gate
-record; adding `--write` refreshes its repository-local verdict exactly as
-before. To score an adopter-owned record without copying either input, provide
-all three paths explicitly:
-
-```sh
-npm run score:milestone -- --baseline /path/to/manual-choreography-baseline.json --gate-record /path/to/adopter/shadow-milestone-gate-record.json --verdict /path/to/adopter/shadow-milestone-gate-verdict.json --write
-```
-
-The scorer resolves and records the two input paths in the verdict, writes only
-the explicit verdict path, and uses the same `scoreShadowMilestone` reduction as
-self-dogfood. The three path flags are all-or-none, and `--write` plus those
-three value-taking flags are the entire grammar: partial sets, unknown or
-trailing tokens, equals forms, and duplicates are refused rather than mixed
-with repository-local defaults. The verdict path may not name either input,
-including through a symlink or hardlink.
 
 ## Where to next
 
