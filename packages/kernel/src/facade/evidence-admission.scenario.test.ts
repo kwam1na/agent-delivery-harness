@@ -27,7 +27,7 @@
  * no agent process anywhere in it.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -463,6 +463,28 @@ describe("the recording discipline", () => {
     expect(entry, JSON.stringify(inventory.entries)).toBeDefined();
     expect(entry?.summary).toContain(".claude/settings.json");
     expect(entry?.remediation.length).toBeGreaterThan(0);
+  });
+
+  it("records a commit whose .claude/skills entries are symlinks into the receipted generation", { timeout: 240_000 }, async () => {
+    const { deliveryId, worktree, fence } = await openDelivery("record-exposure");
+    await planAndImplement(deliveryId, worktree, fence, GREET_RIGHT, "implement the contracted greeting");
+    await driveToRecording(deliveryId, worktree, fence, "e1");
+
+    const prepared = await facade.prepareTrackedRecord({ deliveryId, env: { CLAUDECODE: "1" }, fence });
+    expect(prepared.ok, JSON.stringify(prepared)).toBe(true);
+    // The one admitted shape under the frozen `.claude` prefix: the skill text
+    // in the tracked generation, and a relative symlink exposing it to the
+    // host. This is the product's own projection install, so the product's own
+    // recording checkpoint must admit it — otherwise the local gate would
+    // refuse what the pull-request Action accepts.
+    mkdirSync(path.join(worktree, ".agent-skills", "current", "skills", "execute-work"), { recursive: true });
+    writeFileSync(path.join(worktree, ".agent-skills", "current", "skills", "execute-work", "SKILL.md"), "# execute work\n");
+    mkdirSync(path.join(worktree, ".claude", "skills"), { recursive: true });
+    symlinkSync("../../.agent-skills/current/skills/execute-work", path.join(worktree, ".claude", "skills", "execute-work"));
+    commitAll(worktree, "tracked delivery record plus the projection's Claude skill exposure");
+
+    const confirmed = await facade.confirmTrackedRecord({ deliveryId, fence });
+    expect(codesOf(confirmed)).not.toContain("record_protected_authority_path");
   });
 
   it("returns to validation when the recording commit carries a non-neutral byte", { timeout: 240_000 }, async () => {

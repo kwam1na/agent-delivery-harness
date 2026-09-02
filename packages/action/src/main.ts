@@ -173,7 +173,6 @@ export interface ActionResult {
 
 // ── Blockers ─────────────────────────────────────────────────────────────────
 
-
 const ACTION_SOURCE: BlockerSource = { kind: "command", id: "delivery-harness.action" };
 
 const RECORD_AND_COMMIT: Remediation = {

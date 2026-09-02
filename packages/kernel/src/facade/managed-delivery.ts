@@ -1131,8 +1131,12 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
    * The committed tree's entries — path, mode, and, for a delivery-owned
    * symlink, the target read untrimmed out of its own blob — for the
    * protected-authority-path rule. `undefined` when the tree could not be
-   * listed: half a verification is not a pass, and the two call sites decide
-   * separately what an unavailable listing means for them.
+   * listed, which the two call sites read differently: the verification
+   * checkpoint reports the external verification unavailable rather than
+   * passed, while the recording checkpoint — which listed the commit it has
+   * just written — treats it as no entries, exactly as it did before this
+   * helper existed. The pull-request Action still fails closed on an
+   * unlistable head, so the enforcement point is unaffected either way.
    *
    * `-z`, never newline splitting: git quotes a path containing a newline, and
    * the quoted form no longer starts with the prefix it is inside. The blob is

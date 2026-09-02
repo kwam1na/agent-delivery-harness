@@ -153,3 +153,13 @@ and `.claude/hooks/*` among them — all still raise
 A verifier that can only enumerate path names, never modes and targets, judges
 on the path alone and so admits nothing either: the exception is reachable only
 from the tree evidence that decides it.
+
+What the exception decides is the committed shape of the entry — its mode, and
+where its own target resolves as a path. It does not follow that path through
+any further committed symlink, does not require the target to exist in the
+tree, and does not re-check the receipt inside the generation. It cannot:
+`.agent-skills/current` is itself a tracked symlink pinning the active,
+digest-named generation, so resolving through it would reject the very install
+this admits. The generation's contents remain governed by the `.agent-skills`
+lifecycle and its per-generation receipt — a separate rule this one neither
+owns nor weakens.

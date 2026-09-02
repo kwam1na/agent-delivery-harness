@@ -513,16 +513,28 @@ function resolveTreeSymlink(fromPath: string, target: string): string | undefine
     }
     resolved.push(segment);
   }
-  // A target ending in a separator, or resolving to nothing, names no entry.
+  // A target resolving to nothing names no entry. One ending in a separator
+  // resolves to the directory itself, and is refused a step later by the
+  // strictly-inside test rather than here.
   return resolved.length === 0 ? undefined : resolved.join("/");
 }
 
 /**
  * True when the entry is the one admitted Claude skill exposure: a symlink
- * directly under `.claude/skills/` whose resolved target lies strictly inside
+ * anywhere under `.claude/skills/` whose resolved target lies strictly inside
  * `.agent-skills/current/skills/`. Both anchors are matched literally, never
  * case-folded: the exception is granted to the exact shape the projection
  * install writes, and a case alias is not that shape.
+ *
+ * WHAT THIS DECIDES, AND WHAT IT DOES NOT. It decides the committed shape of
+ * the entry: its mode, and where its own target resolves as a path. It does
+ * not follow that path through any further committed symlink, does not require
+ * the target to exist in the tree, and does not re-check the receipt inside the
+ * generation. It cannot: `.agent-skills/current` is itself a tracked symlink
+ * pinning the active, digest-named generation, so following the path would
+ * reject the very install this admits. The generation's own contents stay
+ * governed by the `.agent-skills` lifecycle and its per-generation receipt,
+ * which this rule does not own and this ticket does not change.
  */
 function isAdmittedClaudeSkillExposure(entry: string | CandidateTreeEntry): boolean {
   if (typeof entry === "string") return false;
