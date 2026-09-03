@@ -322,6 +322,93 @@ describe("a run carrying more than one ticket", () => {
     expect(result.violations).toEqual([]);
   });
 
+  /**
+   * THE SCOPE OF `prerequisites-after-first-round`, PINNED IN BOTH BINDINGS.
+   *
+   * D12's constraint binds the FIRST `ticket.read`, the FIRST
+   * `posture.declared`, and the FIRST `lens.selected` — not every entry of
+   * those kinds. D13 blesses a run that carries more than one ticket, and a
+   * delivery reads a further ticket mid-loop by design (a deferral's follow-up
+   * item is filed and read during review, and a posture re-declared after a
+   * finding is ordinary), so binding every entry would make that conforming
+   * behaviour a violation. What the constraint is for is that the delivery
+   * started with its prerequisites in hand before review opened, which the
+   * first of each kind establishes.
+   *
+   * These two rows are the falsifiable statement of that reading: the second
+   * ticket's `ticket.read` and `posture.declared` land AFTER round 1 opened and
+   * the journal is clean. Under the all-entries reading both rows go red —
+   * `violations` gains `prerequisites-after-first-round` and `status` drops to
+   * `incomplete` — which is exactly the discrimination the rows exist to make.
+   * They are asserted bound to a record and unbound, because the prerequisite
+   * ordering is phrased over no tree sha and must read alike either way.
+   */
+  const prerequisitesAfterTheFirstRound: readonly Step[] = [
+    started,
+    ticketRead,
+    posture,
+    lenses(),
+    opened(1),
+    // The SECOND `lens.selected` is here for the same reason the second ticket
+    // is: `obtain-review` emits one before realizing the lenses of every round,
+    // so a review of more than one round writes one after the first open. All
+    // three prerequisite kinds therefore recur after the open in this journal,
+    // and the clean verdict covers all three rather than two of them.
+    lenses(),
+    secondTicketRead,
+    boundPosture,
+    closed(1),
+    completed("gate"),
+    completed("record"),
+    boundPrOpened,
+    ended,
+  ];
+
+  it("reads a second ticket's prerequisites after the first round opened as clean, bound to a record", () => {
+    expect(evaluateRunJournal(journal(prerequisitesAfterTheFirstRound), TREE, MANDATED)).toEqual({
+      status: "complete",
+      missing: [],
+      violations: [],
+      boundToRecord: true,
+    });
+  });
+
+  it("reads the same journal alike unbound to a record", () => {
+    expect(evaluateRunJournal(journal(prerequisitesAfterTheFirstRound))).toEqual({
+      status: "complete",
+      missing: [],
+      violations: [],
+      boundToRecord: false,
+    });
+  });
+
+  it("still names prerequisites-after-first-round when the FIRST of a kind lands late in the same journal", () => {
+    // The discrimination runs both ways: move the run's own first `ticket.read`
+    // past the open and the constraint fires, on a journal otherwise identical
+    // to the clean one above. Without this row a reading that never binds
+    // `ticket.read` at all would satisfy the two rows above — and the late leg
+    // is `ticket.read` rather than `posture.declared` because the per-identifier
+    // reject vector below already moves the posture, so moving it here would
+    // discriminate nothing the suite does not already have.
+    const firstTicketReadLate = journal([
+      started,
+      posture,
+      lenses(),
+      opened(1),
+      ticketRead,
+      secondTicketRead,
+      boundPosture,
+      closed(1),
+      completed("gate"),
+      completed("record"),
+      boundPrOpened,
+      ended,
+    ]);
+    const result = evaluateRunJournal(firstTicketReadLate, TREE, MANDATED);
+    expect(result.violations).toEqual(["prerequisites-after-first-round"]);
+    expect(result.status).toBe("incomplete");
+  });
+
   it("requires no ticket on a posture, a gate report, or a pull request", () => {
     // The same run with every binding dropped: one `ticket.read`, an unbound
     // posture, an unbound gate report, an unbound pull request. Nothing the
