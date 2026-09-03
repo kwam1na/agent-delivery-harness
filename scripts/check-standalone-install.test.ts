@@ -21,7 +21,7 @@
  * them. One trivial `npm pack` and `npm install --offline` is what that row
  * costs, and it is the only thing that fails when the wiring is deleted.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -34,6 +34,7 @@ import {
   EXPECTED_SCRATCH_NOTE_LINES,
   PACKAGE_SCOPE,
   allocatedRunIdFrom,
+  caseEnvironment,
   caseLabel,
   cliProbeVacuityFinding,
   gitNamespaceCleared,
@@ -42,6 +43,7 @@ import {
   readScratchRunStore,
   readWorkspacePackages,
   relocatedGitEnvironment,
+  relocationControlFinding,
   runStandaloneInstallCheck,
 } from "./check-standalone-install.ts";
 
@@ -243,6 +245,62 @@ describe("relocatedGitEnvironment", () => {
   it("points both GIT_DIR and GIT_COMMON_DIR at the decoy and keeps the rest", () => {
     const env = relocatedGitEnvironment({ PATH: "/usr/bin" }, "/decoy/.git");
     expect(env).toEqual({ PATH: "/usr/bin", GIT_DIR: "/decoy/.git", GIT_COMMON_DIR: "/decoy/.git" });
+  });
+});
+
+describe("caseEnvironment", () => {
+  const cleared = { PATH: "/usr/bin" };
+  const relocated = { PATH: "/usr/bin", GIT_DIR: "/decoy/.git", GIT_COMMON_DIR: "/decoy/.git" };
+
+  // The runner's own selection, extracted because only the slow leg reaches it
+  // and the installed CLI answers identically either way — so no CLI case can
+  // tell a relocated child from an unrelocated one, and a selection that
+  // collapsed to `cleared` would leave every run-surface case green.
+  it("hands the relocated environment to the case that asked for it", () => {
+    expect(caseEnvironment({ args: ["x"], exitCode: 0, expected: ["x"], underRelocatedGit: true }, cleared, relocated)).toBe(
+      relocated,
+    );
+  });
+
+  it("hands every other case the cleared one", () => {
+    expect(caseEnvironment({ args: ["x"], exitCode: 0, expected: ["x"] }, cleared, relocated)).toBe(cleared);
+    expect(caseEnvironment({ args: ["x"], exitCode: 0, expected: ["x"], underRelocatedGit: false }, cleared, relocated)).toBe(
+      cleared,
+    );
+  });
+});
+
+describe("relocationControlFinding", () => {
+  // The allow side of two absence assertions. Both "the store did not move" and
+  // "the decoy holds nothing" are satisfied by a child that was never
+  // relocated, so the control has to fail when the relocation is not live.
+  it("is silent when a git that honours the environment lands in the decoy", () => {
+    expect(relocationControlFinding("the case", "/decoy/.git", "/decoy/.git")).toBeUndefined();
+  });
+
+  it("is a finding when it lands anywhere else — the case would witness nothing", () => {
+    const finding = relocationControlFinding("the case", "/scratch/repo/.git", "/decoy/.git");
+    expect(finding?.rule).toBe("anti-vacuity");
+    expect(finding?.subject).toBe("relocated-git");
+    expect(finding?.message).toContain("/scratch/repo/.git");
+  });
+
+  it("is a finding when git could not answer at all", () => {
+    const finding = relocationControlFinding("the case", undefined, "/decoy/.git");
+    expect(finding?.subject).toBe("relocated-git");
+    expect(finding?.message).toContain("no common directory at all");
+  });
+
+  // The temp root the decoy is built under is a symlink on macOS, and git
+  // answers with the spelling it was handed rather than the realpath.
+  it("compares the two spellings of one directory as equal", () => {
+    const real = mkdtempSync(path.join(realpathSync(os.tmpdir()), "dh-standalone-control-"));
+    cleanups.push(real);
+    const gitDir = path.join(real, ".git");
+    mkdirSync(gitDir, { recursive: true });
+    const linked = path.join(real, "link");
+    symlinkSync(real, linked, "dir");
+    expect(relocationControlFinding("the case", path.join(linked, ".git"), gitDir)).toBeUndefined();
   });
 });
 

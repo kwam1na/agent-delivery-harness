@@ -135,7 +135,10 @@ export const CLI_PACKAGE_NAME = `${PACKAGE_SCOPE}/cli`;
  * a store it must not have. The two halves are one witness — the refusal says
  * which store answered, and the decoy check says which store was written — and
  * neither alone would distinguish a relocated store from a command that simply
- * failed.
+ * failed. Both are absence claims that a child which was never relocated also
+ * satisfies, so `relocationControlFinding` asks a git that DOES honour the
+ * namespace, under the case's own environment value, whether the relocation is
+ * live at all.
  *
  * The five run-surface cases run from a `git init`-ed scratch worktree root,
  * never this repository: the store lives under the invoking repository's git
@@ -384,6 +387,54 @@ export function gitNamespaceCleared(env: NodeJS.ProcessEnv = process.env): NodeJ
  */
 export function relocatedGitEnvironment(base: NodeJS.ProcessEnv, decoyGitDir: string): NodeJS.ProcessEnv {
   return { ...base, GIT_DIR: decoyGitDir, GIT_COMMON_DIR: decoyGitDir };
+}
+
+/**
+ * Which environment one case is spawned with.
+ *
+ * Extracted for the same reason `cliProbeVacuityFinding` is: this is a decision
+ * only the slow leg reaches, and a decision nothing can falsify is a decision
+ * nobody checks. Collapse it to `cleared` and every run-surface case still
+ * passes — the installed CLI ignores the namespace either way, which is
+ * precisely what makes a relocated child indistinguishable from an unrelocated
+ * one at the CLI's own output. So the selection is pinned here, and
+ * `relocationControlFinding` pins that the value it returns is live.
+ */
+export function caseEnvironment(
+  smoke: CliSmokeCase,
+  cleared: NodeJS.ProcessEnv,
+  relocated: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return smoke.underRelocatedGit === true ? relocated : cleared;
+}
+
+/**
+ * THE ALLOW SIDE OF AN ABSENCE ASSERTION. The relocated case asserts that the
+ * store did NOT move and that the decoy repository holds NOTHING — two claims a
+ * child which was never relocated satisfies for free. So a consumer that DOES
+ * honour the namespace is asked, under the very environment value the case is
+ * spawned with, where the repository is: it must answer the decoy. Any other
+ * answer means the case is witnessing nothing, and this says so rather than
+ * letting it report a clean run.
+ *
+ * Compared as canonical paths, because the temp root the decoy is built under
+ * is commonly a symlink and git answers with the spelling it was handed.
+ */
+export function relocationControlFinding(
+  label: string,
+  resolvedCommonDir: string | undefined,
+  decoyGitDir: string,
+): StandaloneFinding | undefined {
+  if (resolvedCommonDir !== undefined && canonicalEntryPath(resolvedCommonDir) === canonicalEntryPath(decoyGitDir)) {
+    return undefined;
+  }
+  return {
+    rule: "anti-vacuity",
+    subject: "relocated-git",
+    message: `\`${label}\` witnesses the store ignoring GIT_DIR and GIT_COMMON_DIR, but a git that honours them resolved ${
+      resolvedCommonDir === undefined ? "no common directory at all" : resolvedCommonDir
+    } rather than the decoy at ${decoyGitDir}; the case's assertions would then hold for a child that was never relocated`,
+  };
 }
 
 /** Timeout for any single npm or node invocation this sensor spawns. */
@@ -659,9 +710,18 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
 
         for (const smoke of CLI_SMOKE_CASES) {
           const label = caseLabel(smoke);
+          const caseEnv = caseEnvironment(smoke, childEnv, relocatedEnv);
+
+          // Asked under the case's own environment value, so the control and the
+          // case it guards cannot disagree about what was relocated.
+          if (smoke.underRelocatedGit === true) {
+            const control = relocationControlFinding(label, gitCommonDirUnder(repoDir, caseEnv), path.join(decoyDir, ".git"));
+            if (control !== undefined) findings.push(control);
+          }
+
           const ran = spawnSync(process.execPath, ["--import", pathToFileURL(loader).href, entry, ...smoke.args], {
             cwd: repoDir,
-            env: smoke.underRelocatedGit === true ? relocatedEnv : childEnv,
+            env: caseEnv,
             encoding: "utf8",
             timeout: STEP_TIMEOUT_MS,
             stdio: CAPTURED,
@@ -761,6 +821,24 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
   }
 
   return { findings, packagesProbed, siblingEdgesVerified, cliCasesCompleted };
+}
+
+/**
+ * Where a git that honours its environment says the repository is, or
+ * `undefined` where it could not say at all — which is itself a failed control.
+ */
+function gitCommonDirUnder(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
+  try {
+    return execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd,
+      env,
+      encoding: "utf8",
+      timeout: STEP_TIMEOUT_MS,
+      stdio: CAPTURED,
+    }).trim();
+  } catch {
+    return undefined;
+  }
 }
 
 /** As much of a captured stream as a finding can carry without becoming the report. */
