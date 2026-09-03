@@ -275,6 +275,15 @@ export function evaluateRunJournal(
     violations.push(VIOLATION.runStartedNotFirst);
   }
 
+  // THE FIRST OF EACH PREREQUISITE KIND, NOT EVERY ENTRY OF IT. `ticketRead`,
+  // `postureDeclared`, and `lensSelected` are each the FIRST of their kind, and
+  // D12 binds exactly those three. A run may carry more than one ticket (D13),
+  // and a delivery reads a further ticket mid-loop by design — a deferral's
+  // follow-up item is filed and read during review, and a posture re-declared
+  // after a finding is ordinary — so a second `ticket.read` or
+  // `posture.declared` after the first round opened is CLEAN. What the
+  // constraint is for is that the delivery started with its prerequisites in
+  // hand before review opened, which the first of each kind establishes.
   const firstRound = first(roundsOpened);
   if (firstRound !== undefined) {
     const late = [ticketRead, postureDeclared, lensSelected].some((entry) => entry !== undefined && entry.at > firstRound.at);
