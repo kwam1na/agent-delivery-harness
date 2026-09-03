@@ -198,7 +198,22 @@ describe("license-coherence", () => {
   it("flags a LICENSE that names the license but is not its text", () => {
     const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, license: "Functional Source License, Version 1.1\n" });
     const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
-    expect(rulesOf(result.findings)).toEqual(["license-coherence", "license-coherence"]);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence", "license-coherence", "license-coherence"]);
+  });
+
+  // The mutation that reinstates the divergence V26-1643 shipped: the licence
+  // text goes on declaring one abbreviation while every manifest publishes
+  // another. It is the whole FSL text, so the clause markers pass; only the
+  // identifier marker stands between it and a clean release run.
+  it("flags a LICENSE whose declared abbreviation is not the id the manifests carry", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      license: `${LICENSE_TEXT_MARKERS.filter((marker) => marker !== EXPECTED_LICENSE_ID).join("\n")}\nFSL-1.1-Apache-2.0\n`,
+    });
+    const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("LICENSE");
+    expect(result.findings[0]!.message).toContain(JSON.stringify(EXPECTED_LICENSE_ID));
   });
 
   it("flags a manifest left behind at the superseded Apache-2.0 id", () => {

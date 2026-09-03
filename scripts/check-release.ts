@@ -17,10 +17,12 @@
  *       supposed to invalidate it. `packages/kernel/src/preparation.ts` states
  *       the lockstep rule; this check is what makes forgetting it a red run.
  *   license-coherence — the `LICENSE` file exists at the root, is the
- *       Functional Source License 1.1, and every manifest's `license` field
- *       (root and packages) says `FSL-1.1-ALv2`. A tarball whose
- *       manifest disagrees with the license
- *       text it ships under is a legal statement nobody made. And the PACK
+ *       Functional Source License 1.1, declares `FSL-1.1-ALv2` as its own
+ *       abbreviation, and every manifest's `license` field (root and packages)
+ *       says the same. A tarball whose manifest disagrees with the license
+ *       text it ships under is a legal statement nobody made, and a licence
+ *       text that abbreviates itself differently from what the registry will
+ *       be told is that same disagreement one step removed. And the PACK
  *       SHAPE is checked, not assumed: what `npm pack --dry-run --json`
  *       reports for each package must include `LICENSE` and `NOTICE`, because
  *       npm auto-includes a license only from the PACKAGE directory — a root
@@ -91,7 +93,7 @@ export const EXPECTED_LICENSE_ID = "FSL-1.1-ALv2";
 /**
  * Phrases the LICENSE file must carry to be the verbatim Functional Source
  * License 1.1 text rather than a stub that merely names it. The first names
- * the license, the other two are the two clauses that make it what it is —
+ * the license, the next two are the two clauses that make it what it is —
  * the competing-use restriction and the Apache-2.0 conversion — so a LICENSE
  * that keeps the title while losing either one is a finding rather than a pass.
  *
@@ -100,11 +102,19 @@ export const EXPECTED_LICENSE_ID = "FSL-1.1-ALv2";
  * word for word: a heading pins the section, not what the section converts to,
  * and `FSL-1.1-MIT` swapped in under an `FSL-1.1-ALv2` manifest is
  * exactly the mismatch this rule exists to refuse.
+ *
+ * The last marker is the identifier itself, which the FSL text declares under
+ * its own `Abbreviation` heading. Without it the rule pins only the manifests'
+ * half of the coherence it claims: the licence text could go on declaring one
+ * abbreviation while every manifest published another, which is precisely the
+ * divergence this repository has just spent a delivery removing. Both halves
+ * read `EXPECTED_LICENSE_ID`, so the identifier moves in one edit or not at all.
  */
 export const LICENSE_TEXT_MARKERS: readonly string[] = [
   "Functional Source License, Version 1.1",
   "A Permitted Purpose is any purpose other than a Competing Use",
   "the Apache License, Version 2.0 that is effective on the second anniversary",
+  EXPECTED_LICENSE_ID,
 ];
 
 /**
