@@ -20,10 +20,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  CLI_PACKAGE_NAME,
   CLI_SMOKE_CASES,
   EXPECTED_SCRATCH_JOURNALS,
   EXPECTED_SCRATCH_NOTE_LINES,
   PACKAGE_SCOPE,
+  cliProbeVacuityFinding,
   gitNamespaceCleared,
   readScratchRunStore,
   readWorkspacePackages,
@@ -184,5 +186,42 @@ describe("readScratchRunStore", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "dh-standalone-store-"));
     cleanups.push(dir);
     expect(() => readScratchRunStore(dir)).toThrow();
+  });
+});
+
+describe("cliProbeVacuityFinding", () => {
+  // The guard the sibling-edge one leaves uncovered. Every CLI case lives
+  // behind a name check, so renaming the package — or failing to install it —
+  // skips all of them silently while the other packages still verify edges.
+  it("is a finding when the CLI package was never probed at all", () => {
+    const finding = cliProbeVacuityFinding({ packageProbed: false, casesCompleted: 0 });
+    expect(finding?.rule).toBe("anti-vacuity");
+    expect(finding?.subject).toBe("cli-cases");
+    expect(finding?.message).toContain(CLI_PACKAGE_NAME);
+  });
+
+  it("is a finding when the package was probed but a case did not run", () => {
+    const finding = cliProbeVacuityFinding({ packageProbed: true, casesCompleted: CLI_SMOKE_CASES.length - 1 });
+    expect(finding?.rule).toBe("anti-vacuity");
+    expect(finding?.subject).toBe("cli-cases");
+    expect(finding?.message).toContain(String(CLI_SMOKE_CASES.length));
+  });
+
+  it("is a finding when the package was probed and no case ran", () => {
+    expect(cliProbeVacuityFinding({ packageProbed: true, casesCompleted: 0 })?.rule).toBe("anti-vacuity");
+  });
+
+  it("is silent only when every case ran to completion", () => {
+    expect(cliProbeVacuityFinding({ packageProbed: true, casesCompleted: CLI_SMOKE_CASES.length })).toBeUndefined();
+  });
+
+  // A count above the case list is a counter that stopped tracking the list it
+  // is bounded by; silence there would hide the drift rather than report it.
+  it("is silent for a count above the case list, which the runner cannot produce", () => {
+    expect(cliProbeVacuityFinding({ packageProbed: true, casesCompleted: CLI_SMOKE_CASES.length + 1 })).toBeUndefined();
+  });
+
+  it("names the package the smoke cases actually run", () => {
+    expect(CLI_PACKAGE_NAME).toBe(`${PACKAGE_SCOPE}/cli`);
   });
 });
