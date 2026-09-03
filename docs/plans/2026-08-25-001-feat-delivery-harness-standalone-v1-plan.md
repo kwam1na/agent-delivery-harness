@@ -145,7 +145,7 @@ Athena's delivery harness makes agent-delivered merges trustworthy — evidence 
 
 ### Requiring User Decision (does not block implementation start)
 
-- npm scope + license (recommendation: Apache-2.0). Unit 14's release mechanics assume a LICENSE file exists; its content awaits this decision. **Superseded:** the Apache-2.0 recommendation was taken for `0.1.0` and `0.2.0` and then replaced by the operator decision recorded on V26-1643 (2026-09-03); every version from here on ships under `FSL-1.1-Apache-2.0`.
+- npm scope + license (recommendation: Apache-2.0). Unit 14's release mechanics assume a LICENSE file exists; its content awaits this decision. **Superseded:** the Apache-2.0 recommendation was taken for `0.1.0` and `0.2.0` and then replaced by the operator decision recorded on V26-1643 (2026-09-03); every version from here on ships under `FSL-1.1-ALv2`, the SPDX identifier settled on V26-1647.
 
 ---
 

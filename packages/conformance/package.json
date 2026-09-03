@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "type": "module",
   "description": "delivery-evidence/1 conformance kit (89 golden vectors) and its generator",
-  "license": "FSL-1.1-Apache-2.0",
+  "license": "FSL-1.1-ALv2",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kwam1na/agent-delivery-harness.git",
