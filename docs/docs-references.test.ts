@@ -49,6 +49,7 @@ import {
   FACADE_SURFACES,
   DELIVERY_STATES,
   INTAKE_STATES,
+  MANIFEST_REJECTION_REGISTRY,
   PRODUCT_TRUST_LABEL,
   projectShippedPersonas,
   readArchiveEntry,
@@ -396,5 +397,75 @@ describe("the computable counts the documentation states", () => {
         }
       }
     }
+  });
+});
+
+/**
+ * Prose that carries a rule, rather than a number.
+ *
+ * WHY THIS BLOCK EXISTS. Everything above pins a documented *value* against
+ * something the tree computes. A sentence that states a rule has no computed
+ * counterpart, so nothing above it can disagree with it — and the failure that
+ * follows is not drift but deletion: the rule is removed, trimmed to one of its
+ * halves, or inverted outright, and every check in this file stays green
+ * because the links still resolve and the counts still agree. The guidance
+ * below is read by a delivering host and by nothing else in this tree, so a pin
+ * here is the only thing standing between it and an ordinary edit.
+ *
+ * The pins are deliberately of two shapes. A rule's own words are pinned by
+ * presence, the way `documentStates` already pins the trust label, because
+ * there is nothing else to compare them against. The identifiers the rule
+ * quotes are pinned by agreement against the documents that define them, so a
+ * sanctioned rename in the policy or the code registry re-stamps the sentence
+ * instead of leaving it quietly wrong.
+ */
+describe("the rules the documentation states in prose", () => {
+  const GUIDE = "docs/agent-guide.md";
+
+  /**
+   * A sentence check over hard-wrapped prose, so a phrase that falls across a
+   * line break reads the same as one that does not and a rewrap is not a
+   * failure. The same treatment the deferred-rules row above gives `AGENTS.md`.
+   */
+  const statesInProse = (phrase: string): void => {
+    expect(textOf(GUIDE).replace(/\s+/g, " "), `${GUIDE} no longer states: ${phrase}`).toContain(phrase);
+  };
+
+  it("states where a review lens that plants mutations runs them", () => {
+    // The instruction itself, in each of its halves: which worktree the lens
+    // gets, where that worktree may live, and which worktree it may never use.
+    // Any one half alone is satisfied by a sentence that no longer says the
+    // thing, and the placement half is how a host reaches the second failure
+    // mode by the route meant to avoid it.
+    statesInProse("gets its own worktree of this repository");
+    statesInProse("beside the delivery worktree rather than under it");
+    statesInProse("never the delivery worktree");
+    // And both failure modes, because the guidance's own claim is that either
+    // one alone reads as an annoyance rather than as a correctness problem.
+    statesInProse("A mutated tree read concurrently produces a phantom finding.");
+    statesInProse("A tree carrying a plant cannot be captured.");
+  });
+
+  it("names the mandated testing lens and its charter as the policy binds them", () => {
+    const policy = JSON.parse(readFileSync(path.join(REPO_ROOT, ".agents/policy/repository-policy.json"), "utf8")) as {
+      readonly reviewLenses: readonly { readonly lensId: string; readonly category: string; readonly personaId: string }[];
+    };
+    const testing = policy.reviewLenses.filter((lens) => lens.category === "testing-policy");
+    // Anti-vacuity from both ends: a policy that declares no testing lens, or
+    // more than one, would otherwise satisfy the loop below with nothing in it.
+    expect(testing.length, "the repository policy declares no single testing-policy lens").toBe(1);
+    for (const lens of testing) {
+      statesInProse(`\`${lens.personaId}\``);
+      statesInProse(`\`${lens.lensId}\``);
+    }
+  });
+
+  it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {
+    // The key is a literal because the registry's key type is the code union,
+    // so a code renamed in `validator/codes.ts` stops this file compiling
+    // rather than leaving the pairing unchecked.
+    const rules = MANIFEST_REJECTION_REGISTRY["candidate_unprepared"].rules;
+    expect(rules.length, "the registry gives candidate_unprepared no rule").toBeGreaterThan(0);
+    for (const rule of rules) statesInProse(`${rule} \`candidate_unprepared\``);
   });
 });

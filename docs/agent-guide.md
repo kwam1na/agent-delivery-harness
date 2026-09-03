@@ -140,7 +140,10 @@ where.
 reset to the revision the round is bound to, and never the delivery worktree.**
 That revision is the one whose tree is the `candidate tree` value
 `review-context` reports, which is how [`AGENTS.md`](../AGENTS.md) resolves a
-`candidateRef` here. The delivery worktree stays clean for the whole loop —
+`candidateRef` here. Create the lens worktree beside the delivery worktree
+rather than under it: a worktree nested inside the delivery worktree is
+untracked content there, which is the second failure mode below arriving by the
+route meant to avoid it. The delivery worktree stays clean for the whole loop —
 from `prepare` through `record` — and a lens restores its own probe in its own
 worktree before reporting.
 
