@@ -44,6 +44,7 @@ import {
   payloadOf,
   readoutOf,
   roundEntries,
+  roundLenses,
   summarize,
   type Readout,
   type RunSummary,
@@ -180,6 +181,14 @@ interface ServedTimelineEntry {
 interface ServedRound {
   readonly round: string;
   readonly candidateTreeSha: string;
+  /**
+   * Whether this round was ever opened. The projection's `lenses` says so in
+   * words for a reader of the page, and a reader of the JSON should not have
+   * to match those words to learn it: a round that never opened and a round
+   * whose lens set happens to spell the same thing are one value apart on the
+   * wire otherwise.
+   */
+  readonly opened: boolean;
   readonly lenses: string;
   readonly outcome: string;
   readonly findings: string;
@@ -295,7 +304,8 @@ function roundsOf(events: readonly RunEvent[]): readonly ServedRound[] {
     return {
       round: entry.round,
       candidateTreeSha: entry.candidateTreeSha,
-      lenses: entry.opened === undefined ? "" : oneLineOf(payloadOf(entry.opened)["lenses"]),
+      opened: entry.opened !== undefined,
+      lenses: roundLenses(entry),
       outcome: closed === undefined ? "open" : oneLineOf(closed["outcome"], 64),
       findings: closed === undefined ? "" : oneLineOf(closed["findings"]),
       cost: closed === undefined ? "" : oneLineOf((closed["cost"] as { total?: unknown } | undefined)?.total, 64),

@@ -26,7 +26,14 @@ import {
   roundRows,
 } from "../run-projection.ts";
 import { startRunServer, type RunServerHandle } from "../run-server.ts";
-import { oneLine, oneLineOf, resolveRunSurface, runSurfaceBlocker, type RunSurface } from "../run-surface.ts";
+import {
+  oneLine,
+  oneLineOf,
+  resolveRunSurface,
+  resolveWorktreeRoot,
+  runSurfaceBlocker,
+  type RunSurface,
+} from "../run-surface.ts";
 import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescriptor } from "../boundary.ts";
 
 const USAGE = [
@@ -173,7 +180,18 @@ async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, r
 
   // No record tree sha and no mandated pair: the viewer has neither, and
   // pretending otherwise would turn an observation into a claim.
-  for (const row of readoutRows(events, evaluateRunJournal(events), context.rootDir)) context.write(row);
+  //
+  // THE ROOT IS THE WORKTREE'S, NOT THE INVOCATION'S. The config-presence note
+  // is a question about the repository, and `runs serve` answers it at the
+  // toplevel of the path it was given. Answering it here at the cwd would tell
+  // an operator standing in `packages/cli` that this repository carries no
+  // config while the page, over the same journal, says it carries one — two
+  // answers to one question, which is the thing the shared projection exists
+  // to prevent. The cwd stands in only where git can name no root at all, and
+  // then it is the only root there is.
+  const worktreeRoot = await resolveWorktreeRoot(context.rootDir);
+  const rootDir = worktreeRoot.ok ? worktreeRoot.root : context.rootDir;
+  for (const row of readoutRows(events, evaluateRunJournal(events), rootDir)) context.write(row);
   return { kind: "ok" };
 }
 

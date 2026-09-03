@@ -134,8 +134,11 @@ export async function resolveRunSurface(cwd: string): Promise<RunSurfaceResoluti
 
 /**
  * The worktree ROOT of a path, for the one thing the run surface needs it for:
- * the config-presence note names a root, and `runs serve` renders a root the
- * operator named rather than the one it was invoked in.
+ * the config-presence note names a root, and BOTH surfaces resolve it here.
+ * `runs serve` renders a root the operator named rather than the one it was
+ * invoked in; `runs show` renders the root of the worktree it was invoked in
+ * rather than the directory, which may be any depth below it. One question
+ * about one repository has to have one answer whichever surface asks it.
  *
  * `--show-toplevel` is a plumbing query that reads no index and runs no hook,
  * alias, or pager, and it runs here with the `GIT_` namespace cleared for the

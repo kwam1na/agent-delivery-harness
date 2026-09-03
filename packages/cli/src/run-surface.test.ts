@@ -631,6 +631,46 @@ describe("emit, the boundary wrap, and runs", () => {
     expect((await lstat(path.join(dir, "harness.config.ts"))).isFile()).toBe(true);
   });
 
+  it("answers the config-presence question at the worktree root from any subdirectory", async () => {
+    const dir = await initRepo();
+    const runId = await executorOnlyRun(dir);
+    const nested = path.join(dir, "packages", "cli");
+    await mkdir(nested, { recursive: true });
+
+    // The page answers this at the worktree root. `runs show` answering it at
+    // the raw invocation cwd would tell an operator standing two directories
+    // down that this repository has no config, while the page — over the same
+    // file on disk — says it has one. One journal, one answer.
+    const shown = await cli(nested, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(shown.out).toContain(`harness.config.ts present at ${realpathSync(dir)}`);
+    expect(shown.out).not.toContain(`present at ${realpathSync(nested)}`);
+
+    const { page } = await pageAndState(await serve([nested]));
+    expect(page).toContain(`note: no CLI gate completion in this journal; harness.config.ts present at ${escapedRoot(dir)}`);
+  });
+
+  it("does not read a subdirectory's own config as the worktree's", async () => {
+    const dir = await initRepo({ withConfig: false });
+    const runId = await executorOnlyRun(dir);
+    const nested = path.join(dir, "packages", "cli");
+    await mkdir(nested, { recursive: true });
+    // The file the note looks for, one directory below the root that owns the
+    // question. A note answered anywhere but the worktree root — at the cwd,
+    // or at the nearest ancestor carrying the file — reports a config this
+    // repository does not have.
+    await writeFile(path.join(nested, "harness.config.ts"), "export default {};\n", "utf8");
+
+    const shown = await cli(nested, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(shown.out).toContain("complete-executor-only");
+    expect(shown.out).not.toContain("harness.config.ts present");
+
+    const { page, state } = await pageAndState(await serve([nested]));
+    expect(page).not.toContain("harness.config.ts present");
+    expect(runOf(state, runId).readout.note).toBeUndefined();
+  });
+
   it("prints a labeled treeSha line from prepare, and records the completion", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
@@ -1152,7 +1192,12 @@ interface ServedState {
     readonly result?: string;
     readonly readout: { readonly status: string; readonly present: readonly string[]; readonly missing: readonly string[]; readonly note?: string };
     readonly timeline: readonly { readonly seq: number; readonly kind: string; readonly writer: string; readonly detail: string }[];
-    readonly roundDetail: readonly { readonly round: string; readonly candidateTreeSha: string }[];
+    readonly roundDetail: readonly {
+      readonly round: string;
+      readonly candidateTreeSha: string;
+      readonly opened: boolean;
+      readonly lenses: string;
+    }[];
   }[];
 }
 
@@ -1478,6 +1523,55 @@ describe("runs serve", () => {
     const shownWithout = await cli(withoutConfig, ["runs", "show", withoutConfigRunId]);
     expect(shownWith.out).toContain("no CLI gate completion in this journal");
     expect(shownWithout.out).not.toContain("no CLI gate completion in this journal");
+  });
+
+  it("distinguishes a round that was never opened, exactly as runs show does", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const closed = (round: number) => ({
+      round,
+      candidateTreeSha: TREE_SHA,
+      outcome: "aligned",
+      findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+      cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+    });
+    // Round 1 opened then closed; round 2 closed having never been opened. The
+    // journal carries both so the distinction is read off ONE page: a cell
+    // that said "never opened" unconditionally would pass over the second
+    // round alone.
+    expect(
+      (await emit(dir, ["review.round.opened"], { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code,
+    ).toBe(EXIT_OK);
+    expect((await emit(dir, ["review.round.closed"], closed(1))).code).toBe(EXIT_OK);
+    expect((await emit(dir, ["review.round.closed"], closed(2))).code).toBe(EXIT_OK);
+
+    const { page, state } = await pageAndState(await serve([dir]));
+    const rounds = runOf(state, runId).roundDetail;
+    expect(rounds.map((round) => round.round)).toEqual(["1", "2"]);
+    expect(rounds[0]).toMatchObject({ opened: true, lenses: '["lens.outcome-correctness"]' });
+    // An empty lenses cell is what an operator reads as "opened, carrying no
+    // lens" — the one reading the page must not offer for a round that was
+    // never opened at all.
+    expect(rounds[1]).toMatchObject({ opened: false, lenses: "never opened" });
+
+    // The rounds table's own cells, in order, so the assertion cannot be
+    // satisfied by the words appearing anywhere else on the page.
+    expect(page).toContain(`<td>1</td><td>${TREE_SHA}</td><td>[&quot;lens.outcome-correctness&quot;]</td>`);
+    expect(page).toContain(`<td>2</td><td>${TREE_SHA}</td><td>never opened</td>`);
+
+    // And the terminal says the same words over the same journal.
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    // The rounds BLOCK, not any line mentioning a round: the timeline prints
+    // `round 2 aligned ...` too, and reading that row instead would leave the
+    // rounds table's own cell untested.
+    const lines = shown.out.split("\n");
+    const header = lines.findIndex((line) => line.trim() === "rounds:");
+    expect(header, shown.out).toBeGreaterThan(-1);
+    const rows = lines.slice(header + 1, header + 3);
+    expect(rows[0]).toContain("lens.outcome-correctness");
+    expect(rows[0]).not.toContain("never opened");
+    expect(rows[1]).toContain("never opened");
   });
 
   it("labels a CLI-written gate completion as the CLI's", async () => {
