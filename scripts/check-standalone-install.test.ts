@@ -25,6 +25,9 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+// The product's own spelling of the override, so the drop below cannot go on
+// clearing a variable the CLI has stopped reading.
+import { RUN_STORE_OVERRIDE as PRODUCT_RUN_STORE_OVERRIDE } from "../packages/cli/src/run-surface.ts";
 import type { CliSmokeCase } from "./check-standalone-install.ts";
 import {
   ALLOCATED_RUN_ID_EXPECTATION,
@@ -34,11 +37,12 @@ import {
   EXPECTED_SCRATCH_JOURNALS,
   EXPECTED_SCRATCH_NOTE_LINES,
   PACKAGE_SCOPE,
+  RUN_STORE_OVERRIDE,
   allocatedRunIdFrom,
   caseEnvironment,
   caseLabel,
+  childEnvironment,
   cliProbeVacuityFinding,
-  gitNamespaceCleared,
   holdsRunStore,
   missingExpectations,
   readScratchRunStore,
@@ -338,9 +342,9 @@ describe("holdsRunStore", () => {
   });
 });
 
-describe("gitNamespaceCleared", () => {
+describe("childEnvironment", () => {
   it("drops the whole GIT_ namespace and keeps everything else", () => {
-    const cleared = gitNamespaceCleared({
+    const cleared = childEnvironment({
       GIT_DIR: "/somewhere/else/.git",
       GIT_COMMON_DIR: "/somewhere/else/.git",
       GIT_INDEX_FILE: "/somewhere/else/.git/index",
@@ -351,7 +355,37 @@ describe("gitNamespaceCleared", () => {
   });
 
   it("drops an unset variable rather than carrying an undefined value", () => {
-    expect(gitNamespaceCleared({ PATH: "/usr/bin", UNSET: undefined })).toEqual({ PATH: "/usr/bin" });
+    expect(childEnvironment({ PATH: "/usr/bin", UNSET: undefined })).toEqual({ PATH: "/usr/bin" });
+  });
+
+  // The reason this row exists: `docs/managed-delivery.md` tells a reviewer
+  // exercising `emit` end to end to export the override, so the developer most
+  // likely to run this sensor is the one most likely to have it set. Carried
+  // into the children, it roots their store under the override instead of the
+  // scratch repository's git directory, `readScratchRunStore` finds no
+  // directory to read, and the sensor reports that the run-surface cases wrote
+  // nothing — a false finding about the product, produced by the sensor's own
+  // environment. Keep the drop and the value never reaches a child.
+  it("drops the run-store override, whatever it names", () => {
+    expect(childEnvironment({ [RUN_STORE_OVERRIDE]: "/somewhere/else/store", PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  // A blank override is unset to the product, and a relative one refuses the
+  // resolution outright — a child carrying either would report something other
+  // than the store this sensor asserts over, so neither survives here either.
+  it("drops the run-store override even where the value could not have relocated a store", () => {
+    expect(childEnvironment({ [RUN_STORE_OVERRIDE]: "", PATH: "/usr/bin" })).toEqual({ PATH: "/usr/bin" });
+    expect(childEnvironment({ [RUN_STORE_OVERRIDE]: "relative/store", PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  // The name is the product's, not this sensor's invention: a rename on the
+  // product side that left this drop spelled the old way would clear nothing.
+  it("clears the variable the product reads", () => {
+    expect(RUN_STORE_OVERRIDE).toBe(PRODUCT_RUN_STORE_OVERRIDE);
   });
 });
 
