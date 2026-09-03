@@ -201,6 +201,25 @@ describe("the complete and executor-only readings", () => {
     expect(result.missing).toContain("command.completed:record");
   });
 
+  it("refuses executor-only status to a journal whose only CLI completion is neither the gate nor the record", () => {
+    // The two rows above enter the executor-only decision from each end and
+    // between them pin the two SINGLE weakenings — "no CLI gate completion",
+    // "no CLI record completion". Neither reaches the CONJUNCTIVE one, which
+    // agrees with the real test on every journal carrying one of those two and
+    // differs only where a CLI completion exists that is neither. `check` is
+    // such a completion: the standalone preflight is a product command, so the
+    // product wrote it, and one product completion is enough to make the
+    // journal not executor-only however plausible its gate.reported looks.
+    // Well-ordered for the same reason as its neighbours — `violations` empty
+    // is what makes the status come from the decision alone.
+    const mixed = journal([started, ticketRead, posture, lenses(), opened(1), closed(1), gateReported, completed("check"), prOpened, ended]);
+    const result = evaluateRunJournal(mixed, TREE, MANDATED);
+    expect(result.violations).toEqual([]);
+    expect(result.status).toBe("incomplete");
+    expect(result.missing).toContain("command.completed:gate");
+    expect(result.missing).toContain("command.completed:record");
+  });
+
   it("reports the evaluation unbound when no record tree sha is supplied", () => {
     const result = evaluateRunJournal(journal(COMPLETE));
     expect(result.boundToRecord).toBe(false);
@@ -361,6 +380,31 @@ describe("one reject vector per violation identifier", () => {
     for (const identifier of RUN_JOURNAL_VIOLATIONS) for (const found of vectors[identifier]().violations) seen.add(found);
     expect([...seen].sort()).toEqual([...RUN_JOURNAL_VIOLATIONS].sort());
   });
+
+  it("names run-started-not-first for a second run.started even where the first stands at index 0", () => {
+    // `run-started-not-first` is a disjunction, and the vector above enters
+    // through the first disjunct alone: a run.started that is not the
+    // journal's first entry. The second disjunct — more than one run.started
+    // anywhere — has no vector of its own, and this journal is the one that
+    // isolates it, satisfying the first disjunct's negation exactly. A run
+    // restarted in place is the condition it describes.
+    const restarted = journal([
+      started,
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      closed(1),
+      completed("gate"),
+      completed("record"),
+      prOpened,
+      ended,
+    ]);
+    const result = evaluateRunJournal(restarted, TREE, MANDATED);
+    expect(result.violations).toEqual(["run-started-not-first"]);
+    expect(result.status).toBe("incomplete");
+  });
 });
 
 describe("one missing vector per required entry", () => {
@@ -422,6 +466,27 @@ describe("the anchored constraints and the round rules", () => {
     expect(evaluateRunJournal(journal(COMPLETE), OTHER_TREE, MANDATED).violations).toContain("round-not-bound-to-record");
     expect(evaluateRunJournal(journal(EXECUTOR_ONLY), OTHER_TREE).violations).toContain("round-not-bound-to-record");
     expect(evaluateRunJournal(journal(COMPLETE), OTHER_TREE, MANDATED).status).toBe("incomplete");
+  });
+
+  it("names mandated-pair-mismatch whatever the writer mix", () => {
+    // The mandate rule is phrased over the lens.selected event alone and reads
+    // no completion, so it must name the same violation in an executor-only
+    // journal as in a CLI-written one. Vectored on the CLI-written side only —
+    // as every mismatch row before this one is — the universal would still
+    // hold under an evaluator that checked the mandate for product-run
+    // deliveries and let an adopter running no product command past it, which
+    // is exactly the adopter the pair is mandated for.
+    const misnamed = (steps: readonly Step[]): readonly Step[] =>
+      steps.map((step) => (step.kind === "lens.selected" ? lenses(["lens.outcome-correctness"]) : step));
+
+    const cliWritten = evaluateRunJournal(journal(misnamed(COMPLETE)), TREE, MANDATED);
+    expect(cliWritten.violations).toEqual(["mandated-pair-mismatch"]);
+    expect(cliWritten.status).toBe("incomplete");
+
+    const executorWritten = evaluateRunJournal(journal(misnamed(EXECUTOR_ONLY)), TREE, MANDATED);
+    expect(executorWritten.violations).toEqual(["mandated-pair-mismatch"]);
+    expect(executorWritten.status).toBe("incomplete");
+    expect(executorWritten.missing).toEqual(["command.completed:gate", "command.completed:record"]);
   });
 
   it("rejects a mandated pair that differs from the supplied one, and an arity failure with none supplied", () => {
