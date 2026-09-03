@@ -13,7 +13,7 @@
  * owner-executed code is unclosable and is bounded by the fact that nothing
  * authoritative reads any of this.
  */
-import { chmodSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -104,6 +104,23 @@ describe("run ids and path containment", () => {
     if (outcome.ok) return;
     expect(outcome.rejections[0]?.code).toBe("unresolvable_run");
   });
+
+  it("notes nothing for a run it has no journal for, rather than creating that run's notes", async () => {
+    const { store, runsDir } = freshStore();
+    // A note is a line IN a run's record. `unresolvable_run` says there is no
+    // such run, so a note for it would be the store's own answer to "which
+    // runs exist?" contradicting itself: `readNotes` would answer for an id
+    // `list` has never heard of, and the notes entry would outlive the typo
+    // that produced it.
+    const outcome = await store.append("run-never-allocated", startedFor("run-never-allocated"));
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.rejections[0]?.code).toBe("unresolvable_run");
+
+    expect(await store.readNotes("run-never-allocated")).toEqual([]);
+    expect(existsSync(path.join(runsDir, "notes", "run-never-allocated.jsonl"))).toBe(false);
+    expect(await store.list()).toEqual([]);
+  });
 });
 
 describe("the append discipline", () => {
@@ -117,6 +134,28 @@ describe("the append discipline", () => {
     if (!read.ok) return;
     expect(read.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(read.events.map((entry) => entry.kind)).toEqual(["run.started", "posture.declared"]);
+  });
+
+  it("refuses an input that carries its own seq rather than letting it displace the assigned one", async () => {
+    const { store } = freshStore();
+    const runId = await allocated(store);
+    expect((await store.append(runId, startedFor(runId))).ok).toBe(true);
+
+    // `seq` sits AFTER `runId` here, which is the ordering that wins: the
+    // assignment is keyed on `runId`, so any later key of the same name
+    // overwrites what the store just counted. The store's own entry point
+    // admits no `seq` at all, so the input never reaches the assignment.
+    const displacing = { ...event(runId, "posture.declared", { posture: "test-first" }), seq: 99 };
+    const outcome = await store.append(runId, displacing as unknown as RunEventInput);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([["unknown_member", "/seq"]]);
+
+    // Nothing durable moved: the journal still ends at the seq the store counted.
+    const read = await store.read(runId);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((entry) => entry.seq)).toEqual([1]);
   });
 
   it("serializes two concurrent in-process appends with strictly increasing seq", async () => {
