@@ -18,11 +18,11 @@
       "role": "Evidence kernel and fail-closed merge admission; becomes the adopter-facing managed product repository.",
       "baselineCommit": "47eca5780548153852799bb4c088c5371085809c",
       "packages": {
-        "@agent-delivery-harness/kernel": "0.1.0",
-        "@agent-delivery-harness/cli": "0.1.0",
-        "@agent-delivery-harness/conformance": "0.1.0",
-        "@agent-delivery-harness/mcp": "0.1.0",
-        "@agent-delivery-harness/action": "0.1.0"
+        "@agent-delivery-harness/kernel": "0.2.0",
+        "@agent-delivery-harness/cli": "0.2.0",
+        "@agent-delivery-harness/conformance": "0.2.0",
+        "@agent-delivery-harness/mcp": "0.2.0",
+        "@agent-delivery-harness/action": "0.2.0"
       },
       "gateId": "delivery-harness.pr-admission",
       "cliCommands": [
@@ -188,7 +188,7 @@
     },
     {
       "id": "harness-package-identities",
-      "statement": "The workspace publishes exactly five packages — @agent-delivery-harness/{kernel,cli,conformance,mcp,action} at 0.1.0 — whose only runtime dependencies are sibling packages in the same scope (zero third-party runtime dependencies).",
+      "statement": "The workspace publishes exactly five packages — @agent-delivery-harness/{kernel,cli,conformance,mcp,action} at 0.2.0 — whose only runtime dependencies are sibling packages in the same scope (zero third-party runtime dependencies).",
       "classification": "retained",
       "verification": {
         "kind": "executable",

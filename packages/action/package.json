@@ -1,14 +1,19 @@
 {
   "name": "@agent-delivery-harness/action",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "GitHub Action verifying a tracked delivery record on pull requests",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kwam1na/agent-delivery-harness.git",
+    "directory": "packages/action"
+  },
   "engines": {
     "node": ">=22.6.0"
   },
   "dependencies": {
-    "@agent-delivery-harness/kernel": "0.1.0"
+    "@agent-delivery-harness/kernel": "0.2.0"
   },
   "exports": {
     ".": "./src/index.ts"
