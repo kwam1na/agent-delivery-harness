@@ -548,6 +548,72 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(`${resolved.surface.runsDir}${path.sep}`.startsWith(`${checkout.commonDir}${path.sep}`)).toBe(false);
   });
 
+  /**
+   * The fail-closed half of the same override, which neither row above holds.
+   * Both of them name a store somewhere else and get one; what the header
+   * calls the refusal — a value that is SET but not absolute — has never been
+   * exercised, so falling back to the repository's own store here would leave
+   * the suite green. A caller that mis-spells its pin is exactly the caller
+   * that must not reach a live store by accident: the resolution is refused,
+   * the refusal says which variable to fix, and the run the invoking worktree
+   * has current is untouched even across every wrapped command.
+   */
+  it("refuses a relative store override, names the variable, and leaves the invoking worktree's run untouched", async () => {
+    const dir = await initRepo();
+    const runId = await withoutStoreOverride(async () => startRun(dir));
+    const own = await ownStoreOf(dir);
+    const journalPath = path.join(own.runsDir, `${runId}.jsonl`);
+    const before = await readFile(journalPath, "utf8");
+
+    await withStoreOverride(path.join(".", "relative-store"), async () => {
+      const refused = await resolveRunSurface(dir);
+      expect(refused.ok, `a relative ${RUN_STORE_OVERRIDE} must be refused, not fall back to the repository's own store`).toBe(
+        false,
+      );
+      // The reason is what an operator acts on, so it has to name the lever
+      // rather than describe a path they never typed.
+      expect(refused.ok ? "" : refused.reason).toContain(RUN_STORE_OVERRIDE);
+
+      for (const command of COMPLETION_WRAPPED_COMMANDS) await cli(dir, [command]);
+    });
+
+    expect(await readFile(journalPath, "utf8")).toBe(before);
+    expect(await createRunStore(own.commonDir).readNotes(runId)).toEqual([]);
+  });
+
+  /**
+   * Blank is unset — the branch `withoutStoreOverride` cannot reach, because it
+   * DELETES the variable rather than setting it empty. An environment that
+   * exports `DELIVERY_HARNESS_RUN_STORE=` with nothing after it sets it blank,
+   * and blank has to land exactly where an unset override lands: the
+   * repository's own store, for the resolver and for a wrapped command's
+   * completion alike. Refusing it would block every run-store resolution there,
+   * and rooting the store at the relative join a blank value produces would
+   * file the journal under the process's working directory.
+   */
+  it("treats a blank store override as unset and resolves the repository's own store", async () => {
+    const dir = await initRepo();
+    const own = await ownStoreOf(dir);
+
+    const runId = await withStoreOverride("", async () => {
+      const resolved = await resolveRunSurface(dir);
+      if (!resolved.ok) throw new Error(`a blank ${RUN_STORE_OVERRIDE} was refused: ${resolved.reason}`);
+      expect(resolved.surface.runsDir).toBe(own.runsDir);
+
+      const started = await startRun(dir);
+      const checked = await cli(dir, ["check"]);
+      expect(checked.code, checked.err).toBe(EXIT_OK);
+      return started;
+    });
+
+    // Read back through the repository's OWN store rather than the resolver
+    // under test, so the row says where the events landed and not merely that
+    // the resolver is self-consistent.
+    const read = await createRunStore(own.commonDir).read(runId);
+    if (!read.ok) throw new Error(`the repository's own store holds no journal for ${runId}`);
+    expect(read.events.map((event) => event.kind)).toEqual(["run.started", "command.completed"]);
+  });
+
   it("exits with the policy code when there is no repository and no resolvable run", async () => {
     const outside = await mkdtemp(path.join(os.tmpdir(), "dh-norepo-"));
     cleanups.push(outside);
