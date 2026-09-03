@@ -9,7 +9,7 @@
  */
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { writeFileSync, rmSync } from "node:fs";
+import { existsSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -168,7 +168,7 @@ async function makeArtifacts(): Promise<ArtifactsPort> {
   return createArtifactsPort({ runRootBase: base });
 }
 
-function greenPayload(): unknown {
+function greenPayload(overrides: Record<string, unknown> = {}): unknown {
   return {
     verdict: "green",
     finalized: true,
@@ -176,7 +176,35 @@ function greenPayload(): unknown {
     reviewers: { selected: ["correctness"], completed: ["correctness"], failed: [], timedOut: [] },
     findings: [],
     telemetry: { iterationCount: 2, findingCounts: { P0: 0, P1: 0, P2: 0, P3: 0 }, deferredExpansionCount: 0, deferredIssueIds: [] },
+    ...overrides,
   };
+}
+
+/**
+ * A green review that deferred one expansion finding, naming `followUpItem` as
+ * the tracker item that carries the deferred work — or naming none, which is
+ * the case the harness must refuse.
+ */
+function deferringPayload(followUpItem: string | undefined): unknown {
+  return greenPayload({
+    findings: [
+      {
+        id: "f-2",
+        severity: "P2",
+        scope: "expansion",
+        actionable: true,
+        blocking: false,
+        disposition: "deferred",
+        ...(followUpItem === undefined ? {} : { deferredIssueId: followUpItem }),
+      },
+    ],
+    telemetry: {
+      iterationCount: 2,
+      findingCounts: { P0: 0, P1: 0, P2: 1, P3: 0 },
+      deferredExpansionCount: 1,
+      deferredIssueIds: followUpItem === undefined ? [] : [followUpItem],
+    },
+  });
 }
 
 /** Captures the candidate the way the CLI does, then builds an accepted manifest bound to it. */
@@ -185,6 +213,7 @@ async function buildAcceptSubmission(
   config: HarnessConfig,
   artifacts: ArtifactsPort,
   provider = PROVIDER,
+  payload: unknown = greenPayload(),
 ): Promise<string> {
   const storage = await resolveRecordStorage(dir, { storageNamespace: config.storageNamespace });
   const capture = await captureGitCandidate({
@@ -235,7 +264,7 @@ async function buildAcceptSubmission(
     artifacts: [{ path: "reviewers/correctness.json", sha256: sha256Hex(approval), role: "reviewer-approval" }],
     attestation: { level: "self", signatures: [] },
     recordedAt: "2026-08-25T00:00:00Z",
-    claims: [{ obligation: "review.green", payloadSpec: "review.green/1", payload: greenPayload() }],
+    claims: [{ obligation: "review.green", payloadSpec: "review.green/1", payload }],
   };
   const manifestPath = path.join(runRoot, "manifest.json");
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -888,6 +917,46 @@ describe("error paths", () => {
     // Dirty the tree, then try to record.
     writeFileSync(path.join(dir, "src.txt"), "edited after gate\n", "utf8");
     expect(await runCli(["record"], runtime)).toBe(EXIT_POLICY);
+  });
+
+  it("records a review whose deferral names a tracked follow-up item", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const manifestPath = await buildAcceptSubmission(dir, config, artifacts, PROVIDER, deferringPayload("V26-1583"));
+    expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+  });
+
+  it("refuses to record a review whose deferral names no follow-up item", { timeout: 60000 }, async () => {
+    // The rule is "every deferral carries a tracked follow-up item". It is
+    // enforced one command upstream of `record`, by RG-7 over the review
+    // claim — which is what makes it reach `record` at all: an untracked
+    // deferral never becomes an evidence record, so there is nothing for a
+    // record to attest and `record` refuses for want of review evidence.
+    // Presence and shape are both refused; a tracker's opinion is never asked.
+    for (const followUpItem of [undefined, "TODO", "v26-1583"]) {
+      const dir = await initRepo();
+      const config = makeConfig();
+      const artifacts = await makeArtifacts();
+      const { runtime, err } = makeRuntime(dir, config, artifacts);
+      expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+
+      const manifestPath = await buildAcceptSubmission(dir, config, artifacts, PROVIDER, deferringPayload(followUpItem));
+      expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime), String(followUpItem)).toBe(EXIT_POLICY);
+      expect(err.join(""), String(followUpItem)).toContain("illegal_deferral");
+
+      // Nothing was published, so no record can carry the untracked deferral.
+      const storage = await resolveRecordStorage(dir, { storageNamespace: config.storageNamespace });
+      const stored = await readdir(storage.storageDir).catch(() => [] as string[]);
+      expect(stored.filter((name) => name.endsWith(".json")), String(followUpItem)).toHaveLength(0);
+
+      expect(await runCli(["record"], runtime), String(followUpItem)).toBe(EXIT_POLICY);
+      expect(err.join(""), String(followUpItem)).toContain("review_evidence_missing");
+      expect(existsSync(path.join(dir, "telemetry/delivery-runs"))).toBe(false);
+    }
   });
 
   it("check outside a repository blocks with a typed store finding", { timeout: 60000 }, async () => {

@@ -331,7 +331,10 @@ Deferring a finding is legal only when **all** of these hold:
 
 And the converse: `deferredIssueId` must be **absent** on any finding whose
 disposition is not `deferred` — an issue id on a resolved finding is
-`illegal_deferral` too. The ten `rg-7-*` and three `rg-6-*` reject vectors
+`illegal_deferral` too. This is where the "every deferral is tracked" rule is
+enforced for the whole product: a refused manifest publishes no evidence record,
+so no delivery record can ever attest a review that deferred untracked work
+(see [the delivery record](delivery-record.md)). The ten `rg-7-*` and three `rg-6-*` reject vectors
 walk every edge of this table; run your provider against them before running
 it against a real repository.
 

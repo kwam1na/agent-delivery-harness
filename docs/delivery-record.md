@@ -117,6 +117,35 @@ relaxed under any policy.
    policy, no blocked claim, every configured obligation covered, and no
    delivery-owned path in the candidate tree.
 
+## A deferral with no follow-up item never reaches a record
+
+A green review may defer expansion work rather than repair it, and the harness
+requires each deferral to name the tracker item carrying the deferred work. It
+enforces that at `submit-evidence` rather than at `record`: `RG-7` refuses a
+`review.green/1` claim whose deferred finding names no `deferredIssueId`, or
+names one that is not shaped like a tracker item identifier (`V26-1583`, not
+`TODO` and not a lowercase slug). The refusal is presence and shape only —
+whether the named item exists, is open, or says anything useful is never asked,
+because a local fail-closed gate that consulted a tracker would be a gate a
+tracker outage could open.
+
+That placement is what makes the rule reach `record`. A refused manifest
+publishes no evidence record, so a record with an untracked deferral behind it
+is not something `record` has to detect: there is no accepted review evidence
+for the obligation at all, and `record` refuses for want of it. The CLI suite
+proves the whole path — missing reference, `TODO`, and a lowercase slug each
+refused at submission, no record in the store, `record` blocked — beside the
+positive case where a deferral naming a real item records normally.
+
+`record` deliberately adds no second deferral check of its own. It could only
+read a deferral the evidence record carried, and the evidence record is written
+by `packages/kernel/src/recorder.ts`, whose exact bytes are pinned by
+`qualifications/agent-skills-provider-interoperability.json` and re-checked on
+every run by the provider-rail qualification. Carrying a follow-up reference
+through to record time therefore costs a re-earned interoperability
+qualification at a new harness baseline, and buys a second refusal of a
+condition the first one already makes unreachable.
+
 ## Delivery-owned paths are never committed
 
 Two path sets belong to the managed delivery, not to the candidate: the
