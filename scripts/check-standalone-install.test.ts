@@ -21,20 +21,30 @@
  * them. One trivial `npm pack` and `npm install --offline` is what that row
  * costs, and it is the only thing that fails when the wiring is deleted.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import type { CliSmokeCase } from "./check-standalone-install.ts";
 import {
+  ALLOCATED_RUN_ID_EXPECTATION,
+  ALLOCATED_RUN_ID_NEEDLE,
   CLI_PACKAGE_NAME,
   CLI_SMOKE_CASES,
   EXPECTED_SCRATCH_JOURNALS,
   EXPECTED_SCRATCH_NOTE_LINES,
   PACKAGE_SCOPE,
+  allocatedRunIdFrom,
+  caseEnvironment,
+  caseLabel,
   cliProbeVacuityFinding,
   gitNamespaceCleared,
+  holdsRunStore,
+  missingExpectations,
   readScratchRunStore,
   readWorkspacePackages,
+  relocatedGitEnvironment,
+  relocationControlFinding,
   runStandaloneInstallCheck,
 } from "./check-standalone-install.ts";
 
@@ -123,20 +133,74 @@ describe("CLI_SMOKE_CASES", () => {
     for (const smoke of CLI_SMOKE_CASES) {
       expect(smoke.args.length).toBeGreaterThan(0);
       expect(smoke.expected.length).toBeGreaterThan(0);
-      expect(smoke.expected.every((needle) => needle.trim() !== "")).toBe(true);
+      expect(smoke.expected.every((needle) => typeof needle !== "string" || needle.trim() !== "")).toBe(true);
     }
   });
 
-  // The order is load-bearing twice over: `runs list` asserts an empty store,
-  // and the refused `emit` resolves the pointer `run.started` wrote.
-  it("reads the empty store before allocating, and refuses after", () => {
-    const labels = CLI_SMOKE_CASES.map((smoke) => smoke.args.join(" "));
-    const list = labels.findIndex((label) => label === "runs list");
-    const started = labels.findIndex((label) => label.startsWith("emit run.started"));
+  // The order is load-bearing three times over: the first `runs list` asserts
+  // an empty store, the second asserts the run the allocation reported, and the
+  // refused `emit` resolves the pointer `run.started` wrote.
+  it("reads the empty store before allocating, lists it non-empty after, and refuses after that", () => {
+    const labels = CLI_SMOKE_CASES.map(caseLabel);
+    const empty = labels.findIndex((label) => label.startsWith("runs list") && label.includes("empty"));
+    const started = labels.findIndex((label) => label.startsWith("emit run.started") && !label.includes("GIT_"));
+    const listed = labels.findIndex((label) => label.startsWith("runs list") && label.includes("non-empty"));
     const refused = labels.findIndex((label) => label.startsWith("emit sensor.unknown-kind"));
-    expect(list).toBeGreaterThanOrEqual(0);
-    expect(started).toBeGreaterThan(list);
+    expect(empty).toBeGreaterThanOrEqual(0);
+    expect(started).toBeGreaterThan(empty);
+    expect(listed).toBeGreaterThan(started);
     expect(refused).toBeGreaterThan(started);
+  });
+
+  // AT-D2. A `store.list()` that unconditionally returned `[]` passes an
+  // assertion taken on an empty store, so the listing path is asserted again
+  // after the allocation — and against the id the allocation itself reported,
+  // which is the one thing a stubbed listing cannot produce.
+  it("asserts the listing non-empty, naming the run the allocation reported", () => {
+    const listing = CLI_SMOKE_CASES.filter(
+      (smoke) => smoke.args.join(" ") === "runs list" && smoke.expected.includes(ALLOCATED_RUN_ID_EXPECTATION),
+    );
+    expect(listing).toHaveLength(1);
+    expect(listing[0]!.expected).toContain("across 1 run(s)");
+    expect(CLI_SMOKE_CASES.indexOf(listing[0]!)).toBeGreaterThan(
+      CLI_SMOKE_CASES.findIndex((smoke) => smoke.args[1] === "run.started"),
+    );
+  });
+
+  // AT-D3. Every other case is spawned with the `GIT_` namespace already
+  // cleared, so none of them can witness the installed CLI clearing it. Exactly
+  // one case leaves the namespace pointed somewhere else, and it asserts the
+  // scratch repository's own current run — an id the decoy store has never
+  // heard of.
+  it("runs exactly one case under a relocated GIT_ namespace, and it names the scratch run", () => {
+    const relocated = CLI_SMOKE_CASES.filter((smoke) => smoke.underRelocatedGit === true);
+    expect(relocated).toHaveLength(1);
+    expect(relocated[0]!.exitCode).toBe(1);
+    expect(relocated[0]!.expected).toContain(ALLOCATED_RUN_ID_EXPECTATION);
+    expect(caseLabel(relocated[0]!)).toContain("GIT_");
+  });
+
+  // AT-1 (P1, round 2). The runner reaches these needles through one line the
+  // fast suite cannot see, and reverting that line to a plain
+  // `smoke.expected.filter(...)` left every check green while the allocated id
+  // stopped being asserted at all. A case therefore asks for that id with a
+  // needle that is NOT a string, so the collapsed filter no longer typechecks
+  // and `npm run check`'s typecheck leg refuses it. This row is what fails if
+  // the needle is spelled as a string again.
+  it("asks for the allocated id with a needle no substring filter can consume", () => {
+    const dynamic = CLI_SMOKE_CASES.filter((smoke) => smoke.expected.some((needle) => typeof needle !== "string"));
+    expect(dynamic.map((smoke) => smoke.proves)).toEqual([
+      "non-empty, naming the run just allocated",
+      "refused for the scratch repository's run under a relocated GIT_ namespace",
+    ]);
+  });
+
+  // Two cases share the argument vector `runs list`, so the vector alone can no
+  // longer name the case a finding is about.
+  it("labels every case distinguishably", () => {
+    const labels = CLI_SMOKE_CASES.map(caseLabel);
+    expect(new Set(labels).size).toBe(CLI_SMOKE_CASES.length);
+    expect(labels.every((label) => label.trim() !== "")).toBe(true);
   });
 
   it("carries the payload inline, because the probe runs with stdin ignored", () => {
@@ -144,6 +208,133 @@ describe("CLI_SMOKE_CASES", () => {
       if (smoke.args[0] !== "emit") continue;
       expect(smoke.args).toContain("--json");
     }
+  });
+});
+
+describe("allocatedRunIdFrom", () => {
+  it("reads the id out of what `emit run.started` printed", () => {
+    expect(allocatedRunIdFrom("started run run-0123456789abcdef\n")).toBe("run-0123456789abcdef");
+  });
+
+  it("is undefined for output that reported no allocation", () => {
+    expect(allocatedRunIdFrom("total 0 bytes across 0 run(s)\n")).toBeUndefined();
+  });
+
+  // The refusal the relocated case asserts also carries a run id, in prose the
+  // allocation never prints. Matching it would let a case that allocated
+  // nothing still claim an id.
+  it("does not read an id out of a refusal that merely mentions one", () => {
+    expect(allocatedRunIdFrom("run run-0123456789abcdef is current; --force displaces it")).toBeUndefined();
+  });
+});
+
+describe("missingExpectations", () => {
+  const listing: CliSmokeCase = { args: ["runs", "list"], exitCode: 0, expected: ["across 1 run(s)"] };
+
+  it("reports a static needle the output did not carry", () => {
+    expect(missingExpectations(listing, "across 0 run(s)", "run-0123456789abcdef")).toEqual(["across 1 run(s)"]);
+  });
+
+  it("reports the allocated id as missing when the output does not name it", () => {
+    const smoke = { ...listing, expected: [...listing.expected, ALLOCATED_RUN_ID_EXPECTATION] } as const;
+    expect(missingExpectations(smoke, "across 1 run(s)", "run-0123456789abcdef")).toEqual(["run-0123456789abcdef"]);
+  });
+
+  it("is satisfied when the output carries both the static needles and the id", () => {
+    const smoke = { ...listing, expected: [...listing.expected, ALLOCATED_RUN_ID_EXPECTATION] } as const;
+    expect(missingExpectations(smoke, "across 1 run(s)  run-0123456789abcdef", "run-0123456789abcdef")).toEqual([]);
+  });
+
+  // A run that allocated nothing must fail this case by name rather than pass
+  // it vacuously for want of anything to look for.
+  it("names the absent allocation when no id was ever reported", () => {
+    const smoke = { ...listing, expected: [...listing.expected, ALLOCATED_RUN_ID_EXPECTATION] } as const;
+    expect(missingExpectations(smoke, "across 1 run(s)", undefined)).toEqual([ALLOCATED_RUN_ID_NEEDLE]);
+  });
+
+  it("looks for no id at all where the case did not ask for one", () => {
+    expect(missingExpectations(listing, "across 1 run(s)", undefined)).toEqual([]);
+  });
+});
+
+describe("relocatedGitEnvironment", () => {
+  it("points both GIT_DIR and GIT_COMMON_DIR at the decoy and keeps the rest", () => {
+    const env = relocatedGitEnvironment({ PATH: "/usr/bin" }, "/decoy/.git");
+    expect(env).toEqual({ PATH: "/usr/bin", GIT_DIR: "/decoy/.git", GIT_COMMON_DIR: "/decoy/.git" });
+  });
+});
+
+describe("caseEnvironment", () => {
+  const cleared = { PATH: "/usr/bin" };
+  const relocated = { PATH: "/usr/bin", GIT_DIR: "/decoy/.git", GIT_COMMON_DIR: "/decoy/.git" };
+
+  // The runner's own selection, extracted because only the slow leg reaches it
+  // and the installed CLI answers identically either way — so no CLI case can
+  // tell a relocated child from an unrelocated one, and a selection that
+  // collapsed to `cleared` would leave every run-surface case green.
+  it("hands the relocated environment to the case that asked for it", () => {
+    expect(caseEnvironment({ args: ["x"], exitCode: 0, expected: ["x"], underRelocatedGit: true }, cleared, relocated)).toBe(
+      relocated,
+    );
+  });
+
+  it("hands every other case the cleared one", () => {
+    expect(caseEnvironment({ args: ["x"], exitCode: 0, expected: ["x"] }, cleared, relocated)).toBe(cleared);
+    expect(caseEnvironment({ args: ["x"], exitCode: 0, expected: ["x"], underRelocatedGit: false }, cleared, relocated)).toBe(
+      cleared,
+    );
+  });
+});
+
+describe("relocationControlFinding", () => {
+  // The allow side of two absence assertions. Both "the store did not move" and
+  // "the decoy holds nothing" are satisfied by a child that was never
+  // relocated, so the control has to fail when the relocation is not live.
+  it("is silent when a git that honours the environment lands in the decoy", () => {
+    expect(relocationControlFinding("the case", "/decoy/.git", "/decoy/.git")).toBeUndefined();
+  });
+
+  it("is a finding when it lands anywhere else — the case would witness nothing", () => {
+    const finding = relocationControlFinding("the case", "/scratch/repo/.git", "/decoy/.git");
+    expect(finding?.rule).toBe("anti-vacuity");
+    expect(finding?.subject).toBe("relocated-git");
+    expect(finding?.message).toContain("/scratch/repo/.git");
+  });
+
+  it("is a finding when git could not answer at all", () => {
+    const finding = relocationControlFinding("the case", undefined, "/decoy/.git");
+    expect(finding?.subject).toBe("relocated-git");
+    expect(finding?.message).toContain("no common directory at all");
+  });
+
+  // The temp root the decoy is built under is a symlink on macOS, and git
+  // answers with the spelling it was handed rather than the realpath.
+  it("compares the two spellings of one directory as equal", () => {
+    const real = mkdtempSync(path.join(realpathSync(os.tmpdir()), "dh-standalone-control-"));
+    cleanups.push(real);
+    const gitDir = path.join(real, ".git");
+    mkdirSync(gitDir, { recursive: true });
+    const linked = path.join(real, "link");
+    symlinkSync(real, linked, "dir");
+    expect(relocationControlFinding("the case", path.join(linked, ".git"), gitDir)).toBeUndefined();
+  });
+});
+
+describe("holdsRunStore", () => {
+  it("is false for a repository nothing wrote a run store into", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "dh-standalone-decoy-"));
+    cleanups.push(dir);
+    mkdirSync(path.join(dir, ".git"), { recursive: true });
+    expect(holdsRunStore(dir)).toBe(false);
+  });
+
+  // What the relocated case fails on if the installed CLI stops clearing the
+  // namespace: the store follows GIT_DIR and lands in the decoy.
+  it("is true once a run store exists under the repository's git directory", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "dh-standalone-decoy-"));
+    cleanups.push(dir);
+    mkdirSync(path.join(dir, ".git", "managed-delivery", "runs"), { recursive: true });
+    expect(holdsRunStore(dir)).toBe(true);
   });
 });
 
