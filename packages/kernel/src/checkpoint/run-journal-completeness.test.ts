@@ -349,6 +349,12 @@ describe("a run carrying more than one ticket", () => {
     posture,
     lenses(),
     opened(1),
+    // The SECOND `lens.selected` is here for the same reason the second ticket
+    // is: `obtain-review` emits one before realizing the lenses of every round,
+    // so a review of more than one round writes one after the first open. All
+    // three prerequisite kinds therefore recur after the open in this journal,
+    // and the clean verdict covers all three rather than two of them.
+    lenses(),
     secondTicketRead,
     boundPosture,
     closed(1),
@@ -377,16 +383,19 @@ describe("a run carrying more than one ticket", () => {
   });
 
   it("still names prerequisites-after-first-round when the FIRST of a kind lands late in the same journal", () => {
-    // The discrimination runs both ways: move the run's own first
-    // `posture.declared` past the open and the constraint fires, on a journal
-    // otherwise identical to the clean one above. Without this row a reading
-    // that never fires at all would satisfy the two rows above.
-    const firstPostureLate = journal([
+    // The discrimination runs both ways: move the run's own first `ticket.read`
+    // past the open and the constraint fires, on a journal otherwise identical
+    // to the clean one above. Without this row a reading that never binds
+    // `ticket.read` at all would satisfy the two rows above — and the late leg
+    // is `ticket.read` rather than `posture.declared` because the per-identifier
+    // reject vector below already moves the posture, so moving it here would
+    // discriminate nothing the suite does not already have.
+    const firstTicketReadLate = journal([
       started,
-      ticketRead,
+      posture,
       lenses(),
       opened(1),
-      posture,
+      ticketRead,
       secondTicketRead,
       boundPosture,
       closed(1),
@@ -395,7 +404,7 @@ describe("a run carrying more than one ticket", () => {
       boundPrOpened,
       ended,
     ]);
-    const result = evaluateRunJournal(firstPostureLate, TREE, MANDATED);
+    const result = evaluateRunJournal(firstTicketReadLate, TREE, MANDATED);
     expect(result.violations).toEqual(["prerequisites-after-first-round"]);
     expect(result.status).toBe("incomplete");
   });
