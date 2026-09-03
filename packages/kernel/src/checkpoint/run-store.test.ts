@@ -173,6 +173,31 @@ describe("the append discipline", () => {
     expect(read.events.map((entry) => entry.seq)).toEqual([1]);
   });
 
+  it("refuses an input whose own seq precedes runId, the ordering the assignment loop used to swallow", async () => {
+    const { store } = freshStore();
+    const runId = await allocated(store);
+    expect((await store.append(runId, startedFor(runId))).ok).toBe(true);
+
+    // The complementary ordering to the row above: `seq` sits BEFORE `runId`.
+    // This is the position that used to be accepted in silence — the
+    // assignment loop copied the 99 across and then overwrote it when it
+    // reached `runId`, so the input never displaced anything and nothing
+    // reported that it had tried. The gate walks `Object.keys`, so it refuses
+    // this position for exactly the reason it refuses the other; no mutation
+    // separates the two orderings, which is why both need a row.
+    const displacing = { seq: 99, ...event(runId, "posture.declared", { posture: "test-first" }) };
+    const outcome = await store.append(runId, displacing as unknown as RunEventInput);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([["unknown_member", "/seq"]]);
+
+    // Nothing durable moved: the journal still ends at the seq the store counted.
+    const read = await store.read(runId);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((entry) => entry.seq)).toEqual([1]);
+  });
+
   it("serializes two concurrent in-process appends with strictly increasing seq", async () => {
     const { store } = freshStore();
     const runId = await allocated(store);
