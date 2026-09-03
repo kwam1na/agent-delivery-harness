@@ -30,7 +30,7 @@ import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { READOUT_LABELS } from "./run-projection.ts";
 import { DEFAULT_POLL_SECONDS, RUN_SERVER_CSP, escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
-import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface } from "./run-surface.ts";
+import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface, resolveWorktreeRoot } from "./run-surface.ts";
 
 const exec = promisify(execFile);
 const cleanups: string[] = [];
@@ -228,6 +228,14 @@ async function readoutRowsFor(dir: string, runId: string): Promise<{ readonly pr
     missing: lines.find((line) => line.includes("missing:")) ?? "",
   };
 }
+
+/**
+ * One `runs show` row's cells. The projection joins a row's cells with two
+ * spaces and collapses the whitespace inside every cell, so splitting on the
+ * separator recovers exactly what the surface decided to put in each column —
+ * which is what a wording assertion has to read, rather than the row's text.
+ */
+const cellsOf = (row: string): readonly string[] => row.trim().split(/ {2}/);
 
 /** A journal whose closed round does not pair: absent from `present`, named by `missing`. */
 async function expectRoundClosedAbsent(dir: string, runId: string): Promise<void> {
@@ -771,6 +779,31 @@ describe("emit, the boundary wrap, and runs", () => {
     const { page, state } = await pageAndState(await serve([nested]));
     expect(page).not.toContain("harness.config.ts present");
     expect(runOf(state, runId).readout.note).toBeUndefined();
+  });
+
+  it("names the invoking directory where git names a repository but no worktree root", async () => {
+    const dir = await initRepo();
+    const runId = await executorOnlyRun(dir);
+
+    // A directory git answers `--git-dir` and `--git-common-dir` for and
+    // refuses `--show-toplevel` in: the store resolves, so `runs show` runs,
+    // while the worktree root does not resolve at all. That is the fallback
+    // arm's one reachable entry, and it is asserted rather than assumed — a
+    // git that started naming a toplevel here would leave the arm untouched
+    // and this row still green.
+    const gitDir = path.join(dir, ".git");
+    expect((await resolveWorktreeRoot(gitDir)).ok, "no worktree root resolves inside a .git directory").toBe(false);
+
+    // The config the note looks for, planted at that directory, so WHICH root
+    // the note names is observable rather than merely absent. The repository's
+    // own root carries one too, from `initRepo`, so a fallback that reached
+    // for the worktree root instead would also print a note — a different one.
+    await writeFile(path.join(gitDir, "harness.config.ts"), "export default {};\n", "utf8");
+
+    const shown = await cli(gitDir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    const note = shown.out.split("\n").find((line) => line.includes("note:")) ?? "";
+    expect(note).toBe(`    note: no CLI gate completion in this journal; harness.config.ts present at ${gitDir}`);
   });
 
   it("prints a labeled treeSha line from prepare, and records the completion", async () => {
@@ -1958,9 +1991,13 @@ describe("runs serve", () => {
     const header = lines.findIndex((line) => line.trim() === "rounds:");
     expect(header, shown.out).toBeGreaterThan(-1);
     const rows = lines.slice(header + 1, header + 3);
-    expect(rows[0]).toContain("lens.outcome-correctness");
-    expect(rows[0]).not.toContain("never opened");
-    expect(rows[1]).toContain("never opened");
+    // The lens CELL, whole, not a substring of the row. `lenses never opened`
+    // contains `never opened` too, so a substring check leaves the terminal
+    // free to prefix the words the page prints bare — one journal answering
+    // one question two ways, in the wording rather than in the verdict, which
+    // is the divergence the shared projection exists to close.
+    expect(cellsOf(rows[0]!)[2]).toBe('lenses ["lens.outcome-correctness"]');
+    expect(cellsOf(rows[1]!)[2]).toBe("never opened");
   });
 
   it("labels a CLI-written gate completion as the CLI's", async () => {
