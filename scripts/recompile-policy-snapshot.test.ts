@@ -13,6 +13,7 @@
  * the compile runs under, the installed charter set — and requires the output
  * to move with it.
  */
+import { spawn } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +39,32 @@ import {
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPTS_DIR, "..");
+const SCRIPT_PATH = path.join(SCRIPTS_DIR, "recompile-policy-snapshot.ts");
+const TSX_BIN = path.join(REPO_ROOT, "node_modules", ".bin", "tsx");
+
+/**
+ * The script as a command, run against a fixture root. The script file stays
+ * in this checkout so `@agent-delivery-harness/kernel` resolves the way it
+ * does in a real run; only the working directory — which is what the command
+ * takes as its root — is the fixture's.
+ */
+function run(cwd: string, ...args: readonly string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(TSX_BIN, [SCRIPT_PATH, ...args], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+  });
+}
 
 const cleanups: string[] = [];
 afterAll(async () => {
@@ -180,6 +207,62 @@ describe("re-recording the compiled policy snapshot", () => {
     const dir = await fixture();
     await rm(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE));
     await expect(recompilePolicySnapshot(dir)).rejects.toThrow(RecompileError);
+  });
+
+  it("rewrites the snapshot when the policy has moved, as the command", { timeout: 120_000 }, async () => {
+    // The exported function returns bytes and writes nothing, so the one side
+    // effect this script has — and the branch AGENTS.md tells the delivery loop
+    // to run — is only proven by driving the command itself.
+    const dir = await fixture();
+    const before = await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8");
+    const document = await readPolicyJson<{ reviewLenses: unknown[] }>(dir, DOCUMENT_FILE);
+    document.reviewLenses = [
+      ...document.reviewLenses,
+      { lensId: "lens.security", category: "additional", personaId: "persona.security" },
+    ];
+    await writePolicyJson(dir, DOCUMENT_FILE, document);
+
+    const result = await run(dir);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain("rewrote");
+    const after = await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8");
+    expect(after).not.toBe(before);
+    expect(after).toBe((await recompilePolicySnapshot(dir)).text);
+    // And it says the comparison report has stopped describing the snapshot,
+    // rather than leaving the projection sensor to be the first to say so.
+    expect(result.stdout).toContain(REPORT_FILE);
+  });
+
+  it("writes nothing under --check, and reports the drift", { timeout: 120_000 }, async () => {
+    // `--check` is documented as the report-only mode. A mode that writes into
+    // a protected authority tree while reporting is worse than no mode at all.
+    const dir = await fixture();
+    const before = await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8");
+
+    const clean = await run(dir, "--check");
+    expect(clean.code, clean.stderr).toBe(0);
+
+    const document = await readPolicyJson<{ reviewLenses: unknown[] }>(dir, DOCUMENT_FILE);
+    document.reviewLenses = [
+      ...document.reviewLenses,
+      { lensId: "lens.security", category: "additional", personaId: "persona.security" },
+    ];
+    await writePolicyJson(dir, DOCUMENT_FILE, document);
+
+    const drifted = await run(dir, "--check");
+    expect(drifted.code, "a snapshot that is not the current policy's compile is a failure").not.toBe(0);
+    expect(await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8")).toBe(before);
+  });
+
+  it("refuses as a command, without writing, when an input is unusable", { timeout: 120_000 }, async () => {
+    const dir = await fixture();
+    const before = await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8");
+    await rm(path.join(dir, INSTALLED_ARCHIVE_DIR), { recursive: true, force: true });
+
+    const result = await run(dir);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("recompile-policy-snapshot:");
+    expect(await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8")).toBe(before);
   });
 
   it("names the comparison report it does not re-record", async () => {

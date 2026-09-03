@@ -721,6 +721,30 @@ describe("an outcome that does not name its reviewers", () => {
     ).toEqual(FIXTURE_CHARTERS.map((charter) => `reviewers/${charter}.json`).sort());
   });
 
+  it("carries unnamed reviewers that did not finish as reviewers that did not finish", { timeout: 120_000 }, async () => {
+    // The greenwash row for this form. Every other row that reaches the
+    // assignment carries `approved`, so an assignment that ignored the result
+    // it was given and stamped `approved` would satisfy all of them — and this
+    // is a document whose verdict says green while both lenses crashed, which
+    // is exactly the manifest RG-3 exists to refuse. It can only refuse what
+    // the manifest reports.
+    const fixture = await createFixture();
+    const emitted = await emit(fixture, {
+      spec: "review-outcome/1",
+      verdict: "green",
+      reviewers: FIXTURE_CHARTERS.map(() => ({ result: "failed" })),
+      findings: [],
+    });
+    expect(emitted.code, `emit failed: ${emitted.stderr}`).toBe(0);
+
+    const manifest = await readManifest(emitted.stdout.trim());
+    const reviewers = manifest.claims[0]!.payload.reviewers;
+    expect(reviewers.selected).toEqual([...FIXTURE_CHARTERS]);
+    expect(reviewers.failed).toEqual([...FIXTURE_CHARTERS]);
+    expect(reviewers.completed).toEqual([]);
+    expect(manifest.artifacts.filter((artifact) => artifact.role === "reviewer-approval")).toEqual([]);
+  });
+
   it("refuses unnamed results that disagree, rather than letting position decide who failed", () => {
     refuses([{ result: "approved" }, { result: "failed" }, { result: "approved" }], "disagree");
   });

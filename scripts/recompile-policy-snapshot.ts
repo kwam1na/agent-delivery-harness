@@ -226,13 +226,8 @@ export async function recompilePolicySnapshot(rootDir: string): Promise<Recompil
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
-export function repoRootFromHere(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-}
-
-async function main(argv: readonly string[]): Promise<void> {
+async function main(argv: readonly string[], rootDir: string): Promise<void> {
   const checkOnly = argv.includes("--check");
-  const rootDir = repoRootFromHere();
   let result: RecompileResult;
   try {
     result = await recompilePolicySnapshot(rootDir);
@@ -283,5 +278,9 @@ const invokedDirectly =
   process.argv[1] !== undefined && canonicalEntryPath(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
-  await main(process.argv.slice(2));
+  // The root is the working directory, not this file's parent, so the whole
+  // command — argv, both branches, and the one write — can be driven against a
+  // fixture. `npm run policy:recompile` runs from the package root, which is
+  // the repository root, so the documented invocation is unchanged.
+  await main(process.argv.slice(2), process.cwd());
 }
