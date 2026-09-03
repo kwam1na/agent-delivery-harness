@@ -62,6 +62,58 @@ const expectRejected = (vector: Vector): void => {
   }
 };
 
+/**
+ * The kinds whose payload owns the optional `ticket` member, exhaustively.
+ *
+ * WHY A SWEEP RATHER THAN EIGHT MORE HAND-AUTHORED VECTORS. The member belongs
+ * to exactly these five kinds, which means it is inadmissible on the other
+ * eight. Written out one vector per non-owning kind, the copy nobody got round
+ * to writing is precisely where the closed contract would widen unseen. So the
+ * boundary is stated as a literal owner list and swept over the WHOLE
+ * vocabulary — the golden-vector suite below pins `doc.kinds` equal to
+ * `RUN_EVENT_KINDS`, so every kind is covered and a new kind arrives already
+ * answered for.
+ *
+ * Each kind is probed with its OWN accept vector, with `ticket` written into
+ * the envelope and the payload together so the two agree exactly and
+ * `unsupported_combination` cannot mask the answer: what is left is the payload
+ * table's verdict on the member and nothing else.
+ */
+const TICKET_OWNING_KINDS: readonly string[] = ["run.started", "ticket.read", "posture.declared", "gate.reported", "pr.opened"];
+
+const PROBE_TICKET = "V26-1675";
+
+/** One accept vector, with `ticket` bound on both sides of the mirror. */
+const withTicket = (value: unknown): unknown => {
+  const event = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  const payload = typeof event["payload"] === "object" && event["payload"] !== null ? (event["payload"] as Record<string, unknown>) : {};
+  return { ...event, ticket: PROBE_TICKET, payload: { ...payload, ticket: PROBE_TICKET } };
+};
+
+describe("the kinds whose payload owns `ticket`", () => {
+  it("names five kinds, each one of the v1 vocabulary", () => {
+    expect(TICKET_OWNING_KINDS).toHaveLength(5);
+    for (const kind of TICKET_OWNING_KINDS) expect([...RUN_EVENT_KINDS], `${kind} is not a run-event kind`).toContain(kind);
+  });
+
+  for (const entry of doc.kinds) {
+    const owns = TICKET_OWNING_KINDS.includes(entry.kind);
+    it(`${owns ? "admits" : "refuses"} a bound ticket on ${entry.kind}`, () => {
+      const accept = entry.accept[0];
+      if (accept === undefined) throw new Error(`${entry.kind} has no accept vector to probe`);
+      const verdict = validateRunEvent(withTicket(accept.value));
+      if (owns) {
+        expect(verdict, `${entry.kind}: ${JSON.stringify(verdict)}`).toEqual({ ok: true });
+        return;
+      }
+      expect(verdict.ok, `${entry.kind} must not admit a ticket`).toBe(false);
+      if (verdict.ok) return;
+      const located = verdict.rejections.map((rejection) => `${rejection.code} at ${rejection.pointer}`);
+      expect(located, `${entry.kind}: reported ${located.join(", ")}`).toContain("unknown_member at /payload/ticket");
+    });
+  }
+});
+
 describe("the run-event/1 golden vectors", () => {
   it("cover every kind in the v1 vocabulary with at least one accept and one reject vector", () => {
     expect(doc.kinds.map((entry) => entry.kind)).toEqual([...RUN_EVENT_KINDS]);
