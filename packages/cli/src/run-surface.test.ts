@@ -2023,7 +2023,11 @@ describe("a run carrying more than one ticket", () => {
     expect(detailOfKind("posture.declared", "characterization-first")).toContain("V26-1658");
     expect(detailOfKind("gate.reported", "npm run check")).toContain("V26-1658");
     expect(detailOfKind("pr.opened", "pr/1658")).toContain("V26-1658");
-    expect(page).toContain("V26-1658");
+
+    // The PAGE renders the binding too, not just the JSON: the bound row is
+    // named verbatim, so a page that dropped the suffix goes red here rather
+    // than passing on the `ticket.read` row that spells the same ticket.
+    expect(page).toContain("npm run check pass in 5ms for V26-1658");
 
     // And nothing about the bindings makes the journal incomplete: the member
     // is optional, so this run reads exactly as an unbound one would.

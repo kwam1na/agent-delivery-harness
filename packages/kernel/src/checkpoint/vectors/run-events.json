@@ -1,5 +1,5 @@
 {
-  "purpose": "Golden accept/reject vectors for the run-event/1 family. Hand-authored claims about the closed contract: every kind carries at least one accept and one reject vector, reject vectors name the codes the validator must report, and the family-level vectors cover the envelope rules that belong to no single kind. The implementation conforms to these vectors, never the reverse.",
+  "purpose": "Golden accept/reject vectors for the run-event/1 family. Hand-authored claims about the closed contract: every kind carries at least one accept and one reject vector, reject vectors name the codes the validator must report and, where the claim is which member is inadmissible, the pointer each code must carry, and the family-level vectors cover the envelope rules that belong to no single kind. The implementation conforms to these vectors, never the reverse.",
   "kinds": [
     {
       "kind": "run.started",
@@ -1145,6 +1145,35 @@
             "attestation": "self",
             "payload": {
               "code": "config_unloadable"
+            }
+          }
+        },
+        {
+          "name": "a ticket on a kind whose payload does not own the member",
+          "rejections": [
+            {
+              "code": "unknown_member",
+              "at": "/payload/ticket"
+            }
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "blocker.recorded",
+            "actor": {
+              "role": "executor"
+            },
+            "ticket": "V26-1675",
+            "attestation": "self",
+            "payload": {
+              "code": "review.loop-bound-reached",
+              "summary": "the bound was reached with dissent open",
+              "ticket": "V26-1675"
             }
           }
         }
