@@ -17,6 +17,18 @@
  * here rather than in the emitting command so that every appender — today's
  * `emit`, tomorrow's — is held to it at the store boundary.
  *
+ * A RUN MAY CARRY MORE THAN ONE TICKET. A dogfood delivery is the ordinary
+ * case: one run, one ticket for the thing being dogfooded and one for the
+ * ordinary item it delivered, each with its own posture. So `posture.declared`,
+ * `gate.reported`, and `pr.opened` each take an OPTIONAL `ticket`, of the same
+ * shape `ticket.read` uses, naming which of the run's tickets the entry belongs
+ * to. The member is optional rather than required because binding by adjacency
+ * is what every single-ticket journal already does and those journals stay
+ * readable: an entry that omits it binds to the run's PRIMARY ticket, which
+ * `runPrimaryTicket` below defines. Nothing requires the member — the
+ * completeness evaluator does not name it — so adding it opens no journal that
+ * was closed and closes none that was open.
+ *
  * SELF-ATTESTED. Every event carries `attestation: "self"`. Nothing
  * authoritative reads this family; see the run store's header.
  */
@@ -256,7 +268,10 @@ const PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> = O
     { name: "posture", check: label, required: false },
     { name: "tracker", check: label },
   ],
-  "posture.declared": [{ name: "posture", check: label }],
+  "posture.declared": [
+    { name: "posture", check: label },
+    { name: "ticket", check: ticketId, required: false },
+  ],
   "lens.selected": [
     // Arity is deliberately NOT checked here: `mandated-pair-mismatch` is the
     // evaluator's finding, and a pair the validator refused to store could
@@ -287,10 +302,12 @@ const PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> = O
     { name: "command", check: label },
     { name: "outcome", check: oneOf(RUN_GATE_REPORTED_OUTCOMES) },
     { name: "durationMs", check: nonNegativeInt },
+    { name: "ticket", check: ticketId, required: false },
   ],
   "pr.opened": [
     { name: "url", check: httpUrl },
     { name: "candidateTreeSha", check: treeSha },
+    { name: "ticket", check: ticketId, required: false },
   ],
   "blocker.recorded": [
     { name: "code", check: label },
@@ -431,6 +448,30 @@ export function validateRunEvent(value: unknown, options: { readonly seqAssigned
   }
 
   return collector.verdict();
+}
+
+/**
+ * The run's primary ticket: the first ticket the journal names, in `seq` order.
+ *
+ * WHY THE FIRST, AND WHY FROM THE ENVELOPE. A run that carries more than one
+ * `ticket.read` needs one of them to be the ticket the run is ABOUT — the one
+ * a runs table names in its row and the one an entry that omits `ticket` binds
+ * to. Order is the only thing that distinguishes them without asking the
+ * executor to declare a primary it could get wrong, so the first wins. The
+ * envelope is what is read rather than each kind's payload, for the same
+ * reason every other reader reads it: the validator holds the two to exact
+ * agreement, so the envelope is the ONE place a ticket lives whatever kind
+ * carries it — `run.started`'s when a run named its ticket at the start, the
+ * first `ticket.read`'s otherwise.
+ *
+ * `undefined` for a journal that names no ticket at all, which is an ordinary
+ * run rather than a defect: nothing in the family requires one.
+ */
+export function runPrimaryTicket(events: readonly RunEvent[]): string | undefined {
+  for (const event of events) {
+    if (event.ticket !== undefined) return event.ticket;
+  }
+  return undefined;
 }
 
 /** The store's own entry point: an event whose `seq` it has not assigned yet. */

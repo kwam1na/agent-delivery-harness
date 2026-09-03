@@ -19,7 +19,7 @@ import {
   type RunJournalRequiredEntry,
   type RunJournalViolation,
 } from "./run-journal-completeness.ts";
-import type { RunEvent, RunEventKind } from "./run-event.ts";
+import { runPrimaryTicket, type RunEvent, type RunEventKind } from "./run-event.ts";
 
 const TREE = "a".repeat(40);
 const OTHER_TREE = "b".repeat(40);
@@ -224,6 +224,95 @@ describe("the complete and executor-only readings", () => {
       ended,
     ]);
     expect(evaluateRunJournal(elsewhere).status).toBe("complete");
+  });
+});
+
+/**
+ * A run that carries two tickets: the dogfood item and the ordinary item it
+ * delivered, each with its own posture, and the gate and pull request bound to
+ * the one they belong to.
+ *
+ * The rule the contract states is that the binding is OPTIONAL — the first
+ * `ticket.read` is the run's primary ticket and an entry that omits `ticket`
+ * binds to it — so completeness must read the bound and the unbound journal
+ * exactly alike. These rows are what stop the member becoming a requirement by
+ * accident, in either direction.
+ */
+const SECOND_TICKET = "V26-1658";
+
+const secondTicketRead: Step = { kind: "ticket.read", payload: { ticket: SECOND_TICKET, tracker: "linear" } };
+const boundPosture: Step = {
+  kind: "posture.declared",
+  payload: { posture: "characterization-first", ticket: SECOND_TICKET },
+};
+const boundGateReported: Step = {
+  kind: "gate.reported",
+  payload: { command: "npm run check", outcome: "pass", durationMs: 10, ticket: SECOND_TICKET },
+};
+const boundPrOpened: Step = {
+  kind: "pr.opened",
+  payload: { url: "https://github.com/owner/repo/pull/90", candidateTreeSha: TREE, ticket: SECOND_TICKET },
+};
+
+describe("a run carrying more than one ticket", () => {
+  it("reads a two-ticket journal as complete when the posture and the pull request name the ticket they bind", () => {
+    const twoTickets = journal([
+      started,
+      ticketRead,
+      secondTicketRead,
+      posture,
+      boundPosture,
+      lenses(),
+      opened(1),
+      closed(1),
+      completed("gate"),
+      completed("record"),
+      boundPrOpened,
+      ended,
+    ]);
+    expect(evaluateRunJournal(twoTickets, TREE, MANDATED)).toEqual({
+      status: "complete",
+      missing: [],
+      violations: [],
+      boundToRecord: true,
+    });
+  });
+
+  it("reads a two-ticket executor-only journal as complete when its gate and pull request name their ticket", () => {
+    const twoTickets = journal([
+      started,
+      ticketRead,
+      secondTicketRead,
+      posture,
+      boundPosture,
+      lenses(),
+      opened(1),
+      closed(1),
+      boundGateReported,
+      boundPrOpened,
+      ended,
+    ]);
+    const result = evaluateRunJournal(twoTickets, TREE);
+    expect(result.status).toBe("complete-executor-only");
+    expect(result.missing).toEqual(["command.completed:gate", "command.completed:record"]);
+    expect(result.violations).toEqual([]);
+  });
+
+  it("requires no ticket on a posture, a gate report, or a pull request", () => {
+    // The same run with every binding dropped: one `ticket.read`, an unbound
+    // posture, an unbound gate report, an unbound pull request. Nothing the
+    // evaluator names may appear.
+    const unbound = evaluateRunJournal(journal(EXECUTOR_ONLY), TREE);
+    expect(unbound.status).toBe("complete-executor-only");
+    expect(unbound.violations).toEqual([]);
+    expect(unbound.missing).toEqual(["command.completed:gate", "command.completed:record"]);
+  });
+
+  it("reads the first ticket the journal names as the run's primary ticket", () => {
+    expect(runPrimaryTicket(journal([started, ticketRead, secondTicketRead, boundPosture]))).toBe("V26-1548");
+    expect(runPrimaryTicket(journal([ticketRead, secondTicketRead]))).toBe("V26-1548");
+    expect(runPrimaryTicket(journal([secondTicketRead, ticketRead]))).toBe(SECOND_TICKET);
+    expect(runPrimaryTicket(journal([posture, lenses()]))).toBeUndefined();
   });
 });
 

@@ -21,6 +21,7 @@
 import {
   RUN_JOURNAL_REQUIRED_ENTRIES,
   runJournalCarries,
+  runPrimaryTicket,
   type RunEvent,
   type RunJournalEvaluation,
   type RunJournalRequiredEntry,
@@ -32,6 +33,19 @@ export const READOUT_LABELS = "self-attested; observability, not evidence; unbou
 
 export const payloadOf = (event: RunEvent): Record<string, unknown> =>
   typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
+
+/**
+ * The ticket an entry BOUND ITSELF to, as a row suffix, or nothing.
+ *
+ * Only the entry's own binding is rendered. An entry that omits `ticket` binds
+ * to the run's primary, which the runs table already names in the row above
+ * every timeline — repeating it on each unbound line would turn the one thing
+ * the member exists to say, that THIS entry belongs to THAT ticket, into
+ * boilerplate an operator learns to skip. The envelope is read rather than the
+ * payload because the validator holds the two to exact agreement and the
+ * envelope is what every other reader here reads.
+ */
+const boundTicket = (event: RunEvent): string => (event.ticket === undefined ? "" : ` for ${oneLineOf(event.ticket, 128)}`);
 
 /**
  * One row's detail for one event: enough to read the run without printing the
@@ -47,7 +61,7 @@ export function detailOf(event: RunEvent): string {
     case "ticket.read":
       return `${oneLineOf(payload["ticket"])} via ${oneLineOf(payload["tracker"])}`;
     case "posture.declared":
-      return oneLineOf(payload["posture"]);
+      return oneLineOf(payload["posture"]) + boundTicket(event);
     case "lens.selected":
       return `mandated ${oneLineOf(payload["mandated"])} selected ${oneLineOf(payload["selected"])} — ${oneLineOf(payload["rationale"])}`;
     case "review.round.opened":
@@ -57,9 +71,9 @@ export function detailOf(event: RunEvent): string {
     case "command.completed":
       return `${oneLineOf(payload["command"])} ${oneLineOf(payload["outcome"])} in ${oneLineOf(payload["durationMs"])}ms`;
     case "gate.reported":
-      return `${oneLineOf(payload["command"])} ${oneLineOf(payload["outcome"])} in ${oneLineOf(payload["durationMs"])}ms`;
+      return `${oneLineOf(payload["command"])} ${oneLineOf(payload["outcome"])} in ${oneLineOf(payload["durationMs"])}ms${boundTicket(event)}`;
     case "pr.opened":
-      return `${oneLineOf(payload["url"], 400)} on ${oneLineOf(event.candidateTreeSha)}`;
+      return `${oneLineOf(payload["url"], 400)} on ${oneLineOf(event.candidateTreeSha)}${boundTicket(event)}`;
     case "blocker.recorded":
       return `${oneLineOf(payload["code"])} — ${oneLineOf(payload["summary"])}`;
     case "decision.recorded":
@@ -187,7 +201,12 @@ export interface WrittenOutcome {
 }
 
 export interface RunSummary {
-  /** From the envelope of the first event that carries one; `emit` mirrors it from the payload. */
+  /**
+   * The run's PRIMARY ticket, by the family's own rule: the first the journal
+   * names. A run that read two — a dogfood item and the ordinary item it
+   * delivered — is named here by the first, and every entry that bound no
+   * ticket of its own belongs to it.
+   */
   readonly ticket: string;
   /** A run with no `run.ended` is open, whatever else it holds. */
   readonly open: boolean;
@@ -256,7 +275,7 @@ export function summarize(events: readonly RunEvent[]): RunSummary {
         : undefined;
 
   return {
-    ticket: oneLineOf(events.find((event) => event.ticket !== undefined)?.ticket, 128),
+    ticket: oneLineOf(runPrimaryTicket(events), 128),
     open: ended === undefined,
     startedAt,
     lastAt,
