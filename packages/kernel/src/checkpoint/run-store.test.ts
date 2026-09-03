@@ -254,6 +254,27 @@ describe("the append discipline", () => {
     ]);
   });
 
+  it("refuses a durable journal line that carries the spec version but an inadmissible envelope", async () => {
+    const { store, runsDir } = freshStore();
+    const runId = await allocated(store);
+    await store.append(runId, startedFor(runId));
+    const journalPath = path.join(runsDir, `${runId}.jsonl`);
+    // The row above omits `version`, so it is satisfied by a read gate reduced
+    // to `validateRunEvent`'s FIRST guard. This line carries the spec version
+    // and a vocabulary kind, so the only thing that can refuse it is the
+    // closed-grammar walk the whole validator does — which is what the read is
+    // being asked to still call.
+    const stray = { ...event(runId, "posture.declared", { posture: "test-first" }), seq: 2, note: "not a member" };
+    writeFileSync(journalPath, `${readFileSync(journalPath, "utf8")}${JSON.stringify(stray)}\n`, { mode: 0o600 });
+
+    const read = await store.read(runId);
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([
+      ["unknown_member", "/1/note"],
+    ]);
+  });
+
   it("rejects a second run.started and any append after run.ended", async () => {
     const { store } = freshStore();
     const runId = await allocated(store);
