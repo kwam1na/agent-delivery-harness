@@ -15,7 +15,8 @@
  * the repository — no workspace root above it, no symlinks, no hoisting from a
  * sibling's install — and then proves the installed thing works: every sibling
  * the manifest declares is physically present in that tree, the package's entry
- * point imports, and for the CLI a real command runs end to end.
+ * point imports, and for the CLI four real commands run end to end — the
+ * operator surface and the config-free run surface.
  *
  * Installing each package alone is the whole point. A single temp directory
  * carrying all five would hoist the kernel to its root and every sibling would
@@ -43,7 +44,7 @@
  * the property this sensor exists for, so it is itself a finding — as is an
  * empty package set, or a missing TypeScript loader.
  */
-import { execFileSync, type StdioOptions } from "node:child_process";
+import { execFileSync, spawnSync, type StdioOptions } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -57,6 +58,7 @@ export type StandaloneRule =
   | "sibling-missing"
   | "entry-import-failed"
   | "cli-command-failed"
+  | "run-store-unexpected"
   | "anti-vacuity";
 
 export interface StandaloneFinding {
@@ -70,18 +72,136 @@ export interface StandaloneFinding {
 export const PACKAGE_SCOPE = "@agent-delivery-harness";
 
 /**
- * The command the CLI tarball must actually run once installed standalone, and
- * the substrings its output must carry.
+ * What the CLI tarball must actually DO once installed standalone: an ordered
+ * list of cases, each an argument vector, the exit code the installed entry has
+ * to return, and the substrings its output has to carry.
  *
  * The entry-point probe already REACHES every module carrying a kernel edge —
- * the barrel imports all seven command modules and `boundary.ts` to build
- * `COMMANDS`, so resolution is covered before this step runs. What `--help`
- * adds is EXECUTION: the registry is walked and rendered, so a package that
- * resolves but cannot run is still a finding. The CLI is an operator surface,
- * and "it imports" is a weaker claim than "it works".
+ * the barrel imports all eleven command modules and `boundary.ts` to build
+ * `COMMANDS`, so resolution is covered before this step runs. What these cases
+ * add is EXECUTION, on the two surfaces where "it imports" is the weakest claim
+ * this sensor could make:
+ *
+ *   `--help` walks and renders the registry, so a package that resolves but
+ *   cannot run is still a finding. The CLI is an operator surface.
+ *
+ *   `runs list`, `emit run.started`, and one `emit` of a kind the run-event
+ *   vocabulary does not define exercise the RUN SURFACE: the config-free half
+ *   of the CLI, dispatched before `harness.config.ts` is loaded, which is the
+ *   only half a repository with no harness config can run at all. Between them
+ *   they resolve the store from git, read an empty store, allocate a journal,
+ *   write the worktree pointer, resolve that pointer back, and refuse an event
+ *   with a diagnostic naming the kind. None of that is reachable from `--help`,
+ *   and every step of it crosses the kernel edge the tarball declares.
+ *
+ * ORDER IS PART OF THE CASE. `runs list` asserts an EMPTY store, so it runs
+ * before the case that allocates a journal; the refused `emit` resolves the
+ * pointer the `run.started` case just wrote, so it runs after it.
+ *
+ * The three run-surface cases run from a `git init`-ed scratch worktree root,
+ * never this repository: the store lives under the invoking repository's git
+ * common directory, so a case that resolved here would write into the
+ * developer's own store. `emit` carries its payload inline with `--json`
+ * because this sensor spawns every child with stdin ignored, and that is what
+ * `emit` reads when `--json` is absent.
  */
-export const CLI_SMOKE_ARGS: readonly string[] = ["--help"];
-export const CLI_SMOKE_EXPECTED: readonly string[] = ["prepare", "gate", "record", "verify"];
+export interface CliSmokeCase {
+  /** The argument vector, after the installed `src/main.ts`. */
+  readonly args: readonly string[];
+  /** The exit code the installed entry must return: 0 ok, 1 policy, 2 usage. */
+  readonly exitCode: number;
+  /** Substrings the case's combined stdout and stderr must carry. */
+  readonly expected: readonly string[];
+}
+
+/**
+ * A kind the run-event vocabulary does not define, spelled so the store's own
+ * id reduction leaves it unchanged: the diagnostic and the durable note then
+ * say the same thing, and the case can assert on either.
+ */
+const UNKNOWN_KIND = "sensor.unknown-kind";
+
+export const CLI_SMOKE_CASES: readonly CliSmokeCase[] = [
+  { args: ["--help"], exitCode: 0, expected: ["prepare", "gate", "record", "verify"] },
+  { args: ["runs", "list"], exitCode: 0, expected: ["runs in ", "total 0 bytes across 0 run(s)"] },
+  {
+    args: [
+      "emit",
+      "run.started",
+      "--json",
+      JSON.stringify({
+        host: "standalone-install-sensor",
+        workflow: { releaseId: "standalone-install-sensor", profile: "sensor" },
+      }),
+    ],
+    exitCode: 0,
+    expected: ["started run run-"],
+  },
+  {
+    args: ["emit", UNKNOWN_KIND, "--json", "{}"],
+    exitCode: 1,
+    expected: [`The run event was refused: ${UNKNOWN_KIND}`, "unknown_kind at /kind"],
+  },
+];
+
+/**
+ * Where the run surface writes, relative to the scratch repository's git
+ * common directory, and what the cases above must leave there.
+ *
+ * A run store belongs to the REPOSITORY, not to the worktree, so these are the
+ * one durable trace the cases leave — and the only place a silent regression
+ * would show: `emit` could exit zero having written nothing, and the refused
+ * case could exit one because the store was never reachable at all. One
+ * `run.started` allocates exactly one journal; the refused append writes
+ * exactly one bounded note line and no second journal.
+ *
+ * These two directories are all this sensor asserts over. The pointer
+ * directory beside them is the store's own business.
+ */
+const SCRATCH_RUNS_DIR = ["managed-delivery", "runs"] as const;
+export const EXPECTED_SCRATCH_JOURNALS = 1;
+export const EXPECTED_SCRATCH_NOTE_LINES = 1;
+
+export interface ScratchRunStore {
+  /** Journals directly under `managed-delivery/runs/`. */
+  readonly journals: number;
+  /** Note lines across every file under `managed-delivery/runs/notes/`. */
+  readonly noteLines: number;
+}
+
+/**
+ * Reads the scratch repository's run store. Throws where either directory is
+ * absent or unreadable, which is itself the finding: the cases claimed to write
+ * there.
+ */
+export function readScratchRunStore(repoDir: string): ScratchRunStore {
+  const runsDir = path.join(repoDir, ".git", ...SCRATCH_RUNS_DIR);
+  const journals = readdirSync(runsDir).filter((entry) => entry.endsWith(".jsonl")).length;
+  const notesDir = path.join(runsDir, "notes");
+  const noteLines = readdirSync(notesDir)
+    .flatMap((entry) => readFileSync(path.join(notesDir, entry), "utf8").split("\n"))
+    .filter((line) => line.trim() !== "").length;
+  return { journals, noteLines };
+}
+
+/**
+ * A child environment with the whole `GIT_` namespace dropped. An inherited
+ * `GIT_DIR` or `GIT_COMMON_DIR` would relocate both the scratch `git init` and
+ * the store the run-surface cases resolve into whatever repository the
+ * developer was standing in — the sensor would then write its journal and its
+ * note into a real store and assert over someone else's. Dropped wholesale
+ * rather than by curated list, for the same reason the product drops it that
+ * way: missing one leaves a store that looks perfectly healthy and belongs to
+ * the wrong repository.
+ */
+export function gitNamespaceCleared(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const cleared: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (name.startsWith("GIT_") || value === undefined) continue;
+    cleared[name] = value;
+  }
+  return cleared;
+}
 
 /** Timeout for any single npm or node invocation this sensor spawns. */
 export const STEP_TIMEOUT_MS = 300_000;
@@ -295,34 +415,94 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
         continue;
       }
 
-      // The CLI is an operator surface, so importing it is not enough: run one.
+      // The CLI is an operator surface, so importing it is not enough: run it.
       if (pkg.name === `${PACKAGE_SCOPE}/cli`) {
         const entry = path.join(installDir, "node_modules", pkg.name, "src", "main.ts");
-        let stdout: string;
+        const childEnv = gitNamespaceCleared();
+
+        // A repository of its own, because the run surface has to have one: the
+        // store is the invoking repository's, and there is no repository above
+        // a temp directory.
+        const repoDir = path.join(scratch, "repo");
+        mkdirSync(repoDir, { recursive: true });
         try {
-          stdout = execFileSync(process.execPath, ["--import", pathToFileURL(loader).href, entry, ...CLI_SMOKE_ARGS], {
-            cwd: installDir,
+          execFileSync("git", ["init", "--quiet"], {
+            cwd: repoDir,
+            env: childEnv,
             encoding: "utf8",
             timeout: STEP_TIMEOUT_MS,
             stdio: CAPTURED,
           });
         } catch (error) {
           findings.push({
-            rule: "cli-command-failed",
-            subject: pkg.name,
-            message: `\`${CLI_SMOKE_ARGS.join(" ")}\` failed from a standalone install: ${describe(error)}`,
+            rule: "anti-vacuity",
+            subject: "scratch-repository",
+            message: `the scratch repository could not be initialized, so every run-surface case would resolve no store and report a blocker instead of exercising one: ${describe(error)}`,
           });
           continue;
         }
-        const missing = CLI_SMOKE_EXPECTED.filter((needle) => !stdout.includes(needle));
-        if (missing.length > 0) {
-          findings.push({
-            rule: "cli-command-failed",
-            subject: pkg.name,
-            message: `\`${CLI_SMOKE_ARGS.join(" ")}\` ran but its output named none of ${missing.join(", ")}; the command registry did not load`,
+
+        for (const smoke of CLI_SMOKE_CASES) {
+          const label = smoke.args.join(" ");
+          const ran = spawnSync(process.execPath, ["--import", pathToFileURL(loader).href, entry, ...smoke.args], {
+            cwd: repoDir,
+            env: childEnv,
+            encoding: "utf8",
+            timeout: STEP_TIMEOUT_MS,
+            stdio: CAPTURED,
           });
-        } else {
-          log(`cli-ok ${CLI_SMOKE_ARGS.join(" ")}`);
+          if (ran.error !== undefined || ran.status === null) {
+            findings.push({
+              rule: "cli-command-failed",
+              subject: pkg.name,
+              message: `\`${label}\` did not run to completion from a standalone install: ${
+                ran.error === undefined ? `terminated by ${ran.signal ?? "an unknown signal"}` : describe(ran.error)
+              }`,
+            });
+            continue;
+          }
+          // Both streams: an ok result prints to stdout and a blocked one to
+          // stderr, and two of these cases are asserting on a refusal.
+          const output = `${ran.stdout}${ran.stderr}`;
+          if (ran.status !== smoke.exitCode) {
+            findings.push({
+              rule: "cli-command-failed",
+              subject: pkg.name,
+              message: `\`${label}\` exited ${ran.status} from a standalone install, not ${smoke.exitCode}: ${excerpt(output)}`,
+            });
+            continue;
+          }
+          const missing = smoke.expected.filter((needle) => !output.includes(needle));
+          if (missing.length > 0) {
+            findings.push({
+              rule: "cli-command-failed",
+              subject: pkg.name,
+              message: `\`${label}\` exited ${ran.status} as expected but its output named none of ${missing.join(", ")}: ${excerpt(output)}`,
+            });
+            continue;
+          }
+          log(`cli-ok ${label}`);
+        }
+
+        // What the run-surface cases left behind, read before the `finally`
+        // below removes the tree it lives in. An `emit` that exited zero having
+        // written nothing would pass every case above and fail here.
+        let store: ScratchRunStore | undefined;
+        try {
+          store = readScratchRunStore(repoDir);
+        } catch (error) {
+          findings.push({
+            rule: "run-store-unexpected",
+            subject: pkg.name,
+            message: `the run-surface cases ran but their run store could not be read under managed-delivery/runs/ of the scratch repository: ${describe(error)}`,
+          });
+        }
+        if (store !== undefined && (store.journals !== EXPECTED_SCRATCH_JOURNALS || store.noteLines !== EXPECTED_SCRATCH_NOTE_LINES)) {
+          findings.push({
+            rule: "run-store-unexpected",
+            subject: pkg.name,
+            message: `the run-surface cases left ${store.journals} journal(s) and ${store.noteLines} note line(s) under managed-delivery/runs/ of the scratch repository; one run.started and one refused append leave exactly ${EXPECTED_SCRATCH_JOURNALS} and ${EXPECTED_SCRATCH_NOTE_LINES}`,
+          });
         }
       }
     }
@@ -341,6 +521,12 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
   }
 
   return { findings, packagesProbed, siblingEdgesVerified };
+}
+
+/** As much of a captured stream as a finding can carry without becoming the report. */
+function excerpt(output: string, maximum = 400): string {
+  const collapsed = output.replace(/\s+/gu, " ").trim();
+  return collapsed.length <= maximum ? collapsed : `${collapsed.slice(0, maximum - 1)}…`;
 }
 
 function describe(error: unknown): string {
