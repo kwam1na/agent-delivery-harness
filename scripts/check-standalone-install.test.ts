@@ -13,7 +13,13 @@
  * load TypeScript at all, from reporting a clean sensor, the case list the CLI
  * probe walks, the environment it hands its children, and the run-store reader
  * that decides whether the run-surface cases actually wrote anything. Every one
- * of those is reachable without a subprocess, so these tests spawn nothing.
+ * of those is reachable without a subprocess, so all but one of these tests
+ * spawn nothing. The exception is the last row, which drives the runner itself
+ * over a one-package fixture: the CLI probe's guard is a decision the fast
+ * suite can falsify, but the two lines that turn that decision into a reported
+ * finding live inside the loop, and nothing else in `npm run check` reaches
+ * them. One trivial `npm pack` and `npm install --offline` is what that row
+ * costs, and it is the only thing that fails when the wiring is deleted.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -92,6 +98,7 @@ describe("anti-vacuity", () => {
     expect(result.findings.map((finding) => finding.rule)).toEqual(["anti-vacuity"]);
     expect(result.findings[0]!.subject).toBe("packages");
     expect(result.packagesProbed).toEqual([]);
+    expect(result.cliCasesCompleted).toBe(0);
   });
 
   it("a missing TypeScript loader is a finding, never a skipped probe", () => {
@@ -103,6 +110,7 @@ describe("anti-vacuity", () => {
     expect(result.findings.map((finding) => finding.rule)).toEqual(["anti-vacuity"]);
     expect(result.findings[0]!.subject).toBe("tsx");
     expect(result.siblingEdgesVerified).toBe(0);
+    expect(result.cliCasesCompleted).toBe(0);
   });
 });
 
@@ -215,8 +223,9 @@ describe("cliProbeVacuityFinding", () => {
     expect(cliProbeVacuityFinding({ packageProbed: true, casesCompleted: CLI_SMOKE_CASES.length })).toBeUndefined();
   });
 
-  // A count above the case list is a counter that stopped tracking the list it
-  // is bounded by; silence there would hide the drift rather than report it.
+  // The runner increments at most once per `CLI_SMOKE_CASES` iteration, so a
+  // count above the list is unreachable and the guard says nothing about it.
+  // Pinned so a later reader does not mistake that silence for a judgement.
   it("is silent for a count above the case list, which the runner cannot produce", () => {
     expect(cliProbeVacuityFinding({ packageProbed: true, casesCompleted: CLI_SMOKE_CASES.length + 1 })).toBeUndefined();
   });
@@ -224,4 +233,35 @@ describe("cliProbeVacuityFinding", () => {
   it("names the package the smoke cases actually run", () => {
     expect(CLI_PACKAGE_NAME).toBe(`${PACKAGE_SCOPE}/cli`);
   });
+});
+
+describe("the CLI probe's guard, through the runner", () => {
+  // The rows above falsify the guard's decision; this one falsifies the wiring
+  // that reports it. Those two lines are reachable from no other check: the
+  // pure rows never enter the loop, and `sensor:standalone` is not in `npm run
+  // check` — it runs in the release workflow, on a healthy tree, where the
+  // guard's only live branch is the silent one. Delete the push at the end of
+  // the run and, without this row, every check stays green while a renamed CLI
+  // package restores the vacuous `clean` report this file exists to refuse.
+  //
+  // A workspace whose only package is not the CLI is the shortest fixture that
+  // reaches the guard: it packs and installs one trivial package for real,
+  // which is why this row carries its own timeout rather than the suite's.
+  it(
+    "reports the finding, and the count it was decided from, when no installed package is the CLI",
+    () => {
+      const dir = makeFixture([{ name: `${PACKAGE_SCOPE}/kernel` }], { withLoader: true });
+      const result = runStandaloneInstallCheck({ root: dir });
+      expect(result.packagesProbed).toEqual([`${PACKAGE_SCOPE}/kernel`]);
+      // The guard's own verdict, reported verbatim rather than re-described:
+      // the runner decides nothing here, it routes.
+      expect(result.findings.filter((finding) => finding.subject === "cli-cases")).toEqual([
+        cliProbeVacuityFinding({ packageProbed: false, casesCompleted: 0 }),
+      ]);
+      // The count the summary line reports, so a return member pinned to a
+      // constant cannot claim four cases ran when none did.
+      expect(result.cliCasesCompleted).toBe(0);
+    },
+    60_000,
+  );
 });
