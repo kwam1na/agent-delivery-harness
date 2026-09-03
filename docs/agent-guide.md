@@ -125,6 +125,41 @@ Mutate at the granularity of the thing you claim to enforce. A sensor made of si
 rules needs six plants — one per rule — because a sibling rule will happily catch
 the plant written for its neighbour and leave the intended one deletable.
 
+### Where a planted mutation runs
+
+Planting is an edit to a tracked file, and the review lens that files findings
+against this repository's testing charter — `persona.testing-policy`, which
+[`.agents/policy/repository-policy.json`](../.agents/policy/repository-policy.json)
+binds to the mandated `lens.adversarial-testing` — cannot avoid making them.
+That charter's finding bar asks for the exact edit that would make the product
+wrong together with the statement that the suite stays green under it. It says
+what the evidence has to be and nothing about where to produce it. Here is
+where.
+
+**A lens that mutates tracked files gets its own worktree of this repository,
+reset to the revision the round is bound to, and never the delivery worktree.**
+That revision is the one whose tree is the `candidate tree` value
+`review-context` reports, which is how [`AGENTS.md`](../AGENTS.md) resolves a
+`candidateRef` here. The delivery worktree stays clean for the whole loop —
+from `prepare` through `record` — and a lens restores its own probe in its own
+worktree before reporting.
+
+Two things break when the plant lands in the delivery worktree instead, and
+each is a correctness problem on its own rather than an avoidable annoyance:
+
+- **A mutated tree read concurrently produces a phantom finding.** Lenses are
+  dispatched together, and a suite run reads whatever is on disk. A second lens
+  running the suite while a plant is live sees the plant's failure with nothing
+  in the failure itself to distinguish it from the candidate's. What separates
+  the two is that the received value carries the mutant's signature — noticing
+  that is a thing to be grateful for, not a thing to build a review round on.
+- **A tree carrying a plant cannot be captured.** Candidate capture refuses
+  unstaged changes to tracked files and untracked files alike, so `prepare`,
+  `review-context`, and `submit-evidence` block on SUB-2
+  `candidate_unprepared` while a probe is still running or was left
+  un-restored. The mutating lens's own attempt to capture evidence is the first
+  thing that stops.
+
 ## Conventions
 
 - **ESM throughout, Node ≥ 22.6.** All process control goes through
