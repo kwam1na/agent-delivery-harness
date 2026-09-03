@@ -423,23 +423,37 @@ describe("the rules the documentation states in prose", () => {
   const GUIDE = "docs/agent-guide.md";
 
   /**
-   * A sentence check over hard-wrapped prose, so a phrase that falls across a
-   * line break reads the same as one that does not and a rewrap is not a
-   * failure. The same treatment the deferred-rules row above gives `AGENTS.md`.
+   * A sentence check over the guide as a reader receives it, not over its
+   * bytes. HTML comments are removed first, because a rule commented out is a
+   * rule the document no longer states while every byte of it is still there —
+   * presence over raw bytes reads that as unchanged. Whitespace is then
+   * collapsed, so a phrase falling across a line break reads the same as one
+   * that does not and a rewrap is correctly not a failure; that half is the
+   * treatment the deferred-rules row above gives `AGENTS.md`.
    */
   const statesInProse = (phrase: string): void => {
-    expect(textOf(GUIDE).replace(/\s+/g, " "), `${GUIDE} no longer states: ${phrase}`).toContain(phrase);
+    const stated = textOf(GUIDE)
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/\s+/g, " ");
+    expect(stated, `${GUIDE} no longer states: ${phrase}`).toContain(phrase);
   };
 
   it("states where a review lens that plants mutations runs them", () => {
-    // The instruction itself, in each of its halves: which worktree the lens
-    // gets, where that worktree may live, and which worktree it may never use.
-    // Any one half alone is satisfied by a sentence that no longer says the
-    // thing, and the placement half is how a host reaches the second failure
-    // mode by the route meant to avoid it.
+    // The instruction in each of its clauses: which worktree the lens gets,
+    // which revision that worktree carries, where it may live, and which
+    // worktree it may never use. Any one clause alone is satisfied by a
+    // sentence that no longer says the thing — a rule trimmed to a subset of
+    // itself is the failure this row exists to catch, so every clause the rule
+    // is made of is pinned rather than a representative one.
     statesInProse("gets its own worktree of this repository");
+    statesInProse("reset to the revision the round is bound to");
     statesInProse("beside the delivery worktree rather than under it");
     statesInProse("never the delivery worktree");
+    // What the delivery worktree must hold while that happens, and who puts it
+    // back. Without these the rule says where a lens may plant and nothing
+    // about the state the loop needs the delivery worktree left in.
+    statesInProse("The delivery worktree stays clean for the whole loop");
+    statesInProse("restores its own probe");
     // And both failure modes, because the guidance's own claim is that either
     // one alone reads as an annoyance rather than as a correctness problem.
     statesInProse("A mutated tree read concurrently produces a phantom finding.");
@@ -461,9 +475,11 @@ describe("the rules the documentation states in prose", () => {
   });
 
   it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {
-    // The key is a literal because the registry's key type is the code union,
-    // so a code renamed in `validator/codes.ts` stops this file compiling
-    // rather than leaving the pairing unchecked.
+    // The key is a literal, and this file is not typechecked — `docs/**` sits
+    // outside every `tsconfig` include, so the key type buys nothing here. It
+    // is a runtime read instead: a code renamed in `validator/codes.ts` leaves
+    // no entry to read and fails this row, rather than leaving the pairing
+    // unchecked.
     const rules = MANIFEST_REJECTION_REGISTRY["candidate_unprepared"].rules;
     expect(rules.length, "the registry gives candidate_unprepared no rule").toBeGreaterThan(0);
     for (const rule of rules) statesInProse(`${rule} \`candidate_unprepared\``);
