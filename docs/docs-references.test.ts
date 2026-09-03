@@ -305,44 +305,96 @@ describe("the computable counts the documentation states", () => {
     everyStatementAgrees("the shipped charter count", /ships \*\*(\d+)\*\* reviewer charters/g, String(projected.personas.length));
   });
 
-  it("states the review round bound and the grace round the installed workflow declares", () => {
-    // `AGENTS.md` opens its review-loop section with "The installed workflow's
-    // default bound applies here unchanged". That is an agreement claim, and
-    // until this row it was the only claim in this file's scope with nothing
-    // recomputing it: the overlay could say three while the installed workflow
-    // said four, in either direction, with the whole suite green. The two have
-    // so far been re-stamped together by hand, once per install — which is why
-    // the claim has held, not evidence that it must.
+  it("references the installed workflow for the rules it carries, rather than restating them", () => {
+    // This row replaces an agreement check. `AGENTS.md` used to restate the
+    // round bound and the grace round, and the check was that the restatement
+    // still agreed with the installed workflow. The corpus's install
+    // convention now says an overlay references the installed workflow for
+    // every rule the workflow carries and restates none of them, so the
+    // overlay carries the reference and this row checks that instead.
     //
-    // The source of truth here is the INSTALLED generation, not the pinned
-    // qualification fixture the charter row above reads. The two rows ask
-    // different questions: that one asks what the pinned composition ships,
-    // which is frozen by definition; this one asks what the overlay is
-    // currently restating, which advances with each install. Reading the
-    // fixture here would leave the overlay unguarded against exactly the
-    // install this repository performs.
+    // It is pinned from THREE ends, because "the overlay does not restate a
+    // rule" is satisfied for free in two separate ways. An overlay that says
+    // nothing at all satisfies it; so does a release that stopped carrying the
+    // rule, at which point the overlay's "read from the installed skills"
+    // sentence points at nothing. So for every rule the overlay defers on:
+    // the installed generation must still carry it, the overlay's enumeration
+    // must still name it, and no scanned document may restate it. The table
+    // below is the enumeration — a rule the overlay defers on and this table
+    // omits is unguarded in all three directions, which is why the overlay's
+    // sentence is checked against the table rather than as one frozen phrase.
+    const DEFERRED_RULES: readonly {
+      readonly named: string;
+      readonly skill: string;
+      readonly carries: RegExp;
+      readonly notRestated: readonly RegExp[];
+    }[] = [
+      {
+        named: "the review round bound",
+        skill: "review-work",
+        carries: /The workflow default is \w+ rounds/,
+        notRestated: [/at most \w+ review rounds/, /review rounds in total/],
+      },
+      {
+        named: "the grace round",
+        skill: "execute-work",
+        carries: /exactly one grace verification round/,
+        notRestated: [/grace verification round/, /at most once per delivery/],
+      },
+      {
+        named: "how a deferral is tracked",
+        skill: "execute-work",
+        carries: /has a tracked follow-up item recorded through the tracker/,
+        notRestated: [/tracked follow-up item/, /review\.deferral-untracked/],
+      },
+      {
+        named: "how a finding is resolved",
+        skill: "obtain-review",
+        carries: /A finding is closed, deferred, or declined only by the lens that filed it/,
+        notRestated: [/only by the lens that filed it/, /only P0 and P1/],
+      },
+    ];
+
     const installedSkill = (skill: string): string =>
       readFileSync(path.join(REPO_ROOT, ".agent-skills/current/skills", skill, "SKILL.md"), "utf8");
 
-    // Extraction is guarded from both ends, the same way the link scan is. A
-    // workflow text that stopped matching would otherwise hand the agreement
-    // helper an undefined value to compare every document against, and the
-    // failure would name the documents rather than this extraction.
-    const declared = /The workflow default is (\w+) rounds/.exec(installedSkill("review-work"));
-    expect(declared, "the installed review-work skill no longer declares a round default").not.toBeNull();
-    everyStatementAgrees("the review round bound", /at most (\w+) review rounds/g, declared![1]!);
+    // Read with whitespace collapsed, because these are sentence checks over
+    // hard-wrapped prose: a rule name or a restatement that happens to fall
+    // across a line break must read the same as one that does not, in both the
+    // presence and the absence directions.
+    const collapsed = (document: string): string => textOf(document).replace(/\s+/g, " ");
 
-    // The grace round is a rule rather than a count, so it is checked the way
-    // the frozen trust label is: the phrase, verbatim. The gate is what keeps
-    // it honest in both directions — the overlay must carry the phrase only
-    // while the installed workflow grants the round, so a release that
-    // withdrew it would fail here rather than leave the overlay describing a
-    // rule that no longer ships.
-    expect(
-      installedSkill("execute-work"),
-      "the installed execute-work skill no longer grants a grace verification round",
-    ).toContain("exactly one grace verification round");
-    documentStates("AGENTS.md", "grace verification round");
-    documentStates("AGENTS.md", "at most once per delivery");
+    const overlay = collapsed("AGENTS.md");
+    expect(overlay, "AGENTS.md no longer defers to the installed workflow").toContain(
+      "Rules the installed workflow already carries are not restated here",
+    );
+    expect(overlay, "AGENTS.md no longer says where those rules are read from").toContain(
+      "read from the installed skills",
+    );
+
+    for (const rule of DEFERRED_RULES) {
+      // The release still carries it. Without this the row would let a
+      // generation drop a rule while the overlay went on deferring to it.
+      expect(
+        rule.carries.test(installedSkill(rule.skill)),
+        `the installed ${rule.skill} skill no longer carries ${rule.named}`,
+      ).toBe(true);
+      // The overlay still names it in the sentence that defers. Without this,
+      // deleting a rule from that enumeration would silently drop it from the
+      // overlay's claim while every other assertion here stayed green.
+      expect(overlay, `AGENTS.md no longer names ${rule.named} among the rules it defers on`).toContain(rule.named);
+      // And nothing restates it. Each pattern is a shape the overlay carried
+      // before the trim, or the shape the installed skill states the rule in —
+      // a restatement in any scanned document puts the two texts back in a
+      // position to disagree silently.
+      for (const document of scannedDocuments()) {
+        for (const restatement of rule.notRestated) {
+          expect(
+            restatement.test(collapsed(document)),
+            `${document} restates ${rule.named}, which the installed workflow carries: ${restatement.source}`,
+          ).toBe(false);
+        }
+      }
+    }
   });
 });

@@ -19,6 +19,7 @@
     "sensor:standalone": "node --import tsx scripts/check-standalone-install.ts",
     "sensor:policy": "node --import tsx scripts/policy-projection-check.ts",
     "policy:recompile": "node --import tsx scripts/recompile-policy-snapshot.ts",
+    "skills:install": "node --import tsx scripts/install-agent-skills-release.ts",
     "review:evidence": "node --import tsx scripts/emit-review-evidence.ts",
     "qualify:provider": "node --import tsx scripts/qualify-agent-skills-provider.ts",
     "qualify:product": "node --import tsx scripts/qualify-product.ts",

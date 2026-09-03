@@ -10,7 +10,9 @@ candidate must prove before it is merge-ready.
 The `linear` profile release is installed by an operator through the
 `agent-skills` lifecycle and exposed as relative symlinks. Resolve every
 workflow skill from those exposures; this repository keeps no local copy of
-them.
+them. Rules the installed workflow already carries are not restated here — the
+review round bound, the grace round, how a deferral is tracked, and how a
+finding is resolved are read from the installed skills.
 
 - Plan decomposition into tracked work: `create-linear-ticket`.
 - Executing one tracked item: `execute-linear-ticket`.
@@ -20,32 +22,37 @@ them.
 Tracker properties for the exposed Linear adapter are declared in
 `.agents/tracker-properties.json`. Read that document; never write to it.
 
-## Bound the review loop
+## Resolve a review candidate
 
-The installed workflow's default bound applies here unchanged: a delivery
-obtains **at most four review rounds in total**, counted across every review
-loop it opens rather than per loop, declared before the first round and never
-re-declared. At the bound with open P0 or P1 findings the delivery stops as
-`partial` with the typed blocker `review.loop-bound-reached`, naming what is
-open, and the operator decides.
+A `candidateRef` resolves here to the candidate tree the review context
+records: the tree SHA `delivery-harness review-context` reports as `candidate
+tree <sha>`, which is the same value `prepare` publishes and the delivery
+record carries as `treeSha`. Supply that resolution alongside the reference
+when a verification round spans two candidates.
 
-Where every lens is aligned at the bound and a required change would alter the
-candidate, the delivery obtains one **grace verification round** for that
-change — at most once per delivery, declared as the grace round when it is
-obtained, and, as the shipped workflow states it, the one round excepted from
-the count — under the same lens set and carry-forward rules as any other
-verification round. Only if that round does not align, or a further candidate
-change is required after it, does the delivery stop as `partial` with
-`review.loop-bound-reached` naming what is open. The grace round is not
-available with dissent open or where the latest round was blocked by a failed
-acquisition; those forms are terminal at the bound as above.
+This repository's two mandated lens ids are `lens.outcome-correctness` and
+`lens.adversarial-testing`, as `.agents/policy/repository-policy.json` declares
+them. They are the ids an operator passes to
+`npm run harness -- verify --mandated-lens lens.outcome-correctness
+--mandated-lens lens.adversarial-testing`, and the ids a `lens.selected` run
+event names as the mandated pair.
 
-A round's `candidateRef` is opaque and is never parsed. In this repository it
-resolves to the candidate tree the review context records: the tree SHA
-`delivery-harness review-context` reports as `candidate tree <sha>`, which is
-the same value `prepare` publishes and the delivery record carries as
-`treeSha`. Supply that resolution alongside the reference when a verification
-round spans two candidates.
+## Emit this delivery's run events
+
+The run-event command here is `node --import tsx packages/cli/src/main.ts emit
+<kind> --json '<payload>'`, run from the worktree root after `npm install` —
+the bare `tsx` specifier is the form every package script uses, and it needs
+the root devDependency the fresh worktree does not have until then. It runs
+candidate source, exactly as every other harness command in this repository
+already does.
+
+One run is current per worktree: `emit run.started` allocates the run and
+writes the pointer under the repository's git common directory
+(`managed-delivery/runs/current/<worktree key>`), every later `emit` and every
+candidate-facing command's own `command.completed` resolves that pointer, and
+`emit run.ended` clears it. A run outlives the worktree it ran in, so end the
+run rather than deleting the worktree out from under it. What is emitted is
+observability, not evidence: no admission, gate, or record decision reads it.
 
 ## Both exposures are tracked
 
@@ -54,8 +61,16 @@ and `.agent-skills/active.json` records both. Both are committed, so a fresh
 clone gets a working installation from git alone: the generation, the `current`
 pointer, and every exposure link.
 
-When the installed generation or `.agents/policy/` moves, re-record the
-compiled snapshot with `npm run policy:recompile` — it recompiles
+A release is installed here by one command:
+`AGENT_SKILLS_CHECKOUT=/path/to/agent-skills npm run skills:install --
+--release-id <id>`. It builds and verifies the release from that checkout,
+drives the lifecycle `update` against this repository, re-records the compiled
+policy snapshot, and then fails unless the lifecycle reports `lifecycle:
+current`, no blockers, and the generation it just built active. Rollback is the
+previous release id through the same command.
+
+When the installed generation or `.agents/policy/` moves outside that command,
+re-record the compiled snapshot with `npm run policy:recompile` — it recompiles
 `.agents/policy/compiled-snapshot.json` from the policy documents and the
 installed charters, preserves the recorded `compiledWith` provenance, and is a
 no-op on an unchanged policy. It does not re-record `comparison-report.json`;
