@@ -321,6 +321,9 @@ describe("emit, the boundary wrap, and runs", () => {
     // executor's claim to have run the same command.
     expect(shown.out).toMatch(/command\.completed +cli\b/);
     expect(shown.out).toMatch(/run\.started +executor\b/);
+    // The deny side of `show`'s open/ended header: this run HAS ended, and a
+    // header hard-wired to `open` would still satisfy every line above.
+    expect(shown.out).toMatch(new RegExp(`^run ${runId} +ended\\b`, "m"));
   });
 
   it("emits in a directory with no harness.config.ts", async () => {
@@ -377,6 +380,30 @@ describe("emit, the boundary wrap, and runs", () => {
     expect((await journalOf(dir, second))[0]!.payload).toMatchObject({ displacedRunId: first });
   });
 
+  it("leaves no journal behind when the start's own payload is refused, however many times it is retried", async () => {
+    const dir = await initRepo();
+    const { store } = await storeOf(dir);
+
+    // `workflow` is required, so the store refuses the append AFTER `allocate`
+    // has already created the journal. Nothing points at it and nothing will
+    // ever append to it, and `runs list` showed it as an open run beside
+    // genuine ones — one more per retry.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const refused = await emit(dir, ["run.started"], { host: "x" });
+      expect(refused.code, `attempt ${attempt}`).toBe(EXIT_POLICY);
+      expect(await store.list(), `attempt ${attempt}`).toEqual([]);
+    }
+
+    const listed = await cli(dir, ["runs", "list"]);
+    expect(listed.code, listed.err).toBe(EXIT_OK);
+    expect(listed.out).toContain("across 0 run(s)");
+
+    // And the start that is not refused still allocates: the removal is the
+    // allocator taking back what it created, not a start that stopped working.
+    const runId = await startRun(dir);
+    expect(await store.list()).toEqual([runId]);
+  });
+
   it("stops appending once the run has ended, and starts cleanly afterwards", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
@@ -422,6 +449,9 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(shown.code, shown.err).toBe(EXIT_OK);
     expect(shown.out).toContain("refused appends:");
     for (const note of notes) expect(shown.out).toContain(note.kind);
+    // The affirmative side of the same header the three-writer row pins as
+    // `ended`: this run never ended, so it reads open, and current here.
+    expect(shown.out).toMatch(new RegExp(`^run ${runId} +open\\b`, "m"));
   });
 
   it("leaves a wrapped command's outcome and exit code untouched when the store fails", async () => {
@@ -564,7 +594,12 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(listed.out).toContain(first);
     expect(listed.out).toContain(second);
     expect(listed.out).toContain("incomplete");
-    expect(listed.out).toMatch(/\bopen\b/);
+    // Both sides of the open/ended column, each bound to the run it belongs
+    // to. A column pinned only by `/\bopen\b/` says nothing: a reader that
+    // printed `open` for every run, ended ones included, satisfies it.
+    expect(listed.out).toMatch(new RegExp(`${second}.*\\bopen\\b`));
+    expect(listed.out).toMatch(new RegExp(`${first}.*\\bended\\b`));
+    expect(listed.out).not.toMatch(new RegExp(`${first}.*\\bopen\\b`));
     // `list` prints a completeness verdict of its own, so it carries the same
     // three labels `show` does — at this call site, not only in the constant.
     expect(listed.out).toContain("self-attested");
@@ -877,14 +912,30 @@ describe("emit, the boundary wrap, and runs", () => {
     const WRAPPED = ["check", "prepare", "review-context", "submit-evidence", "gate", "record", "verify"];
     expect([...COMPLETION_WRAPPED_COMMANDS].sort()).toEqual([...WRAPPED].sort());
 
-    // Every member driven, not four of seven. The exit codes do not matter:
-    // the wrap runs whatever the command decided, as the `gate` row shows.
-    for (const command of WRAPPED) await cli(dir, [command]);
-    const completed = (await journalOf(dir, runId))
-      .filter((event) => event.kind === "command.completed")
-      .map((event) => event.payload["command"]);
+    // Every member driven, not four of seven. The wrap runs whatever the
+    // command decided, as the `gate` row shows, so the exit codes vary — and
+    // they are kept, because the outcome column below is derived from them.
+    const codes = new Map<string, number>();
+    for (const command of WRAPPED) codes.set(command, (await cli(dir, [command])).code);
+    const completions = (await journalOf(dir, runId)).filter((event) => event.kind === "command.completed");
+    const completed = completions.map((event) => event.payload["command"]);
     expect([...new Set(completed)].sort()).toEqual([...WRAPPED].sort());
     expect(completed).toHaveLength(WRAPPED.length);
+
+    // THE OUTCOME COLUMN, NOT ONLY THE COMMAND COLUMN. `command.completed`
+    // carries a closed four-value enum the wrap derives from the exit code,
+    // and a derivation that lost an arm records the wrong value for every
+    // invocation that took it while every assertion above stays green.
+    // `submit-evidence` with no `--manifest` is the usage exit among the
+    // seven, and it was the arm no journal in this suite had ever recorded;
+    // `check` is the ok one beside it. The policy arm is pinned on the gate
+    // row that reads a refused `gate` back out of its own journal.
+    expect(codes.get("submit-evidence")).toBe(EXIT_USAGE);
+    expect(codes.get("check")).toBe(EXIT_OK);
+    const outcomeOf = (command: string): unknown =>
+      completions.find((event) => event.payload["command"] === command)?.payload["outcome"];
+    expect(outcomeOf("submit-evidence")).toBe("usage");
+    expect(outcomeOf("check")).toBe("ok");
   });
 
   it("reports a journal it cannot read rather than dropping it from the list", async () => {
@@ -929,6 +980,12 @@ describe("emit, the boundary wrap, and runs", () => {
       const { store, worktreeKey } = await storeOf(raced);
       const current = await store.current(worktreeKey);
       expect(current.ok && current.runId !== undefined).toBe(true);
+      // ONE journal, not two. The loser allocates and appends a real
+      // `run.started` before the exclusive pointer write refuses it, so
+      // without the allocator taking its journal back the store holds a
+      // second, fully-formed-looking run that `runs list` calls open and
+      // nothing distinguishes from an abandoned delivery.
+      expect(await store.list(), `attempt ${attempt}`).toEqual([current.ok ? current.runId : undefined]);
     }
   });
 
@@ -1082,11 +1139,12 @@ describe("emit, the boundary wrap, and runs", () => {
         { round: 1, candidateTreeSha: TREE_SHA, outcome: hostile, findings: { P0: 0, P1: 0, P2: 0, P3: 0 }, cost },
       ],
       ["gate.reported", { command: hostile, outcome: "pass", durationMs: 5 }],
-      // `httpUrl` validates with `new URL` and stores the caller's original
-      // string, and `new URL` accepts a C0 escape in the path — it
-      // percent-encodes only in `href`. So a url is executor free text on the
-      // way to a terminal exactly like a rationale, and both lenses filed the
-      // arm that renders it as the one this row had left undriven.
+      // `httpUrl` validates with `new URL` but never writes the parsed form
+      // back, so the payload keeps the caller's original string — including
+      // C0 controls `new URL` would have percent-encoded had its output been
+      // used. So a url is executor free text on the way to a terminal exactly
+      // like a rationale, and both lenses filed the arm that renders it as the
+      // one this row had left undriven.
       ["pr.opened", { url: `https://example.invalid/${hostile}`, candidateTreeSha: TREE_SHA }],
       ["blocker.recorded", { code: hostile, summary: hostile }],
       ["decision.recorded", { fork: hostile, choice: hostile, cited: hostile }],

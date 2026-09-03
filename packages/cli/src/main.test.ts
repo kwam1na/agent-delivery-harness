@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, onTestFinished } from "vitest";
-import { createWaiverPrompt, invokedDirectly } from "./main.ts";
+import { createWaiverPrompt, invokedDirectly, readStdinText } from "./main.ts";
 import { CliInterruption } from "./index.ts";
 import type { GateDecision } from "@agent-delivery-harness/kernel";
 
@@ -112,6 +112,43 @@ describe("createWaiverPrompt", () => {
     input.write("y\n");
     input.end();
     await expect(answered).resolves.toBe(true);
+  });
+});
+
+describe("readStdinText", () => {
+  /**
+   * `emit` takes its payload here, so both arms of this function are on the
+   * path an executor drives every time it records a run event.
+   *
+   * THE TTY ARM IS A HANG, NOT A WRONG ANSWER. Removing the guard leaves a
+   * terminal with no pipe attached waiting forever for a line nobody is going
+   * to type, which is why the TTY stream below is one that never ends: a
+   * missing guard fails this row as a timeout, exactly as it would fail an
+   * operator.
+   */
+  it("reads a TTY stdin as empty and a piped stdin to its end", async () => {
+    const tty = new PassThrough() as PassThrough & { isTTY?: boolean };
+    tty.isTTY = true;
+    // Never ended, never written to. The only way this settles is the guard.
+    await expect(readStdinText(tty)).resolves.toBe("");
+
+    const piped = new PassThrough();
+    const read = readStdinText(piped);
+    // More than one chunk, so a reader that resolved on the first `data` and
+    // dropped the rest is caught rather than passing on a short payload.
+    piped.write('{"host":"claude-code",');
+    piped.write('"workflow":{}}');
+    piped.end();
+    await expect(read).resolves.toBe('{"host":"claude-code","workflow":{}}');
+
+    // A stream that errors settles with what it had, rather than leaving the
+    // command waiting on a stdin that is not coming back.
+    const broken = new PassThrough();
+    const partial = readStdinText(broken);
+    broken.write("half");
+    await new Promise((resolve) => setImmediate(resolve));
+    broken.destroy(new Error("pipe closed"));
+    await expect(partial).resolves.toBe("half");
   });
 });
 
