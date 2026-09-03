@@ -736,6 +736,47 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(await readFile(journalPath, "utf8")).toBe(before);
   });
 
+  it("leaves a wrapped command untouched when the store THROWS rather than returning a rejection", async () => {
+    const dir = await initRepo();
+    const clean = await cli(dir, ["check"]);
+    const runId = await startRun(dir);
+    const { store, runsDir, commonDir } = await storeOf(dir);
+    const journalPath = path.join(runsDir, `${runId}.jsonl`);
+    const before = await readFile(journalPath, "utf8");
+
+    // The OTHER failure mode, and the one the wrap's `catch` is the only thing
+    // standing between and a command's exit code. `append` converts a
+    // `JournalAccessRefused` into a rejection and RETHROWS everything else, so
+    // a raw errno reaches the caller as a throw. A read-only journal produces
+    // exactly that: still a regular file, still owner-only, so every fstat
+    // discipline passes and the failure lands on the write itself as EACCES.
+    await chmod(journalPath, 0o400);
+    try {
+      const thrown = await store
+        .append(
+          runId,
+          buildRunEvent({ runId, commonDir, kind: "posture.declared", role: "executor", payload: { posture: "test-first" } }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      // Pinned as a throw, and as one the store did NOT classify: were this a
+      // `JournalAccessRefused`, `append` would have returned a rejection and
+      // this row would be the refusal row above under another name.
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EACCES");
+      expect((thrown as Error | undefined)?.name).not.toBe("JournalAccessRefused");
+
+      const sabotaged = await cli(dir, ["check"]);
+      expect(sabotaged.code).toBe(clean.code);
+      expect(sabotaged.out).toBe(clean.out);
+      expect(sabotaged.err).toBe(clean.err);
+    } finally {
+      await chmod(journalPath, 0o600);
+    }
+    expect(await readFile(journalPath, "utf8")).toBe(before);
+  });
+
   it("displaces a pointer whose journal is gone rather than allocating one run per retry", async () => {
     const dir = await initRepo();
     const first = await startRun(dir);

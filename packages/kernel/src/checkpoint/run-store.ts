@@ -47,6 +47,7 @@ import {
   isRunInstant,
   reduceToProviderId,
   validateRunEvent,
+  validateRunEventInput,
   type RunEvent,
   type RunEventInput,
 } from "./run-event.ts";
@@ -352,6 +353,15 @@ export function createRunStore(commonDir: string): RunStore {
               return { ok: false, rejected: reject("subject_mismatch", "/runId", "the event names a different run than the journal it is being appended to") };
             }
 
+            // THE INPUT IS VALIDATED FIRST, through the store's own entry
+            // point, which admits no `seq`. That ordering is what makes the
+            // assignment below safe: the assignment is keyed on `runId`, so a
+            // `seq` appearing later in the input would overwrite the count the
+            // store just took, and the after-the-fact validation cannot tell
+            // the two apart — both are positive integers.
+            const admitted = validateRunEventInput(candidate);
+            if (!admitted.ok) return { ok: false, rejected: admitted.rejections };
+
             // `seq` is the store's to assign, and only here: it is the
             // journal's own count, taken inside the critical section.
             const durable: Record<string, unknown> = {};
@@ -374,7 +384,12 @@ export function createRunStore(commonDir: string): RunStore {
 
       if (outcome.ok) return { ok: true, event: outcome.accepted };
       const first = outcome.rejected[0];
-      if (first !== undefined) await note(runId, event, first, pattern);
+      // Every rejection is noted but one. A note is a line IN a run's record,
+      // and `unresolvable_run` is the store saying there is no such run: a
+      // note for it would create that run's notes entry for an id `list` has
+      // never heard of, so a typo would leave a permanent record of a run that
+      // never existed.
+      if (first !== undefined && first.code !== "unresolvable_run") await note(runId, event, first, pattern);
       return { ok: false, rejections: outcome.rejected };
     },
 
