@@ -7,7 +7,10 @@
  * the implementation must match them, never the other way around. Every kind
  * must carry at least one accept and one reject vector, and every reject
  * vector's expected codes must all be reported, so a grammar that silently
- * opens (or a validator that silently vanishes) goes red here.
+ * opens (or a validator that silently vanishes) goes red here. A reject vector
+ * may also name `{code, at}` pairs instead of bare codes, for a claim about
+ * WHICH member the validator refuses rather than only that it refused
+ * something; every reject vector must claim at least one of the two.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -20,6 +23,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 interface Vector {
   readonly name: string;
   readonly codes?: readonly string[];
+  /**
+   * Expected `{code, pointer}` pairs, for a vector whose claim is WHERE the
+   * validator objects and not merely that it did. `codes` alone cannot say
+   * that, so a vector about one member's admissibility names the pointer here.
+   */
+  readonly rejections?: readonly { readonly code: string; readonly at: string }[];
   readonly value: unknown;
 }
 
@@ -47,6 +56,10 @@ const expectRejected = (vector: Vector): void => {
   for (const code of vector.codes ?? []) {
     expect(reported, `${vector.name} should report ${code}; reported ${reported.join(", ")}`).toContain(code);
   }
+  const located = verdict.rejections.map((rejection) => `${rejection.code} at ${rejection.pointer}`);
+  for (const { code, at } of vector.rejections ?? []) {
+    expect(located, `${vector.name} should report ${code} at ${at}; reported ${located.join(", ")}`).toContain(`${code} at ${at}`);
+  }
 };
 
 describe("the run-event/1 golden vectors", () => {
@@ -55,6 +68,12 @@ describe("the run-event/1 golden vectors", () => {
     for (const entry of doc.kinds) {
       expect(entry.accept.length, `${entry.kind} has no accept vector`).toBeGreaterThan(0);
       expect(entry.reject.length, `${entry.kind} has no reject vector`).toBeGreaterThan(0);
+      for (const vector of entry.reject) {
+        expect(
+          (vector.codes ?? []).length + (vector.rejections ?? []).length,
+          `${entry.kind}: reject vector "${vector.name}" claims nothing the validator must report`,
+        ).toBeGreaterThan(0);
+      }
     }
   });
 

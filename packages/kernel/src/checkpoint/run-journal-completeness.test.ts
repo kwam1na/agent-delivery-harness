@@ -260,6 +260,11 @@ describe("the complete and executor-only readings", () => {
 const SECOND_TICKET = "V26-1658";
 
 const secondTicketRead: Step = { kind: "ticket.read", payload: { ticket: SECOND_TICKET, tracker: "linear" } };
+/** A run that named its ticket at the start, and a DIFFERENT one on its first `ticket.read`. */
+const startedSecond: Step = {
+  kind: "run.started",
+  payload: { ticket: SECOND_TICKET, host: "claude-code", workflow: { releaseId: "r1", profile: "linear" } },
+};
 const boundPosture: Step = {
   kind: "posture.declared",
   payload: { posture: "characterization-first", ticket: SECOND_TICKET },
@@ -332,6 +337,20 @@ describe("a run carrying more than one ticket", () => {
     expect(runPrimaryTicket(journal([ticketRead, secondTicketRead]))).toBe("V26-1548");
     expect(runPrimaryTicket(journal([secondTicketRead, ticketRead]))).toBe(SECOND_TICKET);
     expect(runPrimaryTicket(journal([posture, lenses()]))).toBeUndefined();
+  });
+
+  /**
+   * The row above cannot tell the two SOURCES apart: `started` and `ticketRead`
+   * name the same ticket, so a rule that read the first `ticket.read` rather
+   * than the first ticket in `seq` order would answer it identically. Here the
+   * two disagree, which is exactly the journal the docstring describes — one
+   * that names its ticket on `run.started`. Order decides, so `run.started`
+   * wins, and reading `ticket.read` instead would answer "V26-1548".
+   */
+  it("prefers the run.started ticket over a first ticket.read that names a different one", () => {
+    expect(runPrimaryTicket(journal([startedSecond, ticketRead, secondTicketRead]))).toBe(SECOND_TICKET);
+    // And with no `ticket.read` at all there is still a primary to read.
+    expect(runPrimaryTicket(journal([startedSecond, posture, lenses()]))).toBe(SECOND_TICKET);
   });
 });
 
