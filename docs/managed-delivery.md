@@ -581,8 +581,10 @@ it; the page does not consume it, because the page is rendered server-side.
 `--repo <path>` may repeat and selects the worktrees to serve; with none, the
 invoking worktree. Two paths in different repositories are two stores, each
 resolved under its own repository's common directory with the `GIT_` namespace
-cleared, so an inherited `GIT_DIR` cannot relocate either. Two worktrees of one
-repository are one store and one set of runs.
+cleared, so an inherited `GIT_DIR` cannot relocate either — and the root each
+path renders under comes from a `--show-toplevel` cleared the same way, so an
+inherited `GIT_WORK_TREE` cannot rename it. Two worktrees of one repository are
+one store and one set of runs.
 
 **A run is live** when the pointer of a worktree that was *named* points at it
 and it carries no `run.ended`. The server reads only the pointers of the paths
@@ -593,9 +595,13 @@ polling mechanism — only while something is live; a store of finished runs
 costs an open tab nothing.
 
 **What the page refuses.** It binds loopback on an ephemeral port by default
-(`--port <n>` to fix one) and answers only requests whose `Host` is the address
-and port it bound, compared by exact equality — so a page on another origin
-that resolves a name to loopback gets a 403 rather than the operator's runs.
+(`--port <n>` to fix one; 80 and 443 are refused as usage errors, because a
+browser omits a scheme's default port from `Host` and a page bound to one could
+never satisfy the check below) and answers only requests whose `Host` is the
+address and port it bound, compared by exact equality — so a page on another
+origin that resolves a name to loopback gets a 403 rather than the operator's
+runs, and so does a request carrying no `Host` at all. Only `GET` and `HEAD`
+are routed; every other method is answered 405, under the same headers.
 Every response carries `nosniff`, `no-referrer`, `no-store`, and a content
 security policy whose `script-src` is `'none'`; nothing sends a cross-origin
 allowance. The page contains **no script at all**: every string it renders,
