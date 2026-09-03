@@ -1535,14 +1535,25 @@ describe("runs serve", () => {
     // the loop and fail this one.
     expect((await httpRequest(`${server.url}/`, { host }, "HEAD")).status).toBe(200);
 
-    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
-      const response = await httpRequest(`${server.url}/api/runs`, { host }, method);
-      expect(response.status, method).toBe(405);
-      expect(response.body, method).toBe("method not allowed\n");
-      // A refusal is a response like any other. It is rendered in the
-      // operator's browser, so it is served under the same policy the page is.
-      expect(response.headers["content-security-policy"], method).toBe(RUN_SERVER_CSP);
-      expect(response.headers["x-content-type-options"], method).toBe("nosniff");
+    // EVERY route, not one, because the guard's POSITION is the property being
+    // asserted: it sits above the route table, so a guard moved below the `/`
+    // branch would answer `POST /` with the whole rendered run store while a
+    // loop that only ever asked for `/api/runs` stayed green.
+    for (const route of ["/", "/api/runs", "/nothing-here"]) {
+      for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+        const at = `${method} ${route}`;
+        const response = await httpRequest(`${server.url}${route}`, { host }, method);
+        expect(response.status, at).toBe(405);
+        expect(response.body, at).toBe("method not allowed\n");
+        // A refusal is a response like any other. It is rendered in the
+        // operator's browser, so it is served under the same policy the page
+        // is — all four headers, and no cross-origin allowance.
+        expect(response.headers["content-security-policy"], at).toBe(RUN_SERVER_CSP);
+        expect(response.headers["x-content-type-options"], at).toBe("nosniff");
+        expect(response.headers["referrer-policy"], at).toBe("no-referrer");
+        expect(response.headers["cache-control"], at).toBe("no-store");
+        expect(response.headers["access-control-allow-origin"], at).toBeUndefined();
+      }
     }
   });
 
