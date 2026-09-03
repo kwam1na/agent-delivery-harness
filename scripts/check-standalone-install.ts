@@ -15,7 +15,7 @@
  * the repository — no workspace root above it, no symlinks, no hoisting from a
  * sibling's install — and then proves the installed thing works: every sibling
  * the manifest declares is physically present in that tree, the package's entry
- * point imports, and for the CLI four real commands run end to end — the
+ * point imports, and for the CLI six real commands run end to end — the
  * operator surface and the config-free run surface.
  *
  * Installing each package alone is the whole point. A single temp directory
@@ -100,20 +100,44 @@ export const CLI_PACKAGE_NAME = `${PACKAGE_SCOPE}/cli`;
  *   `--help` walks and renders the registry, so a package that resolves but
  *   cannot run is still a finding. The CLI is an operator surface.
  *
- *   `runs list`, `emit run.started`, and one `emit` of a kind the run-event
- *   vocabulary does not define exercise the RUN SURFACE: the config-free half
- *   of the CLI, dispatched before `harness.config.ts` is loaded, which is the
- *   only half a repository with no harness config can run at all. Between them
- *   they resolve the store from git, read an empty store, allocate a journal,
- *   write the worktree pointer, resolve that pointer back, and refuse an event
- *   with a diagnostic naming the kind. None of that is reachable from `--help`,
- *   and every step of it crosses the kernel edge the tarball declares.
+ *   Two `runs list`s, `emit run.started`, and two refused `emit`s exercise the
+ *   RUN SURFACE: the config-free half of the CLI, dispatched before
+ *   `harness.config.ts` is loaded, which is the only half a repository with no
+ *   harness config can run at all. Between them they resolve the store from
+ *   git, read an empty store, allocate a journal, write the worktree pointer,
+ *   read the store back non-empty, resolve that pointer back, and refuse an
+ *   event with a diagnostic naming the kind. None of that is reachable from
+ *   `--help`, and every step of it crosses the kernel edge the tarball
+ *   declares.
  *
- * ORDER IS PART OF THE CASE. `runs list` asserts an EMPTY store, so it runs
- * before the case that allocates a journal; the refused `emit` resolves the
- * pointer the `run.started` case just wrote, so it runs after it.
+ * ORDER IS PART OF THE CASE. The first `runs list` asserts an EMPTY store, so
+ * it runs before the case that allocates a journal; the second asserts the
+ * store NON-EMPTY and names the id that allocation reported, so it runs after
+ * it; the refused `emit` resolves the pointer the `run.started` case wrote, so
+ * it runs after it too.
  *
- * The three run-surface cases run from a `git init`-ed scratch worktree root,
+ * AN EMPTY LISTING PROVES ALMOST NOTHING. A `store.list()` that unconditionally
+ * returned `[]` satisfies an assertion taken before anything is written, so the
+ * listing is asserted a second time against the id the allocation itself
+ * reported — the one string a stubbed listing cannot produce. That id is not
+ * knowable when this list is written, so the case asks for it with
+ * `expectsAllocatedRunId` and the runner supplies what the `run.started` case
+ * printed.
+ *
+ * THE SENSOR WITNESSES THE `GIT_` CLEARING RATHER THAN PRE-EMPTING IT. Every
+ * case below is spawned with the `GIT_` namespace already dropped, and the
+ * installed CLI drops it again before resolving the store — so none of those
+ * cases can tell the two clearings apart, and the sensor's own would be
+ * unfalsifiable if that were all it did. The last case therefore points
+ * `GIT_DIR` and `GIT_COMMON_DIR` at a SECOND `git init`-ed repository and
+ * asserts the store did not follow: the scratch repository's own current run is
+ * named back in the refusal, and the decoy repository is checked afterwards for
+ * a store it must not have. The two halves are one witness — the refusal says
+ * which store answered, and the decoy check says which store was written — and
+ * neither alone would distinguish a relocated store from a command that simply
+ * failed.
+ *
+ * The five run-surface cases run from a `git init`-ed scratch worktree root,
  * never this repository: the store lives under the invoking repository's git
  * common directory, so a case that resolved here would write into the
  * developer's own store. `emit` carries its payload inline with `--json`
@@ -127,6 +151,28 @@ export interface CliSmokeCase {
   readonly exitCode: number;
   /** Substrings the case's combined stdout and stderr must carry. */
   readonly expected: readonly string[];
+  /**
+   * What this case proves, where its argument vector does not say it. Two cases
+   * share the vector `runs list`, so a finding that named only the vector would
+   * not say which of them failed.
+   */
+  readonly proves?: string;
+  /**
+   * The output must also carry the run id the `emit run.started` case reported.
+   * The id is allocated at run time, so it cannot be written into `expected`.
+   */
+  readonly expectsAllocatedRunId?: boolean;
+  /**
+   * Spawn this case with `GIT_DIR` and `GIT_COMMON_DIR` pointed at a second
+   * repository, rather than with the `GIT_` namespace cleared.
+   */
+  readonly underRelocatedGit?: boolean;
+}
+
+/** How a finding names a case: the vector, and what it proves where that differs. */
+export function caseLabel(smoke: CliSmokeCase): string {
+  const vector = smoke.args.join(" ");
+  return smoke.proves === undefined ? vector : `${vector} (${smoke.proves})`;
 }
 
 /**
@@ -136,28 +182,84 @@ export interface CliSmokeCase {
  */
 const UNKNOWN_KIND = "sensor.unknown-kind";
 
+/** The `run.started` payload both allocation cases carry. */
+const RUN_STARTED_PAYLOAD = JSON.stringify({
+  host: "standalone-install-sensor",
+  workflow: { releaseId: "standalone-install-sensor", profile: "sensor" },
+});
+
 export const CLI_SMOKE_CASES: readonly CliSmokeCase[] = [
   { args: ["--help"], exitCode: 0, expected: ["prepare", "gate", "record", "verify"] },
-  { args: ["runs", "list"], exitCode: 0, expected: ["runs in ", "total 0 bytes across 0 run(s)"] },
   {
-    args: [
-      "emit",
-      "run.started",
-      "--json",
-      JSON.stringify({
-        host: "standalone-install-sensor",
-        workflow: { releaseId: "standalone-install-sensor", profile: "sensor" },
-      }),
-    ],
+    args: ["runs", "list"],
+    proves: "empty, before anything is allocated",
+    exitCode: 0,
+    expected: ["runs in ", "total 0 bytes across 0 run(s)"],
+  },
+  {
+    args: ["emit", "run.started", "--json", RUN_STARTED_PAYLOAD],
     exitCode: 0,
     expected: ["started run run-"],
+  },
+  {
+    args: ["runs", "list"],
+    proves: "non-empty, naming the run just allocated",
+    exitCode: 0,
+    expected: ["runs in ", "across 1 run(s)", "open current"],
+    expectsAllocatedRunId: true,
   },
   {
     args: ["emit", UNKNOWN_KIND, "--json", "{}"],
     exitCode: 1,
     expected: [`The run event was refused: ${UNKNOWN_KIND}`, "unknown_kind at /kind"],
   },
+  {
+    // The store must resolve from the working directory's repository, not from
+    // the relocated namespace: a second `run.started` there would allocate
+    // cleanly in the decoy's empty store, so being refused for the SCRATCH
+    // repository's already-current run — named by id — is the witness.
+    args: ["emit", "run.started", "--json", RUN_STARTED_PAYLOAD],
+    proves: "refused for the scratch repository's run under a relocated GIT_ namespace",
+    exitCode: 1,
+    expected: ["run_already_current", "A run is already current for this worktree."],
+    expectsAllocatedRunId: true,
+    underRelocatedGit: true,
+  },
 ];
+
+/**
+ * The id the allocation reported, read out of `emit run.started`'s own output.
+ *
+ * Deliberately anchored to what the ALLOCATION prints. The refusal the last
+ * case asserts also names a run id, in prose of its own; matching that too
+ * would let a run which allocated nothing still claim an id and satisfy every
+ * case that asks for one.
+ */
+const ALLOCATED_RUN_ID = /\bstarted run (run-[0-9a-f]{16})\b/u;
+
+export function allocatedRunIdFrom(output: string): string | undefined {
+  return ALLOCATED_RUN_ID.exec(output)?.[1];
+}
+
+/**
+ * What a case asking for the allocated id names as missing when no case ever
+ * reported one — so the finding says the allocation went unwitnessed rather
+ * than passing for want of anything to look for.
+ */
+export const ALLOCATED_RUN_ID_NEEDLE = "the run id `emit run.started` reported";
+
+/** The needles a case asked for that its output did not carry. */
+export function missingExpectations(
+  smoke: CliSmokeCase,
+  output: string,
+  allocatedRunId: string | undefined,
+): readonly string[] {
+  const needles =
+    smoke.expectsAllocatedRunId === true
+      ? [...smoke.expected, allocatedRunId ?? ALLOCATED_RUN_ID_NEEDLE]
+      : smoke.expected;
+  return needles.filter((needle) => !output.includes(needle));
+}
 
 /**
  * Where the run surface writes, relative to the scratch repository's git
@@ -169,6 +271,10 @@ export const CLI_SMOKE_CASES: readonly CliSmokeCase[] = [
  * case could exit one because the store was never reachable at all. One
  * `run.started` allocates exactly one journal; the refused append writes
  * exactly one bounded note line and no second journal.
+ *
+ * The case that runs under a relocated `GIT_` namespace is refused before it
+ * allocates anything, so it adds neither a journal nor a note here — and adds
+ * nothing to the decoy repository either, which `holdsRunStore` checks.
  *
  * These two directories are all this sensor asserts over. The pointer
  * directory beside them is the store's own business.
@@ -197,6 +303,19 @@ export function readScratchRunStore(repoDir: string): ScratchRunStore {
     .flatMap((entry) => readFileSync(path.join(notesDir, entry), "utf8").split("\n"))
     .filter((line) => line.trim() !== "").length;
   return { journals, noteLines };
+}
+
+/**
+ * Whether a repository holds a run store at all.
+ *
+ * Asked of the DECOY repository, whose `.git` the last case points `GIT_DIR`
+ * and `GIT_COMMON_DIR` at. The installed CLI clears that namespace before
+ * resolving the store, so the decoy must come back untouched; a store here is
+ * the store having followed the environment into someone else's repository,
+ * which is exactly the failure the clearing exists to prevent.
+ */
+export function holdsRunStore(repoDir: string): boolean {
+  return existsSync(path.join(repoDir, ".git", ...SCRATCH_RUNS_DIR));
 }
 
 /**
@@ -242,6 +361,11 @@ export function cliProbeVacuityFinding(probe: {
  * rather than by curated list, for the same reason the product drops it that
  * way: missing one leaves a store that looks perfectly healthy and belongs to
  * the wrong repository.
+ *
+ * This is the sensor's own hygiene, not its evidence: the installed CLI clears
+ * the namespace too, so a case spawned from here can never tell which clearing
+ * saved it. What makes the product's clearing falsifiable is the one case that
+ * opts out of this environment through `relocatedGitEnvironment` below.
  */
 export function gitNamespaceCleared(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const cleared: NodeJS.ProcessEnv = {};
@@ -250,6 +374,16 @@ export function gitNamespaceCleared(env: NodeJS.ProcessEnv = process.env): NodeJ
     cleared[name] = value;
   }
   return cleared;
+}
+
+/**
+ * The environment the `GIT_` relocation witness runs under: the cleared one,
+ * with both variables that could relocate a store pointed at the decoy
+ * repository. Set together, because a store resolver that honoured either one
+ * would land in the decoy and the case must not depend on which.
+ */
+export function relocatedGitEnvironment(base: NodeJS.ProcessEnv, decoyGitDir: string): NodeJS.ProcessEnv {
+  return { ...base, GIT_DIR: decoyGitDir, GIT_COMMON_DIR: decoyGitDir };
 }
 
 /** Timeout for any single npm or node invocation this sensor spawns. */
@@ -496,11 +630,38 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
           continue;
         }
 
+        // The repository the relocation witness points `GIT_` at. It has to be
+        // a REAL repository: a `GIT_DIR` naming no repository fails resolution
+        // outright, and a case that cannot distinguish "the clearing worked"
+        // from "git errored" witnesses nothing. Its store must stay empty.
+        const decoyDir = path.join(scratch, "decoy");
+        mkdirSync(decoyDir, { recursive: true });
+        try {
+          execFileSync("git", ["init", "--quiet"], {
+            cwd: decoyDir,
+            env: childEnv,
+            encoding: "utf8",
+            timeout: STEP_TIMEOUT_MS,
+            stdio: CAPTURED,
+          });
+        } catch (error) {
+          findings.push({
+            rule: "anti-vacuity",
+            subject: "decoy-repository",
+            message: `the decoy repository could not be initialized, so the case that points GIT_DIR and GIT_COMMON_DIR at it would fail for want of a repository rather than witness the store's own GIT_ clearing: ${describe(error)}`,
+          });
+          continue;
+        }
+        const relocatedEnv = relocatedGitEnvironment(childEnv, path.join(decoyDir, ".git"));
+
+        /** What `emit run.started` reported, for the cases that assert on it. */
+        let allocatedRunId: string | undefined;
+
         for (const smoke of CLI_SMOKE_CASES) {
-          const label = smoke.args.join(" ");
+          const label = caseLabel(smoke);
           const ran = spawnSync(process.execPath, ["--import", pathToFileURL(loader).href, entry, ...smoke.args], {
             cwd: repoDir,
-            env: childEnv,
+            env: smoke.underRelocatedGit === true ? relocatedEnv : childEnv,
             encoding: "utf8",
             timeout: STEP_TIMEOUT_MS,
             stdio: CAPTURED,
@@ -522,6 +683,10 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
           // Both streams: an ok result prints to stdout and a blocked one to
           // stderr, and two of these cases are asserting on a refusal.
           const output = `${ran.stdout}${ran.stderr}`;
+          // The first allocation wins: later cases assert against the id this
+          // run produced, and the relocated case must never be able to supply
+          // one of its own.
+          allocatedRunId ??= allocatedRunIdFrom(output);
           if (ran.status !== smoke.exitCode) {
             findings.push({
               rule: "cli-command-failed",
@@ -530,7 +695,7 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
             });
             continue;
           }
-          const missing = smoke.expected.filter((needle) => !output.includes(needle));
+          const missing = missingExpectations(smoke, output, allocatedRunId);
           if (missing.length > 0) {
             findings.push({
               rule: "cli-command-failed",
@@ -560,6 +725,18 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
             rule: "run-store-unexpected",
             subject: pkg.name,
             message: `the run-surface cases left ${store.journals} journal(s) and ${store.noteLines} note line(s) under managed-delivery/runs/ of the scratch repository; one run.started and one refused append leave exactly ${EXPECTED_SCRATCH_JOURNALS} and ${EXPECTED_SCRATCH_NOTE_LINES}`,
+          });
+        }
+
+        // The other half of the relocation witness. The case above says which
+        // store ANSWERED; this says which store was WRITTEN — an installed CLI
+        // that stopped clearing the namespace would have allocated here, in a
+        // repository the operator never named.
+        if (holdsRunStore(decoyDir)) {
+          findings.push({
+            rule: "run-store-unexpected",
+            subject: pkg.name,
+            message: `a run store was created under managed-delivery/runs/ of the decoy repository at ${decoyDir}; the case that ran with GIT_DIR and GIT_COMMON_DIR pointed there must resolve its store from the working directory's repository instead`,
           });
         }
       }
