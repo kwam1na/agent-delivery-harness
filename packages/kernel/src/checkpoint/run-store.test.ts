@@ -12,6 +12,21 @@
  * in a bounded note rather than swallowed. The residual race against
  * owner-executed code is unclosable and is bounded by the fact that nothing
  * authoritative reads any of this.
+ *
+ * WHAT THIS SUITE ACCEPTS AS UNPROVEN. Two clauses of the discipline have no
+ * vector here, and both are accepted that way rather than left to look like
+ * oversights:
+ *
+ * - The undefended DIRECTORY COMPONENTS behind the residual above. `O_NOFOLLOW`
+ *   and the `fstat` check defend the FINAL path component only, because node
+ *   has no `openat`, so there is nothing for a vector to assert about a planted
+ *   parent directory.
+ * - `ownerOnlyRegularFile`'s uid clause (`append-only-file.ts`, "not owned by
+ *   this user"). Reaching it needs a file at a store path owned by a DIFFERENT
+ *   user, and no fixture running as one unprivileged user can create one. The
+ *   sibling clauses — regular file and owner-only mode — are vectored in "the
+ *   fstat discipline on every opened descriptor" below; this one is not, and
+ *   the gap is the fixture's, not the discipline's.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -188,6 +203,29 @@ describe("the append discipline", () => {
     expect(readFileSync(journalPath, "utf8").startsWith(durable)).toBe(true);
   });
 
+  it("refuses a durable journal line that parses as JSON but is not a run event", async () => {
+    const { store, runsDir } = freshStore();
+    const runId = await allocated(store);
+    await store.append(runId, startedFor(runId));
+    const journalPath = path.join(runsDir, `${runId}.jsonl`);
+    // Terminated, so it is durable: the torn-tail repair above never reaches
+    // it, and `append`'s own validation never saw it. The only thing standing
+    // between this line and a reader is the per-entry check inside the read.
+    const stray = { runId, seq: 2, kind: "posture.declared", payload: { posture: "test-first" } };
+    writeFileSync(journalPath, `${readFileSync(journalPath, "utf8")}${JSON.stringify(stray)}\n`, { mode: 0o600 });
+
+    const read = await store.read(runId);
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    // `unsupported_spec` rather than `not_an_object` is the discrimination
+    // this row exists for: the line parsed, and the entry was refused on its
+    // shape. The `/1` prefix pins the refusal to the offending entry's index
+    // rather than to the journal as a whole.
+    expect(read.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([
+      ["unsupported_spec", "/1/version"],
+    ]);
+  });
+
   it("rejects a second run.started and any append after run.ended", async () => {
     const { store } = freshStore();
     const runId = await allocated(store);
@@ -253,12 +291,24 @@ describe("the append discipline", () => {
       event(runId, "review.round.opened", { round: 1, candidateTreeSha: long, lenses: [] }, { candidateTreeSha: long }),
     );
     expect(badTree.ok).toBe(false);
+    if (!badTree.ok) {
+      expect(badTree.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([
+        ["malformed_member", "/candidateTreeSha"],
+        ["malformed_member", "/payload/candidateTreeSha"],
+      ]);
+    }
     const badTicket = "V".repeat(129);
     const ticket = await store.append(
       runId,
       event(runId, "ticket.read", { ticket: badTicket, tracker: "linear" }, { ticket: badTicket }),
     );
     expect(ticket.ok).toBe(false);
+    if (!ticket.ok) {
+      expect(ticket.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([
+        ["malformed_member", "/ticket"],
+        ["malformed_member", "/payload/ticket"],
+      ]);
+    }
   });
 
   it("rejects a pr.opened whose url is not http or https", async () => {
