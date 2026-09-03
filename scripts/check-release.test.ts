@@ -27,7 +27,7 @@ afterAll(() => {
   }
 });
 
-const APACHE_LICENSE_STUB = `${LICENSE_TEXT_MARKERS.join("\n")}\n`;
+const LICENSE_STUB = `${LICENSE_TEXT_MARKERS.join("\n")}\n`;
 
 /**
  * A canned green pack shape for fixture runs, so the rules under test fail for
@@ -76,7 +76,7 @@ function makeFixture(options: FixtureOptions = {}): string {
   writeFileSync(path.join(dir, "package.json"), `${JSON.stringify(rootManifest, null, 2)}\n`, "utf8");
 
   if (options.license !== false) {
-    writeFileSync(path.join(dir, "LICENSE"), options.license ?? APACHE_LICENSE_STUB, "utf8");
+    writeFileSync(path.join(dir, "LICENSE"), options.license ?? LICENSE_STUB, "utf8");
   }
 
   const packages = options.packages ?? [
@@ -173,16 +173,16 @@ describe("license-coherence", () => {
     expect(result.findings[0]!.file).toBe("LICENSE");
   });
 
-  it("flags a LICENSE that names Apache but is not the license text", () => {
-    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, license: "Apache License\n" });
+  it("flags a LICENSE that names the license but is not its text", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, license: "Functional Source License, Version 1.1\n" });
     const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
     expect(rulesOf(result.findings)).toEqual(["license-coherence", "license-coherence"]);
   });
 
-  it("flags a manifest whose license field disagrees with the LICENSE file", () => {
+  it("flags a manifest left behind at the superseded Apache-2.0 id", () => {
     const dir = makeFixture({
       rootLicense: EXPECTED_LICENSE_ID,
-      packages: [{ name: "@fixture/a", license: "MIT" }, { name: "@fixture/b" }],
+      packages: [{ name: "@fixture/a", license: "Apache-2.0" }, { name: "@fixture/b" }],
     });
     const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
     expect(rulesOf(result.findings)).toEqual(["license-coherence"]);

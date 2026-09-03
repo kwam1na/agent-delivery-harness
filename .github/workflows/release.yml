@@ -5,9 +5,10 @@
 #   static  — scripts/check-release.ts: one version across the root and every
 #             workspace package, HARNESS_VERSION in lockstep with the kernel
 #             manifest (the fingerprint rule packages/kernel/src/preparation.ts
-#             states), LICENSE present and actually the Apache License 2.0,
-#             every manifest's `license` field agreeing with it, workspace
-#             packages packable (not private) while the root stays private.
+#             states), LICENSE present and actually the Functional Source
+#             License 1.1, every manifest's `license` field agreeing with it,
+#             workspace packages packable (not private) while the root stays
+#             private.
 #             Each rule is falsified in scripts/check-release.test.ts, so the
 #             ordinary CI suite already fails a pull request that breaks one;
 #             this workflow re-runs the same sensor as its own named check.
