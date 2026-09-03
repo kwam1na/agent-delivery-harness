@@ -29,7 +29,7 @@ import {
 import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { READOUT_LABELS } from "./run-projection.ts";
-import { RUN_SERVER_CSP, escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
+import { DEFAULT_POLL_SECONDS, RUN_SERVER_CSP, escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
 import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface } from "./run-surface.ts";
 
 const exec = promisify(execFile);
@@ -1292,7 +1292,25 @@ const runOf = (state: ServedState, runId: string): ServedState["runs"][number] =
   return found;
 };
 
-/** A journal carrying both writers, a paired round, and an end — the U2 script. */
+/**
+ * One run's own block on the page: everything between its heading and the next
+ * run's, or the end of the document.
+ *
+ * The page renders every run under one `<h2>`, and a block that read another
+ * run's projection would still put the right words SOMEWHERE on the page.
+ * Slicing to the heading is what makes "this run's completeness" an assertion
+ * about this run rather than about the document.
+ */
+function sectionFor(page: string, runId: string): string {
+  const heading = `<h2>${runId}</h2>`;
+  const start = page.indexOf(heading);
+  expect(start, `${runId} has no heading on the page`).toBeGreaterThan(-1);
+  const rest = page.slice(start + heading.length);
+  const next = rest.indexOf("<h2>");
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+/** A journal carrying both writers, a paired round, and an end. */
 async function scriptedRun(dir: string, options: { readonly rationale?: string } = {}): Promise<string> {
   const runId = await startRun(dir);
   const steps: readonly (readonly [string, unknown])[] = [
@@ -1406,6 +1424,23 @@ describe("runs serve", () => {
     expect(after.page).not.toContain('http-equiv="refresh"');
   });
 
+  it("renders the poll interval it declares, not one the page hardcodes", async () => {
+    const dir = await initRepo();
+    await startRun(dir);
+
+    // The other live row serves `pollSeconds: 1`. This one names no interval,
+    // so the page renders the constant the server declares — and a renderer
+    // that spelled either number into the markup fails one of the two.
+    expect(DEFAULT_POLL_SECONDS, "the two live rows must not assert the same interval").not.toBe(1);
+
+    const { page, state } = await pageAndState(await serve([dir]));
+    expect(state.pollSeconds).toBe(DEFAULT_POLL_SECONDS);
+    // Both places the interval reaches the operator: the refresh the browser
+    // obeys, and the prose that tells a reader how stale a row may be.
+    expect(page).toContain(`<meta http-equiv="refresh" content="${DEFAULT_POLL_SECONDS}">`);
+    expect(page).toContain(`<p class="meta">refreshing every ${DEFAULT_POLL_SECONDS}s while a run is live</p>`);
+  });
+
   it("gives each repository its own pointer key, store root, and root path under a planted git environment", async () => {
     const first = await initRepo();
     const second = await initRepo();
@@ -1475,6 +1510,44 @@ describe("runs serve", () => {
     expect(page).toContain(runId);
     expect(page).toContain('<td class="open">open</td>');
     expect(page).not.toContain('<td class="live">live</td>');
+  });
+
+  it("groups both named worktrees of one repository, listing the run once and reading every pointer", async () => {
+    const dir = await initRepo();
+    const other = path.join(path.dirname(dir), `${path.basename(dir)}-grouped`);
+    cleanups.push(other);
+    await git(dir, "worktree", "add", "--quiet", "-b", "grouped", other);
+
+    // The run is started in the worktree named SECOND, so the pointer that
+    // makes it live is not the group's first: a server that read one pointer
+    // per store would render this run open and never live.
+    const runId = await startRun(other);
+
+    const first = await storeOf(dir);
+    const second = await storeOf(other);
+    expect(first.commonDir).toBe(second.commonDir);
+    expect(first.worktreeKey).not.toBe(second.worktreeKey);
+
+    // Named on its own, the first worktree holds no pointer at this run. That
+    // is the control: whatever makes the run live below came from the other.
+    const alone = await pageAndState(await serve([dir]));
+    expect(runOf(alone.state, runId).live).toBe(false);
+
+    const { page, state } = await pageAndState(await serve([dir, other]));
+
+    // One store, so one group — carrying both keys, in the order the operator
+    // named them, with the first named path owning the group's root.
+    expect(state.repositories).toHaveLength(1);
+    expect(state.repositories[0]?.worktreeKeys).toEqual([first.worktreeKey, second.worktreeKey]);
+    expect(state.repositories[0]?.root).toBe(realpathSync(dir));
+
+    // Two worktrees, one store: the run is served once, not once per key.
+    expect(state.runs.filter((run) => run.runId === runId)).toHaveLength(1);
+    expect(page.split(`<h2>${runId}</h2>`).length - 1).toBe(1);
+
+    // And it is live, which only the second worktree's pointer can say.
+    expect(runOf(state, runId).live).toBe(true);
+    expect(page).toContain('<td class="live">live</td>');
   });
 
   it("binds loopback on an ephemeral port and refuses a foreign Host", async () => {
@@ -1680,6 +1753,43 @@ describe("runs serve", () => {
     expect(shownWithout.out).not.toContain("no CLI gate completion in this journal");
   });
 
+  it("gives each run on one page its own completeness block, and the note to the one run it explains", async () => {
+    // Two repositories, both carrying a config, served TOGETHER — which is what
+    // the separately-served rows above cannot do: with one run on the page,
+    // rendering `runs[0]`'s readout under every heading is indistinguishable
+    // from rendering each run's own.
+    const finished = await initRepo();
+    const finishedRunId = await executorOnlyRun(finished);
+    const barelyStarted = await initRepo();
+    const barelyStartedRunId = await startRun(barelyStarted);
+
+    const { page, state } = await pageAndState(await serve([finished, barelyStarted]));
+    expect([...state.runs].map((run) => run.runId).sort()).toEqual([finishedRunId, barelyStartedRunId].sort());
+    expect(runOf(state, finishedRunId).readout.status).toBe("complete-executor-only");
+    expect(runOf(state, barelyStartedRunId).readout.status).toBe("incomplete");
+
+    // Each heading is followed by ITS run's completeness, not the page's first.
+    const finishedBlock = sectionFor(page, finishedRunId);
+    const barelyStartedBlock = sectionFor(page, barelyStartedRunId);
+    expect(finishedBlock).toContain(`complete-executor-only — ${READOUT_LABELS}`);
+    expect(barelyStartedBlock).toContain(`incomplete — ${READOUT_LABELS}`);
+    expect(barelyStartedBlock).not.toContain("complete-executor-only");
+
+    // The present row is the block's own too, asserted as the whole paragraph:
+    // the finished journal's row starts with the barely-started one's, so a
+    // containment check alone would hold with both blocks reading one run.
+    expect(finishedBlock).toContain('<p class="meta">present: run.started, ticket.read,');
+    expect(barelyStartedBlock).toContain('<p class="meta">present: run.started</p>');
+
+    // The note belongs to the status that explains it, on the repository it
+    // names — once on the whole page, under the heading of the run it is about.
+    const note = "note: no CLI gate completion in this journal";
+    expect(page.split(note).length - 1, "the note is rendered once, for one run").toBe(1);
+    expect(finishedBlock).toContain(`${note}; harness.config.ts present at ${escapedRoot(finished)}`);
+    expect(barelyStartedBlock).not.toContain(note);
+    expect(runOf(state, barelyStartedRunId).readout.note).toBeUndefined();
+  });
+
   it("distinguishes a round that was never opened, exactly as runs show does", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
@@ -1766,6 +1876,23 @@ describe("runs serve", () => {
     expect(runOf(state, runId).readable).toBe(false);
     expect(page).toContain('<td class="open">unreadable</td>');
     expect(page).toContain("no readable events");
+  });
+
+  it("carries the labels banner and the empty-store cell over a store holding no runs", async () => {
+    const dir = await initRepo();
+
+    // Nothing has ever run here, so every per-run block is absent and the
+    // page-wide banner is the ONLY place the disclaimer can come from. Deleting
+    // it would leave this page with no disclaimer at all.
+    const { page, state } = await pageAndState(await serve([dir]));
+    expect(state.runs).toEqual([]);
+    expect(state.labels).toBe(READOUT_LABELS);
+    expect(page).toContain(`<p class="labels">${READOUT_LABELS}. Nothing here is read by admission, the gate, or the recorder.</p>`);
+
+    // The runs table still renders, spanning every column it declares, rather
+    // than collapsing to nothing an operator could mistake for a failed read.
+    expect(page).toContain('<td colspan="10">no runs in this store</td>');
+    expect(page).not.toContain("<h2>");
   });
 });
 
