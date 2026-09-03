@@ -293,6 +293,8 @@ interface FixtureOptions {
   readonly drift?: string;
   /** Ship the manifest record for this charter, but not its bytes. */
   readonly omit?: string;
+  /** Ship this charter's bytes, but drop its record from the manifest. */
+  readonly undeclared?: string;
 }
 
 /**
@@ -331,7 +333,8 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
 
   // The installed generation: a charter manifest naming every charter it
   // ships, and the bytes for each. `omit` leaves one declared and unshipped;
-  // `drift` ships bytes the compiled policy was not resolved against.
+  // `undeclared` is its mirror, leaving one shipped and undeclared; `drift`
+  // ships bytes the compiled policy was not resolved against.
   const shipped = [...charters, UNACTIVATED_CHARTER];
   await mkdir(path.join(dir, INSTALLED_ARCHIVE_DIR, "personas"), { recursive: true });
   await writeFile(
@@ -339,7 +342,9 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     `${JSON.stringify(
       {
         schemaVersion: "reviewer-persona-manifest/1",
-        personas: shipped.map((charter) => ({ personaId: `persona.${charter}`, path: charterEntryPath(charter) })),
+        personas: shipped
+          .filter((charter) => charter !== options.undeclared)
+          .map((charter) => ({ personaId: `persona.${charter}`, path: charterEntryPath(charter) })),
       },
       null,
       2,
@@ -502,6 +507,20 @@ describe("the charter bytes the emitter reviews under", () => {
   it("refuses a charter the installed generation does not carry", async () => {
     const fixture = await createFixture({ omit: "zeta-lens" });
     const result = await emit(fixture, greenOutcome);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("persona.zeta-lens");
+    expect(result.stdout.trim()).toBe("");
+  });
+
+  it("refuses an activated charter the installed manifest does not declare", async () => {
+    // The sibling of the row above, and the one the digest check cannot stand
+    // in for: the bytes are present and hash correctly, but nothing in the
+    // installation declares them, so there is no path to open. The outcome
+    // names only the two charters that survive dropping the activated lens,
+    // so an emitter that skipped the undeclared one instead of refusing would
+    // satisfy every later arity and membership check and exit green.
+    const fixture = await createFixture({ undeclared: "zeta-lens" });
+    const result = await emit(fixture, { ...greenOutcome, reviewers: approvedBy(["alpha-lens", "beta-lens"]) });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("persona.zeta-lens");
     expect(result.stdout.trim()).toBe("");
