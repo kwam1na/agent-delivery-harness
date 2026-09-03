@@ -810,6 +810,16 @@ describe("a journal that re-ran a command", () => {
     // The shape of the repository's own second-round loop. Clean: the pull
     // request followed a gate, and the re-gate that followed it is the one the
     // other two constraints are judged on.
+    //
+    // THE PULL REQUEST SITS BEFORE THE FIRST RECORD COMPLETION ON PURPOSE, and
+    // that is what pins the anchor's COMMAND rather than only its position in
+    // the run. With the pull request placed after it, this journal reads clean
+    // under any "first CLI completion of some command" anchor, so an anchor
+    // taken on `record` instead of `gate` would pass — and that anchor is wrong
+    // in both directions: an unfinished run that has gated but not yet
+    // recorded would report nothing at all, and this journal would be reported
+    // out of order. Here the first record completion follows the pull request,
+    // so a `record` anchor names it as late and the row fails.
     const reGatedAfterPr = journal([
       started,
       ticketRead,
@@ -818,8 +828,8 @@ describe("a journal that re-ran a command", () => {
       opened(1),
       closed(1),
       completed("gate"),
-      completed("record"),
       prOpened,
+      completed("record"),
       completed("gate"),
       completed("record"),
       ended,
