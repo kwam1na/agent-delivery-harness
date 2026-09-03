@@ -123,6 +123,20 @@ export function roundEntries(events: readonly RunEvent[]): readonly RoundEntry[]
   });
 }
 
+/**
+ * The lenses a round carried, or the fact that it never opened.
+ *
+ * A round with no `review.round.opened` has no lens set to name, and the two
+ * surfaces have to say the SAME thing about that. The terminal already said
+ * `never opened`; the page rendered nothing, which an operator reads as a
+ * round that opened carrying no lens. That is a second answer to one question
+ * about one file, which is exactly what this module exists to prevent — so the
+ * words live here, once, and each surface only escapes and places them.
+ */
+export function roundLenses(entry: RoundEntry): string {
+  return entry.opened === undefined ? "never opened" : oneLineOf(payloadOf(entry.opened)["lenses"]);
+}
+
 /** One text row per round, each carrying the candidate it was bound to. */
 export function roundRows(events: readonly RunEvent[]): readonly string[] {
   return roundEntries(events).map((entry) => {
@@ -130,7 +144,7 @@ export function roundRows(events: readonly RunEvent[]): readonly string[] {
     return [
       `  round ${entry.round}`,
       `candidate ${entry.candidateTreeSha || "(none)"}`,
-      entry.opened === undefined ? "never opened" : `lenses ${oneLineOf(payloadOf(entry.opened)["lenses"])}`,
+      entry.opened === undefined ? roundLenses(entry) : `lenses ${roundLenses(entry)}`,
       closed === undefined ? "open" : `${oneLineOf(closed["outcome"])} findings ${oneLineOf(closed["findings"])} cost ${oneLineOf((closed["cost"] as { total?: unknown } | undefined)?.total)}`,
     ].join("  ");
   });
