@@ -1990,6 +1990,41 @@ describe("runs serve", () => {
     expect(page).toContain("(cli-written)");
   });
 
+  it("reports the last CLI completion of a re-run command, not the first", async () => {
+    // THE SAME BINDING THE COMPLETENESS EVALUATOR SETTLED (V26-1709). The
+    // table's gate and record cells answer the same question `cliCompletion`
+    // does — which CLI completion of this command governs — from their own
+    // `cliCompletionFor`. Left on the first, a page would report the outcome
+    // of a gate the delivery re-ran and abandoned while the completeness block
+    // beside it judged the re-run, so the two halves of one row would describe
+    // two different gates.
+    const dir = await initRepo();
+    const runId = await scriptedRun(dir);
+    const { store, commonDir } = await storeOf(dir);
+    for (const [command, outcome] of [
+      ["gate", "policy"],
+      ["record", "policy"],
+      ["gate", "ok"],
+      ["record", "ok"],
+    ] as const) {
+      const appended = await store.append(
+        runId,
+        buildRunEvent({
+          runId,
+          commonDir,
+          kind: "command.completed",
+          role: "cli",
+          payload: { command, outcome, durationMs: 12 },
+        }),
+      );
+      expect(appended.ok, JSON.stringify(appended)).toBe(true);
+    }
+
+    const { state } = await pageAndState(await serve([dir]));
+    expect(runOf(state, runId).gate).toEqual({ outcome: "ok", writer: "cli" });
+    expect(runOf(state, runId).record).toEqual({ outcome: "ok", writer: "cli" });
+  });
+
   it("renders a run whose journal will not read rather than failing the page", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);

@@ -154,14 +154,36 @@ const payloadOf = (event: RunEvent): Record<string, unknown> =>
   typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
 
 const first = (events: readonly Indexed[]): Indexed | undefined => events[0];
+const last = (events: readonly Indexed[]): Indexed | undefined => events[events.length - 1];
 
 function indexBy(events: readonly RunEvent[], kind: RunEventKind): Indexed[] {
   return events.flatMap((event, at) => (event.kind === kind ? [{ at, event }] : []));
 }
 
-/** A CLI-written completion of one registered command; nothing else counts. */
+/**
+ * A CLI-written completion of one registered command; nothing else counts.
+ *
+ * THE LAST OF THEM, NOT THE FIRST (settled 2026-09-03 under V26-1709, closing
+ * `OC-1570-D1` and `AT-1570-02` from V26-1548's deferral 3). A journal carrying
+ * one completion per command — every journal the product had produced when the
+ * deferral was filed — reads the same either way, so the binding had to be
+ * decided rather than observed. A command is re-run to SUPERSEDE its earlier
+ * outcome, so the completion the three gate-anchored constraints below are
+ * about (`gate-before-closed-round`, `record-before-gate`, `pr-before-gate`) is
+ * the one the delivery finally stood on, which is the latest. Binding the
+ * first would judge a delivery on a gate it had already abandoned, and would
+ * let a gate re-run AFTER the record was written read as clean because an
+ * earlier gate happened to precede it.
+ *
+ * The decision was taken on those grounds rather than on a cited journal:
+ * V26-1557's dogfood closed without producing one that re-runs a gate, and no
+ * tracked item promised another, so waiting on the evidence would have
+ * deferred the reading indefinitely. It is pinned by the four-journal vector in
+ * this module's suite, each journal carrying two CLI completions of one command
+ * straddling a constraint the two readings judge differently.
+ */
 function cliCompletion(events: readonly RunEvent[], command: string): Indexed | undefined {
-  return first(
+  return last(
     indexBy(events, "command.completed").filter(
       (entry) => entry.event.actor.role === "cli" && payloadOf(entry.event)["command"] === command,
     ),

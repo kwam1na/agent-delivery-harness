@@ -710,3 +710,101 @@ describe("the anchored constraints and the round rules", () => {
     expect(result.status).toBe("incomplete");
   });
 });
+
+describe("a journal that re-ran a command", () => {
+  /**
+   * THE FIRST-VERSUS-LAST BINDING, PINNED. `cliCompletion` binds the LAST CLI
+   * completion of a command, and until this row nothing said which — every
+   * journal above carries at most one completion per command, so `first` and
+   * `last` agree on all of them and a binding flipped either way survived the
+   * whole suite. The four journals here are the ones the two readings judge
+   * differently: each carries two CLI completions of one command straddling a
+   * gate-anchored constraint, so a `first` binding turns a clean verdict dirty
+   * or a dirty one clean on every single one.
+   *
+   * WHY LAST IS THE READING. A command is re-run to supersede its earlier
+   * outcome, so the completion the three gate-anchored constraints are about
+   * is the one the delivery finally stood on — the latest. Under a `first`
+   * binding a delivery could gate before its round closed, close the round,
+   * re-run the gate, and be judged on the gate it had already abandoned; and a
+   * gate re-run after the record was written — the ordering `record-before-gate`
+   * exists to catch — would read as clean because an earlier gate preceded the
+   * record.
+   */
+  it("binds the last CLI completion of a command, not the first", () => {
+    // Gate re-run after the round closed: clean, because the gate that governs
+    // is the second one. Under a `first` binding the abandoned gate governs
+    // and the journal reads as gating before any round closed.
+    const gateRerunAfterRound = journal([
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      completed("gate"),
+      closed(1),
+      completed("gate"),
+      completed("record"),
+      prOpened,
+      ended,
+    ]);
+    const rerun = evaluateRunJournal(gateRerunAfterRound, TREE, MANDATED);
+    expect(rerun.violations).toEqual([]);
+    expect(rerun.status).toBe("complete");
+
+    // Gate re-run after the record was written: dirty, because the governing
+    // gate now follows the record. Under a `first` binding the earlier gate
+    // precedes the record and the re-run disappears from the verdict.
+    const gateRerunAfterRecord = journal([
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      closed(1),
+      completed("gate"),
+      completed("record"),
+      completed("gate"),
+      prOpened,
+      ended,
+    ]);
+    expect(evaluateRunJournal(gateRerunAfterRecord, TREE, MANDATED).violations).toEqual(["record-before-gate"]);
+
+    // Gate re-run after the pull request opened: dirty for the same reason,
+    // on the third gate-anchored constraint.
+    const gateRerunAfterPr = journal([
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      closed(1),
+      completed("gate"),
+      prOpened,
+      completed("gate"),
+      completed("record"),
+      ended,
+    ]);
+    expect(evaluateRunJournal(gateRerunAfterPr, TREE, MANDATED).violations).toEqual(["pr-before-gate"]);
+
+    // The binding is `cliCompletion`'s, not the gate's: a re-run RECORD binds
+    // last too, so a record written before the gate and rewritten after it is
+    // clean rather than caught by `record-before-gate`.
+    const recordRerun = journal([
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      closed(1),
+      completed("record"),
+      completed("gate"),
+      completed("record"),
+      prOpened,
+      ended,
+    ]);
+    const rewritten = evaluateRunJournal(recordRerun, TREE, MANDATED);
+    expect(rewritten.violations).toEqual([]);
+    expect(rewritten.status).toBe("complete");
+  });
+});

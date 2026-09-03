@@ -251,8 +251,16 @@ export interface RunSummary {
   readonly result?: string;
 }
 
+/**
+ * The CLI-written completion of one command that governs, which is the LAST of
+ * them — the same binding `evaluateRunJournal`'s own `cliCompletion` settled
+ * under V26-1709, for the same reason: a command is re-run to supersede its
+ * earlier outcome. The table and the completeness block sit on one row of one
+ * page, so a projection reading the first would report the outcome of a gate
+ * the delivery abandoned beside a verdict taken on the re-run.
+ */
 const cliCompletionFor = (events: readonly RunEvent[], command: string): RunEvent | undefined =>
-  events.find(
+  events.findLast(
     (event) => event.kind === "command.completed" && event.actor.role === "cli" && payloadOf(event)["command"] === command,
   );
 
