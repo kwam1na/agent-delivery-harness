@@ -103,7 +103,9 @@ cannot drift from the tool.
   projection on a script-free loopback page over one or more `--repo` paths,
   refreshing itself only while a run is live. The seven candidate-facing commands
   append their own `command.completed` automatically whenever a run is current
-  for the invoking worktree. The run journal is self-attested observability
+  for the invoking worktree, unless `DELIVERY_HARNESS_RUN_STORE` points the
+  store somewhere other than the repository's git common directory. The run
+  journal is self-attested observability
   that no admission, gate, or record decision reads; see
   [The managed delivery product](docs/managed-delivery.md#run-surface).
   `managed operations` prints the facade's own operation contract — each

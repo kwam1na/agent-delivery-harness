@@ -537,6 +537,23 @@ best-effort and can never change a command's outcome or its exit code, and a
 refused append lands one bounded line in the run's note rather than anywhere a
 reader could mistake for evidence.
 
+**Pointing it somewhere else.** `DELIVERY_HARNESS_RUN_STORE` names an absolute
+directory to root the store at instead of the repository's git common
+directory. It is read at resolution time, on the one path every CLI reach for a
+run store goes through, so `emit`, `runs`, `runs serve`, the automatic
+`command.completed`, and `verify`'s journal row either all honour it or none
+do. Each repository still keeps its own store beneath the named directory, at a
+subdirectory digested from its common directory, so two paths in different
+repositories remain two stores and two worktrees of one repository remain one;
+`repo.commonDir` on every event still names the repository, never the override.
+Blank is unset; a value that is set but not absolute refuses the resolution
+rather than falling back, because a caller that mis-spells its override is
+exactly the one that must not reach a live store by accident. It exists for a
+process that is not a delivery but invokes this CLI from a worktree where one
+is running — this repository's own test suite pins it at a per-run temporary
+directory for that reason, and so must any reviewer exercising `emit` end to
+end.
+
 **Reading it back.** `runs list` reports each run's completeness status, whether
 it is still open, its size, and the store's total. `runs show <id>` renders the
 timeline — every event labeled with its writer's role, the rounds with the

@@ -3,6 +3,28 @@
  * found, how an event envelope is built, and how a store-derived string is
  * made safe to print.
  *
+ * THE ONE STORE OVERRIDE. `DELIVERY_HARNESS_RUN_STORE` names an absolute
+ * directory to resolve the store under instead of the repository's git common
+ * directory, read HERE — at resolution time, on every CLI path that reaches a
+ * run store — so no path can be honouring it while another is not. It exists
+ * because a process that is not a delivery can invoke this CLI from a worktree
+ * that has a delivery run current: the repository's own test suite does,
+ * hundreds of times per `npm run check`, and every wrapped invocation appended
+ * a `command.completed` to whatever run the executor had open there. Such a
+ * process pins the override at a directory of its own and is thereby unable to
+ * reach any live store. An invocation with the override unset writes where it
+ * always did; an invocation under test with it unset is a defect in the test,
+ * not a behaviour of the product, so nothing here tries to detect a test
+ * runner.
+ *
+ * WHAT THE OVERRIDE DOES NOT COLLAPSE. Each repository keeps its own store
+ * under the named directory, at a subdirectory digested from its common
+ * directory, so the two rules the surface documents survive being overridden:
+ * two paths in different repositories are two stores, and two worktrees of one
+ * repository are one store. `repo.commonDir` on every event still names the
+ * repository, never the override — the event says where the run happened, not
+ * where its journal was filed.
+ *
  * WHY THE STORE IS RESOLVED HERE AND NOT WIRED. The record store is wired from
  * the config, because a delivery record belongs to a configured gate. A run
  * belongs to the *repository* — it outlives the worktree it ran in and it
@@ -25,6 +47,7 @@ import path from "node:path";
 import {
   createBlocker,
   createRunStore,
+  sha256Hex,
   evaluateRunJournal,
   gitNamespaceClearedEnvironment,
   neutralizeForDisplay,
@@ -42,7 +65,9 @@ export const RUN_SURFACE_SOURCE = "delivery-harness.cli.run-surface";
 
 export interface RunSurface {
   readonly store: RunStore;
+  /** The repository's OWN git common directory, which is what an event names. */
   readonly commonDir: string;
+  /** The store's `runs` directory, under the override when one is named. */
   readonly runsDir: string;
   /** The invoking worktree's pointer key — the identity of "the current run" here. */
   readonly worktreeKey: string;
@@ -52,10 +77,39 @@ export type RunSurfaceResolution =
   | { readonly ok: true; readonly surface: RunSurface }
   | { readonly ok: false; readonly reason: string };
 
+/** The environment variable that relocates the run store. See this file's header. */
+export const RUN_STORE_OVERRIDE = "DELIVERY_HARNESS_RUN_STORE";
+
+/**
+ * The directory the store is rooted at for a repository whose common directory
+ * is `commonDir`.
+ *
+ * Blank is unset, following this repository's other environment levers. A
+ * value that is set but not absolute FAILS CLOSED — the resolution is refused
+ * rather than falling back to the repository's own store, because a caller
+ * that mis-spells its override is exactly the caller that must not reach a
+ * live store by accident.
+ */
+function storeRootFor(
+  commonDir: string,
+  override: string | undefined,
+): { readonly ok: true; readonly root: string } | { readonly ok: false; readonly reason: string } {
+  const named = override?.trim() ?? "";
+  if (named.length === 0) return { ok: true, root: commonDir };
+  if (!path.isAbsolute(named)) {
+    return { ok: false, reason: `${RUN_STORE_OVERRIDE} must name an absolute directory` };
+  }
+  return { ok: true, root: path.join(named, sha256Hex(commonDir)) };
+}
+
 /**
  * Resolves the run store for the invoking worktree. Never throws: a config-free
  * command turns a failure into a typed blocker, and the boundary wrap turns it
  * into silence.
+ *
+ * The override is read here, on this one path, because this is the one path
+ * every CLI reach for a run store goes through: `emit`, `runs`, `runs serve`,
+ * the boundary wrap's automatic completion, and `verify`'s journal row.
  */
 export async function resolveRunSurface(cwd: string): Promise<RunSurfaceResolution> {
   const location = await resolveRunStoreLocation({
@@ -64,12 +118,15 @@ export async function resolveRunSurface(cwd: string): Promise<RunSurfaceResoluti
     env: gitNamespaceClearedEnvironment(),
   });
   if (!location.ok) return { ok: false, reason: location.reason };
+  const rooted = storeRootFor(location.commonDir, process.env[RUN_STORE_OVERRIDE]);
+  if (!rooted.ok) return { ok: false, reason: rooted.reason };
+  const store = createRunStore(rooted.root);
   return {
     ok: true,
     surface: {
-      store: createRunStore(location.commonDir),
+      store,
       commonDir: location.commonDir,
-      runsDir: location.runsDir,
+      runsDir: store.runsDir,
       worktreeKey: location.worktreeKey,
     },
   };

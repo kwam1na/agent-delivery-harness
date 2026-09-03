@@ -34,7 +34,6 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
-  createRunStore,
   evaluateRunJournal,
   type RunEvent,
   type RunStore,
@@ -86,6 +85,12 @@ interface ResolvedRepo {
   readonly commonDir: string;
   readonly runsDir: string;
   readonly worktreeKey: string;
+  /**
+   * The store the surface resolved, carried rather than rebuilt: the store's
+   * root is not always the repository's common directory, and a second
+   * construction here would read a different store than every writer wrote to.
+   */
+  readonly store: RunStore;
 }
 
 /**
@@ -134,12 +139,13 @@ async function resolveRepo(repoPath: string): Promise<ResolvedRepo | { readonly 
     commonDir: surface.surface.commonDir,
     runsDir: surface.surface.runsDir,
     worktreeKey: surface.surface.worktreeKey,
+    store: surface.surface.store,
   };
 }
 
 /** Groups resolved paths by store, preserving the order the operator gave. */
 function groupByStore(resolved: readonly ResolvedRepo[]): readonly RepoGroup[] {
-  const groups = new Map<string, { root: string; commonDir: string; runsDir: string; worktreeKeys: string[] }>();
+  const groups = new Map<string, { root: string; commonDir: string; runsDir: string; worktreeKeys: string[]; store: RunStore }>();
   for (const repo of resolved) {
     const existing = groups.get(repo.commonDir);
     if (existing === undefined) {
@@ -152,12 +158,13 @@ function groupByStore(resolved: readonly ResolvedRepo[]): readonly RepoGroup[] {
         commonDir: repo.commonDir,
         runsDir: repo.runsDir,
         worktreeKeys: [repo.worktreeKey],
+        store: repo.store,
       });
       continue;
     }
     if (!existing.worktreeKeys.includes(repo.worktreeKey)) existing.worktreeKeys.push(repo.worktreeKey);
   }
-  return [...groups.values()].map((group) => ({ ...group, store: createRunStore(group.commonDir) }));
+  return [...groups.values()];
 }
 
 // ── The served state ─────────────────────────────────────────────────────────
