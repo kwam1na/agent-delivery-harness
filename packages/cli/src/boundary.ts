@@ -351,7 +351,10 @@ function outcomeOfExit(code: number): "ok" | "policy" | "usage" | "interrupted" 
  * caller has already decided the exit code, and a run journal that could
  * change a gate's verdict would be evidence. It is not evidence, so it is not
  * allowed to matter. A refused append still lands one bounded line in the
- * run's note, which the store writes.
+ * run's note, which the store writes — every refusal but the two that name no
+ * run it can address: an id its charset refuses, and `unresolvable_run`.
+ * Neither is noted, rather than open a notes entry for a run that never
+ * existed.
  */
 async function recordCommandCompletion(input: {
   readonly cwd: string;
