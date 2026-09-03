@@ -8,10 +8,13 @@
  * owner executes can reach it — that is the price of surviving the removal of
  * the worktree a run happened in. So every file it opens is opened with
  * `O_NOFOLLOW` and checked by `fstat` ON THE OPENED DESCRIPTOR, every run id
- * is charset-checked before a path is formed, and every rejection is recorded
- * in a bounded note rather than swallowed. The residual race against
- * owner-executed code is unclosable and is bounded by the fact that nothing
- * authoritative reads any of this.
+ * is charset-checked before a path is formed, and every rejection but the two
+ * naming no addressable run — an id the charset refuses, and
+ * `unresolvable_run` — is recorded in a bounded note rather than swallowed;
+ * those two are left unnoted so a mistyped id cannot leave a notes entry for a
+ * run that never existed. The residual race against owner-executed code is
+ * unclosable and is bounded by the fact that nothing authoritative reads any
+ * of this.
  *
  * WHAT THIS SUITE ACCEPTS AS UNPROVEN. Two clauses of the discipline have no
  * vector here, and both are accepted that way rather than left to look like
