@@ -538,6 +538,44 @@ kernel's display neutralizer with its whitespace collapsed, so a rationale
 carrying an escape sequence renders inert and one carrying a newline cannot
 forge a row.
 
+**The page.** `runs serve` starts a dependency-free local HTTP server over
+`node:http` and prints the URL it bound. It serves one inline HTML page — a
+runs table (ticket, repository, duration, rounds, findings, the gate and record
+outcomes each labeled with the role of whoever wrote them down, the result, and
+whether the run is live, open, or ended) and, per run, the full timeline with
+every event labeled by its writer's role, each round with the candidate tree
+SHA it was bound to, the refused appends, and the same completeness readout
+`runs show` renders under the same three labels. A JSON endpoint at `/api/runs`
+serves the same projection for anything that would rather read it than look at
+it; the page does not consume it, because the page is rendered server-side.
+
+`--repo <path>` may repeat and selects the worktrees to serve; with none, the
+invoking worktree. Two paths in different repositories are two stores, each
+resolved under its own repository's common directory with the `GIT_` namespace
+cleared, so an inherited `GIT_DIR` cannot relocate either. Two worktrees of one
+repository are one store and one set of runs.
+
+**A run is live** when the pointer of a worktree that was *named* points at it
+and it carries no `run.ended`. The server reads only the pointers of the paths
+it was given and never enumerates the store's `current/` directory, so a run
+executing in a worktree the operator did not name renders as open but not live.
+The page refreshes itself — a `<meta http-equiv="refresh">`, the whole of the
+polling mechanism — only while something is live; a store of finished runs
+costs an open tab nothing.
+
+**What the page refuses.** It binds loopback on an ephemeral port by default
+(`--port <n>` to fix one) and answers only requests whose `Host` is the address
+and port it bound, compared by exact equality — so a page on another origin
+that resolves a name to loopback gets a 403 rather than the operator's runs.
+Every response carries `nosniff`, `no-referrer`, `no-store`, and a content
+security policy whose `script-src` is `'none'`; nothing sends a cross-origin
+allowance. The page contains **no script at all**: every string it renders,
+store-derived or not, is neutralized for display and then escaped as markup, and
+even a rendering mistake could only produce inert markup on a page where scripts
+are refused by policy. That is what keeps a rationale an executor wrote — or a
+worktree root whose path contains markup — from scripting the operator's
+browser.
+
 `emit` and `runs` are a **config-free** command class: dispatched before
 `harness.config.ts` is loaded, with their own context type, so they run in a
 repository that has no config at all and no other command's `config_unloadable`

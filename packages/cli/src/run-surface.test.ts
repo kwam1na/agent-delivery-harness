@@ -8,8 +8,9 @@
  * paths, is one coherent thing an operator can read.
  */
 import { execFile } from "node:child_process";
-import { appendFile, chmod, lstat, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
-import { rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -25,6 +26,8 @@ import {
 } from "@agent-delivery-harness/kernel";
 import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
+import { READOUT_LABELS } from "./run-projection.ts";
+import { escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
 import { buildRunEvent } from "./run-surface.ts";
 
 const exec = promisify(execFile);
@@ -212,14 +215,14 @@ async function startRun(dir: string, extra: readonly string[] = []): Promise<str
  * two CLI completions, with `gate.reported` in its ordered place: Athena's
  * finished state, and the one status the config-presence note attaches to.
  */
-async function executorOnlyRun(dir: string): Promise<string> {
+async function executorOnlyRun(dir: string, rationale = "the shipped pair"): Promise<string> {
   const runId = await startRun(dir);
   const steps: readonly (readonly [string, unknown])[] = [
     ["ticket.read", { ticket: "V26-1549", tracker: "linear" }],
     ["posture.declared", { posture: "test-first" }],
     [
       "lens.selected",
-      { mandated: ["lens.outcome-correctness", "lens.adversarial-testing"], selected: [], rationale: "the shipped pair" },
+      { mandated: ["lens.outcome-correctness", "lens.adversarial-testing"], selected: [], rationale },
     ],
     ["review.round.opened", { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] }],
     [
@@ -957,5 +960,468 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(shown.code, shown.err).toBe(EXIT_OK);
     expect(shown.out).toContain("refused appends:");
     expect(shown.out).not.toContain(ESC);
+  });
+});
+
+// ── `runs serve` ─────────────────────────────────────────────────────────────
+
+/**
+ * The page is driven over a real socket with a real HTTP client, never by
+ * calling the request handler directly. Two of this unit's properties — the
+ * loopback bind and the `Host` refusal — exist only at the socket, and a
+ * handler invoked in-process would report both as passing while neither was
+ * ever exercised. `node:http` rather than `fetch` because the client has to be
+ * able to send a `Host` the runtime would otherwise write for it.
+ */
+async function httpGet(
+  url: string,
+  headers: Readonly<Record<string, string>> = {},
+): Promise<{ readonly status: number; readonly headers: NodeJS.Dict<string | string[]>; readonly body: string }> {
+  const target = new URL(url);
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      { host: target.hostname, port: target.port, path: `${target.pathname}${target.search}`, method: "GET", headers },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.on("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body }));
+      },
+    );
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+interface ServedState {
+  readonly labels: string;
+  readonly pollSeconds: number;
+  readonly repositories: readonly { readonly root: string; readonly commonDir: string; readonly runsDir: string; readonly worktreeKeys: readonly string[] }[];
+  readonly runs: readonly {
+    readonly runId: string;
+    readonly repository: string;
+    readonly ticket: string;
+    readonly open: boolean;
+    readonly live: boolean;
+    readonly readable: boolean;
+    readonly durationSeconds: number;
+    readonly rounds: { readonly opened: number; readonly closed: number };
+    readonly gate?: { readonly outcome: string; readonly writer: string };
+    readonly record?: { readonly outcome: string; readonly writer: string };
+    readonly result?: string;
+    readonly readout: { readonly status: string; readonly present: readonly string[]; readonly missing: readonly string[]; readonly note?: string };
+    readonly timeline: readonly { readonly seq: number; readonly kind: string; readonly writer: string; readonly detail: string }[];
+    readonly roundDetail: readonly { readonly round: string; readonly candidateTreeSha: string }[];
+  }[];
+}
+
+/** A started server, registered for teardown even when the assertion that follows throws. */
+const servers: { close(): Promise<void> }[] = [];
+afterAll(async () => {
+  while (servers.length > 0) await servers.pop()?.close();
+});
+
+async function serve(repos: readonly string[], options: { readonly pollSeconds?: number } = {}): Promise<RunServerHandle> {
+  const started = await startRunServer({ repos, ...options });
+  if (!started.ok) throw new Error(started.reason);
+  servers.push(started.server);
+  return started.server;
+}
+
+/** The page and the JSON endpoint for one server, both fetched with the Host it bound. */
+async function pageAndState(server: RunServerHandle): Promise<{ readonly page: string; readonly state: ServedState }> {
+  const host = `${server.host}:${server.port}`;
+  const page = await httpGet(`${server.url}/`, { host });
+  expect(page.status).toBe(200);
+  const json = await httpGet(`${server.url}/api/runs`, { host });
+  expect(json.status).toBe(200);
+  return { page: page.body, state: JSON.parse(json.body) as ServedState };
+}
+
+/** A worktree root as the page spells it: git's own toplevel, HTML-escaped. */
+function escapedRoot(dir: string): string {
+  return escapeHtml(realpathSync(dir));
+}
+
+const runOf = (state: ServedState, runId: string): ServedState["runs"][number] => {
+  const found = state.runs.find((run) => run.runId === runId);
+  if (found === undefined) throw new Error(`${runId} not served: ${state.runs.map((run) => run.runId).join(",")}`);
+  return found;
+};
+
+/** A journal carrying both writers, a paired round, and an end — the U2 script. */
+async function scriptedRun(dir: string, options: { readonly rationale?: string } = {}): Promise<string> {
+  const runId = await startRun(dir);
+  const steps: readonly (readonly [string, unknown])[] = [
+    ["ticket.read", { ticket: "V26-1555", tracker: "linear" }],
+    ["posture.declared", { posture: "test-first" }],
+    [
+      "lens.selected",
+      {
+        mandated: ["lens.outcome-correctness", "lens.adversarial-testing"],
+        selected: [],
+        rationale: options.rationale ?? "the shipped pair",
+      },
+    ],
+    ["review.round.opened", { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] }],
+    [
+      "review.round.closed",
+      {
+        round: 1,
+        candidateTreeSha: TREE_SHA,
+        outcome: "aligned",
+        findings: { P0: 0, P1: 2, P2: 0, P3: 0 },
+        cost: { unit: "usd", total: 1, reportedBy: "vitest" },
+      },
+    ],
+  ];
+  for (const [kind, payload] of steps) {
+    const result = await emit(dir, [kind], payload);
+    expect(result.code, `${kind}: ${result.err}`).toBe(EXIT_OK);
+  }
+  // The CLI's own writers: two wrapped commands, appended by the boundary.
+  expect((await cli(dir, ["check"])).code).toBe(EXIT_OK);
+  const opened = await emit(dir, ["pr.opened"], { url: "https://example.invalid/pr/1555", candidateTreeSha: TREE_SHA });
+  expect(opened.code, opened.err).toBe(EXIT_OK);
+  return runId;
+}
+
+describe("runs serve", () => {
+  it("renders the scripted journal, both writers labeled, with each round's candidate", async () => {
+    const dir = await initRepo();
+    const runId = await scriptedRun(dir);
+    const ended = await emit(dir, ["run.ended"], { result: "complete", cost: { unit: "usd", total: 2, reportedBy: "vitest" } });
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+
+    const { page, state } = await pageAndState(await serve([dir]));
+    const run = runOf(state, runId);
+
+    expect(run.ticket).toBe("V26-1555");
+    expect(run.rounds).toEqual({ opened: 1, closed: 1 });
+    expect(run.result).toBe("complete");
+    expect(run.record).toBeUndefined();
+    expect(run.timeline.map((entry) => entry.kind)).toContain("command.completed");
+
+    // The writer label is the point: a CLI completion and an executor's claim
+    // to have run the same command must never read alike.
+    expect(run.timeline.find((entry) => entry.kind === "command.completed")?.writer).toBe("cli");
+    expect(run.timeline.find((entry) => entry.kind === "pr.opened")?.writer).toBe("executor");
+
+    // And the PAGE carries the writer beside each event, not just the JSON:
+    // the confusion this label exists to prevent is an operator reading the
+    // executor's claim to have run a command as the product's own record of
+    // having run it.
+    expect(page).toContain("<td>cli-written</td>");
+    expect(page).toContain("<td>executor-written</td>");
+
+    // The per-run timeline carries each round's candidate.
+    expect(run.roundDetail.map((round) => round.candidateTreeSha)).toEqual([TREE_SHA]);
+    expect(page).toContain(TREE_SHA);
+    expect(page).toContain(runId);
+    expect(page).toContain("https://example.invalid/pr/1555");
+    expect(page).toContain("test-first");
+  });
+
+  it("shows a live-appended event on the next poll and stops polling once the run ends", async () => {
+    const dir = await initRepo();
+    const runId = await scriptedRun(dir);
+    const server = await serve([dir], { pollSeconds: 1 });
+
+    const live = await pageAndState(server);
+    expect(runOf(live.state, runId).live).toBe(true);
+    expect(runOf(live.state, runId).open).toBe(true);
+    // The CELL, not the word. The stylesheet names all three states, so
+    // `toContain("ended")` holds on every page ever rendered; only the cell
+    // distinguishes a run the operator is watching from one that has stopped.
+    expect(live.page).toContain('<td class="live">live</td>');
+    expect(live.page).not.toContain('<td class="ended">ended</td>');
+    // A live run is what makes the page refresh itself; the interval is the
+    // page's own declaration, so an operator can see how stale a row may be.
+    expect(live.page).toContain('http-equiv="refresh"');
+    expect(live.page).toContain('content="1"');
+    expect(live.page).not.toContain("branch name");
+
+    const decided = await emit(dir, ["decision.recorded"], { fork: "branch name", choice: "ticket branch" });
+    expect(decided.code, decided.err).toBe(EXIT_OK);
+
+    // One poll later — which for a server that reads the store per request is
+    // simply the next request — the page carries the event.
+    const refreshed = await pageAndState(server);
+    expect(refreshed.page).toContain("branch name");
+    expect(runOf(refreshed.state, runId).timeline.map((entry) => entry.kind)).toContain("decision.recorded");
+
+    const ended = await emit(dir, ["run.ended"], { result: "complete", cost: { unit: "usd", total: 2, reportedBy: "vitest" } });
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+
+    const after = await pageAndState(server);
+    expect(runOf(after.state, runId).live).toBe(false);
+    expect(runOf(after.state, runId).open).toBe(false);
+    expect(after.page).toContain('<td class="ended">ended</td>');
+    expect(after.page).not.toContain('<td class="live">live</td>');
+    // Nothing is live, so nothing is polled. The refresh is what an operator
+    // pays for in requests; a store with only finished runs must cost nothing.
+    expect(after.page).not.toContain('http-equiv="refresh"');
+  });
+
+  it("gives each repository its own pointer key and store root under a planted GIT_DIR", async () => {
+    const first = await initRepo();
+    const second = await initRepo();
+    const liveRunId = await startRun(first);
+    const otherRunId = await startRun(second);
+    const ended = await emit(second, ["run.ended"], { result: "partial", cost: { unit: "usd", total: 0, reportedBy: "vitest" } });
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+
+    const firstStore = await storeOf(first);
+    const secondStore = await storeOf(second);
+    expect(firstStore.worktreeKey).not.toBe(secondStore.worktreeKey);
+
+    // An inherited GIT_DIR must never relocate a store. It names the SECOND
+    // repository while the server resolves both.
+    const planted = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = path.join(second, ".git");
+    try {
+      const { state } = await pageAndState(await serve([first, second]));
+      expect(state.repositories.map((repository) => repository.runsDir)).toEqual([firstStore.runsDir, secondStore.runsDir]);
+      expect(state.repositories.map((repository) => repository.worktreeKeys[0])).toEqual([
+        firstStore.worktreeKey,
+        secondStore.worktreeKey,
+      ]);
+
+      // Each run belongs to the repository whose store holds it, and liveness
+      // does not cross: the second repository's pointer was cleared by its own
+      // `run.ended`, and the first's run is live only under the first.
+      expect(runOf(state, liveRunId).repository).toBe(realpathSync(first));
+      expect(runOf(state, liveRunId).live).toBe(true);
+      expect(runOf(state, otherRunId).repository).toBe(realpathSync(second));
+      expect(runOf(state, otherRunId).live).toBe(false);
+    } finally {
+      if (planted === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = planted;
+    }
+  });
+
+  it("renders a run live in an unnamed worktree of the same repository as open but not live", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const other = path.join(path.dirname(dir), `${path.basename(dir)}-served`);
+    cleanups.push(other);
+    await git(dir, "worktree", "add", "--quiet", "-b", "served", other);
+
+    // Only worktree B is named. The store is shared — one common directory —
+    // so the run is listed; the pointer that would make it live belongs to A,
+    // and the server reads only the pointers of the worktrees it was given.
+    const { page, state } = await pageAndState(await serve([other]));
+    expect(runOf(state, runId).open).toBe(true);
+    expect(runOf(state, runId).live).toBe(false);
+    expect(page).toContain(runId);
+    expect(page).toContain('<td class="open">open</td>');
+    expect(page).not.toContain('<td class="live">live</td>');
+  });
+
+  it("binds loopback on an ephemeral port and refuses a foreign Host", async () => {
+    const dir = await initRepo();
+    await startRun(dir);
+    const server = await serve([dir]);
+
+    // `host` is read back off the bound socket, not echoed from the constant
+    // handed to `listen`, so a server that bound every interface would report
+    // `0.0.0.0` (or `::`) here and this row would fail. That is the whole of
+    // the loopback claim: a handle that repeated its own input could not
+    // distinguish the two.
+    expect(server.host).toBe("127.0.0.1");
+    expect(server.port).toBeGreaterThan(0);
+
+    const bound = await httpGet(`${server.url}/`, { host: `${server.host}:${server.port}` });
+    expect(bound.status).toBe(200);
+
+    // A name that is not the bound address is a request that arrived through
+    // something else — a DNS rebind, a proxy, a page on another origin. The
+    // page renders executor-written text, so it answers only to itself.
+    const foreign = await httpGet(`${server.url}/`, { host: "harness.example.invalid" });
+    expect(foreign.status).toBe(403);
+    expect(foreign.body).not.toContain(dir);
+
+    const noHost = await httpGet(`${server.url}/api/runs`, { host: "127.0.0.1" });
+    expect(noHost.status).toBe(403);
+  });
+
+  it("serves JSON and the page with nosniff, the policy header, and no cross-origin allowance", async () => {
+    const dir = await initRepo();
+    await startRun(dir);
+    const server = await serve([dir]);
+    const host = `${server.host}:${server.port}`;
+
+    for (const route of ["/", "/api/runs", "/nothing-here"]) {
+      const response = await httpGet(`${server.url}${route}`, { host });
+      expect(response.headers["x-content-type-options"], route).toBe("nosniff");
+      expect(String(response.headers["content-security-policy"]), route).toContain("default-src 'none'");
+      expect(String(response.headers["content-security-policy"]), route).toContain("script-src 'none'");
+      expect(response.headers["access-control-allow-origin"], route).toBeUndefined();
+    }
+
+    const json = await httpGet(`${server.url}/api/runs`, { host });
+    expect(String(json.headers["content-type"])).toContain("application/json");
+    expect(String((await httpGet(`${server.url}/`, { host })).headers["content-type"])).toContain("text/html");
+    expect((await httpGet(`${server.url}/nothing-here`, { host })).status).toBe(404);
+  });
+
+  it("renders executor markup and a marked-up root path as text", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "dh-run-mk-"));
+    cleanups.push(parent);
+    // No `/` in the name: `</b>` would be a second path segment. `<b>repo` is
+    // markup enough to prove the escaping, and is one directory.
+    const dir = path.join(parent, "<b>repo");
+    await mkdir(dir);
+    await git(dir, "init", "--quiet", "--initial-branch", "main");
+    await git(dir, "config", "user.email", "harness@example.invalid");
+    await git(dir, "config", "user.name", "Delivery Harness");
+    await git(dir, "config", "commit.gpgsign", "false");
+    await writeFile(path.join(dir, "harness.config.ts"), "export default {};\n", "utf8");
+    await git(dir, "add", "-A");
+    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "root");
+
+    const runId = await executorOnlyRun(dir, "<script>alert(1)</script>");
+    const { page, state } = await pageAndState(await serve([dir]));
+
+    // Neither the rationale nor the root path in the note may reach the
+    // browser as markup. Both are rendered; neither is a tag.
+    expect(page).not.toContain("<script>alert(1)</script>");
+    expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(page).not.toContain("<b>repo");
+    // The NOTE's own line, not merely the escaped path — the path also reaches
+    // the page through the repository heading, so asserting the escaped
+    // spelling alone would hold with the note never rendered at all.
+    expect(page).toContain(`note: no CLI gate completion in this journal; harness.config.ts present at ${escapedRoot(dir)}`);
+    expect(runOf(state, runId).readout.note).toContain("<b>repo");
+  });
+
+  it("carries the readout labels, the writer roles, and the note exactly when runs show would", async () => {
+    const withConfig = await initRepo();
+    const withConfigRunId = await executorOnlyRun(withConfig);
+    const withoutConfig = await initRepo({ withConfig: false });
+    const withoutConfigRunId = await executorOnlyRun(withoutConfig);
+
+    // Served SEPARATELY, because the claim under test is that one page does
+    // not carry the note. One page over both repositories could only ever be
+    // asked whether the note appears somewhere on it.
+    const noted = await pageAndState(await serve([withConfig]));
+    const unnoted = await pageAndState(await serve([withoutConfig]));
+
+    // The readout block's own labelled line, which is the only place the
+    // status and the three labels appear together. The page-wide banner also
+    // prints the labels, so asserting them alone would hold with the whole
+    // per-run readout deleted.
+    expect(noted.page).toContain(`complete-executor-only — ${READOUT_LABELS}`);
+    expect(noted.page).toContain("present: run.started, ticket.read");
+    expect(noted.page).toContain("missing: command.completed:gate, command.completed:record");
+    expect(noted.page).toContain("note: no CLI gate completion in this journal");
+    expect(noted.page).toContain(`harness.config.ts present at ${escapedRoot(withConfig)}`);
+
+    const notedRun = runOf(noted.state, withConfigRunId);
+    expect(notedRun.readout.status).toBe("complete-executor-only");
+    expect(notedRun.readout.missing).toContain("command.completed:gate");
+    expect(notedRun.gate).toEqual({ outcome: "pass", writer: "executor" });
+    expect(notedRun.timeline.find((entry) => entry.kind === "gate.reported")?.writer).toBe("executor");
+    expect(notedRun.timeline.find((entry) => entry.kind === "pr.opened")?.writer).toBe("executor");
+    // An adopter's gate is the executor's word, and the page says so.
+    expect(noted.page).toContain("(executor-written)");
+    expect(noted.page).not.toContain("(cli-written)");
+
+    // The note is the presence check's, not the page's: the repository without
+    // a config gets the same status and no note, exactly as `runs show` does.
+    expect(unnoted.page).toContain(`complete-executor-only — ${READOUT_LABELS}`);
+    expect(unnoted.page).not.toContain("no CLI gate completion in this journal");
+    expect(runOf(unnoted.state, withoutConfigRunId).readout.note).toBeUndefined();
+
+    const shownWith = await cli(withConfig, ["runs", "show", withConfigRunId]);
+    const shownWithout = await cli(withoutConfig, ["runs", "show", withoutConfigRunId]);
+    expect(shownWith.out).toContain("no CLI gate completion in this journal");
+    expect(shownWithout.out).not.toContain("no CLI gate completion in this journal");
+  });
+
+  it("labels a CLI-written gate completion as the CLI's", async () => {
+    const dir = await initRepo();
+    const runId = await scriptedRun(dir);
+    const { commonDir } = await storeOf(dir);
+    // `gate` is a wrapped command, but driving a real gate needs a candidate;
+    // the completion the boundary would write is planted through the store so
+    // the writer label has a CLI-written gate to distinguish.
+    const appended = await createRunStore(commonDir).append(
+      runId,
+      buildRunEvent({
+        runId,
+        commonDir,
+        kind: "command.completed",
+        role: "cli",
+        payload: { command: "gate", outcome: "ok", durationMs: 12 },
+      }),
+    );
+    expect(appended.ok, JSON.stringify(appended)).toBe(true);
+
+    const { page, state } = await pageAndState(await serve([dir]));
+    expect(runOf(state, runId).gate).toEqual({ outcome: "ok", writer: "cli" });
+    // The runs table's gate cell says who wrote the outcome down; without it
+    // an adopter's self-reported gate and the product's own completion read
+    // identically.
+    expect(page).toContain("(cli-written)");
+  });
+
+  it("renders a run whose journal will not read rather than failing the page", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const { runsDir } = await storeOf(dir);
+    await chmod(path.join(runsDir, `${runId}.jsonl`), 0o644);
+
+    const { page, state } = await pageAndState(await serve([dir]));
+    expect(runOf(state, runId).readable).toBe(false);
+    expect(page).toContain('<td class="open">unreadable</td>');
+    expect(page).toContain("no readable events");
+  });
+});
+
+describe("the runs serve command", () => {
+  it("refuses a joined flag value, an unknown flag, and a missing value", async () => {
+    const dir = await initRepo();
+    for (const argv of [
+      ["runs", "serve", "--port=8080"],
+      ["runs", "serve", "--repo"],
+      ["runs", "serve", "--port"],
+      ["runs", "serve", "--nope", "x"],
+      ["runs", "serve", "--port", "not-a-number"],
+      ["runs", "serve", "--port", "70000"],
+      ["runs", "serve", "extra"],
+    ]) {
+      const result = await cli(dir, argv);
+      expect(result.code, argv.join(" ")).toBe(EXIT_USAGE);
+    }
+  });
+
+  it("blocks on a --repo path that is not a repository", async () => {
+    const dir = await initRepo();
+    const outside = await mkdtemp(path.join(os.tmpdir(), "dh-run-out-"));
+    cleanups.push(outside);
+    const result = await cli(dir, ["runs", "serve", "--repo", outside]);
+    expect(result.code).toBe(EXIT_POLICY);
+    expect(result.err).toContain("run_store_unresolvable");
+  });
+
+  it("serves until it is signalled, naming the URL it bound", async () => {
+    const dir = await initRepo();
+    await startRun(dir);
+    const controller = new AbortController();
+    const lines: string[] = [];
+    const result = await cli(dir, ["runs", "serve"], {
+      signal: controller.signal,
+      // The URL line is the operator's only way to reach the page, so it is
+      // also what tells this test the socket is up.
+      stdout: (text: string) => {
+        lines.push(text);
+        if (text.includes("http://127.0.0.1:")) controller.abort();
+      },
+    });
+    expect(result.code, result.err).toBe(EXIT_OK);
+    expect(lines.join("")).toMatch(/http:\/\/127\.0\.0\.1:\d+/);
   });
 });
