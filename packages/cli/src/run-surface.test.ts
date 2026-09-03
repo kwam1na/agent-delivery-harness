@@ -9,6 +9,7 @@
  */
 import { execFile } from "node:child_process";
 import http from "node:http";
+import net from "node:net";
 import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -28,7 +29,7 @@ import {
 import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { READOUT_LABELS } from "./run-projection.ts";
-import { escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
+import { RUN_SERVER_CSP, escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
 import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface } from "./run-surface.ts";
 
 const exec = promisify(execFile);
@@ -1150,16 +1151,18 @@ describe("emit, the boundary wrap, and runs", () => {
  * loopback bind and the `Host` refusal — exist only at the socket, and a
  * handler invoked in-process would report both as passing while neither was
  * ever exercised. `node:http` rather than `fetch` because the client has to be
- * able to send a `Host` the runtime would otherwise write for it.
+ * able to send a `Host` the runtime would otherwise write for it, and a method
+ * the route table is supposed to refuse.
  */
-async function httpGet(
+async function httpRequest(
   url: string,
   headers: Readonly<Record<string, string>> = {},
+  method = "GET",
 ): Promise<{ readonly status: number; readonly headers: NodeJS.Dict<string | string[]>; readonly body: string }> {
   const target = new URL(url);
   return new Promise((resolve, reject) => {
     const request = http.request(
-      { host: target.hostname, port: target.port, path: `${target.pathname}${target.search}`, method: "GET", headers },
+      { host: target.hostname, port: target.port, path: `${target.pathname}${target.search}`, method, headers },
       (response) => {
         let body = "";
         response.setEncoding("utf8");
@@ -1172,6 +1175,57 @@ async function httpGet(
     request.once("error", reject);
     request.end();
   });
+}
+
+/** The case almost every row wants: a GET, with whatever headers that row needs. */
+const httpGet = (
+  url: string,
+  headers: Readonly<Record<string, string>> = {},
+): ReturnType<typeof httpRequest> => httpRequest(url, headers);
+
+/**
+ * One request written onto the socket verbatim, for the single case no HTTP
+ * client can express: a request carrying NO `Host` header at all.
+ *
+ * `node:http` writes a `Host` for every request it sends, and node's own
+ * server answers 400 to an HTTP/1.1 request that lacks one before the handler
+ * ever runs (`requireHostHeader`, on by default). An HTTP/1.0 request typed
+ * onto the socket by hand is what reaches `hostIsBound` with `undefined`.
+ */
+async function rawRequest(host: string, port: number, lines: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, host, () => socket.end(lines.join("\r\n")));
+    let text = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      text += chunk;
+    });
+    socket.on("end", () => resolve(text));
+    socket.once("error", reject);
+  });
+}
+
+/**
+ * A port nothing is listening on, obtained the only way available: bind one
+ * ephemerally, read it back, release it.
+ *
+ * A row that asserts a fixed `--port` was honoured cannot hard-code a number —
+ * a developer's machine is not empty — and it cannot assert against a port the
+ * server chose, because the ephemeral default is exactly what such a row exists
+ * to distinguish an honoured `--port` from.
+ */
+async function freePort(): Promise<number> {
+  const probe = http.createServer();
+  const port = await new Promise<number>((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") reject(new Error("the probe bound no inspectable address"));
+      else resolve(address.port);
+    });
+  });
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
 }
 
 interface ServedState {
@@ -1207,7 +1261,10 @@ afterAll(async () => {
   while (servers.length > 0) await servers.pop()?.close();
 });
 
-async function serve(repos: readonly string[], options: { readonly pollSeconds?: number } = {}): Promise<RunServerHandle> {
+async function serve(
+  repos: readonly string[],
+  options: { readonly pollSeconds?: number; readonly port?: number } = {},
+): Promise<RunServerHandle> {
   const started = await startRunServer({ repos, ...options });
   if (!started.ok) throw new Error(started.reason);
   servers.push(started.server);
@@ -1349,7 +1406,7 @@ describe("runs serve", () => {
     expect(after.page).not.toContain('http-equiv="refresh"');
   });
 
-  it("gives each repository its own pointer key and store root under a planted GIT_DIR", async () => {
+  it("gives each repository its own pointer key, store root, and root path under a planted git environment", async () => {
     const first = await initRepo();
     const second = await initRepo();
     const liveRunId = await startRun(first);
@@ -1361,13 +1418,27 @@ describe("runs serve", () => {
     const secondStore = await storeOf(second);
     expect(firstStore.worktreeKey).not.toBe(secondStore.worktreeKey);
 
-    // An inherited GIT_DIR must never relocate a store. It names the SECOND
-    // repository while the server resolves both.
-    const planted = process.env["GIT_DIR"];
+    // An inherited git environment must never relocate a store OR rename a
+    // root. It names the SECOND repository while the server resolves both.
+    //
+    // BOTH VARIABLES, because the server runs two different git queries per
+    // `--repo` path and `GIT_DIR` alone only decides one of them. The store
+    // resolution reads the common directory, which `GIT_DIR` moves. The root
+    // comes from `rev-parse --show-toplevel`, and with only `GIT_DIR` planted
+    // that query still answers with its own cwd — so an uncleared toplevel
+    // query would have passed this row while being just as inherited. Adding
+    // `GIT_WORK_TREE` is what makes an uncleared `--show-toplevel` in the
+    // first path name the second repository.
+    const planted = { dir: process.env["GIT_DIR"], workTree: process.env["GIT_WORK_TREE"] };
     process.env["GIT_DIR"] = path.join(second, ".git");
+    process.env["GIT_WORK_TREE"] = second;
     try {
       const { state } = await pageAndState(await serve([first, second]));
       expect(state.repositories.map((repository) => repository.runsDir)).toEqual([firstStore.runsDir, secondStore.runsDir]);
+
+      // The roots the page names are the toplevels of the paths the operator
+      // gave, not the work tree the environment pointed at.
+      expect(state.repositories.map((repository) => repository.root)).toEqual([realpathSync(first), realpathSync(second)]);
       expect(state.repositories.map((repository) => repository.worktreeKeys[0])).toEqual([
         firstStore.worktreeKey,
         secondStore.worktreeKey,
@@ -1381,8 +1452,10 @@ describe("runs serve", () => {
       expect(runOf(state, otherRunId).repository).toBe(realpathSync(second));
       expect(runOf(state, otherRunId).live).toBe(false);
     } finally {
-      if (planted === undefined) delete process.env["GIT_DIR"];
-      else process.env["GIT_DIR"] = planted;
+      if (planted.dir === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = planted.dir;
+      if (planted.workTree === undefined) delete process.env["GIT_WORK_TREE"];
+      else process.env["GIT_WORK_TREE"] = planted.workTree;
     }
   });
 
@@ -1429,6 +1502,77 @@ describe("runs serve", () => {
 
     const noHost = await httpGet(`${server.url}/api/runs`, { host: "127.0.0.1" });
     expect(noHost.status).toBe(403);
+  });
+
+  it("binds the port it was given and answers to that exact pair", async () => {
+    const dir = await initRepo();
+    await startRun(dir);
+    const port = await freePort();
+    const server = await serve([dir], { port });
+
+    // The handle reports the port read back off the socket, so a server that
+    // dropped the input and took an ephemeral port instead would report a
+    // different number here. That is the whole difference between honouring
+    // `--port` and appearing to.
+    expect(server.port).toBe(port);
+    expect(server.url).toBe(`http://127.0.0.1:${port}`);
+
+    // And the `Host` check is computed from the pair actually bound, so a
+    // fixed port has to be part of the name the page answers to — and the
+    // ephemeral port the server would otherwise have taken is not it.
+    expect((await httpGet(`${server.url}/`, { host: `127.0.0.1:${port}` })).status).toBe(200);
+    expect((await httpGet(`${server.url}/`, { host: `127.0.0.1:${port + 1}` })).status).toBe(403);
+  });
+
+  it("answers HEAD like GET and refuses every other method with 405", async () => {
+    const dir = await initRepo();
+    await startRun(dir);
+    const server = await serve([dir]);
+    const host = `${server.host}:${server.port}`;
+
+    // HEAD is in the route table with GET, so it bounds the refusal below: a
+    // server that answered 405 to everything but GET would pass every row of
+    // the loop and fail this one.
+    expect((await httpRequest(`${server.url}/`, { host }, "HEAD")).status).toBe(200);
+
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      const response = await httpRequest(`${server.url}/api/runs`, { host }, method);
+      expect(response.status, method).toBe(405);
+      expect(response.body, method).toBe("method not allowed\n");
+      // A refusal is a response like any other. It is rendered in the
+      // operator's browser, so it is served under the same policy the page is.
+      expect(response.headers["content-security-policy"], method).toBe(RUN_SERVER_CSP);
+      expect(response.headers["x-content-type-options"], method).toBe("nosniff");
+    }
+  });
+
+  it("carries the security headers on a 403, and refuses a request with no Host at all", async () => {
+    const dir = await initRepo();
+    await startRun(dir);
+    const server = await serve([dir]);
+
+    // The 403 is the response a rebound page actually receives, so it is the
+    // one response whose headers matter most: a refusal served without
+    // `nosniff` or the policy is a refusal a browser may still render as
+    // something.
+    const foreign = await httpGet(`${server.url}/`, { host: "harness.example.invalid" });
+    expect(foreign.status).toBe(403);
+    expect(foreign.headers["content-security-policy"]).toBe(RUN_SERVER_CSP);
+    expect(foreign.headers["x-content-type-options"]).toBe("nosniff");
+    expect(foreign.headers["referrer-policy"]).toBe("no-referrer");
+    expect(foreign.headers["cache-control"]).toBe("no-store");
+    expect(foreign.headers["access-control-allow-origin"]).toBeUndefined();
+
+    // `hostIsBound` compares an ABSENT header against the bound pair, and the
+    // row above never reaches that branch — it sends a wrong host, not a
+    // missing one. This one sends no `Host`, which only a hand-written
+    // HTTP/1.0 request can do, and it is refused with everything else.
+    const absent = await rawRequest(server.host, server.port, ["GET /api/runs HTTP/1.0", "", ""]);
+    expect(absent).toContain("403 Forbidden");
+    expect(absent).toContain("forbidden host");
+    expect(absent).toContain(`Content-Security-Policy: ${RUN_SERVER_CSP}`);
+    // Nothing about the store leaks through the refusal, on this path either.
+    expect(absent).not.toContain(realpathSync(dir));
   });
 
   it("serves JSON and the page with nosniff, the policy header, and no cross-origin allowance", async () => {
@@ -1721,6 +1865,38 @@ describe("the runs serve command", () => {
       const result = await cli(dir, argv);
       expect(result.code, argv.join(" ")).toBe(EXIT_USAGE);
     }
+  });
+
+  it("refuses a port a browser would elide from Host, and honours one it would not", async () => {
+    const dir = await initRepo();
+
+    // The page's `Host` check is exact equality against the `host:port` it
+    // bound — it parses nothing and normalizes nothing, which is what makes
+    // the loopback claim answerable by something other than itself. A browser
+    // omits a scheme's default port from `Host`, so a page served on one could
+    // never satisfy that check: the operator would get a URL they cannot open
+    // and a 403 indistinguishable from a rebind. The port is refused where the
+    // operator types it, which leaves the check exact.
+    for (const port of ["80", "443"]) {
+      const refused = await cli(dir, ["runs", "serve", "--port", port]);
+      expect(refused.code, port).toBe(EXIT_USAGE);
+      expect(refused.err, port).toContain("a browser omits");
+    }
+
+    // And it is those two ports, not every port: a parser that refused them
+    // all would satisfy the rows above while serving nothing at all.
+    const port = await freePort();
+    const controller = new AbortController();
+    const lines: string[] = [];
+    const served = await cli(dir, ["runs", "serve", "--port", String(port)], {
+      signal: controller.signal,
+      stdout: (text: string) => {
+        lines.push(text);
+        if (text.includes("http://127.0.0.1:")) controller.abort();
+      },
+    });
+    expect(served.code, served.err).toBe(EXIT_OK);
+    expect(lines.join("")).toContain(`http://127.0.0.1:${port}`);
   });
 
   it("blocks on a --repo path that is not a repository", async () => {

@@ -592,6 +592,12 @@ function send(response: ServerResponse, status: number, contentType: string, bod
  * operator was reading, a proxy), and this page renders text an executor
  * wrote. `localhost` is refused with everything else: the server prints the
  * URL it bound, and that URL is the one that works.
+ *
+ * The exactness has one consequence a caller has to honour rather than this
+ * function: a browser omits a scheme's default port from `Host`, so a page
+ * bound to 80 or 443 could never satisfy this comparison. `runs serve` refuses
+ * those ports where the operator types them. Nothing is re-checked here — a
+ * second guard would leave neither one answerable.
  */
 export function hostIsBound(header: string | undefined, host: string, port: number): boolean {
   return header === `${host}:${port}`;

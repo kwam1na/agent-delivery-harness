@@ -205,6 +205,29 @@ interface ServeArgs {
 type ServeParse = { readonly ok: true; readonly args: ServeArgs } | { readonly ok: false; readonly message: string };
 
 /**
+ * The ports a browser leaves out of the `Host` header, being the defaults of
+ * the schemes it would dial them under.
+ *
+ * `run-server.ts` decides whether a request is addressed to the socket it
+ * arrived on by comparing `Host` against the bound `host:port` for EXACT
+ * equality — it parses nothing, normalizes nothing, and matches no list of
+ * names that "mean" loopback. That exactness is the property; it is what makes
+ * the page's answer to a DNS rebind checkable rather than a matter of parsing
+ * taste. A page served on one of these ports is one no browser can ever reach:
+ * the request arrives carrying `Host: 127.0.0.1`, with no port at all, and is
+ * answered 403 — the same 403 a rebind gets, with nothing to tell them apart.
+ *
+ * So the choice is between widening the check and refusing the port, and it is
+ * settled by what each costs. Widening costs the property. Refusing costs an
+ * operator nothing they wanted: a loopback viewer of a run store has no reason
+ * to sit on a privileged port, and the ephemeral default is one flag away.
+ * The refusal lives HERE, at the one surface an operator types a port at,
+ * rather than beside the check it protects — a second guard inside the server
+ * would make neither one provable.
+ */
+const BROWSER_ELIDED_PORTS: readonly number[] = [80, 443];
+
+/**
  * The separate-argument form every other command uses. `--flag=value` is
  * REFUSED rather than accepted as a convenience: one spelling means an
  * operator who mistypes a path gets a usage error instead of a server quietly
@@ -227,6 +250,14 @@ function parseServeArgs(args: readonly string[], rootDir: string): ServeParse {
       if (!/^\d{1,5}$/.test(value)) return { ok: false, message: `--port needs a port number.\n${USAGE}` };
       const parsed = Number(value);
       if (parsed > 65535) return { ok: false, message: `--port needs a port number.\n${USAGE}` };
+      if (BROWSER_ELIDED_PORTS.includes(parsed)) {
+        return {
+          ok: false,
+          message:
+            `--port ${parsed} cannot be served: a browser omits a scheme's default port from the Host header, ` +
+            `and this page answers only to the exact host:port it bound.\n${USAGE}`,
+        };
+      }
       port = parsed;
       continue;
     }
