@@ -1998,6 +1998,11 @@ describe("runs serve", () => {
     // is the divergence the shared projection exists to close.
     expect(cellsOf(rows[0]!)[2]).toBe('lenses ["lens.outcome-correctness"]');
     expect(cellsOf(rows[1]!)[2]).toBe("never opened");
+    // The cell assertions bind one column. This one binds the WHOLE row of the
+    // round that did open, because the words may not appear anywhere on it: a
+    // surface that grew a second cell carrying them would say `never opened`
+    // about an opened round while the page, over the same journal, does not.
+    expect(rows[0]).not.toContain("never opened");
   });
 
   it("labels a CLI-written gate completion as the CLI's", async () => {
