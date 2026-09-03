@@ -50,6 +50,11 @@ interface FixtureOptions {
     readonly version?: string;
     readonly license?: string | undefined;
     readonly isPrivate?: boolean;
+    /**
+     * `false` omits the field entirely; a string writes the shorthand form; the
+     * default writes the object form every real manifest in this workspace uses.
+     */
+    readonly repository?: string | false;
     readonly dependencies?: Readonly<Record<string, string>>;
     /** Body of the package's published `src/index.ts`. */
     readonly source?: string;
@@ -84,6 +89,10 @@ function makeFixture(options: FixtureOptions = {}): string {
     const manifest: Record<string, unknown> = { name: pkg.name, version: pkg.version ?? "1.2.3" };
     manifest["license"] = pkg.license === undefined ? EXPECTED_LICENSE_ID : pkg.license;
     if (pkg.isPrivate === true) manifest["private"] = true;
+    if (pkg.repository !== false) {
+      manifest["repository"] =
+        pkg.repository ?? { type: "git", url: "git+https://example.invalid/fixture.git", directory: `packages/${pkg.name.replace(/^@[^/]+\//u, "")}` };
+    }
     if (pkg.dependencies !== undefined) manifest["dependencies"] = pkg.dependencies;
     writeFileSync(path.join(pkgDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
@@ -347,6 +356,49 @@ describe("publishability", () => {
     const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
     expect(rulesOf(result.findings)).toEqual(["publishability"]);
     expect(result.findings[0]!.file).toBe("package.json");
+  });
+});
+
+describe("provenance-repository", () => {
+  it("flags a publishable package that declares no repository: --provenance would refuse it", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [{ name: "@fixture/a", repository: false }, { name: "@fixture/b" }],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["provenance-repository"]);
+    expect(result.findings[0]!.file).toBe("packages/a/package.json");
+  });
+
+  it("flags a repository whose url is present but empty", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [{ name: "@fixture/a", repository: "   " }, { name: "@fixture/b" }],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["provenance-repository"]);
+    expect(result.findings[0]!.file).toBe("packages/a/package.json");
+  });
+
+  // The allow side, pinned in both accepted shapes: a rule that fired on
+  // everything would satisfy the two falsifications above for free.
+  it("accepts the shorthand string form as well as the object form", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [{ name: "@fixture/a", repository: "git+https://example.invalid/fixture.git" }, { name: "@fixture/b" }],
+    });
+    expect(runFixture(dir).findings).toEqual([]);
+  });
+
+  // A private package is never published, so it is never published with
+  // provenance; only `publishability` speaks for it.
+  it("says nothing about a private package, which publishability already owns", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [{ name: "@fixture/a", isPrivate: true, repository: false }, { name: "@fixture/b" }],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["publishability"]);
   });
 });
 
