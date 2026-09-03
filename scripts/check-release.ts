@@ -16,9 +16,10 @@
  *       names the previous one would let a receipt survive the upgrade that is
  *       supposed to invalidate it. `packages/kernel/src/preparation.ts` states
  *       the lockstep rule; this check is what makes forgetting it a red run.
- *   license-coherence — the `LICENSE` file exists at the root, is the Apache
- *       License 2.0, and every manifest's `license` field (root and packages)
- *       says `Apache-2.0`. A tarball whose manifest disagrees with the license
+ *   license-coherence — the `LICENSE` file exists at the root, is the
+ *       Functional Source License 1.1, and every manifest's `license` field
+ *       (root and packages) says `FSL-1.1-Apache-2.0`. A tarball whose
+ *       manifest disagrees with the license
  *       text it ships under is a legal statement nobody made. And the PACK
  *       SHAPE is checked, not assumed: what `npm pack --dry-run --json`
  *       reports for each package must include `LICENSE` and `NOTICE`, because
@@ -85,21 +86,31 @@ export interface ReleaseFinding {
 }
 
 /** The license this repository is released under. */
-export const EXPECTED_LICENSE_ID = "Apache-2.0";
+export const EXPECTED_LICENSE_ID = "FSL-1.1-Apache-2.0";
 
 /**
- * Phrases the LICENSE file must carry to be the verbatim Apache License 2.0
- * text rather than a stub that merely names it.
+ * Phrases the LICENSE file must carry to be the verbatim Functional Source
+ * License 1.1 text rather than a stub that merely names it. The first names
+ * the license, the other two are the two clauses that make it what it is —
+ * the competing-use restriction and the Apache-2.0 conversion — so a LICENSE
+ * that keeps the title while losing either one is a finding rather than a pass.
+ *
+ * The conversion marker quotes the grant itself rather than its `Grant of
+ * Future License` heading, which the steward's MIT-future template carries
+ * word for word: a heading pins the section, not what the section converts to,
+ * and `FSL-1.1-MIT` swapped in under an `FSL-1.1-Apache-2.0` manifest is
+ * exactly the mismatch this rule exists to refuse.
  */
 export const LICENSE_TEXT_MARKERS: readonly string[] = [
-  "Apache License",
-  "Version 2.0, January 2004",
-  "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+  "Functional Source License, Version 1.1",
+  "A Permitted Purpose is any purpose other than a Competing Use",
+  "the Apache License, Version 2.0 that is effective on the second anniversary",
 ];
 
 /**
- * Files every published tarball must carry. Apache-2.0 §4 requires
- * redistributions to carry the license, and NOTICE rides with it (§4(d)).
+ * Files every published tarball must carry. The FSL's Redistribution clause
+ * requires copies to carry these Terms and Conditions and to leave the
+ * copyright notices in place, so LICENSE and NOTICE ride with every tarball.
  */
 export const REQUIRED_PACK_FILES: readonly string[] = ["LICENSE", "NOTICE"];
 
@@ -390,7 +401,7 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
         findings.push({
           rule: "license-coherence",
           file: "LICENSE",
-          message: `LICENSE does not carry the Apache License 2.0 marker ${JSON.stringify(marker)}`,
+          message: `LICENSE does not carry the ${EXPECTED_LICENSE_ID} marker ${JSON.stringify(marker)}`,
         });
       }
     }

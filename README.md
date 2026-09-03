@@ -183,9 +183,9 @@ filesystem port, and enforces the spec's GEN-5 clock ban in decision paths.
 blocker contract. `scripts/check-release.ts` is the release-mechanics sensor:
 one version across the root manifest and every workspace package, the kernel's
 `HARNESS_VERSION` fingerprint constant in lockstep with that version, license
-coherence — the root `LICENSE` carries the Apache License 2.0 text rather than a
-stub that names it, and every manifest's `license` field agrees, checked against
-the actual
+coherence — the root `LICENSE` carries the Functional Source License 1.1 text
+rather than a stub that names it, and every manifest's `license` field agrees,
+checked against the actual
 `npm pack --dry-run` file list so each tarball really carries `LICENSE` and
 `NOTICE` — and the publishability split: no workspace package private, the root
 manifest private. Every rule is falsified by a test, and
@@ -234,6 +234,26 @@ rather than restating them.
 
 ## License
 
-Apache-2.0. [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) sit at the repository
-root, and the release sensor above verifies that both files are present in every
-package tarball rather than assuming npm will include them.
+`FSL-1.1-Apache-2.0` — the Functional Source License, Version 1.1, with an
+Apache-2.0 future license. It grants every use except a **Competing Use**:
+making the software available to others in a commercial product or service that
+substitutes for it, substitutes for another product or service we already offer
+using it, or offers substantially the same functionality. Each version
+**converts to Apache-2.0 two years after the date it is made available**, by an
+irrevocable grant the license makes up front. Internal use, non-commercial
+education and research, and professional services to a licensee are named
+Permitted Purposes.
+
+Versions `0.1.0` and `0.2.0` were published under Apache-2.0 and stay there:
+those grants are irrevocable, and this license governs every version from the
+next one on.
+
+`FSL-1.1-Apache-2.0` is the identifier the manifests carry, and it is the
+license's original abbreviation; its steward has since renamed it, so the SPDX
+identifier for the text in [`LICENSE`](LICENSE) — the text itself unchanged — is
+`FSL-1.1-ALv2`. A tool that resolves identifiers against the SPDX list will not
+find the manifests' string; the two name the same license.
+
+[`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) sit at the repository root, and the
+release sensor above verifies that both files are present in every package
+tarball rather than assuming npm will include them.

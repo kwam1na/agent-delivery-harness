@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "type": "module",
   "description": "Delivery harness CLI: prepare, review-context, submit-evidence, gate, record, verify, check",
-  "license": "Apache-2.0",
+  "license": "FSL-1.1-Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kwam1na/agent-delivery-harness.git",
