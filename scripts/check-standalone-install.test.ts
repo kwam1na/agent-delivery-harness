@@ -13,13 +13,16 @@
  * load TypeScript at all, from reporting a clean sensor, the case list the CLI
  * probe walks, the environment it hands its children, and the run-store reader
  * that decides whether the run-surface cases actually wrote anything. Every one
- * of those is reachable without a subprocess, so all but one of these tests
- * spawn nothing. The exception is the last row, which drives the runner itself
- * over a one-package fixture: the CLI probe's guard is a decision the fast
- * suite can falsify, but the two lines that turn that decision into a reported
- * finding live inside the loop, and nothing else in `npm run check` reaches
- * them. One trivial `npm pack` and `npm install --offline` is what that row
- * costs, and it is the only thing that fails when the wiring is deleted.
+ * of those is reachable without a subprocess, so all but the last two of these
+ * tests spawn nothing. Those two drive the runner itself over a one-package
+ * fixture, because what they pin lives inside the run rather than in anything
+ * the run calls. The CLI probe's guard is a decision the fast suite can
+ * falsify, but the two lines that turn that decision into a reported finding
+ * live inside the loop, and nothing else in `npm run check` reaches them; one
+ * trivial `npm pack` and `npm install --offline` is what that row costs, and it
+ * is the only thing that fails when the wiring is deleted. The row after it
+ * pins the count the pack-failure return reports, which no pure row can reach
+ * either, and it costs one `npm pack` that fails — no install at all.
  */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -488,5 +491,40 @@ describe("the CLI probe's guard, through the runner", () => {
       expect(result.cliCasesCompleted).toBe(0);
     },
     60_000,
+  );
+});
+
+describe("the pack-failure return, through the runner", () => {
+  // The fourth return, and the last one whose reported counts nothing observes.
+  // It is taken while `findings` already holds a `pack-failed`, so the sensor
+  // exits non-zero either way and no mutation here can turn a red verdict
+  // green; what it can do is make `main()`'s summary line say `4 CLI smoke
+  // case(s) run` on a run that packed nothing and therefore installed nothing,
+  // and a summary that reports work the run never did is the same lie the
+  // guards above refuse one level up.
+  //
+  // The fixture is one package whose name carries a trailing separator. npm
+  // derives the tarball's filename from the package name and leaves a second
+  // separator in it, so the write lands in a directory under
+  // `--pack-destination` that does not exist and `npm pack` exits non-zero —
+  // no registry, no install, no network. `makeFixture` strips the scope to
+  // pick the package directory, and a trailing separator is the one placement
+  // that leaves that directory exactly where `readWorkspacePackages` looks.
+  // Asserting the `pack-failed` finding is what keeps the row honest: if npm
+  // ever sanitizes that filename the package packs, this row fails loudly
+  // rather than quietly asserting a zero from some later return.
+  it(
+    "reports no CLI smoke cases when the run packed nothing",
+    () => {
+      const dir = makeFixture([{ name: `${PACKAGE_SCOPE}/kernel/` }], { withLoader: true });
+      const result = runStandaloneInstallCheck({ root: dir });
+      expect(result.findings.map((finding) => [finding.rule, finding.subject])).toEqual([
+        ["pack-failed", `${PACKAGE_SCOPE}/kernel/`],
+      ]);
+      // The count the summary line reports. Nothing was packed, so nothing was
+      // installed and no case could have run.
+      expect(result.cliCasesCompleted).toBe(0);
+    },
+    30_000,
   );
 });
