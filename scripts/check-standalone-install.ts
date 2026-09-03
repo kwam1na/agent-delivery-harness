@@ -42,7 +42,14 @@
  *
  * ANTI-VACUITY. A run that verified no sibling edge at all proves nothing about
  * the property this sensor exists for, so it is itself a finding — as is an
- * empty package set, or a missing TypeScript loader.
+ * empty package set, or a missing TypeScript loader. The CLI probe is held to
+ * the same doctrine and needs its own guard, because its cases live behind a
+ * package-name check rather than behind the package loop: rename `packages/cli`
+ * or change its manifest name and every case is skipped in silence while the
+ * other packages still verify edges, which is exactly the clean report this
+ * paragraph refuses. So the cases that ran to completion are counted, and a
+ * count short of the case list — the CLI package never probed included — is a
+ * finding.
  */
 import { execFileSync, spawnSync, type StdioOptions } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -70,6 +77,14 @@ export interface StandaloneFinding {
 
 /** The scope every workspace package lives under. */
 export const PACKAGE_SCOPE = "@agent-delivery-harness";
+
+/**
+ * The one package whose smoke cases run. Every case below is gated on this
+ * name, so it is the single point where a rename detaches the CLI probe from
+ * the thing it probes — which is why the guard at the end of the run asserts
+ * over it rather than trusting the loop to have reached it.
+ */
+export const CLI_PACKAGE_NAME = `${PACKAGE_SCOPE}/cli`;
 
 /**
  * What the CLI tarball must actually DO once installed standalone: an ordered
@@ -185,6 +200,40 @@ export function readScratchRunStore(repoDir: string): ScratchRunStore {
 }
 
 /**
+ * The CLI probe's own anti-vacuity guard, extracted so the fast suite can
+ * falsify it: the slow leg it protects needs five `npm install` runs, and a
+ * judgement only that leg can reach is a judgement nobody checks.
+ *
+ * `packageProbed` says the run entered the CLI block at all — it is false when
+ * no workspace package carries `CLI_PACKAGE_NAME`, when that package failed to
+ * install, and when its entry point failed to import, all of which skip every
+ * case. `casesCompleted` counts the cases that ran to COMPLETION, not the ones
+ * that passed: a case whose exit code or output was wrong already has its own
+ * `cli-command-failed` finding, and reporting it twice would say nothing new.
+ * What this guard names is the case that never ran.
+ */
+export function cliProbeVacuityFinding(probe: {
+  readonly packageProbed: boolean;
+  readonly casesCompleted: number;
+}): StandaloneFinding | undefined {
+  if (!probe.packageProbed) {
+    return {
+      rule: "anti-vacuity",
+      subject: "cli-cases",
+      message: `no standalone install probed ${CLI_PACKAGE_NAME}, so none of the ${CLI_SMOKE_CASES.length} CLI smoke case(s) ran and neither the operator surface nor the config-free run surface was exercised at all`,
+    };
+  }
+  if (probe.casesCompleted < CLI_SMOKE_CASES.length) {
+    return {
+      rule: "anti-vacuity",
+      subject: "cli-cases",
+      message: `only ${probe.casesCompleted} of ${CLI_SMOKE_CASES.length} CLI smoke case(s) ran to completion against the standalone install; a case that never ran proves nothing about the surface it covers`,
+    };
+  }
+  return undefined;
+}
+
+/**
  * A child environment with the whole `GIT_` namespace dropped. An inherited
  * `GIT_DIR` or `GIT_COMMON_DIR` would relocate both the scratch `git init` and
  * the store the run-surface cases resolve into whatever repository the
@@ -231,6 +280,8 @@ export interface StandaloneCheckResult {
   readonly packagesProbed: readonly string[];
   /** How many `package -> sibling` edges were proven present in a standalone tree. */
   readonly siblingEdgesVerified: number;
+  /** How many `CLI_SMOKE_CASES` entries ran to completion against the installed CLI. */
+  readonly cliCasesCompleted: number;
 }
 
 // ── Workspace inspection ─────────────────────────────────────────────────────
@@ -277,6 +328,8 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
   const findings: StandaloneFinding[] = [];
   const packagesProbed: string[] = [];
   let siblingEdgesVerified = 0;
+  let cliPackageProbed = false;
+  let cliCasesCompleted = 0;
 
   const packages = readWorkspacePackages(root);
   if (packages.length === 0) {
@@ -285,7 +338,7 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       subject: "packages",
       message: "no workspace packages found; every per-package probe would pass vacuously",
     });
-    return { findings, packagesProbed, siblingEdgesVerified };
+    return { findings, packagesProbed, siblingEdgesVerified, cliCasesCompleted };
   }
 
   const loader = path.join(root, "node_modules", "tsx", "dist", "loader.mjs");
@@ -295,7 +348,7 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       subject: "tsx",
       message: `the TypeScript loader is missing at ${loader}; the packages publish TypeScript sources, so without it no entry point can be imported and every probe would be skipped rather than run`,
     });
-    return { findings, packagesProbed, siblingEdgesVerified };
+    return { findings, packagesProbed, siblingEdgesVerified, cliCasesCompleted };
   }
 
   const workRoot = input.workRoot ?? os.tmpdir();
@@ -329,7 +382,7 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       }
       tarballs.set(pkg.name, path.join(tarballDir, filename));
     }
-    if (findings.length > 0) return { findings, packagesProbed, siblingEdgesVerified };
+    if (findings.length > 0) return { findings, packagesProbed, siblingEdgesVerified, cliCasesCompleted };
 
     /** Every package name pinned to its local tarball, so nothing reaches a registry. */
     const overrides: Record<string, string> = {};
@@ -416,7 +469,8 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       }
 
       // The CLI is an operator surface, so importing it is not enough: run it.
-      if (pkg.name === `${PACKAGE_SCOPE}/cli`) {
+      if (pkg.name === CLI_PACKAGE_NAME) {
+        cliPackageProbed = true;
         const entry = path.join(installDir, "node_modules", pkg.name, "src", "main.ts");
         const childEnv = gitNamespaceCleared();
 
@@ -461,6 +515,10 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
             });
             continue;
           }
+          // Counted here rather than after the assertions below: what the guard
+          // at the end of the run refuses is a case that never ran, and a case
+          // whose exit code or output was wrong already has its own finding.
+          cliCasesCompleted += 1;
           // Both streams: an ok result prints to stdout and a blocked one to
           // stderr, and two of these cases are asserting on a refusal.
           const output = `${ran.stdout}${ran.stderr}`;
@@ -507,6 +565,11 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       }
     }
 
+    // Anti-vacuity: the CLI cases are gated on a package name, so a run can
+    // reach here having skipped every one of them.
+    const cliVacuity = cliProbeVacuityFinding({ packageProbed: cliPackageProbed, casesCompleted: cliCasesCompleted });
+    if (cliVacuity !== undefined) findings.push(cliVacuity);
+
     // Anti-vacuity: a run that proved no sibling edge proves nothing at all.
     if (siblingEdgesVerified === 0) {
       findings.push({
@@ -520,7 +583,7 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
     rmSync(scratch, { recursive: true, force: true });
   }
 
-  return { findings, packagesProbed, siblingEdgesVerified };
+  return { findings, packagesProbed, siblingEdgesVerified, cliCasesCompleted };
 }
 
 /** As much of a captured stream as a finding can carry without becoming the report. */
@@ -556,7 +619,7 @@ function main(): void {
     root: repoRootFromHere(),
     log: verbose ? (line) => process.stdout.write(`  ${line}\n`) : undefined,
   });
-  const summary = `${result.packagesProbed.length} package(s) installed standalone; ${result.siblingEdgesVerified} sibling edge(s) verified`;
+  const summary = `${result.packagesProbed.length} package(s) installed standalone; ${result.siblingEdgesVerified} sibling edge(s) verified; ${result.cliCasesCompleted} CLI smoke case(s) run`;
   if (result.findings.length === 0) {
     process.stdout.write(`check-standalone-install: clean (${summary})\n`);
     return;
