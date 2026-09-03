@@ -54,6 +54,13 @@ and `.agent-skills/active.json` records both. Both are committed, so a fresh
 clone gets a working installation from git alone: the generation, the `current`
 pointer, and every exposure link.
 
+When the installed generation or `.agents/policy/` moves, re-record the
+compiled snapshot with `npm run policy:recompile` — it recompiles
+`.agents/policy/compiled-snapshot.json` from the policy documents and the
+installed charters, preserves the recorded `compiledWith` provenance, and is a
+no-op on an unchanged policy. It does not re-record `comparison-report.json`;
+it says when that report has stopped describing the snapshot.
+
 `.claude/` is otherwise a delivery-owned path, where a committed entry raises
 `record_protected_authority_path`. The skills exposure is the one admitted
 exception, and it is admitted on the entry's own committed bytes: mode
@@ -75,7 +82,10 @@ own CLI. `check` is the standalone preflight; the loop itself is `prepare`,
 `review-context`, `submit-evidence`, `gate`, `record`, `verify`, in that order.
 The commands and their contract are documented in [the README](README.md) and
 [docs/getting-started.md](docs/getting-started.md); the record format is in
-[docs/delivery-record.md](docs/delivery-record.md).
+[docs/delivery-record.md](docs/delivery-record.md). Run that CLI against this
+repository through its own launcher — `npm run harness -- <command>`, so
+`npm run harness -- check` is `delivery-harness check` here — rather than
+wiring a `delivery-harness` shim per delivery.
 
 ## Tracker absence
 

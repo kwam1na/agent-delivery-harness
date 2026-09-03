@@ -97,8 +97,8 @@ MANIFEST="$(npm run --silent review:evidence <<'JSON'
   "spec": "review-outcome/1",
   "verdict": "green",
   "reviewers": [
-    { "id": "outcome-correctness", "result": "approved" },
-    { "id": "testing-policy", "result": "approved" }
+    { "result": "approved" },
+    { "result": "approved" }
   ],
   "findings": []
 }
@@ -106,6 +106,16 @@ JSON
 )"
 delivery-harness submit-evidence --manifest "$MANIFEST"
 ```
+
+One entry per reviewer the policy selects, and no ids: the ids are basenames of
+charter paths inside the installed archive, and a caller that restates them is
+redoing the emitter's own resolution with no way to check the answer. A review
+whose reviewers did not all report the same thing has to name them —
+`{ "id": "outcome-correctness", "result": "rejected" }` — because unnamed
+results that disagree could only be assigned to reviewers by their order, and
+the emitter refuses that rather than stamping the wrong lens. The named form is
+held to the policy-selected set in both directions, so a name no activated lens
+defines is refused.
 
 Three things it resolves rather than asserts, each of them a way a provider can
 quietly stop describing the repository it serves:
@@ -119,7 +129,8 @@ quietly stop describing the repository it serves:
   the policy was compiled against; a charter the installation does not carry, or
   one whose bytes have drifted, refuses the emission. An outcome that leaves a
   lens unrepresented, or names a reviewer no activated lens defines, is refused
-  before any manifest exists.
+  before any manifest exists. The same resolution supplies the ids of an
+  outcome that carries none.
 - **The obligation and provider come from the config.** The one obligation
   accepting `review.green/1`, and the one provider it names.
 - **Telemetry is derived from the findings**, the way RG-8 re-derives it.

@@ -28,6 +28,13 @@
  *     under a charter nobody approved. An outcome that leaves a lens
  *     unrepresented — or names a reviewer no activated lens defines — is
  *     refused rather than emitted.
+ *   - The reviewer IDS of the outcome document itself, when it does not carry
+ *     them. They are charter-path basenames inside the installed archive, so a
+ *     caller that restates them is redoing this resolution with no way to
+ *     check its answer. An outcome may carry one result per selected reviewer
+ *     and nothing else. It may not distinguish its reviewers without naming
+ *     them: unnamed results that disagree would be assigned by their order,
+ *     and are refused.
  *   - The obligation and provider are read from the loaded config: the one
  *     obligation accepting `review.green/1`, and the one provider it names.
  *   - Every telemetry number is derived from the findings the outcome carries,
@@ -37,11 +44,16 @@
  *
  *   MANIFEST="$(npm run --silent review:evidence <<'JSON'
  *   { "spec": "review-outcome/1", "verdict": "green",
- *     "reviewers": [{ "id": "outcome-correctness", "result": "approved" }],
+ *     "reviewers": [{ "result": "approved" }, { "result": "approved" }],
  *     "findings": [] }
  *   JSON
  *   )"
  *   delivery-harness submit-evidence --manifest "$MANIFEST"
+ *
+ * One entry per reviewer the policy selects, in either form: the unnamed one
+ * above, or the named one a review whose reviewers disagreed has to use —
+ * `{ "id": "outcome-correctness", "result": "rejected" }` — which is held to
+ * the same policy-selected set in both directions.
  */
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -253,22 +265,74 @@ export function parseReviewOutcome(document: unknown, charters: readonly string[
 
   const reviewers = document["reviewers"];
   if (!Array.isArray(reviewers)) throw new OutcomeError("the review outcome's reviewers are not an array");
-  const parsed: ReviewerOutcome[] = [];
+  const named: ReviewerOutcome[] = [];
+  const unnamed: ReviewerResult[] = [];
   const seen = new Set<string>();
   for (const entry of reviewers) {
     if (!isRecord(entry)) throw new OutcomeError("a reviewer outcome is not an object");
     const id = entry["id"];
     const result = entry["result"];
-    if (typeof id !== "string" || id === "") throw new OutcomeError("a reviewer outcome names no reviewer");
+    // An absent id is the unnamed form, resolved below. A present one that is
+    // not a usable id is still a document naming a reviewer it cannot name.
+    const carriesId = id !== undefined;
+    if (carriesId && (typeof id !== "string" || id === "")) {
+      throw new OutcomeError("a reviewer outcome names no reviewer");
+    }
+    const subject = carriesId ? `reviewer ${id as string}` : "an unnamed reviewer outcome";
     if (typeof result !== "string" || !(REVIEWER_RESULTS as readonly string[]).includes(result)) {
       throw new OutcomeError(
-        `reviewer ${id} reports result ${JSON.stringify(result)}, which is not one of ${REVIEWER_RESULTS.join(", ")}`,
+        `${subject} reports result ${JSON.stringify(result)}, which is not one of ${REVIEWER_RESULTS.join(", ")}`,
       );
     }
-    if (seen.has(id)) throw new OutcomeError(`reviewer ${id} appears twice in the review outcome`);
-    seen.add(id);
-    parsed.push({ id, result: result as ReviewerResult });
+    if (!carriesId) {
+      unnamed.push(result as ReviewerResult);
+      continue;
+    }
+    const reviewerId = id as string;
+    if (seen.has(reviewerId)) throw new OutcomeError(`reviewer ${reviewerId} appears twice in the review outcome`);
+    seen.add(reviewerId);
+    named.push({ id: reviewerId, result: result as ReviewerResult });
   }
+
+  // ── The unnamed form ───────────────────────────────────────────────────────
+  //
+  // The ids are this emitter's to resolve, not the caller's to restate: they
+  // are charter-path basenames inside an installed archive that the compiled
+  // policy selects from, and a caller who restates them is performing the same
+  // resolution a second time with no way to check the answer. So an outcome
+  // may carry results alone and take `charters` as its ids.
+  //
+  // It may not, however, DISTINGUISH its reviewers without naming them.
+  // Nothing in the document says which result belongs to which lens, so the
+  // assignment can only be positional — and a positional assignment that
+  // matters is one where the wrong reviewer is silently stamped approved while
+  // the one that failed is reported clean. Refusing every disagreeing unnamed
+  // document keeps position load-bearing for nothing: the results are
+  // interchangeable exactly when the order cannot matter.
+  if (unnamed.length > 0) {
+    if (named.length > 0) {
+      throw new OutcomeError(
+        `the review outcome names ${named.length} of its ${reviewers.length} reviewers and leaves the rest unnamed; a document that distinguishes its reviewers names every one of them`,
+      );
+    }
+    if (unnamed.length !== charters.length) {
+      throw new OutcomeError(
+        `the review outcome carries ${unnamed.length} result(s) under no reviewer id, and the policy selects ${charters.length} reviewer(s): ${charters.join(", ")}`,
+      );
+    }
+    const distinct = [...new Set(unnamed)];
+    if (distinct.length > 1) {
+      throw new OutcomeError(
+        `the review outcome's unnamed results disagree (${distinct.join(", ")}), so which reviewer reported which would be decided by their order; name the reviewers instead`,
+      );
+    }
+    for (const [index, result] of unnamed.entries()) {
+      const reviewerId = charters[index]!;
+      seen.add(reviewerId);
+      named.push({ id: reviewerId, result });
+    }
+  }
+  const parsed = named;
 
   // The charter set is the authority in both directions: a charter with no
   // outcome is a lens that did not review, and an outcome with no charter is a

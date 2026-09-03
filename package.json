@@ -12,11 +12,13 @@
     "node": ">=22.6.0"
   },
   "scripts": {
+    "harness": "node --import tsx packages/cli/src/main.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.vendored.json",
     "sensor": "node --import tsx scripts/check-import-boundaries.ts",
     "sensor:cli": "node --import tsx scripts/check-cli-inventory.ts",
     "sensor:standalone": "node --import tsx scripts/check-standalone-install.ts",
     "sensor:policy": "node --import tsx scripts/policy-projection-check.ts",
+    "policy:recompile": "node --import tsx scripts/recompile-policy-snapshot.ts",
     "review:evidence": "node --import tsx scripts/emit-review-evidence.ts",
     "qualify:provider": "node --import tsx scripts/qualify-agent-skills-provider.ts",
     "qualify:product": "node --import tsx scripts/qualify-product.ts",
