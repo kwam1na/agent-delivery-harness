@@ -23,12 +23,13 @@ import {
   runGitDirect,
   type HarnessConfig,
   type RunEvent,
+  type RunStore,
 } from "@agent-delivery-harness/kernel";
 import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { READOUT_LABELS } from "./run-projection.ts";
 import { escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
-import { buildRunEvent } from "./run-surface.ts";
+import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface } from "./run-surface.ts";
 
 const exec = promisify(execFile);
 const cleanups: string[] = [];
@@ -149,7 +150,12 @@ async function emit(dir: string, argv: readonly string[], payload?: unknown): Pr
   });
 }
 
-async function storeOf(
+/**
+ * The store this repository owns — where its runs live with no override in
+ * play. Resolved through the kernel rather than the CLI's resolver on purpose:
+ * this is the store the override has to keep an invocation OUT of.
+ */
+async function ownStoreOf(
   dir: string,
 ): Promise<{ readonly runsDir: string; readonly commonDir: string; readonly worktreeKey: string }> {
   const location = await resolveRunStoreLocation({ cwd: dir, run: runGitDirect, env: gitNamespaceClearedEnvironment() });
@@ -157,16 +163,54 @@ async function storeOf(
   return { runsDir: location.runsDir, commonDir: location.commonDir, worktreeKey: location.worktreeKey };
 }
 
+/**
+ * The store an invocation from `dir` actually resolves, which under this
+ * suite's own pin is the override's. Every assertion about what a CLI
+ * invocation wrote reads it back through here, so the reader and the writer
+ * can never disagree about which store the scenario was about.
+ */
+async function storeOf(
+  dir: string,
+): Promise<{
+  readonly store: RunStore;
+  readonly runsDir: string;
+  readonly commonDir: string;
+  readonly worktreeKey: string;
+}> {
+  const resolved = await resolveRunSurface(dir);
+  if (!resolved.ok) throw new Error(resolved.reason);
+  const { store, runsDir, commonDir, worktreeKey } = resolved.surface;
+  return { store, runsDir, commonDir, worktreeKey };
+}
+
+/** Runs `body` with the run store pinned at `root`, restoring the suite's pin after. */
+async function withStoreOverride<T>(root: string | undefined, body: () => Promise<T>): Promise<T> {
+  const pinned = process.env[RUN_STORE_OVERRIDE];
+  if (root === undefined) delete process.env[RUN_STORE_OVERRIDE];
+  else process.env[RUN_STORE_OVERRIDE] = root;
+  try {
+    return await body();
+  } finally {
+    if (pinned === undefined) delete process.env[RUN_STORE_OVERRIDE];
+    else process.env[RUN_STORE_OVERRIDE] = pinned;
+  }
+}
+
+/** Runs `body` with no override at all: every resolution falls back to git. */
+async function withoutStoreOverride<T>(body: () => Promise<T>): Promise<T> {
+  return withStoreOverride(undefined, body);
+}
+
 async function journalOf(dir: string, runId: string): Promise<readonly RunEvent[]> {
-  const { commonDir } = await storeOf(dir);
-  const read = await createRunStore(commonDir).read(runId);
+  const { store } = await storeOf(dir);
+  const read = await store.read(runId);
   if (!read.ok) throw new Error(`journal unreadable: ${JSON.stringify(read.rejections)}`);
   return read.events;
 }
 
 async function notesOf(dir: string, runId: string): Promise<readonly unknown[]> {
-  const { commonDir } = await storeOf(dir);
-  return createRunStore(commonDir).readNotes(runId);
+  const { store } = await storeOf(dir);
+  return store.readNotes(runId);
 }
 
 /**
@@ -204,8 +248,8 @@ async function startRun(dir: string, extra: readonly string[] = []): Promise<str
   expect(result.out, "a start that displaced nothing unreadable must not raise the store-health alarm").not.toContain(
     "stale pointer",
   );
-  const { commonDir, worktreeKey } = await storeOf(dir);
-  const current = await createRunStore(commonDir).current(worktreeKey);
+  const { store, worktreeKey } = await storeOf(dir);
+  const current = await store.current(worktreeKey);
   if (!current.ok || current.runId === undefined) throw new Error("run.started left no current run");
   return current.runId;
 }
@@ -324,8 +368,8 @@ describe("emit, the boundary wrap, and runs", () => {
     expect((await journalOf(dir, first)).map((event) => event.kind)).toEqual(["run.started"]);
     // The pointer is read BEFORE the journal is allocated, so the refusal
     // leaves no second journal behind. Allocating first would list two.
-    const { commonDir } = await storeOf(dir);
-    expect(await createRunStore(commonDir).list()).toEqual([first]);
+    const { store } = await storeOf(dir);
+    expect(await store.list()).toEqual([first]);
 
     const second = await startRun(dir, ["--force"]);
     expect(second).not.toBe(first);
@@ -410,13 +454,67 @@ describe("emit, the boundary wrap, and runs", () => {
       expect(events.map((event) => event.kind)).toEqual(["run.started", "command.completed"]);
       expect(events[0]!.repo.commonDir).toBe((await storeOf(dir)).commonDir);
       // The other repository's store was never touched.
-      expect(await createRunStore((await storeOf(elsewhere)).commonDir).list()).toEqual([]);
+      expect(await (await storeOf(elsewhere)).store.list()).toEqual([]);
     } finally {
       if (saved.dir === undefined) delete process.env["GIT_DIR"];
       else process.env["GIT_DIR"] = saved.dir;
       if (saved.common === undefined) delete process.env["GIT_COMMON_DIR"];
       else process.env["GIT_COMMON_DIR"] = saved.common;
     }
+  });
+
+  /**
+   * The defect this pins: a CLI invocation made from a worktree that has a run
+   * current appended a `command.completed` to THAT run, whoever made the
+   * invocation. The repository's own suite invokes the CLI from its checkout
+   * root, so `npm run check` wrote foreign completions into whatever delivery
+   * run was open there. The override is what separates the two: the store a
+   * process resolves is the one the override names, so an invocation under it
+   * cannot reach the store its worktree would otherwise resolve.
+   */
+  it("appends nothing to the invoking worktree's own run when the store override names another store", async () => {
+    const dir = await initRepo();
+    const runId = await withoutStoreOverride(async () => {
+      const started = await startRun(dir);
+      // The pointer is current in this repository's own store, which is
+      // exactly the state the checkout root is in during a live delivery.
+      const own = await ownStoreOf(dir);
+      const current = await createRunStore(own.commonDir).current(own.worktreeKey);
+      expect(current.ok && current.runId).toBe(started);
+      return started;
+    });
+    const own = await ownStoreOf(dir);
+    const journalPath = path.join(own.runsDir, `${runId}.jsonl`);
+    const before = await readFile(journalPath, "utf8");
+
+    // Every wrapped command, invoked from that worktree, under an override
+    // naming a store somewhere else entirely.
+    const elsewhere = await mkdtemp(path.join(os.tmpdir(), "dh-run-store-"));
+    cleanups.push(elsewhere);
+    await withStoreOverride(elsewhere, async () => {
+      for (const command of COMPLETION_WRAPPED_COMMANDS) await cli(dir, [command]);
+    });
+
+    expect(await readFile(journalPath, "utf8")).toBe(before);
+    expect(await createRunStore(own.commonDir).readNotes(runId)).toEqual([]);
+  });
+
+  /**
+   * The wiring half of the same rule, and the one that fails if the suite's
+   * own pin is ever removed: this process resolves a store that is not the
+   * checkout's, so no test in it — this one included — can reach the run a
+   * delivery has open here.
+   */
+  it("pins the repository's own suite at a store outside the checkout's common directory", async () => {
+    const pinned = process.env[RUN_STORE_OVERRIDE];
+    expect(pinned, `${RUN_STORE_OVERRIDE} is unset; the suite would resolve the checkout's own run store`).toBeDefined();
+    expect(path.isAbsolute(pinned ?? "")).toBe(true);
+
+    const checkout = await ownStoreOf(process.cwd());
+    const resolved = await resolveRunSurface(process.cwd());
+    if (!resolved.ok) throw new Error(resolved.reason);
+    expect(resolved.surface.runsDir).not.toBe(checkout.runsDir);
+    expect(`${resolved.surface.runsDir}${path.sep}`.startsWith(`${checkout.commonDir}${path.sep}`)).toBe(false);
   });
 
   it("exits with the policy code when there is no repository and no resolvable run", async () => {
@@ -430,14 +528,14 @@ describe("emit, the boundary wrap, and runs", () => {
     const noPointer = await emit(dir, ["ticket.read"], { ticket: "V26-1549", tracker: "linear" });
     expect(noPointer.code).toBe(EXIT_POLICY);
     expect(noPointer.err).toContain("no current run");
-    expect(await createRunStore((await storeOf(dir)).commonDir).list()).toEqual([]);
+    expect(await (await storeOf(dir)).store.list()).toEqual([]);
 
     const unknownRun = await emit(dir, ["ticket.read", "--run", "run-deadbeefdeadbeef"], {
       ticket: "V26-1549",
       tracker: "linear",
     });
     expect(unknownRun.code).toBe(EXIT_POLICY);
-    expect(await createRunStore((await storeOf(dir)).commonDir).list()).toEqual([]);
+    expect(await (await storeOf(dir)).store.list()).toEqual([]);
     // No journal AND no note: a caller-chosen id must not be able to create a
     // file anywhere in the store, which is the whole point of resolving the
     // run before the kind is judged.
@@ -569,8 +667,8 @@ describe("emit, the boundary wrap, and runs", () => {
 
     const events = await journalOf(dir, runId);
     expect(events[1]!.candidateTreeSha).toBe(OTHER_TREE_SHA);
-    const { commonDir } = await storeOf(dir);
-    expect(await createRunStore(commonDir).findByCandidateTreeSha(OTHER_TREE_SHA)).toEqual({ runId, alsoMatching: [] });
+    const { store } = await storeOf(dir);
+    expect(await store.findByCandidateTreeSha(OTHER_TREE_SHA)).toEqual({ runId, alsoMatching: [] });
 
     const shown = await cli(dir, ["runs", "show", runId]);
     expect(shown.out).toMatch(new RegExp(`round 1.*${OTHER_TREE_SHA}`));
@@ -597,10 +695,10 @@ describe("emit, the boundary wrap, and runs", () => {
   it("does not count an executor-written completion as a CLI completion", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
-    const { commonDir } = await storeOf(dir);
+    const { store, commonDir } = await storeOf(dir);
     // The store admits this — a completion claimed by an executor is a legal
     // event. The readout must still refuse to read it as the product's.
-    const forged = await createRunStore(commonDir).append(
+    const forged = await store.append(
       runId,
       buildRunEvent({
         runId,
@@ -641,7 +739,7 @@ describe("emit, the boundary wrap, and runs", () => {
   it("displaces a pointer whose journal is gone rather than allocating one run per retry", async () => {
     const dir = await initRepo();
     const first = await startRun(dir);
-    const { runsDir, commonDir, worktreeKey } = await storeOf(dir);
+    const { store, runsDir, worktreeKey } = await storeOf(dir);
     // A pruned store, a restored `.git`: the pointer survives, the journal
     // does not. `current` answers `undefined` here exactly as it does for no
     // pointer at all, so nothing but the pointer write can tell them apart.
@@ -656,10 +754,10 @@ describe("emit, the boundary wrap, and runs", () => {
     });
     expect(restarted.code, restarted.err).toBe(EXIT_OK);
     expect(restarted.out).toContain("stale pointer");
-    const pointer = await createRunStore(commonDir).current(worktreeKey);
+    const pointer = await store.current(worktreeKey);
     const second = pointer.ok ? pointer.runId : undefined;
     expect(second).not.toBe(first);
-    expect(await createRunStore(commonDir).list()).toEqual([second]);
+    expect(await store.list()).toEqual([second]);
   });
 
   it("runs the config-free pair through the shipped loader seam", async () => {
@@ -746,8 +844,8 @@ describe("emit, the boundary wrap, and runs", () => {
       ).map((invocation) => invocation.code);
       expect(codes.filter((code) => code === EXIT_OK), `attempt ${attempt}`).toHaveLength(1);
 
-      const { commonDir, worktreeKey } = await storeOf(raced);
-      const current = await createRunStore(commonDir).current(worktreeKey);
+      const { store, worktreeKey } = await storeOf(raced);
+      const current = await store.current(worktreeKey);
       expect(current.ok && current.runId !== undefined).toBe(true);
     }
   });
@@ -917,7 +1015,7 @@ describe("emit, the boundary wrap, and runs", () => {
       const result = await emit(dir, [kind], payload);
       expect(result.code, `${kind}: ${result.err}`).toBe(EXIT_OK);
     }
-    const runId = (await createRunStore((await storeOf(dir)).commonDir).list())[0]!;
+    const runId = (await (await storeOf(dir)).store.list())[0]!;
     const events = await journalOf(dir, runId);
 
     const shown = await cli(dir, ["runs", "show", runId]);
@@ -1344,11 +1442,11 @@ describe("runs serve", () => {
   it("labels a CLI-written gate completion as the CLI's", async () => {
     const dir = await initRepo();
     const runId = await scriptedRun(dir);
-    const { commonDir } = await storeOf(dir);
+    const { store, commonDir } = await storeOf(dir);
     // `gate` is a wrapped command, but driving a real gate needs a candidate;
     // the completion the boundary would write is planted through the store so
     // the writer label has a CLI-written gate to distinguish.
-    const appended = await createRunStore(commonDir).append(
+    const appended = await store.append(
       runId,
       buildRunEvent({
         runId,

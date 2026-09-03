@@ -23,19 +23,17 @@ import {
   MAX_RUN_PROVIDER_ID,
   captureGitCandidate,
   createArtifactsPort,
-  createRunStore,
   defineHarnessConfig,
-  gitNamespaceClearedEnvironment,
   resolveRecordStorage,
-  resolveRunStoreLocation,
-  runGitDirect,
   sha256Hex,
   withDeliverableIdentity,
   type ArtifactsPort,
   type HarnessConfig,
   type HarnessConfigInput,
+  type RunStore,
 } from "@agent-delivery-harness/kernel";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
+import { resolveRunSurface } from "./run-surface.ts";
 
 const exec = promisify(execFile);
 const cleanups: string[] = [];
@@ -193,15 +191,29 @@ async function makeHarness(overrides: Partial<HarnessConfigInput> = {}): Promise
   };
 }
 
-async function storeOf(dir: string): Promise<{ readonly runsDir: string; readonly commonDir: string; readonly worktreeKey: string }> {
-  const location = await resolveRunStoreLocation({ cwd: dir, run: runGitDirect, env: gitNamespaceClearedEnvironment() });
-  if (!location.ok) throw new Error(location.reason);
-  return { runsDir: location.runsDir, commonDir: location.commonDir, worktreeKey: location.worktreeKey };
+/**
+ * The store an invocation from `dir` actually resolves, which under this
+ * suite's pinned `DELIVERY_HARNESS_RUN_STORE` is not the one this repository
+ * owns. Every assertion here reads back through the same resolver the CLI
+ * wrote through, so the two can never disagree about which store was meant.
+ */
+async function storeOf(
+  dir: string,
+): Promise<{
+  readonly store: RunStore;
+  readonly runsDir: string;
+  readonly commonDir: string;
+  readonly worktreeKey: string;
+}> {
+  const resolved = await resolveRunSurface(dir);
+  if (!resolved.ok) throw new Error(resolved.reason);
+  const { store, runsDir, commonDir, worktreeKey } = resolved.surface;
+  return { store, runsDir, commonDir, worktreeKey };
 }
 
 async function currentRun(dir: string): Promise<string | undefined> {
-  const { commonDir, worktreeKey } = await storeOf(dir);
-  const current = await createRunStore(commonDir).current(worktreeKey);
+  const { store, worktreeKey } = await storeOf(dir);
+  const current = await store.current(worktreeKey);
   if (!current.ok) throw new Error("the pointer is unreadable");
   return current.runId;
 }
@@ -581,7 +593,7 @@ describe("verify's run-journal completeness row", () => {
       expect(verified.code, verified.err).toBe(EXIT_OK);
       expect(rowOf(verified.out)).toContain(runId);
       // The planted repository's own store was never read into this row.
-      expect(await createRunStore((await storeOf(elsewhere.dir)).commonDir).list()).toEqual([]);
+      expect(await (await storeOf(elsewhere.dir)).store.list()).toEqual([]);
     } finally {
       if (saved.dir === undefined) delete process.env["GIT_DIR"];
       else process.env["GIT_DIR"] = saved.dir;
