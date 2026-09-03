@@ -220,6 +220,38 @@ describe("the complete and executor-only readings", () => {
     expect(result.missing).toContain("command.completed:record");
   });
 
+  it("refuses executor-only status to a journal whose only completion is executor-written", () => {
+    // The fourth and last weakening of the executor-only decision: reading it
+    // as "no CLI completion" rather than "no completion at all". The three
+    // rows above cannot reach it — every one of their journals carries a CLI
+    // completion, on which the two readings agree — and neither can the
+    // executor-written row at the foot of this file, whose journal also
+    // carries a CLI `record`. Only a journal whose SOLE `command.completed` is
+    // executor-written separates them: it is not executor-only, because a
+    // `command.completed` is present, and the executor's claim to have run the
+    // gate is not the product's, so both CLI completions stay missing and
+    // gate.reported cannot stand in for either. Well-ordered for the same
+    // reason as its neighbours — gate.reported in its D12 place, before the
+    // completion, with run.ended last — so `violations` empty is what makes
+    // the status come from the executor-only decision alone.
+    const executorWritten = journal([
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      closed(1),
+      gateReported,
+      { kind: "command.completed", payload: { command: "gate", outcome: "ok", durationMs: 10 } },
+      prOpened,
+      ended,
+    ]);
+    const result = evaluateRunJournal(executorWritten, TREE, MANDATED);
+    expect(result.violations).toEqual([]);
+    expect(result.status).toBe("incomplete");
+    expect(result.missing).toEqual(["command.completed:gate", "command.completed:record"]);
+  });
+
   it("reports the evaluation unbound when no record tree sha is supplied", () => {
     const result = evaluateRunJournal(journal(COMPLETE));
     expect(result.boundToRecord).toBe(false);
