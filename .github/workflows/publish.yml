@@ -1,0 +1,174 @@
+# Publish the five workspace packages to npm, from a pushed version tag.
+#
+# THE COMPANION TO release.yml, NOT A REPLACEMENT. `release.yml` answers "could
+# this workspace be published?" on every pull request that touches a release
+# surface — the static sensor, five `npm publish --dry-run` packs, the
+# standalone-install leg, the product qualification. This workflow answers
+# "publish it", and only from a tag, which is the one place a version is a
+# decision rather than a state of the tree.
+#
+# NO CREDENTIAL EXISTS ANYWHERE. Publication authenticates through npm trusted
+# publishing: GitHub mints a short-lived OIDC token for this job (`id-token:
+# write`), npm exchanges it for a publish grant, and the registry checks the
+# grant against the trusted publisher registered for each package. There is no
+# npm token in this file, in a repository secret, in an environment, or on any
+# machine an agent touches — so there is nothing to leak, rotate, or scope. It
+# is also why the workflow FILE PATH matters: the trusted publisher is
+# registered as this repository plus this file, so renaming or copying this
+# workflow revokes its own authority rather than carrying it along.
+#
+# OPERATOR PREREQUISITE, ONE TIME. Each of the five packages —
+# @agent-delivery-harness/{action,cli,conformance,kernel,mcp} — must have
+# `kwam1na/agent-delivery-harness` and `.github/workflows/publish.yml`
+# registered as its trusted publisher on npmjs.com. Until that registration
+# exists the job reaches the publish steps and the registry refuses them; every
+# step before that point still runs and still reports honestly.
+#
+# THE REFUSAL IS EXERCISED, NOT ASSUMED. A tag is a claim about a tree, and the
+# two can disagree: a tag pushed at the wrong commit, or moved after a bump.
+# The version-equality step below refuses the run unless the root manifest and
+# all five package manifests declare exactly the tag's version — and then asks
+# the same guard for a version this workspace does not declare and requires it
+# to refuse, so the refusal path runs on every release rather than being
+# discovered the one time it was needed. HARNESS_VERSION is covered
+# transitively: `scripts/check-release.ts` holds it in lockstep with the root
+# manifest, which this step has just pinned to the tag.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      # The bump this workflow publishes is a lockstep semver across the
+      # workspace, so the tag is `v<version>` and nothing else.
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never two publishes of one tag at once: the registry would reject the
+  # second, but only after the first had already published some of the five.
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # `--maxWorkers`-style lever read by vitest.config.ts, matching ci.yml:
+  # GitHub runners have starved vitest's worker RPC at default concurrency.
+  DELIVERY_HARNESS_MAX_WORKERS: "2"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The whole authentication story. Nothing else is granted.
+      id-token: write
+
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+        with:
+          # The pushed tag, explicitly: what gets published is the tree the tag
+          # names, never a branch tip that has since moved.
+          ref: ${{ github.ref }}
+          # Full history, for the same reason ci.yml takes it: several suites in
+          # the gate resolve commits and merge bases against ancestor history,
+          # and under a depth-1 checkout those objects are simply absent.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          # Points npm at the public registry so the OIDC exchange has a
+          # registry to perform it against. It writes no credential: the
+          # `.npmrc` it produces carries no value this workflow supplies.
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Use an npm that speaks trusted publishing
+        # OIDC exchange landed in npm 11.5.1; the npm bundled with a given Node
+        # release line is not guaranteed to be at or past it. Pinning the floor
+        # rather than the exact version keeps this from silently falling back to
+        # an authenticated publish it has no credential for.
+        run: npm install -g npm@^11.5.1
+
+      - name: Install
+        run: npm ci
+
+      - name: Version equality with the tag, and its refusal
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/version-equality.mjs" <<'NODE'
+          // Refuses unless the root manifest and every workspace package
+          // manifest declares exactly the expected version. Reads the
+          // manifests as JSON rather than grepping them: a version is a
+          // manifest field, and a grep would also match a dependency pin.
+          import { readFileSync, readdirSync } from "node:fs";
+
+          const expected = process.argv[2];
+          const disagreeing = [];
+          const check = (file) => {
+            const version = JSON.parse(readFileSync(file, "utf8")).version;
+            if (version !== expected) disagreeing.push(`${file} declares ${version}`);
+          };
+
+          check("package.json");
+          const packages = readdirSync("packages", { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name)
+            .sort();
+          if (packages.length === 0) {
+            console.error("version-equality: no workspace packages found; the check would pass vacuously");
+            process.exit(1);
+          }
+          for (const name of packages) check(`packages/${name}/package.json`);
+
+          if (disagreeing.length > 0) {
+            console.error(`version-equality: expected ${expected}; ${disagreeing.join("; ")}`);
+            process.exit(1);
+          }
+          console.log(`version-equality: the root manifest and ${packages.length} packages all declare ${expected}`);
+          NODE
+
+          tag_version="${TAG_NAME#v}"
+          echo "tag ${TAG_NAME} claims version ${tag_version}"
+          node "${RUNNER_TEMP}/version-equality.mjs" "${tag_version}"
+
+          # The dry half: the same guard, asked for a version this workspace
+          # does not declare, must refuse. A guard whose refusal branch never
+          # runs is a guard nobody has seen work.
+          if node "${RUNNER_TEMP}/version-equality.mjs" "${tag_version}-refusal-probe" 2>/dev/null; then
+            echo "version-equality guard accepted a version no manifest declares; the guard is broken" >&2
+            exit 1
+          fi
+          echo "version-equality: the guard refuses a version no manifest declares"
+
+      - name: Repository gate
+        run: npm run check
+
+      - name: Static release sensor
+        run: node --import tsx scripts/check-release.ts
+
+      # Dependency order, so no published package can name a sibling version the
+      # registry does not yet have: kernel depends on nothing, conformance, cli
+      # and action depend on kernel, mcp depends on cli and kernel. One step per
+      # package, so a failure names the package that did not publish — and says
+      # which ones already did.
+      - name: Publish kernel
+        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/kernel"
+
+      - name: Publish conformance
+        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/conformance"
+
+      - name: Publish cli
+        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/cli"
+
+      - name: Publish action
+        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/action"
+
+      - name: Publish mcp
+        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/mcp"

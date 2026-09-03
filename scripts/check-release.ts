@@ -44,6 +44,14 @@
  *       manifest MUST stay private: it is the workspace shell, and a root that
  *       lost the flag is one `npm publish` away from shipping the whole
  *       repository as a package nobody declared.
+ *   provenance-repository — every publishable package declares a `repository`
+ *       with a non-empty `url`. npm REFUSES `--provenance` for a package whose
+ *       manifest names no repository, and `.github/workflows/publish.yml`
+ *       publishes all five with that flag, one step at a time in dependency
+ *       order. So a dropped `repository` field is not a documentation lapse: it
+ *       is a release that publishes the packages before it and then stops,
+ *       stranding the rest at a version npm will never accept again. Nothing
+ *       else in the tree reads the field, which is exactly why it needs a rule.
  *
  * Anti-vacuity: a workspace that yields zero packages passes every per-package
  * check vacuously, so an empty package set is itself a finding.
@@ -65,6 +73,7 @@ export type ReleaseRule =
   | "dependency-version-drift"
   | "dependency-unused"
   | "publishability"
+  | "provenance-repository"
   | "manifest-unreadable"
   | "anti-vacuity";
 
@@ -142,6 +151,11 @@ interface Manifest {
   readonly isPrivate: boolean;
   /** Declared runtime dependencies, as written. */
   readonly dependencies: Readonly<Record<string, string>>;
+  /**
+   * `repository.url`, or the shorthand string form, when the manifest declares
+   * one that is a non-empty string. Absent for every other shape.
+   */
+  readonly repositoryUrl: string | undefined;
 }
 
 function readManifest(root: string, relativePath: string, findings: ReleaseFinding[]): Manifest | undefined {
@@ -169,6 +183,14 @@ function readManifest(root: string, relativePath: string, findings: ReleaseFindi
       if (typeof range === "string") dependencies[name] = range;
     }
   }
+  const rawRepository = record["repository"];
+  const repositoryUrl =
+    typeof rawRepository === "string"
+      ? rawRepository
+      : typeof rawRepository === "object" && rawRepository !== null &&
+          typeof (rawRepository as Record<string, unknown>)["url"] === "string"
+        ? ((rawRepository as Record<string, unknown>)["url"] as string)
+        : undefined;
   return {
     path: relativePath,
     name: typeof record["name"] === "string" ? (record["name"] as string) : relativePath,
@@ -176,6 +198,7 @@ function readManifest(root: string, relativePath: string, findings: ReleaseFindi
     license: typeof record["license"] === "string" ? (record["license"] as string) : undefined,
     isPrivate: record["private"] === true,
     dependencies,
+    repositoryUrl: repositoryUrl !== undefined && repositoryUrl.trim() !== "" ? repositoryUrl : undefined,
   };
 }
 
@@ -438,6 +461,20 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
         rule: "publishability",
         file: pkg.path,
         message: `${pkg.name} is marked private; npm cannot pack it, so the publish dry-run can never go green`,
+      });
+    }
+  }
+
+  // provenance-repository
+  for (const pkg of packages) {
+    // A private package is never published, so it is never published with
+    // provenance either; `publishability` above is the rule that owns it.
+    if (pkg.isPrivate) continue;
+    if (pkg.repositoryUrl === undefined) {
+      findings.push({
+        rule: "provenance-repository",
+        file: pkg.path,
+        message: `${pkg.name} declares no \`repository\` with a non-empty \`url\`; \`npm publish --provenance\` refuses such a package, and the publish workflow runs one package per step, so the packages before it in dependency order would already be on the registry at a version that can never be republished`,
       });
     }
   }

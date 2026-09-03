@@ -1,9 +1,14 @@
 {
   "name": "@agent-delivery-harness/kernel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Config-driven delivery-evidence kernel: validator, identity, records, gate evaluator",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kwam1na/agent-delivery-harness.git",
+    "directory": "packages/kernel"
+  },
   "engines": {
     "node": ">=22.6.0"
   },
