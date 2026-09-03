@@ -29,6 +29,7 @@ import {
   type DeliveryRecord,
 } from "./delivery-record.ts";
 import { PORTABLE_STAGE_GRANT } from "./policy/compile.ts";
+import { RUN_JOURNAL_REQUIRED_ENTRIES, RUN_JOURNAL_VIOLATIONS } from "./checkpoint/run-journal-completeness.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -578,6 +579,53 @@ describe("verifyDeliveryRecord", () => {
     const check = verifyDeliveryRecord(twoObligations, buildFreshRecord(), RECOMPUTED, FRESH_BASE);
     expect(check.ok).toBe(false);
     expect(check.blockers.map((b) => b.code)).toContain("obligation_uncovered");
+  });
+
+  it("echoes a supplied run-journal row verbatim and omits the member entirely without one", () => {
+    // BOTH DIRECTIONS, because both are load-bearing and each fails silently.
+    // Dropping the echo would accept the option and lose the row, leaving the
+    // one caller that supplies it unable to report what it resolved; echoing
+    // unconditionally would give every check — the Action's and the facade's
+    // included — a member none of them asked for.
+    const row = {
+      runId: "r-echoed",
+      alsoMatching: ["r-earlier"],
+      status: "incomplete",
+      missing: ["pr.opened"],
+      violations: ["round-not-bound-to-record"],
+      attestation: "self",
+    } as const;
+    const echoed = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, { runJournal: row });
+    expect(echoed.runJournal).toEqual(row);
+
+    const withoutRow = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE);
+    expect("runJournal" in withoutRow, "a caller that supplied no row gets no member").toBe(false);
+  });
+
+  it("never lets a run-journal row change the verdict it is attached to", () => {
+    // The row is observability. A journal an owner-executed script can write
+    // must not be able to admit a record the drift table refuses, nor refuse one
+    // it admits — so both verdicts stand unchanged whatever the row says.
+    const worst = {
+      status: "absent",
+      missing: [...RUN_JOURNAL_REQUIRED_ENTRIES],
+      violations: [...RUN_JOURNAL_VIOLATIONS],
+      attestation: "self",
+    } as const;
+    const passing = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE, { runJournal: worst });
+    expect(passing.ok).toBe(true);
+    expect(passing.blockers).toHaveLength(0);
+
+    const best = { runId: "r-perfect", status: "complete", missing: [], attestation: "self" } as const;
+    const drifted = verifyDeliveryRecord(
+      makeConfig(),
+      buildFreshRecord(),
+      { deliverableDigest: "c".repeat(64), identityToken: TOKEN },
+      FRESH_BASE,
+      { runJournal: best },
+    );
+    expect(drifted.ok).toBe(false);
+    expect(drifted.blockers.map((b) => b.code)).toContain("deliverable_identity_changed");
   });
 
   it("excludes workspaceId from verification (CI is a different workspace)", () => {
