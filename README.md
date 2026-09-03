@@ -65,7 +65,7 @@ cannot drift from the tool.
 |---|---|
 | [Getting started](docs/getting-started.md) | Config → CLI loop → delivery record → local verify → the PR check. |
 | [The managed delivery product](docs/managed-delivery.md) | The facade and its operation contract, the durable journal and its reducers, the policy compiler and reviewer lenses, the graded host ladder and the granted-shell posture, the two authorization classes, the trust label, and the shadow window. |
-| [Agent guide](docs/agent-guide.md) | Module boundaries, which sensor owns which rule, and what bites on a documentation-only change. |
+| [Agent guide](docs/agent-guide.md) | Module boundaries, which sensor owns which rule, what bites on a documentation-only change, and where a review lens that plants mutations runs them. |
 | [Provider guide](docs/provider-guide.md) | Taking a review context to an accepted manifest: run roots, the final-pass discipline, reviewer approvals, deferral rules, resubmission semantics. |
 | [Provider rails contract](docs/contracts/delivery-provider-rails-v1.md) | The vendored neutral negotiation, lifecycle, cancellation, and terminal-state contract used by opt-in command providers. |
 | [The delivery record](docs/delivery-record.md) | The `delivery-record/1` note: extra-spec status, the both-neutral-sets requirement, what L0 attestation honestly claims, the `baseMovement` policy. |
