@@ -305,44 +305,46 @@ describe("the computable counts the documentation states", () => {
     everyStatementAgrees("the shipped charter count", /ships \*\*(\d+)\*\* reviewer charters/g, String(projected.personas.length));
   });
 
-  it("states the review round bound and the grace round the installed workflow declares", () => {
-    // `AGENTS.md` opens its review-loop section with "The installed workflow's
-    // default bound applies here unchanged". That is an agreement claim, and
-    // until this row it was the only claim in this file's scope with nothing
-    // recomputing it: the overlay could say three while the installed workflow
-    // said four, in either direction, with the whole suite green. The two have
-    // so far been re-stamped together by hand, once per install — which is why
-    // the claim has held, not evidence that it must.
+  it("references the installed workflow for the rules it carries, rather than restating them", () => {
+    // This row replaces an agreement check. `AGENTS.md` used to restate the
+    // round bound and the grace round, and the check was that the restatement
+    // still agreed with the installed workflow. The corpus's install
+    // convention now says an overlay references the installed workflow for
+    // every rule the workflow carries and restates none of them, so the
+    // overlay carries the reference and this row checks that instead.
     //
-    // The source of truth here is the INSTALLED generation, not the pinned
-    // qualification fixture the charter row above reads. The two rows ask
-    // different questions: that one asks what the pinned composition ships,
-    // which is frozen by definition; this one asks what the overlay is
-    // currently restating, which advances with each install. Reading the
-    // fixture here would leave the overlay unguarded against exactly the
-    // install this repository performs.
+    // It is pinned from both ends for the same reason the agreement check was.
+    // Asserting only that the overlay does not restate a rule is satisfied for
+    // free by an overlay that says nothing at all, and by a release that
+    // stopped carrying the rule — at which point the overlay's "read from the
+    // installed skills" sentence would be pointing at nothing. So the
+    // installed generation is read first and must still carry both rules, and
+    // the overlay must carry the sentence that defers to it.
     const installedSkill = (skill: string): string =>
       readFileSync(path.join(REPO_ROOT, ".agent-skills/current/skills", skill, "SKILL.md"), "utf8");
 
-    // Extraction is guarded from both ends, the same way the link scan is. A
-    // workflow text that stopped matching would otherwise hand the agreement
-    // helper an undefined value to compare every document against, and the
-    // failure would name the documents rather than this extraction.
-    const declared = /The workflow default is (\w+) rounds/.exec(installedSkill("review-work"));
-    expect(declared, "the installed review-work skill no longer declares a round default").not.toBeNull();
-    everyStatementAgrees("the review round bound", /at most (\w+) review rounds/g, declared![1]!);
-
-    // The grace round is a rule rather than a count, so it is checked the way
-    // the frozen trust label is: the phrase, verbatim. The gate is what keeps
-    // it honest in both directions — the overlay must carry the phrase only
-    // while the installed workflow grants the round, so a release that
-    // withdrew it would fail here rather than leave the overlay describing a
-    // rule that no longer ships.
+    expect(
+      /The workflow default is (\w+) rounds/.test(installedSkill("review-work")),
+      "the installed review-work skill no longer declares a round default",
+    ).toBe(true);
     expect(
       installedSkill("execute-work"),
       "the installed execute-work skill no longer grants a grace verification round",
     ).toContain("exactly one grace verification round");
-    documentStates("AGENTS.md", "grace verification round");
-    documentStates("AGENTS.md", "at most once per delivery");
+
+    documentStates("AGENTS.md", "Rules the installed workflow already carries are not restated here");
+    documentStates("AGENTS.md", "read from the installed skills");
+
+    // And the restatements themselves are gone. Each pattern below is the
+    // exact shape the overlay used to carry; a re-restatement in any scanned
+    // document puts the two texts back in a position to disagree silently.
+    for (const document of scannedDocuments()) {
+      for (const restatement of [/at most \w+ review rounds/, /grace verification round/, /at most once per delivery/]) {
+        expect(
+          restatement.test(textOf(document)),
+          `${document} restates a rule the installed workflow carries: ${restatement.source}`,
+        ).toBe(false);
+      }
+    }
   });
 });

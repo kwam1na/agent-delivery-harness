@@ -22,6 +22,18 @@ output: exact release (`releaseId`, `profile`, `archiveSha256`,
 references, and a positive integer round. Never let an incoming result supply
 its own trusted comparison values. Preserve opaque references exactly.
 
+Emit `lens.selected` before asking the host to realize any lens, naming the
+mandated pair the caller declared, the full selected set, and the reason for the
+selection, and emit `review.round.opened` for each round before its realization,
+naming the round, the candidate it binds, and the lenses it carries. Emit both
+through the run-event command the repository's root instruction file declares,
+when it declares one; where the repository declares none, proceed silently, with
+no handoff and no blocker. Give the run's identifier to any lens realized in
+another worktree of the same repository so its own emissions join this run; a
+lens realized in a different repository shares no run and is given none. This
+workflow keeps the caller-selected lens list unchanged; emission records the
+selection and never decides it.
+
 Use `prepare_review` in `agent_skills.review_orchestration` to create ordered,
 in-process host inputs. Supply each selected lens's bounded `contextRefs` and
 the expected result shape `review-lens-result/1`: `outcome`, `findings`, and
@@ -60,7 +72,9 @@ round for the delivery, and it reviews the whole delivered diff. Every later
 result-carrying round of that lens is a verification round, including a round
 obtained after alignment because the candidate changed, and its delta runs from
 the candidate of that lens's most recent result-carrying entry, so a round in
-which that lens's acquisition failed is spanned rather than skipped.
+which that lens's acquisition failed is spanned rather than skipped. A grace
+round obtained at the bound is such a verification round, like any other, with
+no special kind, scope, or carry-forward.
 
 For a verification round the caller supplies each lens, as its `contextRefs`,
 that lens's own retained entry from every prior round of the delivery in which
@@ -96,21 +110,43 @@ finding of its own, deferrals included, and report each one closed, open, raised
 with its new severity, withdrawn with its reason, or still deferred, and only
 then to review the delta between the previous round's candidate and this one. A
 new finding outside the delta is filed only at P0; a P1 first filed outside the
-delta is recorded as a deferral with a follow-up.
+delta is recorded as a deferral with a follow-up item.
 
 Only P0 and P1 findings inside the round's scope are actionable. Deferrable
 findings, P2 and P3 under the charter's severity vocabulary and a P1 first filed
 outside the delta in a verification round, belong in `evidence` as deferrals
-with a follow-up rather than in `findings`. A carried finding's filed severity
-and in-scope status are a floor: the filing lens may raise them on re-check and
-never lower them, and a raised finding is treated as filed at the new severity
-from that round, so a carried deferral raised to P0 blocks under the
-out-of-delta rule. A carried P0 or P1 is discharged only by the filing lens's
+with a follow-up item rather than in `findings`. A carried finding's filed
+severity and in-scope status are a floor: the filing lens may raise them on
+re-check and never lower them, and a raised finding is treated as filed at the
+new severity from that round, so a carried deferral raised to P0 blocks under
+the out-of-delta rule. A carried P0 or P1 is discharged only by the filing lens's
 closure report or by that lens's withdrawal with its reason, never by a later
 deferral; a finding the lens filed as a deferral is discharged by that deferral.
 A finding is closed, deferred, or declined only by the lens that filed it, in
 its own report, with its reason. `aligned` means every carried finding
 discharged and no actionable finding open.
+
+A deferral's follow-up is a tracked item, and the executor records it, not the
+lens. In its own report the lens records in its evidence what that item must
+say: the outcome the item must reach, the deferral's identifier, and the lens
+that filed it. A lens is read-only and files nothing itself.
+
+## Realize a lens by convention where the harness supplies none
+
+Where no harness-supplied realization exists for a selected lens, realize it by
+this convention rather than by improvising one per delivery. One subagent per
+lens. The charter is supplied to it verbatim beside the round brief, and the
+executor composes nothing about the charter itself. A lens is read-only. No two
+lenses in a round share context. The evidence names the model class the lens ran
+under.
+
+Evidence obtained by this convention records independence as `host-convention`,
+naming this section, rather than leaving the realization described as
+unverified. The acquisition entry's typed `independence` is unchanged by the
+convention and stays `{"status": "unverified"}` until harness-supplied
+attestation evidence upgrades it, because a declared procedure is not a proof of
+distinct realization. This section declares that procedure only: it builds no
+realization runtime, and this workflow launches no subordinate runtime.
 
 ## Independence and repair
 

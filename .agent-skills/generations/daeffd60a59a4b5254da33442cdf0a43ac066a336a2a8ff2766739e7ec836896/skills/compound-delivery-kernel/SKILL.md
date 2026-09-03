@@ -32,7 +32,8 @@ Plan -> Work -> Review -> Compound.
 
 - Review against acceptance criteria, repository authority, and sensor evidence.
 - Declare the round bound before the first round; every round of the delivery
-  counts; the default is three rounds.
+  counts, except one grace round obtained at the bound; the default is four
+  rounds.
 - Later rounds verify closure and review the delta; only P0 and P1 findings
   block; the lens, not the executor, closes or defers a finding.
 - Use specialized review only when the change's risk warrants it.
@@ -44,6 +45,8 @@ Plan -> Work -> Review -> Compound.
 Choose the smallest durable response to a reusable learning: update existing
 guidance, add a focused sensor, record a follow-up, or explicitly record that no
 durable learning emerged. Do not create documentation for obvious one-off work.
+Name the tracked follow-up item recorded for every deferral any lens filed as
+part of the delivery's record.
 
 ## Handoff
 
