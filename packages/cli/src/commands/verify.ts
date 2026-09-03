@@ -7,10 +7,30 @@
  * the pure `verifyDeliveryRecord` core. A missing record names the command that
  * writes it; a failed check surfaces the named drift class. When the base-movement
  * policy is `allow`, a passing check that relaxed base drift names the relaxation.
+ *
+ * THE RUN-JOURNAL ROW, AND WHY IT IS LOCAL ONLY. `verify` is the one caller
+ * that holds both halves of the question "was this candidate journaled": a
+ * record binding an exact tree sha, and a repository whose run store it can
+ * scan for a journal bound to the same one. So it resolves the row and reports
+ * it — and reporting is all it does by default. The row changes no exit code
+ * unless the operator asks for that with `--require-run-journal`, a LOCAL
+ * opt-in: it is not passed by the GitHub Action, not read by the gate, and not
+ * consulted by admission. A run journal is self-attested observability that
+ * anything the owner executes can append to, so a delivery that could be
+ * admitted or refused on one would be resting its gate on a file its own
+ * candidate scripts can write.
+ *
+ * `--mandated-lens <id>` is the second half of the same opt-in: supplied, the
+ * evaluator checks the journal's declared mandated pair against these ids
+ * rather than merely checking that it declared two non-empty ones. Repeatable,
+ * separate-argument form, and bounded to the run family's own id charset before
+ * it reaches the kernel.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  MAX_RUN_PROVIDER_ID,
+  RUN_PROVIDER_ID,
   deliveryRecordPathFor,
   needsCommittedSymlinkTarget,
   parseCandidateTreeListing,
@@ -18,15 +38,89 @@ import {
   runGitCommand,
   verifyDeliveryRecord,
   type CandidateTreeEntry,
+  type RunJournalRow,
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
+import { oneLine, resolveRunJournalRow, runJournalRows } from "../run-surface.ts";
+
+const USAGE = "Usage: delivery-harness verify [--require-run-journal] [--mandated-lens <id>]...";
+
+interface ParsedArgs {
+  readonly requireRunJournal: boolean;
+  readonly mandatedLensIds: readonly string[];
+}
+
+type ArgParse = { readonly ok: true; readonly args: ParsedArgs } | { readonly ok: false; readonly message: string };
+
+/**
+ * The separate-argument form every other command's flags take: `--flag value`,
+ * never `--flag=value`. The joined form is not silently split, because a
+ * `--mandated-lens=x` that quietly worked here and nowhere else would be a
+ * second grammar for the same CLI. It falls through to the unknown-flag arm,
+ * which is a usage error naming the token.
+ */
+function parseArgs(args: readonly string[]): ArgParse {
+  let requireRunJournal = false;
+  const mandatedLensIds: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === "--require-run-journal") {
+      requireRunJournal = true;
+      continue;
+    }
+    if (token === "--mandated-lens") {
+      const value = args[index + 1];
+      if (value === undefined) return { ok: false, message: `${token} needs a value.\n${USAGE}` };
+      // Bounded before the kernel sees it: an id is compared against journal
+      // content, and an unbounded one would be echoed into the row it produces.
+      if (value.length > MAX_RUN_PROVIDER_ID || !RUN_PROVIDER_ID.test(value)) {
+        return { ok: false, message: `${token} takes a bounded lens id, not ${oneLine(value, 64)}.\n${USAGE}` };
+      }
+      mandatedLensIds.push(value);
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) return { ok: false, message: `Unknown flag ${oneLine(token, 64)}.\n${USAGE}` };
+    return { ok: false, message: `verify takes no positional arguments, and ${oneLine(token, 64)} is one.\n${USAGE}` };
+  }
+  return { ok: true, args: { requireRunJournal, mandatedLensIds } };
+}
+
+/**
+ * The opt-in's refusal. It names the status, the missing entries, and the
+ * violated constraints, all of them product-defined names from the evaluator's
+ * two closed sets — never journal-derived text.
+ */
+function runJournalBlocker(row: RunJournalRow) {
+  const missing = row.missing.length === 0 ? "(none)" : row.missing.join(", ");
+  const violations = row.violations === undefined || row.violations.length === 0 ? "(none)" : row.violations.join(", ");
+  return commandBlocker({
+    code: "run_journal_incomplete",
+    sourceId: "delivery-harness.cli.verify",
+    summary: "The run journal for this candidate is not complete, and --require-run-journal was given.",
+    details: `status ${row.status}${row.runId === undefined ? "" : ` (run ${oneLine(row.runId, 128)})`}; missing: ${missing}; violations: ${violations}`,
+    remediations: [
+      {
+        id: "emit-the-missing-run-events",
+        kind: "manual_action",
+        summary: "Emit the run events this delivery did not journal, or drop --require-run-journal: the row is observability, not evidence.",
+      },
+    ],
+  });
+}
 
 export const verifyCommand: CommandDescriptor = {
   name: "verify",
   sourceId: "delivery-harness.cli.verify",
   summary: "Verify the tracked delivery record against the current candidate.",
   async run(context: CommandContext): Promise<CommandResult> {
+    // Arguments first: a malformed invocation is a usage error and captures
+    // nothing, exactly as `emit` and `submit-evidence` order it.
+    const parsedArgs = parseArgs(context.args);
+    if (!parsedArgs.ok) return { kind: "usage", message: parsedArgs.message };
+
     const wiring = await context.wire();
     const capture = await wiring.captureCandidate();
     if (!capture.ok) {
@@ -102,9 +196,24 @@ export const verifyCommand: CommandDescriptor = {
       }
     }
 
-    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths });
+    // The row is resolved from the RECORD'S tree sha, not the recomputed
+    // identity: the identity digest excludes the review-neutral paths, and what
+    // a review round and a `pr.opened` bind is the raw tree the record carries.
+    const runJournal = await resolveRunJournalRow({
+      cwd: context.rootDir,
+      treeSha: parsed.record.candidateBinding.treeSha,
+      ...(parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }),
+    });
+
+    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths, runJournal });
     if (!check.ok) {
       return { kind: "blocked", blockers: [...check.blockers] };
+    }
+
+    // The opt-in is judged AFTER the record's own verification, so a delivery
+    // whose record is bad is never told its journal is the problem.
+    if (parsedArgs.args.requireRunJournal && runJournal.status !== "complete") {
+      return { kind: "blocked", blockers: [runJournalBlocker(runJournal)] };
     }
 
     const relaxation = check.baseMovementRelaxed
@@ -112,7 +221,10 @@ export const verifyCommand: CommandDescriptor = {
       : "";
     return {
       kind: "ok",
-      summary: `verified ${relativePath}${relaxation}; attestation: ${check.attestationLabel}`,
+      summary: [
+        `verified ${relativePath}${relaxation}; attestation: ${check.attestationLabel}`,
+        ...runJournalRows(runJournal),
+      ].join("\n"),
     };
   },
 };

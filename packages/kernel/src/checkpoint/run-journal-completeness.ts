@@ -117,6 +117,32 @@ export interface RunJournalEvaluation {
   readonly boundToRecord: boolean;
 }
 
+/**
+ * One journal's completeness as a REPORTED ROW, rather than as the evaluator's
+ * own return: the shape a reader — today only `verify` — attaches to something
+ * it prints or returns.
+ *
+ * It carries the resolution as well as the verdict, because the question an
+ * operator is really asking is "was THIS candidate journaled", and answering it
+ * means saying which run was read and which other runs bound the same
+ * candidate. `attestation` is the constant `"self"` for the same reason every
+ * readout carries the label in prose: a row derived from a store anyone who can
+ * execute in this repository may append to is never anything else.
+ *
+ * `absent` is the honest answer to "no journal bound this candidate", and it
+ * carries no run id and no missing entries — nothing was evaluated.
+ */
+export interface RunJournalRow {
+  /** The run whose journal was evaluated; absent when the status is `absent`. */
+  readonly runId?: string;
+  /** The other runs whose journals bind the same candidate, most recent first. */
+  readonly alsoMatching?: readonly string[];
+  readonly status: RunJournalStatus;
+  readonly missing: readonly RunJournalRequiredEntry[];
+  readonly violations?: readonly RunJournalViolation[];
+  readonly attestation: "self";
+}
+
 // ── Journal projections ────────────────────────────────────────────────────
 
 interface Indexed {

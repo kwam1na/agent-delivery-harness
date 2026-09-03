@@ -818,6 +818,7 @@ export {
   runJournalCarries,
   type RunJournalEvaluation,
   type RunJournalRequiredEntry,
+  type RunJournalRow,
   type RunJournalStatus,
   type RunJournalViolation,
 } from "./checkpoint/run-journal-completeness.ts";

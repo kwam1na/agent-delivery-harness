@@ -45,6 +45,9 @@ import {
 import { canonicalize } from "./canonical.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
 import type { EvidenceRecord, RecordCandidateBinding } from "./records.types.ts";
+// TYPE ONLY, DELIBERATELY. The row is echoed, never evaluated, so this module
+// takes the shape and nothing that could read one.
+import type { RunJournalRow } from "./checkpoint/run-journal-completeness.ts";
 import { RESOLUTION_OUTCOMES, type GateDecision, type ResolutionOutcome } from "./evaluator.ts";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -440,6 +443,18 @@ export interface DeliveryRecordCheck {
   readonly relaxedDriftClasses: readonly DeliveryRecordDriftClass[];
   readonly attestationLabel: string;
   readonly claims: readonly DeliveryRecordClaim[];
+  /**
+   * The caller's self-attested run-journal row, echoed verbatim and absent when
+   * the caller supplied none — which is every caller but the local `verify`.
+   *
+   * ECHOED, NEVER JUDGED. Nothing in this core reads the row: it does not raise
+   * a blocker, it does not touch `ok`, and no member of it appears in any
+   * decision above. A run journal is observability, and the moment a verifier
+   * consulted one, a store that anyone who can execute in the repository may
+   * append to would be deciding admission. The Action never supplies it, so the
+   * check it computes is byte-for-byte the check it computed before.
+   */
+  readonly runJournal?: RunJournalRow;
 }
 
 /**
@@ -464,6 +479,15 @@ export interface VerifyDeliveryRecordOptions {
    * path alone and stays blocked.
    */
   readonly candidateTreePaths?: readonly (string | CandidateTreeEntry)[];
+  /**
+   * A self-attested run-journal completeness row the caller resolved for this
+   * record's candidate. Echoed onto the check and never read — see
+   * {@link DeliveryRecordCheck.runJournal}. Only a caller that can reach the
+   * repository's run store has one, and only the local `verify` does; whether
+   * an incomplete row should fail is that caller's decision, taken behind its
+   * own opt-in, never this core's.
+   */
+  readonly runJournal?: RunJournalRow;
 }
 
 /**
@@ -707,5 +731,6 @@ export function verifyDeliveryRecord(
     relaxedDriftClasses,
     attestationLabel: ATTESTATION_LABEL,
     claims: record.claims,
+    ...(options.runJournal === undefined ? {} : { runJournal: options.runJournal }),
   };
 }

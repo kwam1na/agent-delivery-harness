@@ -195,17 +195,20 @@ describe("the getting-started walkthrough", () => {
     expect(stdout).toContain(ATTESTATION_LABEL);
 
     // FLAG COUPLING, WITHOUT DUPLICATION. The CLI accepts a lone positional
-    // where a flag is optional, and every command other than `submit-evidence`
-    // ignores its argv entirely — so merely executing the walkthrough survives
-    // a renamed flag on either side and an invented flag on the guide's part.
+    // where a flag is optional; of the commands this walkthrough runs, only
+    // `submit-evidence` and `verify` parse their argv at all, and every flag
+    // `verify` takes is optional, so the walkthrough passes it none. Merely
+    // executing the walkthrough therefore survives a renamed flag on either
+    // side and an invented flag on the guide's part.
     // The authority on what the flags are called is the CLI's own usage error:
     // run `submit-evidence` with no arguments through the shim the walkthrough
     // installed and collect the flags its message names. Compare as EXACT token
     // sets, in BOTH directions — every usage-named flag must appear as a token
     // on one of the guide's `delivery-harness` lines, and every flag token the
-    // guide passes to `delivery-harness` must be one the CLI named (for the six
-    // argument-less commands that means their guide lines carry no flags at
-    // all). Substring containment would let `--manifest` hide inside
+    // guide passes to `delivery-harness` must be one the CLI named (for every
+    // other command the guide invokes, all of which it invokes without flags,
+    // that means their guide lines carry no flags at all). Substring
+    // containment would let `--manifest` hide inside
     // `--manifest-file` and `--man` inside `--manifest`; token equality does
     // not. Both sides are harvested under ONE shared grammar by whitespace
     // tokenization — an unanchored regex over the usage text would truncate a

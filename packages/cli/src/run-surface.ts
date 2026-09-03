@@ -25,6 +25,7 @@ import path from "node:path";
 import {
   createBlocker,
   createRunStore,
+  evaluateRunJournal,
   gitNamespaceClearedEnvironment,
   neutralizeForDisplay,
   resolveRunStoreLocation,
@@ -32,6 +33,7 @@ import {
   type Blocker,
   type RunEventInput,
   type RunEventKind,
+  type RunJournalRow,
   type RunStore,
 } from "@agent-delivery-harness/kernel";
 
@@ -157,6 +159,74 @@ export function oneLineOf(value: unknown, maximum = 240): string {
   if (typeof value === "string") return oneLine(value, maximum);
   if (value === undefined) return "";
   return oneLine(JSON.stringify(value) ?? String(value), maximum);
+}
+
+/**
+ * The labels the row carries wherever it is printed. `bound to the record` is
+ * the one that differs from the viewer's: `verify` always has a record's tree
+ * sha, so its round constraints were judged against THIS candidate rather than
+ * against any paired round.
+ */
+export const RUN_JOURNAL_ROW_LABELS = "self-attested; observability, not evidence; bound to the record";
+
+/** Nothing was found, so nothing was evaluated. The one shape `absent` takes. */
+const ABSENT: RunJournalRow = { status: "absent", missing: [], attestation: "self" };
+
+/**
+ * The self-attested completeness row for the candidate a delivery record binds.
+ *
+ * FOUND BY THE RECORD'S TREE SHA, NOT BY THE POINTER. The run whose journal
+ * describes this candidate has usually ended by the time anyone verifies it,
+ * and `run.ended` clears the worktree pointer — so "the current run" is exactly
+ * the wrong question. The store scans instead, which is affordable because it
+ * is unpruned by design and small, and which is what lets a journal outlive the
+ * worktree its run happened in.
+ *
+ * EVERY FAILURE IS `absent`. No store, no match, a journal that refuses the
+ * read discipline, a journal that vanished between the scan and the read: the
+ * row says nothing was found rather than inventing a verdict. A reader that
+ * treats `absent` as a failure does so behind its own opt-in — this function
+ * never decides that.
+ */
+export async function resolveRunJournalRow(input: {
+  readonly cwd: string;
+  readonly treeSha: string;
+  readonly mandatedLensIds?: readonly string[];
+}): Promise<RunJournalRow> {
+  const resolved = await resolveRunSurface(input.cwd);
+  if (!resolved.ok) return ABSENT;
+  const match = await resolved.surface.store.findByCandidateTreeSha(input.treeSha);
+  if (match === undefined) return ABSENT;
+  const read = await resolved.surface.store.read(match.runId);
+  if (!read.ok) return ABSENT;
+  const evaluation = evaluateRunJournal(read.events, input.treeSha, input.mandatedLensIds);
+  return {
+    runId: match.runId,
+    ...(match.alsoMatching.length === 0 ? {} : { alsoMatching: match.alsoMatching }),
+    status: evaluation.status,
+    missing: evaluation.missing,
+    ...(evaluation.violations.length === 0 ? {} : { violations: evaluation.violations }),
+    attestation: "self",
+  };
+}
+
+/**
+ * The row, rendered for a terminal. Every store-derived string goes through
+ * `oneLine` for the same reason the viewer's rows do: a run id or a constraint
+ * name printed raw is a string from a file anyone who can execute here may
+ * write, and this one is printed under a line an operator reads as a verdict.
+ */
+export function runJournalRows(row: RunJournalRow): readonly string[] {
+  const rows = [`  run journal: ${oneLine(row.status, 64)}  (${RUN_JOURNAL_ROW_LABELS})`];
+  if (row.runId !== undefined) rows.push(`    run: ${oneLine(row.runId, 128)}`);
+  if (row.alsoMatching !== undefined && row.alsoMatching.length > 0) {
+    rows.push(`    also matching: ${row.alsoMatching.map((id) => oneLine(id, 128)).join(", ")}`);
+  }
+  rows.push(`    missing: ${row.missing.length === 0 ? "(none)" : row.missing.map((entry) => oneLine(entry, 64)).join(", ")}`);
+  if (row.violations !== undefined && row.violations.length > 0) {
+    rows.push(`    violations: ${row.violations.map((entry) => oneLine(entry, 64)).join(", ")}`);
+  }
+  return rows;
 }
 
 /** The typed refusal a config-free command returns when it has nothing to work with. */
