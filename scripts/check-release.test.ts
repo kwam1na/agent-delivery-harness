@@ -6,13 +6,14 @@
  * the named finding, so a rule that stops firing is a red test rather than a
  * silently vacuous release gate.
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   EXPECTED_LICENSE_ID,
   LICENSE_TEXT_MARKERS,
+  REQUIRED_PACK_FILES,
   formatReleaseFindings,
   repoRootFromHere,
   runReleaseChecks,
@@ -120,19 +121,40 @@ function rulesOf(findings: readonly ReleaseFinding[]): string[] {
   return findings.map((finding) => finding.rule);
 }
 
+/** The five packages this workspace ships, asserted by the first row below. */
+const SHIPPED_PACKAGE_MANIFESTS = [
+  "packages/action/package.json",
+  "packages/cli/package.json",
+  "packages/conformance/package.json",
+  "packages/kernel/package.json",
+  "packages/mcp/package.json",
+];
+
 describe("this repository is releasable", () => {
   it("passes every release check", () => {
     const result = runReleaseChecks({ root: repoRootFromHere() });
     expect(formatReleaseFindings(result.findings)).toBe("");
     expect(result.findings).toEqual([]);
-    // The five packages this workspace ships.
-    expect(result.packageManifests).toEqual([
-      "packages/action/package.json",
-      "packages/cli/package.json",
-      "packages/conformance/package.json",
-      "packages/kernel/package.json",
-      "packages/mcp/package.json",
-    ]);
+    expect(result.packageManifests).toEqual(SHIPPED_PACKAGE_MANIFESTS);
+  });
+
+  // The sensor's text half reads the ROOT LICENSE, while npm packs each
+  // package's OWN copy — so five of the six license files this workspace
+  // ships are checked for presence and never for content. Six copies nothing
+  // compares are five that can drift, and a tarball carrying the superseded
+  // license under an FSL manifest is the exact statement the rule exists to
+  // refuse. This row is what makes leaving one copy behind a red run.
+  it("ships one license text and one notice, not six copies that can drift", () => {
+    const root = repoRootFromHere();
+    for (const required of REQUIRED_PACK_FILES) {
+      const rootText = readFileSync(path.join(root, required), "utf8");
+      expect(rootText).not.toBe("");
+      for (const manifestRel of SHIPPED_PACKAGE_MANIFESTS) {
+        const packageDir = path.dirname(manifestRel);
+        expect({ file: `${packageDir}/${required}`, text: readFileSync(path.join(root, packageDir, required), "utf8") })
+          .toEqual({ file: `${packageDir}/${required}`, text: rootText });
+      }
+    }
   });
 });
 

@@ -94,11 +94,17 @@ export const EXPECTED_LICENSE_ID = "FSL-1.1-Apache-2.0";
  * the license, the other two are the two clauses that make it what it is —
  * the competing-use restriction and the Apache-2.0 conversion — so a LICENSE
  * that keeps the title while losing either one is a finding rather than a pass.
+ *
+ * The conversion marker quotes the grant itself rather than its `Grant of
+ * Future License` heading, which the steward's MIT-future template carries
+ * word for word: a heading pins the section, not what the section converts to,
+ * and `FSL-1.1-MIT` swapped in under an `FSL-1.1-Apache-2.0` manifest is
+ * exactly the mismatch this rule exists to refuse.
  */
 export const LICENSE_TEXT_MARKERS: readonly string[] = [
   "Functional Source License, Version 1.1",
   "A Permitted Purpose is any purpose other than a Competing Use",
-  "Grant of Future License",
+  "the Apache License, Version 2.0 that is effective on the second anniversary",
 ];
 
 /**

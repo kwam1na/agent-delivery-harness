@@ -248,6 +248,12 @@ Versions `0.1.0` and `0.2.0` were published under Apache-2.0 and stay there:
 those grants are irrevocable, and this license governs every version from the
 next one on.
 
+`FSL-1.1-Apache-2.0` is the identifier the manifests carry, and it is the
+license's original abbreviation; its steward has since renamed it, so the SPDX
+identifier for the text in [`LICENSE`](LICENSE) — the text itself unchanged — is
+`FSL-1.1-ALv2`. A tool that resolves identifiers against the SPDX list will not
+find the manifests' string; the two name the same license.
+
 [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) sit at the repository root, and the
 release sensor above verifies that both files are present in every package
 tarball rather than assuming npm will include them.
