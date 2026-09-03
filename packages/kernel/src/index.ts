@@ -800,6 +800,7 @@ export {
   isRunEventKind,
   isRunInstant,
   reduceToProviderId,
+  runPrimaryTicket,
   validateRunEvent,
   validateRunEventInput,
   type RunActorRole,

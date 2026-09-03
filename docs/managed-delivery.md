@@ -515,6 +515,18 @@ refuses an event claiming to be CLI-written on any kind other than
 adopter whose gate is not a product command reports it as `gate.reported`,
 which never substitutes for the CLI-written completion.
 
+**A run may carry more than one ticket.** A dogfood delivery is the ordinary
+case: one run reads the item being dogfooded and the ordinary item it delivers,
+each with its own posture. So `posture.declared`, `gate.reported`, and
+`pr.opened` each take an optional `ticket` naming which of the run's tickets the
+entry belongs to, of the same shape `ticket.read` uses and held to the same
+exact envelope/payload agreement as every other mirrored member. The run's
+*primary* ticket is the first the journal names, and an entry that omits the
+member binds to it — which is what a single-ticket journal has always meant, so
+nothing requires the member and completeness names it nowhere. `runs show` and
+the page render an entry's own binding on its row and nothing on an unbound one;
+the runs table names the primary once per run.
+
 **Where it lives, and why that is safe.** One journal per run under the
 repository's git common directory, so a run outlives the worktree it ran in.
 That location is readable and writable by anything the owner executes in any

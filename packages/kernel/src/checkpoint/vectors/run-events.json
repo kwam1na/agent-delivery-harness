@@ -299,6 +299,28 @@
               "posture": "test-first"
             }
           }
+        },
+        {
+          "name": "a posture bound to the second of a run's two tickets",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "posture.declared",
+            "actor": {
+              "role": "executor"
+            },
+            "ticket": "V26-1558",
+            "attestation": "self",
+            "payload": {
+              "posture": "characterization-first",
+              "ticket": "V26-1558"
+            }
+          }
         }
       ],
       "reject": [
@@ -323,6 +345,30 @@
             "payload": {
               "posture": "test-first",
               "why": "because"
+            }
+          }
+        },
+        {
+          "name": "a posture whose payload ticket the envelope does not repeat",
+          "codes": [
+            "unsupported_combination"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "posture.declared",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "posture": "test-first",
+              "ticket": "V26-1558"
             }
           }
         }
@@ -817,6 +863,30 @@
               "durationMs": 90000
             }
           }
+        },
+        {
+          "name": "an adopter gate bound to the ticket it gated",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "gate.reported",
+            "actor": {
+              "role": "executor"
+            },
+            "ticket": "V26-1558",
+            "attestation": "self",
+            "payload": {
+              "command": "pr:athena",
+              "outcome": "pass",
+              "durationMs": 90000,
+              "ticket": "V26-1558"
+            }
+          }
         }
       ],
       "reject": [
@@ -869,6 +939,33 @@
               "durationMs": -1
             }
           }
+        },
+        {
+          "name": "a gate report whose ticket leaves the run-id charset",
+          "codes": [
+            "malformed_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "gate.reported",
+            "actor": {
+              "role": "executor"
+            },
+            "ticket": "V26 1558",
+            "attestation": "self",
+            "payload": {
+              "command": "pr:athena",
+              "outcome": "pass",
+              "durationMs": 1,
+              "ticket": "V26 1558"
+            }
+          }
         }
       ]
     },
@@ -895,6 +992,30 @@
               "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "name": "a pull request bound to the ticket it delivers as well as the candidate it carries",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "pr.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "ticket": "V26-1658",
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attestation": "self",
+            "payload": {
+              "url": "https://github.com/owner/repo/pull/75",
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "ticket": "V26-1658"
+            }
           }
         }
       ],
@@ -947,6 +1068,33 @@
               "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "name": "a pull request whose envelope ticket differs from the payload's",
+          "codes": [
+            "unsupported_combination"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-02T10:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "pr.opened",
+            "actor": {
+              "role": "executor"
+            },
+            "ticket": "V26-1558",
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attestation": "self",
+            "payload": {
+              "url": "https://github.com/owner/repo/pull/75",
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "ticket": "V26-1658"
+            }
           }
         }
       ]

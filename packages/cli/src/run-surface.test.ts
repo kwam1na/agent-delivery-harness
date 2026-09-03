@@ -1381,6 +1381,98 @@ describe("runs serve", () => {
   });
 });
 
+/**
+ * A run carrying two tickets — the dogfood item and the ordinary item it
+ * delivered — with a posture, a gate, and a pull request bound to the one each
+ * belongs to. Emitted through the real `emit`, so the store validates every
+ * binding on the way in; read back through both viewers, which must agree.
+ */
+async function twoTicketRun(dir: string): Promise<string> {
+  const runId = await startRun(dir);
+  const steps: readonly (readonly [string, unknown])[] = [
+    ["ticket.read", { ticket: "V26-1558", tracker: "linear" }],
+    ["ticket.read", { ticket: "V26-1658", tracker: "linear" }],
+    ["posture.declared", { posture: "sensor-only", ticket: "V26-1558" }],
+    ["posture.declared", { posture: "characterization-first", ticket: "V26-1658" }],
+    [
+      "lens.selected",
+      { mandated: ["lens.outcome-correctness", "lens.adversarial-testing"], selected: [], rationale: "the shipped pair" },
+    ],
+    ["review.round.opened", { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] }],
+    [
+      "review.round.closed",
+      {
+        round: 1,
+        candidateTreeSha: TREE_SHA,
+        outcome: "aligned",
+        findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+        cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+      },
+    ],
+    ["gate.reported", { command: "npm run check", outcome: "pass", durationMs: 5, ticket: "V26-1658" }],
+    ["pr.opened", { url: "https://example.invalid/pr/1658", candidateTreeSha: TREE_SHA, ticket: "V26-1658" }],
+    ["run.ended", { result: "complete", cost: { unit: "usd", total: 0, reportedBy: "vitest" } }],
+  ];
+  for (const [kind, payload] of steps) {
+    const result = await emit(dir, [kind], payload);
+    expect(result.code, `${kind}: ${result.err}`).toBe(EXIT_OK);
+  }
+  return runId;
+}
+
+describe("a run carrying more than one ticket", () => {
+  it("binds a posture, a gate, and a pull request to the ticket each names, and reads the first as the run's", async () => {
+    const dir = await initRepo();
+    const runId = await twoTicketRun(dir);
+
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    const row = (kind: string, contains: string): string =>
+      shown.out.split("\n").find((line) => line.includes(kind) && line.includes(contains)) ?? "";
+
+    // Each bound entry names its own ticket, and the two postures are told
+    // apart by it rather than by which line came first.
+    expect(row("posture.declared", "sensor-only")).toContain("V26-1558");
+    expect(row("posture.declared", "characterization-first")).toContain("V26-1658");
+    expect(row("gate.reported", "npm run check")).toContain("V26-1658");
+    expect(row("pr.opened", "pr/1658")).toContain("V26-1658");
+
+    // The run's own ticket is the first one it read, whatever the later
+    // entries bind: an entry that omits the member binds to this one.
+    const { page, state } = await pageAndState(await serve([dir]));
+    const run = runOf(state, runId);
+    expect(run.ticket).toBe("V26-1558");
+
+    // The page renders what `runs show` rendered, from the one projection.
+    const detailOfKind = (kind: string, contains: string): string =>
+      run.timeline.find((entry) => entry.kind === kind && entry.detail.includes(contains))?.detail ?? "";
+    expect(detailOfKind("posture.declared", "sensor-only")).toContain("V26-1558");
+    expect(detailOfKind("posture.declared", "characterization-first")).toContain("V26-1658");
+    expect(detailOfKind("gate.reported", "npm run check")).toContain("V26-1658");
+    expect(detailOfKind("pr.opened", "pr/1658")).toContain("V26-1658");
+    expect(page).toContain("V26-1658");
+
+    // And nothing about the bindings makes the journal incomplete: the member
+    // is optional, so this run reads exactly as an unbound one would.
+    expect(run.readout.status).toBe("complete-executor-only");
+  });
+
+  it("leaves an unbound posture, gate report, and pull request rendered exactly as before", async () => {
+    const dir = await initRepo();
+    const runId = await executorOnlyRun(dir);
+    const shown = await cli(dir, ["runs", "show", runId]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    const rowFor = (kind: string): string => shown.out.split("\n").find((line) => line.includes(kind)) ?? "";
+
+    // The rendering an existing journal gets, unchanged: a posture is its
+    // posture, a gate its command and outcome, a pull request its URL and
+    // candidate, with no empty binding appended to any of them.
+    expect(rowFor("posture.declared").trimEnd()).toMatch(/ {2}test-first$/);
+    expect(rowFor("gate.reported").trimEnd()).toMatch(/ {2}npm run check pass in 5ms$/);
+    expect(rowFor("pr.opened").trimEnd()).toMatch(new RegExp(`https://example\\.invalid/pr/1 on ${TREE_SHA}$`));
+  });
+});
+
 describe("the runs serve command", () => {
   it("refuses a joined flag value, an unknown flag, and a missing value", async () => {
     const dir = await initRepo();
