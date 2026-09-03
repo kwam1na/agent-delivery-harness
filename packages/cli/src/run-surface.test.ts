@@ -1910,7 +1910,7 @@ describe("runs serve", () => {
     expect(shownWithout.out).not.toContain("no CLI gate completion in this journal");
   });
 
-  it("gives each run on one page its own completeness block, and the note to the one run it explains", async () => {
+  it("gives each run on one page its own timeline, rounds, notes, repository, and completeness", async () => {
     // Two repositories, both carrying a config, served TOGETHER — which is what
     // the separately-served rows above cannot do: with one run on the page,
     // rendering `runs[0]`'s readout under every heading is indistinguishable
@@ -1919,6 +1919,13 @@ describe("runs serve", () => {
     const finishedRunId = await executorOnlyRun(finished);
     const barelyStarted = await initRepo();
     const barelyStartedRunId = await startRun(barelyStarted);
+    // One refused append, against the barely-started run alone. Notes are the
+    // fourth per-run block, and with NEITHER run carrying one the block is
+    // empty under both headings — which is exactly what a notes table read off
+    // the page's first run also renders. The asymmetry is what makes the block
+    // answerable at all.
+    const refused = await emit(barelyStarted, ["not.a.kind"], { anything: true });
+    expect(refused.code, refused.err).toBe(EXIT_POLICY);
 
     const { page, state } = await pageAndState(await serve([finished, barelyStarted]));
     expect([...state.runs].map((run) => run.runId).sort()).toEqual([finishedRunId, barelyStartedRunId].sort());
@@ -1945,6 +1952,38 @@ describe("runs serve", () => {
     expect(finishedBlock).toContain(`${note}; harness.config.ts present at ${escapedRoot(finished)}`);
     expect(barelyStartedBlock).not.toContain(note);
     expect(runOf(state, barelyStartedRunId).readout.note).toBeUndefined();
+
+    // The other three per-run blocks, and the repository line above them, each
+    // asserted on the block that owns it and denied on the block that does not.
+    // The two journals are deliberately unalike — one carries a gate, a closed
+    // round, and no refusal; the other a single start and one refusal — so a
+    // block rendered from the page's FIRST run reads wrong under one of the two
+    // headings whichever of them happens to be first.
+
+    // Its own timeline. `run.started` opens both journals, so the gate is the
+    // discriminator: only the finished run ever reported one.
+    expect(finishedBlock).toContain("<td>gate.reported</td>");
+    expect(barelyStartedBlock).toContain("<td>run.started</td>");
+    expect(barelyStartedBlock).not.toContain("<td>gate.reported</td>");
+
+    // Its own rounds. The barely-started run opened none, and the table is
+    // omitted entirely rather than rendered empty, so the heading is the
+    // whole assertion.
+    expect(finishedBlock).toContain("<h3>rounds</h3>");
+    expect(barelyStartedBlock).not.toContain("<h3>rounds</h3>");
+
+    // Its own refused appends, on the one run that has any.
+    expect(barelyStartedBlock).toContain("<h3>refused appends</h3>");
+    expect(barelyStartedBlock).toContain("<td>not.a.kind</td>");
+    expect(finishedBlock).not.toContain("<h3>refused appends</h3>");
+
+    // Its own repository path, asserted as the WHOLE paragraph: the page prints
+    // both roots above the first heading, and the finished block names its root
+    // again inside the config-presence note, so a bare containment check would
+    // hold on a block that had been handed the other run's path.
+    expect(finishedBlock).toContain(`<p class="meta">${escapedRoot(finished)}</p>`);
+    expect(barelyStartedBlock).toContain(`<p class="meta">${escapedRoot(barelyStarted)}</p>`);
+    expect(barelyStartedBlock).not.toContain(`<p class="meta">${escapedRoot(finished)}</p>`);
   });
 
   it("distinguishes a round that was never opened, exactly as runs show does", async () => {
