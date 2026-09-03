@@ -717,13 +717,16 @@ describe("a journal that re-ran a command", () => {
    * completion of a command, and until this row nothing said which — every
    * journal above carries at most one completion per command, so `first` and
    * `last` agree on all of them and a binding flipped either way survived the
-   * whole suite. The four journals here are the ones the two readings judge
+   * whole suite. The three journals here are the ones the two readings judge
    * differently: each carries two CLI completions of one command straddling a
    * gate-anchored constraint, so a `first` binding turns a clean verdict dirty
-   * or a dirty one clean on every single one.
+   * or a dirty one clean on every single one. `pr-before-gate` is not among
+   * those constraints — it anchors on the OPENING gate for the reason the row
+   * below states — so these journals separate the binding on
+   * `gate-before-closed-round` and on `record-before-gate`.
    *
    * WHY LAST IS THE READING. A command is re-run to supersede its earlier
-   * outcome, so the completion the three gate-anchored constraints are about
+   * outcome, so the completion the two governing-gate constraints are about
    * is the one the delivery finally stood on — the latest. Under a `first`
    * binding a delivery could gate before its round closed, close the round,
    * re-run the gate, and be judged on the gate it had already abandoned; and a
@@ -770,23 +773,6 @@ describe("a journal that re-ran a command", () => {
     ]);
     expect(evaluateRunJournal(gateRerunAfterRecord, TREE, MANDATED).violations).toEqual(["record-before-gate"]);
 
-    // Gate re-run after the pull request opened: dirty for the same reason,
-    // on the third gate-anchored constraint.
-    const gateRerunAfterPr = journal([
-      started,
-      ticketRead,
-      posture,
-      lenses(),
-      opened(1),
-      closed(1),
-      completed("gate"),
-      prOpened,
-      completed("gate"),
-      completed("record"),
-      ended,
-    ]);
-    expect(evaluateRunJournal(gateRerunAfterPr, TREE, MANDATED).violations).toEqual(["pr-before-gate"]);
-
     // The binding is `cliCompletion`'s, not the gate's: a re-run RECORD binds
     // last too, so a record written before the gate and rewritten after it is
     // clean rather than caught by `record-before-gate`.
@@ -806,5 +792,57 @@ describe("a journal that re-ran a command", () => {
     const rewritten = evaluateRunJournal(recordRerun, TREE, MANDATED);
     expect(rewritten.violations).toEqual([]);
     expect(rewritten.status).toBe("complete");
+  });
+
+  /**
+   * THE ONE GATE-ANCHORED CONSTRAINT THAT DOES NOT FOLLOW THE BINDING.
+   * `pr-before-gate` asks whether the delivery opened its pull request before
+   * it had gated AT ALL, so its anchor is the OPENING gate completion and not
+   * the governing one. Anchored on the governing gate it would fire on the
+   * ordinary review loop this repository itself runs — gate, record, open the
+   * pull request, then a further round and a further gate — where the pull
+   * request precedes the last gate by construction and nothing is out of
+   * order. `run-01c68dea9d1d5fd0`, this repository's own V26-1580 delivery, is
+   * exactly such a journal: it opens its pull request at index 17 and re-gates
+   * at index 26, and it is the journal the binding decision was taken against.
+   */
+  it("anchors pr-before-gate on the opening gate completion, not the governing one", () => {
+    // The shape of the repository's own second-round loop. Clean: the pull
+    // request followed a gate, and the re-gate that followed it is the one the
+    // other two constraints are judged on.
+    const reGatedAfterPr = journal([
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      closed(1),
+      completed("gate"),
+      completed("record"),
+      prOpened,
+      completed("gate"),
+      completed("record"),
+      ended,
+    ]);
+    const looped = evaluateRunJournal(reGatedAfterPr, TREE, MANDATED);
+    expect(looped.violations).toEqual([]);
+    expect(looped.status).toBe("complete");
+
+    // The deny side survives the split: a pull request opened before the
+    // opening gate is still out of order, two gates or one.
+    const prFirst = journal([
+      started,
+      ticketRead,
+      posture,
+      lenses(),
+      opened(1),
+      closed(1),
+      prOpened,
+      completed("gate"),
+      completed("gate"),
+      completed("record"),
+      ended,
+    ]);
+    expect(evaluateRunJournal(prFirst, TREE, MANDATED).violations).toEqual(["pr-before-gate"]);
   });
 });

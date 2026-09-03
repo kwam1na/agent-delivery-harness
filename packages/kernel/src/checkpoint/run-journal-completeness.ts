@@ -163,27 +163,29 @@ function indexBy(events: readonly RunEvent[], kind: RunEventKind): Indexed[] {
 /**
  * A CLI-written completion of one registered command; nothing else counts.
  *
- * THE LAST OF THEM, NOT THE FIRST (settled 2026-09-03 under V26-1709, closing
- * `OC-1570-D1` and `AT-1570-02` from V26-1548's deferral 3). A journal carrying
- * one completion per command — every journal the product had produced when the
- * deferral was filed — reads the same either way, so the binding had to be
- * decided rather than observed. A command is re-run to SUPERSEDE its earlier
- * outcome, so the completion the three gate-anchored constraints below are
- * about (`gate-before-closed-round`, `record-before-gate`, `pr-before-gate`) is
- * the one the delivery finally stood on, which is the latest. Binding the
- * first would judge a delivery on a gate it had already abandoned, and would
- * let a gate re-run AFTER the record was written read as clean because an
- * earlier gate happened to precede it.
+ * WHICH OF THEM, WHERE A COMMAND WAS RUN TWICE (settled 2026-09-03 under
+ * V26-1709, closing `OC-1570-D1` and `AT-1570-02` from V26-1548's deferral 3).
+ * The GOVERNING completion is the LAST — a command is re-run to SUPERSEDE its
+ * earlier outcome, so the completion `gate-before-closed-round` and
+ * `record-before-gate` are about is the one the delivery finally stood on.
+ * Binding the first would judge a delivery on a gate it had already abandoned,
+ * and would let a gate re-run AFTER the record was written read as clean
+ * because an earlier gate happened to precede it. `pick` is what lets the one
+ * constraint that asks a different question ask it: see `prBeforeGate` below.
  *
- * The decision was taken on those grounds rather than on a cited journal:
- * V26-1557's dogfood closed without producing one that re-runs a gate, and no
- * tracked item promised another, so waiting on the evidence would have
- * deferred the reading indefinitely. It is pinned by the four-journal vector in
- * this module's suite, each journal carrying two CLI completions of one command
- * straddling a constraint the two readings judge differently.
+ * The decision was taken against a real journal rather than a synthetic one.
+ * `run-01c68dea9d1d5fd0` in this repository's own run store — the V26-1580
+ * delivery — runs the loop twice: it gates at index 13, records at 14, opens
+ * its pull request at 17, then re-gates at 26 and re-records at 27. Under the
+ * governing-completion reading its gate and record orderings are judged on the
+ * second pass, which is the pass the delivery was recorded from.
  */
-function cliCompletion(events: readonly RunEvent[], command: string): Indexed | undefined {
-  return last(
+function cliCompletion(
+  events: readonly RunEvent[],
+  command: string,
+  pick: (entries: readonly Indexed[]) => Indexed | undefined = last,
+): Indexed | undefined {
+  return pick(
     indexBy(events, "command.completed").filter(
       (entry) => entry.event.actor.role === "cli" && payloadOf(entry.event)["command"] === command,
     ),
@@ -273,6 +275,18 @@ export function evaluateRunJournal(
   const completions = indexBy(events, "command.completed");
   const gateCompletion = cliCompletion(events, "gate");
   const recordCompletion = cliCompletion(events, "record");
+  /**
+   * The gate the pull request had to follow, which is the OPENING one and not
+   * the governing one. `pr-before-gate` asks whether the delivery opened its
+   * pull request before it had gated at all; every other gate-anchored
+   * constraint asks about the gate the delivery finally stood on. Anchored on
+   * the governing gate this would fire on the ordinary review loop — gate,
+   * record, open the pull request, then a further round and a further gate —
+   * where the pull request precedes the last gate by construction and nothing
+   * is out of order, and `run-01c68dea9d1d5fd0` is a journal in this
+   * repository's own store with exactly that shape.
+   */
+  const openingGateCompletion = cliCompletion(events, "gate", first);
 
   /** No `command.completed` at all — an adopter that runs no product command. */
   const executorOnly = completions.length === 0;
@@ -318,7 +332,10 @@ export function evaluateRunJournal(
     const closedFirst = qualifying.some((entry) => entry.closedAt < gateCompletion.at);
     if (!closedFirst) violations.push(VIOLATION.gateBeforeClosedRound);
     if (recordCompletion !== undefined && recordCompletion.at < gateCompletion.at) violations.push(VIOLATION.recordBeforeGate);
-    if (prOpened !== undefined && prOpened.at < gateCompletion.at) violations.push(VIOLATION.prBeforeGate);
+  }
+
+  if (openingGateCompletion !== undefined && prOpened !== undefined && prOpened.at < openingGateCompletion.at) {
+    violations.push(VIOLATION.prBeforeGate);
   }
 
   if (runEnded !== undefined && runEnded.at !== events.length - 1) violations.push(VIOLATION.runEndedNotLast);

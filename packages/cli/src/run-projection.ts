@@ -257,7 +257,9 @@ export interface RunSummary {
  * under V26-1709, for the same reason: a command is re-run to supersede its
  * earlier outcome. The table and the completeness block sit on one row of one
  * page, so a projection reading the first would report the outcome of a gate
- * the delivery abandoned beside a verdict taken on the re-run.
+ * the delivery abandoned beside a verdict taken on the re-run —
+ * `run-01c68dea9d1d5fd0` in this repository's own store is a journal that gates
+ * twice and would read that way.
  */
 const cliCompletionFor = (events: readonly RunEvent[], command: string): RunEvent | undefined =>
   events.findLast(
