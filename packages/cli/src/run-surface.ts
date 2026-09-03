@@ -74,6 +74,29 @@ export async function resolveRunSurface(cwd: string): Promise<RunSurfaceResoluti
 }
 
 /**
+ * The worktree ROOT of a path, for the one thing the run surface needs it for:
+ * the config-presence note names a root, and `runs serve` renders a root the
+ * operator named rather than the one it was invoked in.
+ *
+ * `--show-toplevel` is a plumbing query that reads no index and runs no hook,
+ * alias, or pager, and it runs here with the `GIT_` namespace cleared for the
+ * same reason the store resolution does: a `GIT_DIR` inherited from the
+ * operator's shell must not decide which repository a `--repo` path names.
+ */
+export async function resolveWorktreeRoot(
+  cwd: string,
+): Promise<{ readonly ok: true; readonly root: string } | { readonly ok: false; readonly reason: string }> {
+  const outcome = await runGitDirect({
+    cwd,
+    args: ["rev-parse", "--path-format=absolute", "--show-toplevel"],
+    env: gitNamespaceClearedEnvironment(),
+  });
+  const root = outcome.stdout.trim();
+  if (outcome.code !== 0 || root.length === 0) return { ok: false, reason: `not a git worktree: ${cwd}` };
+  return { ok: true, root };
+}
+
+/**
  * The writing process's own instant, at the contract's second granularity.
  * `at` is never settable through an argument surface: whoever writes the event
  * is whoever is holding the clock.

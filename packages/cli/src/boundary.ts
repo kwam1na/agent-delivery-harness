@@ -165,6 +165,13 @@ export interface ConfigFreeCommandContext {
   readStdin(): Promise<string>;
   /** Emits one line of operator-facing output to stdout. */
   readonly write: (text: string) => void;
+  /**
+   * The invocation's cancellation, for the one config-free command that does
+   * not return on its own. `runs serve` holds a socket open until the operator
+   * ends it; without a signal it serves forever, which is exactly right for a
+   * terminal and useless for a caller that has to get its process back.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface ConfigFreeCommandDescriptor {
@@ -430,6 +437,7 @@ async function runConfigFreeCommand(
       args,
       readStdin: runtime.readStdin ?? (async () => ""),
       write: (text) => runtime.stdout(`${text}\n`),
+      ...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
     });
     if (result.kind === "ok") {
       if (result.summary !== undefined && result.summary !== "") runtime.stdout(`${result.summary}\n`);

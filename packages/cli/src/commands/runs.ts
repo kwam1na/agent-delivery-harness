@@ -1,5 +1,6 @@
 /**
- * `runs` — read the run store back: `runs list` and `runs show <id>`.
+ * `runs` — read the run store back: `runs list`, `runs show <id>`, and
+ * `runs serve`, the local page over the same files.
  *
  * THE VIEWER IS NOT A JUDGE. Everything rendered here is self-attested: an
  * executor wrote most of it, and the executor could have written anything.
@@ -17,27 +18,22 @@
  */
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { evaluateRunJournal } from "@agent-delivery-harness/kernel";
 import {
-  RUN_JOURNAL_REQUIRED_ENTRIES,
-  evaluateRunJournal,
-  runJournalCarries,
-  type RunEvent,
-  type RunJournalEvaluation,
-} from "@agent-delivery-harness/kernel";
-import {
-  harnessConfigPresentAt,
-  oneLine,
-  oneLineOf,
-  resolveRunSurface,
-  runSurfaceBlocker,
-  type RunSurface,
-} from "../run-surface.ts";
+  READOUT_LABELS,
+  detailOf,
+  readoutRows,
+  roundRows,
+} from "../run-projection.ts";
+import { startRunServer, type RunServerHandle } from "../run-server.ts";
+import { oneLine, oneLineOf, resolveRunSurface, runSurfaceBlocker, type RunSurface } from "../run-surface.ts";
 import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescriptor } from "../boundary.ts";
 
-const USAGE = "Usage: delivery-harness runs <list|show> [<run-id>]";
-
-/** The three labels every readout carries, so no reader mistakes this for evidence. */
-const READOUT_LABELS = "self-attested; observability, not evidence; unbound to a record";
+const USAGE = [
+  "Usage: delivery-harness runs list",
+  "       delivery-harness runs show <run-id>",
+  "       delivery-harness runs serve [--repo <path>]... [--port <n>]",
+].join("\n");
 
 const unresolvable = (reason: string): CommandResult => ({
   kind: "blocked",
@@ -57,17 +53,21 @@ const unresolvable = (reason: string): CommandResult => ({
 export const runsCommand: ConfigFreeCommandDescriptor = {
   name: "runs",
   sourceId: "delivery-harness.cli.runs",
-  summary: "List and show the delivery runs this repository has recorded.",
+  summary: "List, show, and serve the delivery runs this repository has recorded.",
   configFree: true,
   async run(context: ConfigFreeCommandContext): Promise<CommandResult> {
     const [subcommand, ...rest] = context.args;
     if (subcommand === undefined) return { kind: "usage", message: `runs needs a subcommand.\n${USAGE}` };
-    if (subcommand !== "list" && subcommand !== "show") {
+    if (subcommand !== "list" && subcommand !== "show" && subcommand !== "serve") {
       return { kind: "usage", message: `Unknown runs subcommand ${oneLine(subcommand, 64)}.\n${USAGE}` };
     }
     if (subcommand === "show" && rest[0] === undefined) {
       return { kind: "usage", message: `runs show needs a run id.\n${USAGE}` };
     }
+    // `serve` resolves its OWN repositories — one per `--repo`, none of them
+    // necessarily the invoking worktree — so it never asks the invoking
+    // worktree's store to resolve first.
+    if (subcommand === "serve") return serveRuns(context, rest);
 
     const resolved = await resolveRunSurface(context.rootDir);
     if (!resolved.ok) return unresolvable(resolved.reason);
@@ -120,98 +120,6 @@ async function listRuns(surface: RunSurface, context: ConfigFreeCommandContext):
 }
 
 // ── show ─────────────────────────────────────────────────────────────────────
-
-const payloadOf = (event: RunEvent): Record<string, unknown> =>
-  typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
-
-/**
- * One row's detail for one event: enough to read the run without printing the
- * whole payload back at the operator.
- */
-function detailOf(event: RunEvent): string {
-  const payload = payloadOf(event);
-  switch (event.kind) {
-    case "run.started":
-      return oneLineOf(payload["host"]) + (payload["displacedRunId"] === undefined ? "" : ` displaced ${oneLineOf(payload["displacedRunId"])}`);
-    case "run.ended":
-      return `${oneLineOf(payload["result"])} cost ${oneLineOf((payload["cost"] as { total?: unknown } | undefined)?.total)}`;
-    case "ticket.read":
-      return `${oneLineOf(payload["ticket"])} via ${oneLineOf(payload["tracker"])}`;
-    case "posture.declared":
-      return oneLineOf(payload["posture"]);
-    case "lens.selected":
-      return `mandated ${oneLineOf(payload["mandated"])} selected ${oneLineOf(payload["selected"])} — ${oneLineOf(payload["rationale"])}`;
-    case "review.round.opened":
-      return `round ${oneLineOf(payload["round"])} on ${oneLineOf(event.candidateTreeSha)} lenses ${oneLineOf(payload["lenses"])}`;
-    case "review.round.closed":
-      return `round ${oneLineOf(payload["round"])} ${oneLineOf(payload["outcome"])} findings ${oneLineOf(payload["findings"])}`;
-    case "command.completed":
-      return `${oneLineOf(payload["command"])} ${oneLineOf(payload["outcome"])} in ${oneLineOf(payload["durationMs"])}ms`;
-    case "gate.reported":
-      return `${oneLineOf(payload["command"])} ${oneLineOf(payload["outcome"])} in ${oneLineOf(payload["durationMs"])}ms`;
-    case "pr.opened":
-      return `${oneLineOf(payload["url"], 400)} on ${oneLineOf(event.candidateTreeSha)}`;
-    case "blocker.recorded":
-      return `${oneLineOf(payload["code"])} — ${oneLineOf(payload["summary"])}`;
-    case "decision.recorded":
-      return `${oneLineOf(payload["fork"])} — ${oneLineOf(payload["choice"])}${payload["cited"] === undefined ? "" : ` (cited ${oneLineOf(payload["cited"])})`}`;
-    case "compounding.recorded":
-      return `${oneLineOf(payload["outcome"])}${payload["reference"] === undefined ? "" : ` — ${oneLineOf(payload["reference"])}`}`;
-    default:
-      return "";
-  }
-}
-
-/** One row per round, each carrying the candidate it was bound to. */
-function roundRows(events: readonly RunEvent[]): readonly string[] {
-  const rounds = new Map<string, { opened?: RunEvent; closed?: RunEvent }>();
-  for (const event of events) {
-    if (event.kind !== "review.round.opened" && event.kind !== "review.round.closed") continue;
-    const key = oneLineOf(payloadOf(event)["round"], 32);
-    const entry = rounds.get(key) ?? {};
-    if (event.kind === "review.round.opened") entry.opened = event;
-    else entry.closed = event;
-    rounds.set(key, entry);
-  }
-  return [...rounds.entries()].map(([round, entry]) => {
-    const anchor = entry.opened ?? entry.closed;
-    const closed = entry.closed === undefined ? undefined : payloadOf(entry.closed);
-    return [
-      `  round ${round}`,
-      `candidate ${oneLineOf(anchor?.candidateTreeSha) || "(none)"}`,
-      entry.opened === undefined ? "never opened" : `lenses ${oneLineOf(payloadOf(entry.opened)["lenses"])}`,
-      closed === undefined ? "open" : `${oneLineOf(closed["outcome"])} findings ${oneLineOf(closed["findings"])} cost ${oneLineOf((closed["cost"] as { total?: unknown } | undefined)?.total)}`,
-    ].join("  ");
-  });
-}
-
-/**
- * The readout. Labeled three ways, listing what the journal has and what it
- * lacks under the ordered rule, with the config-presence note attached to the
- * one status it explains.
- */
-function readoutRows(events: readonly RunEvent[], evaluation: RunJournalEvaluation, rootDir: string): readonly string[] {
-  // Present is read off the journal, not inferred by subtracting `missing`
-  // from the required list. The two are not complements: `gate.reported` is
-  // required only of an executor-only journal, so a journal that never carried
-  // one would otherwise be reported as HAVING it.
-  //
-  // The predicate is the evaluator's own, imported rather than restated. A
-  // second implementation here would be a second answer to the same question,
-  // and a reader would eventually be told an entry is both present and
-  // missing — which is exactly what a rewritten copy of the pairing rule did.
-  const present = RUN_JOURNAL_REQUIRED_ENTRIES.filter((entry) => runJournalCarries(events, entry));
-  const rows = [
-    `  completeness: ${evaluation.status}  (${READOUT_LABELS})`,
-    `    present: ${present.length === 0 ? "(none)" : present.join(", ")}`,
-    `    missing: ${evaluation.missing.length === 0 ? "(none)" : [...evaluation.missing].join(", ")}`,
-  ];
-  if (evaluation.violations.length > 0) rows.push(`    violations: ${[...evaluation.violations].join(", ")}`);
-  if (evaluation.status === "complete-executor-only" && harnessConfigPresentAt(rootDir)) {
-    rows.push(`    note: no CLI gate completion in this journal; harness.config.ts present at ${oneLine(rootDir, 400)}`);
-  }
-  return rows;
-}
 
 async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, runId: string): Promise<CommandResult> {
   const read = await surface.store.read(runId);
@@ -267,4 +175,81 @@ async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, r
   // pretending otherwise would turn an observation into a claim.
   for (const row of readoutRows(events, evaluateRunJournal(events), context.rootDir)) context.write(row);
   return { kind: "ok" };
+}
+
+// ── serve ────────────────────────────────────────────────────────────────────
+
+interface ServeArgs {
+  readonly repos: readonly string[];
+  readonly port?: number;
+}
+
+type ServeParse = { readonly ok: true; readonly args: ServeArgs } | { readonly ok: false; readonly message: string };
+
+/**
+ * The separate-argument form every other command uses. `--flag=value` is
+ * REFUSED rather than accepted as a convenience: one spelling means an
+ * operator who mistypes a path gets a usage error instead of a server quietly
+ * watching a repository named `--repo=/some/path`.
+ */
+function parseServeArgs(args: readonly string[], rootDir: string): ServeParse {
+  const repos: string[] = [];
+  let port: number | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === "--repo" || token === "--port") {
+      const value = args[index + 1];
+      if (value === undefined) return { ok: false, message: `${token} needs a value.\n${USAGE}` };
+      index += 1;
+      if (token === "--repo") {
+        repos.push(path.resolve(rootDir, value));
+        continue;
+      }
+      if (!/^\d{1,5}$/.test(value)) return { ok: false, message: `--port needs a port number.\n${USAGE}` };
+      const parsed = Number(value);
+      if (parsed > 65535) return { ok: false, message: `--port needs a port number.\n${USAGE}` };
+      port = parsed;
+      continue;
+    }
+    if (token.startsWith("--")) return { ok: false, message: `Unknown flag ${oneLine(token, 64)}.\n${USAGE}` };
+    return { ok: false, message: `runs serve takes no positional arguments.\n${USAGE}` };
+  }
+
+  // No `--repo` means the worktree the operator is standing in, which is the
+  // only repository they can have meant.
+  return { ok: true, args: { repos: repos.length === 0 ? [rootDir] : repos, ...(port === undefined ? {} : { port }) } };
+}
+
+/**
+ * Serves until the invocation is signalled.
+ *
+ * There is no other exit. A viewer's job is to be there while the operator
+ * watches, and the operator ends it with the interrupt the boundary already
+ * maps; a run ending is not a reason to stop serving, because the next run
+ * starts in the same store.
+ */
+async function serveRuns(context: ConfigFreeCommandContext, args: readonly string[]): Promise<CommandResult> {
+  const parsed = parseServeArgs(args, context.rootDir);
+  if (!parsed.ok) return { kind: "usage", message: parsed.message };
+
+  const started = await startRunServer({ repos: parsed.args.repos, ...(parsed.args.port === undefined ? {} : { port: parsed.args.port }) });
+  if (!started.ok) return unresolvable(started.reason);
+
+  const server: RunServerHandle = started.server;
+  context.write(`serving ${parsed.args.repos.length} repository path(s) at ${server.url}`);
+  context.write(`  (${READOUT_LABELS})`);
+  try {
+    await untilSignalled(context.signal);
+  } finally {
+    await server.close();
+  }
+  return { kind: "ok" };
+}
+
+/** Resolves when the invocation's signal aborts; never, when it has none. */
+function untilSignalled(signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) return new Promise<void>(() => {});
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
 }

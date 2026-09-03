@@ -99,7 +99,9 @@ cannot drift from the tool.
   update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark), and
   the config-free run-surface pair `emit` and `runs` — `emit` appends one
   `run-event/1` event to the current delivery run's journal, `runs list` and
-  `runs show` render that journal back. The seven candidate-facing commands
+  `runs show` render that journal back, and `runs serve` puts the same
+  projection on a script-free loopback page over one or more `--repo` paths,
+  refreshing itself only while a run is live. The seven candidate-facing commands
   append their own `command.completed` automatically whenever a run is current
   for the invoking worktree. The run journal is self-attested observability
   that no admission, gate, or record decision reads; see
