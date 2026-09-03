@@ -78,6 +78,10 @@ export type RunAllocateResult =
   | { readonly ok: true; readonly runId: string }
   | { readonly ok: false; readonly rejections: readonly RunStoreRejection[] };
 
+export type RunDiscardResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly rejections: readonly RunStoreRejection[] };
+
 export type RunCurrentResult =
   | { readonly ok: true; readonly runId: string | undefined }
   | { readonly ok: false; readonly rejections: readonly RunStoreRejection[] };
@@ -96,6 +100,22 @@ export interface RunStore {
   /** `<common-dir>/managed-delivery/runs`. */
   readonly runsDir: string;
   allocate(): Promise<RunAllocateResult>;
+  /**
+   * Takes back a journal `allocate` created for a run that never began.
+   *
+   * THE ALLOCATOR'S INVERSE, AND ONLY THAT. `allocate` creates the journal
+   * before the two things that can still refuse a start — the `run.started`
+   * append and the exclusive pointer write — so a refusal after allocation
+   * leaves a journal nothing points at and nothing will ever append to, which
+   * `list` then shows beside genuine runs and a retry produces one more of.
+   *
+   * A journal carrying anything but its own `run.started` is a run with
+   * history, and history in an append-only store is not the allocator's to
+   * delete: both a second event and a lone event that is not a start are
+   * refused. That is the whole guard. A pointer check beside it would make
+   * neither clause provable on its own.
+   */
+  discard(runId: string): Promise<RunDiscardResult>;
   append(runId: string, event: RunEventInput): Promise<RunAppendResult>;
   /**
    * Records one bounded line for an append a CALLER refused before it reached
@@ -278,6 +298,43 @@ export function createRunStore(commonDir: string): RunStore {
         }
       }
       return { ok: false, rejections: reject("access_refused", "", "no unused run id was available after eight attempts") };
+    },
+
+    async discard(runId) {
+      const journalPath = journalPathFor(runId);
+      if (journalPath === undefined) {
+        return { ok: false, rejections: reject("malformed_member", "/runId", "the run id is not admissible to this store") };
+      }
+      const read = await this.read(runId);
+      if (!read.ok) return { ok: false, rejections: read.rejections };
+      const [first, ...rest] = read.events;
+      if (rest.length > 0) {
+        return {
+          ok: false,
+          rejections: reject("invalid_transition", "/seq", "this run carries history beyond its start; a journal with history is never discarded"),
+        };
+      }
+      if (first !== undefined && first.kind !== "run.started") {
+        return {
+          ok: false,
+          rejections: reject("invalid_transition", "/kind", `this journal's one event is ${first.kind}, not the start it was allocated for; it is never discarded`),
+        };
+      }
+      try {
+        await unlink(journalPath);
+      } catch (error) {
+        return {
+          ok: false,
+          rejections: reject("access_refused", "", `the run journal could not be removed: ${(error as NodeJS.ErrnoException).code ?? "unknown"}`),
+        };
+      }
+      // The notes entry goes with the journal. A note is a line IN a run's
+      // record, so one left behind would be `readNotes` answering for an id
+      // `list` has never heard of — the same thing the store refuses to create
+      // for an unresolvable run.
+      const notePath = notePathFor(runId);
+      if (notePath !== undefined) await unlink(notePath).catch(() => undefined);
+      return { ok: true };
     },
 
     async append(runId, event) {

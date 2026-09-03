@@ -841,6 +841,7 @@ export {
   type RunAllocateResult,
   type RunAppendResult,
   type RunCurrentResult,
+  type RunDiscardResult,
   type RunMatch,
   type RunReadResult,
   type RunSetCurrentResult,

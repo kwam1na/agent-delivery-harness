@@ -520,6 +520,78 @@ describe("the per-worktree current-run pointer", () => {
   });
 });
 
+describe("taking back a journal that never became a run", () => {
+  it("removes an allocated journal that holds nothing, and one that holds only its own start", async () => {
+    for (const started of [false, true]) {
+      const { store, runsDir } = freshStore();
+      const runId = await allocated(store);
+      if (started) expect((await store.append(runId, startedFor(runId))).ok).toBe(true);
+      expect(await store.list()).toEqual([runId]);
+
+      const discarded = await store.discard(runId);
+      expect(discarded.ok, JSON.stringify(discarded)).toBe(true);
+      // Gone from the store's own answer to "which runs exist?", and gone from
+      // the directory: a journal `list` no longer names but a reader can still
+      // open is the same orphan under another name.
+      expect(await store.list()).toEqual([]);
+      expect(existsSync(path.join(runsDir, `${runId}.jsonl`))).toBe(false);
+      expect((await store.read(runId)).ok).toBe(false);
+    }
+  });
+
+  it("takes the run's notes entry with the journal", async () => {
+    const { store, runsDir } = freshStore();
+    const runId = await allocated(store);
+    // The refusal an `emit run.started` with a malformed payload produces: the
+    // journal exists, the append is refused, and the store notes it.
+    const refused = await store.append(runId, event(runId, "run.started", { host: "x" }));
+    expect(refused.ok).toBe(false);
+    expect((await store.readNotes(runId)).length).toBe(1);
+
+    expect((await store.discard(runId)).ok).toBe(true);
+    expect(await store.readNotes(runId)).toEqual([]);
+    expect(existsSync(path.join(runsDir, "notes", `${runId}.jsonl`))).toBe(false);
+  });
+
+  it("refuses a journal that carries history beyond its start", async () => {
+    const { store, runsDir } = freshStore();
+    const runId = await allocated(store);
+    expect((await store.append(runId, startedFor(runId))).ok).toBe(true);
+    expect((await store.append(runId, roundOpened(runId))).ok).toBe(true);
+
+    const refused = await store.discard(runId);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.rejections[0]?.code).toBe("invalid_transition");
+    expect(await store.list()).toEqual([runId]);
+    expect(existsSync(path.join(runsDir, `${runId}.jsonl`))).toBe(true);
+  });
+
+  it("refuses a journal whose only event is not the start it was allocated for", async () => {
+    const { store } = freshStore();
+    const runId = await allocated(store);
+    // Reachable through `emit <kind> --run <id>` against a journal whose start
+    // was refused: the first durable line of a journal need not be a start.
+    expect((await store.append(runId, event(runId, "posture.declared", { posture: "test-first" }))).ok).toBe(true);
+
+    const refused = await store.discard(runId);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.rejections[0]?.code).toBe("invalid_transition");
+    expect(await store.list()).toEqual([runId]);
+  });
+
+  it("refuses an inadmissible id and an id it has no journal for, creating nothing", async () => {
+    const { store, runsDir } = freshStore();
+    const escaping = await store.discard("../elsewhere");
+    expect(escaping.ok).toBe(false);
+    if (!escaping.ok) expect(escaping.rejections[0]?.code).toBe("malformed_member");
+
+    const absent = await store.discard("run-never-allocated");
+    expect(absent.ok).toBe(false);
+    if (!absent.ok) expect(absent.rejections[0]?.code).toBe("unresolvable_run");
+    expect(existsSync(runsDir)).toBe(false);
+  });
+});
+
 describe("listing and candidate lookup", () => {
   it("lists run ids in ascending order and ignores the notes and current subdirectories", async () => {
     const { store, runsDir } = freshStore();

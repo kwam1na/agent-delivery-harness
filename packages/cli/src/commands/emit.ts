@@ -234,6 +234,14 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
  * journal behind. `--force` carries the displaced run's id into the new run's
  * own `run.started` payload, which is what makes a restarted delivery legible
  * afterwards.
+ *
+ * THE TWO REFUSALS THAT COME AFTER ALLOCATION are the append and the exclusive
+ * pointer write, and each takes the journal back through `discard`. Without
+ * that, a payload the store refuses leaves an empty journal per retry, and the
+ * loser of a pointer race leaves a journal carrying a real `run.started` —
+ * both of which `runs list` shows as open runs an operator cannot tell from an
+ * abandoned delivery. The removal is best-effort by construction: this command
+ * has already decided to refuse, and a store failure may not change that.
  */
 async function startRun(surface: RunSurface, force: boolean, supplied: unknown): Promise<CommandResult> {
   const store = surface.store;
@@ -283,6 +291,7 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
   );
   if (!appended.ok) {
     const first = appended.rejections[0];
+    await store.discard(runId);
     return {
       kind: "blocked",
       blockers: [
@@ -317,6 +326,7 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
     }
   }
   if (!pointed.ok) {
+    await store.discard(runId);
     return {
       kind: "blocked",
       blockers: [
