@@ -375,24 +375,51 @@ export function cliProbeVacuityFinding(probe: {
 }
 
 /**
- * A child environment with the whole `GIT_` namespace dropped. An inherited
- * `GIT_DIR` or `GIT_COMMON_DIR` would relocate both the scratch `git init` and
- * the store the run-surface cases resolve into whatever repository the
- * developer was standing in — the sensor would then write its journal and its
- * note into a real store and assert over someone else's. Dropped wholesale
- * rather than by curated list, for the same reason the product drops it that
- * way: missing one leaves a store that looks perfectly healthy and belongs to
- * the wrong repository.
- *
- * This is the sensor's own hygiene, not its evidence: the installed CLI clears
- * the namespace too, so a case spawned from here can never tell which clearing
- * saved it. What makes the product's clearing falsifiable is the one case that
- * opts out of this environment through `relocatedGitEnvironment` below.
+ * The product's own name for the variable that roots a run store somewhere
+ * other than the repository's git common directory. Spelled here rather than
+ * imported, because this sensor imports nothing from the workspace it is
+ * checking; the fast suite pins the two spellings against each other so a
+ * rename on the product side cannot leave this dropping a variable nobody
+ * reads.
  */
-export function gitNamespaceCleared(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export const RUN_STORE_OVERRIDE = "DELIVERY_HARNESS_RUN_STORE";
+
+/**
+ * The environment every child of this sensor is spawned with: the invoking one
+ * with the whole `GIT_` namespace and the run-store override dropped. Both are
+ * ways the invoking developer's environment can move what this sensor asserts
+ * over out from under it, and both are the sensor's own hygiene rather than any
+ * part of its evidence.
+ *
+ * `GIT_`, because an inherited `GIT_DIR` or `GIT_COMMON_DIR` would relocate
+ * both the scratch `git init` and the store the run-surface cases resolve into
+ * whatever repository the developer was standing in — the sensor would then
+ * write its journal and its note into a real store and assert over someone
+ * else's. Dropped wholesale rather than by curated list, for the same reason
+ * the product drops it that way: missing one leaves a store that looks
+ * perfectly healthy and belongs to the wrong repository.
+ *
+ * The override, because it does the same thing one level up and does it to an
+ * environment a reviewer is TOLD to have: `docs/managed-delivery.md` instructs
+ * anyone exercising `emit` end to end to export it. Carried into a child, the
+ * run-surface cases write under the override instead of under the scratch
+ * repository's git directory, `readScratchRunStore` finds no directory there,
+ * and the sensor reports the cases wrote nothing — a finding about the sensor's
+ * own environment, told as a finding about the product. Dropped, the children
+ * resolve the store exactly where an installed consumer's would, which is the
+ * behaviour these cases exist to exercise and the only place this sensor
+ * asserts.
+ *
+ * The `GIT_` half is not evidence for a second reason too: the installed CLI
+ * clears that namespace itself, so a case spawned from here can never tell
+ * which clearing saved it. What makes the product's clearing falsifiable is the
+ * one case that opts out of this environment through `relocatedGitEnvironment`
+ * below.
+ */
+export function childEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const cleared: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
-    if (name.startsWith("GIT_") || value === undefined) continue;
+    if (name.startsWith("GIT_") || name === RUN_STORE_OVERRIDE || value === undefined) continue;
     cleared[name] = value;
   }
   return cleared;
@@ -676,7 +703,7 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       if (pkg.name === CLI_PACKAGE_NAME) {
         cliPackageProbed = true;
         const entry = path.join(installDir, "node_modules", pkg.name, "src", "main.ts");
-        const childEnv = gitNamespaceCleared();
+        const childEnv = childEnvironment();
 
         // A repository of its own, because the run surface has to have one: the
         // store is the invoking repository's, and there is no repository above
