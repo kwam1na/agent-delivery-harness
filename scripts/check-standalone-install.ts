@@ -121,8 +121,8 @@ export const CLI_PACKAGE_NAME = `${PACKAGE_SCOPE}/cli`;
  * listing is asserted a second time against the id the allocation itself
  * reported — the one string a stubbed listing cannot produce. That id is not
  * knowable when this list is written, so the case asks for it with
- * `expectsAllocatedRunId` and the runner supplies what the `run.started` case
- * printed.
+ * `ALLOCATED_RUN_ID_EXPECTATION` and the runner supplies what the `run.started`
+ * case printed.
  *
  * THE SENSOR WITNESSES THE `GIT_` CLEARING RATHER THAN PRE-EMPTING IT. Every
  * case below is spawned with the `GIT_` namespace already dropped, and the
@@ -147,24 +147,48 @@ export const CLI_PACKAGE_NAME = `${PACKAGE_SCOPE}/cli`;
  * because this sensor spawns every child with stdin ignored, and that is what
  * `emit` reads when `--json` is absent.
  */
+/**
+ * What a case asking for the allocated id names as missing when no case ever
+ * reported one — so the finding says the allocation went unwitnessed rather
+ * than passing for want of anything to look for.
+ */
+export const ALLOCATED_RUN_ID_NEEDLE = "the run id `emit run.started` reported";
+
+/**
+ * THE NEEDLE NO CASE LIST CAN SPELL: the id `emit run.started` allocates at run
+ * time, asked for by identity rather than by text.
+ *
+ * A symbol rather than a placeholder string, because the runner reaches these
+ * needles through ONE line the fast suite cannot see, and a line nothing can
+ * falsify is a line nobody checks: collapsing that line back to
+ * `smoke.expected.filter((needle) => !output.includes(needle))` — its
+ * pre-delivery form — silently stopped asserting the id at all, with the fast
+ * suite and the sensor both green. Over `SmokeNeedle` that collapse no longer
+ * typechecks, so `npm run check`'s typecheck leg refuses it, and
+ * `missingExpectations` below is the only way to a matchable needle.
+ */
+export const ALLOCATED_RUN_ID_EXPECTATION: unique symbol = Symbol(ALLOCATED_RUN_ID_NEEDLE);
+
+/** A substring the output must carry, or the run id only the runner can supply. */
+export type SmokeNeedle = string | typeof ALLOCATED_RUN_ID_EXPECTATION;
+
 export interface CliSmokeCase {
   /** The argument vector, after the installed `src/main.ts`. */
   readonly args: readonly string[];
   /** The exit code the installed entry must return: 0 ok, 1 policy, 2 usage. */
   readonly exitCode: number;
-  /** Substrings the case's combined stdout and stderr must carry. */
-  readonly expected: readonly string[];
+  /**
+   * What the case's combined stdout and stderr must carry: substrings, plus
+   * `ALLOCATED_RUN_ID_EXPECTATION` where the case asserts the run id the
+   * `emit run.started` case reported. Resolve with `missingExpectations`.
+   */
+  readonly expected: readonly SmokeNeedle[];
   /**
    * What this case proves, where its argument vector does not say it. Two cases
    * share the vector `runs list`, so a finding that named only the vector would
    * not say which of them failed.
    */
   readonly proves?: string;
-  /**
-   * The output must also carry the run id the `emit run.started` case reported.
-   * The id is allocated at run time, so it cannot be written into `expected`.
-   */
-  readonly expectsAllocatedRunId?: boolean;
   /**
    * Spawn this case with `GIT_DIR` and `GIT_COMMON_DIR` pointed at a second
    * repository, rather than with the `GIT_` namespace cleared.
@@ -208,8 +232,7 @@ export const CLI_SMOKE_CASES: readonly CliSmokeCase[] = [
     args: ["runs", "list"],
     proves: "non-empty, naming the run just allocated",
     exitCode: 0,
-    expected: ["runs in ", "across 1 run(s)", "open current"],
-    expectsAllocatedRunId: true,
+    expected: ["runs in ", "across 1 run(s)", "open current", ALLOCATED_RUN_ID_EXPECTATION],
   },
   {
     args: ["emit", UNKNOWN_KIND, "--json", "{}"],
@@ -224,8 +247,7 @@ export const CLI_SMOKE_CASES: readonly CliSmokeCase[] = [
     args: ["emit", "run.started", "--json", RUN_STARTED_PAYLOAD],
     proves: "refused for the scratch repository's run under a relocated GIT_ namespace",
     exitCode: 1,
-    expected: ["run_already_current", "A run is already current for this worktree."],
-    expectsAllocatedRunId: true,
+    expected: ["run_already_current", "A run is already current for this worktree.", ALLOCATED_RUN_ID_EXPECTATION],
     underRelocatedGit: true,
   },
 ];
@@ -245,23 +267,20 @@ export function allocatedRunIdFrom(output: string): string | undefined {
 }
 
 /**
- * What a case asking for the allocated id names as missing when no case ever
- * reported one — so the finding says the allocation went unwitnessed rather
- * than passing for want of anything to look for.
+ * The needles a case asked for that its output did not carry.
+ *
+ * The only place `expected` becomes matchable text: every
+ * `ALLOCATED_RUN_ID_EXPECTATION` resolves to what the allocation reported, or,
+ * where no case reported one, to the phrase that says so.
  */
-export const ALLOCATED_RUN_ID_NEEDLE = "the run id `emit run.started` reported";
-
-/** The needles a case asked for that its output did not carry. */
 export function missingExpectations(
   smoke: CliSmokeCase,
   output: string,
   allocatedRunId: string | undefined,
 ): readonly string[] {
-  const needles =
-    smoke.expectsAllocatedRunId === true
-      ? [...smoke.expected, allocatedRunId ?? ALLOCATED_RUN_ID_NEEDLE]
-      : smoke.expected;
-  return needles.filter((needle) => !output.includes(needle));
+  return smoke.expected
+    .map((needle) => (needle === ALLOCATED_RUN_ID_EXPECTATION ? (allocatedRunId ?? ALLOCATED_RUN_ID_NEEDLE) : needle))
+    .filter((needle) => !output.includes(needle));
 }
 
 /**

@@ -27,6 +27,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { CliSmokeCase } from "./check-standalone-install.ts";
 import {
+  ALLOCATED_RUN_ID_EXPECTATION,
   ALLOCATED_RUN_ID_NEEDLE,
   CLI_PACKAGE_NAME,
   CLI_SMOKE_CASES,
@@ -132,7 +133,7 @@ describe("CLI_SMOKE_CASES", () => {
     for (const smoke of CLI_SMOKE_CASES) {
       expect(smoke.args.length).toBeGreaterThan(0);
       expect(smoke.expected.length).toBeGreaterThan(0);
-      expect(smoke.expected.every((needle) => needle.trim() !== "")).toBe(true);
+      expect(smoke.expected.every((needle) => typeof needle !== "string" || needle.trim() !== "")).toBe(true);
     }
   });
 
@@ -157,7 +158,7 @@ describe("CLI_SMOKE_CASES", () => {
   // which is the one thing a stubbed listing cannot produce.
   it("asserts the listing non-empty, naming the run the allocation reported", () => {
     const listing = CLI_SMOKE_CASES.filter(
-      (smoke) => smoke.args.join(" ") === "runs list" && smoke.expectsAllocatedRunId === true,
+      (smoke) => smoke.args.join(" ") === "runs list" && smoke.expected.includes(ALLOCATED_RUN_ID_EXPECTATION),
     );
     expect(listing).toHaveLength(1);
     expect(listing[0]!.expected).toContain("across 1 run(s)");
@@ -175,8 +176,23 @@ describe("CLI_SMOKE_CASES", () => {
     const relocated = CLI_SMOKE_CASES.filter((smoke) => smoke.underRelocatedGit === true);
     expect(relocated).toHaveLength(1);
     expect(relocated[0]!.exitCode).toBe(1);
-    expect(relocated[0]!.expectsAllocatedRunId).toBe(true);
+    expect(relocated[0]!.expected).toContain(ALLOCATED_RUN_ID_EXPECTATION);
     expect(caseLabel(relocated[0]!)).toContain("GIT_");
+  });
+
+  // AT-1 (P1, round 2). The runner reaches these needles through one line the
+  // fast suite cannot see, and reverting that line to a plain
+  // `smoke.expected.filter(...)` left every check green while the allocated id
+  // stopped being asserted at all. A case therefore asks for that id with a
+  // needle that is NOT a string, so the collapsed filter no longer typechecks
+  // and `npm run check`'s typecheck leg refuses it. This row is what fails if
+  // the needle is spelled as a string again.
+  it("asks for the allocated id with a needle no substring filter can consume", () => {
+    const dynamic = CLI_SMOKE_CASES.filter((smoke) => smoke.expected.some((needle) => typeof needle !== "string"));
+    expect(dynamic.map((smoke) => smoke.proves)).toEqual([
+      "non-empty, naming the run just allocated",
+      "refused for the scratch repository's run under a relocated GIT_ namespace",
+    ]);
   });
 
   // Two cases share the argument vector `runs list`, so the vector alone can no
@@ -220,19 +236,19 @@ describe("missingExpectations", () => {
   });
 
   it("reports the allocated id as missing when the output does not name it", () => {
-    const smoke = { ...listing, expectsAllocatedRunId: true } as const;
+    const smoke = { ...listing, expected: [...listing.expected, ALLOCATED_RUN_ID_EXPECTATION] } as const;
     expect(missingExpectations(smoke, "across 1 run(s)", "run-0123456789abcdef")).toEqual(["run-0123456789abcdef"]);
   });
 
   it("is satisfied when the output carries both the static needles and the id", () => {
-    const smoke = { ...listing, expectsAllocatedRunId: true } as const;
+    const smoke = { ...listing, expected: [...listing.expected, ALLOCATED_RUN_ID_EXPECTATION] } as const;
     expect(missingExpectations(smoke, "across 1 run(s)  run-0123456789abcdef", "run-0123456789abcdef")).toEqual([]);
   });
 
   // A run that allocated nothing must fail this case by name rather than pass
   // it vacuously for want of anything to look for.
   it("names the absent allocation when no id was ever reported", () => {
-    const smoke = { ...listing, expectsAllocatedRunId: true } as const;
+    const smoke = { ...listing, expected: [...listing.expected, ALLOCATED_RUN_ID_EXPECTATION] } as const;
     expect(missingExpectations(smoke, "across 1 run(s)", undefined)).toEqual([ALLOCATED_RUN_ID_NEEDLE]);
   });
 
