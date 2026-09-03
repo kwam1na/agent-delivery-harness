@@ -134,8 +134,12 @@ publishes no evidence record, so a record with an untracked deferral behind it
 is not something `record` has to detect: there is no accepted review evidence
 for the obligation at all, and `record` refuses for want of it. The CLI suite
 proves the whole path — missing reference, `TODO`, and a lowercase slug each
-refused at submission, no record in the store, `record` blocked — beside the
-positive case where a deferral naming a real item records normally.
+refused at submission, the refusal naming the offending finding by its own
+index rather than the payload it sat in, no record in the store, `record`
+blocked — beside the positive case, where a deferral naming a real item records
+and the written record is read back. The deferral is deliberately not the
+review's only finding there: every other deferral payload in this repository is
+a single finding, so a rule that judged only the first one would pass them all.
 
 `record` deliberately adds no second deferral check of its own. It could only
 read a deferral the evidence record carried, and the evidence record is written

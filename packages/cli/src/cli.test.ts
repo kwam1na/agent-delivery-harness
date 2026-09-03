@@ -181,13 +181,22 @@ function greenPayload(overrides: Record<string, unknown> = {}): unknown {
 }
 
 /**
- * A green review that deferred one expansion finding, naming `followUpItem` as
- * the tracker item that carries the deferred work — or naming none, which is
- * the case the harness must refuse.
+ * A green review that resolved one in-contract finding and deferred one
+ * expansion finding, naming `followUpItem` as the tracker item that carries the
+ * deferred work — or naming none, which is the case the harness must refuse.
+ *
+ * The resolved finding sits at index 0 deliberately, so the deferral is judged
+ * at index 1. A rule that only ever evaluated the first finding would pass
+ * every other deferral payload in this repository — each of them is a single
+ * finding at index 0 — and would still refuse this one only if the deferral
+ * were the first thing it saw.
  */
+const DEFERRAL_POINTER = "/claims/0/payload/findings/1";
+
 function deferringPayload(followUpItem: string | undefined): unknown {
   return greenPayload({
     findings: [
+      { id: "f-1", severity: "P3", scope: "in_contract", actionable: true, blocking: false, disposition: "resolved" },
       {
         id: "f-2",
         severity: "P2",
@@ -200,7 +209,7 @@ function deferringPayload(followUpItem: string | undefined): unknown {
     ],
     telemetry: {
       iterationCount: 2,
-      findingCounts: { P0: 0, P1: 0, P2: 1, P3: 0 },
+      findingCounts: { P0: 0, P1: 0, P2: 1, P3: 1 },
       deferredExpansionCount: 1,
       deferredIssueIds: followUpItem === undefined ? [] : [followUpItem],
     },
@@ -928,6 +937,16 @@ describe("error paths", () => {
     const manifestPath = await buildAcceptSubmission(dir, config, artifacts, PROVIDER, deferringPayload("V26-1583"));
     expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_OK);
     expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+
+    // Read the record back: an admitted deferral records, it does not merely
+    // exit zero.
+    const recordDir = path.join(dir, "telemetry/delivery-runs");
+    const recordName = (await readdir(recordDir)).find((name) => name.startsWith("record--") && name.endsWith(".json"));
+    expect(recordName).toBeDefined();
+    const parsed = parseDeliveryRecord(await readFile(path.join(recordDir, recordName as string), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.claims.map((claim) => [claim.obligationId, claim.outcome])).toEqual([["review.green", "satisfied_evidence"]]);
   });
 
   it("refuses to record a review whose deferral names no follow-up item", { timeout: 60000 }, async () => {
@@ -946,15 +965,21 @@ describe("error paths", () => {
 
       const manifestPath = await buildAcceptSubmission(dir, config, artifacts, PROVIDER, deferringPayload(followUpItem));
       expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime), String(followUpItem)).toBe(EXIT_POLICY);
-      expect(err.join(""), String(followUpItem)).toContain("illegal_deferral");
+      const submitted = err.join("");
+      expect(submitted, String(followUpItem)).toContain("illegal_deferral");
+      // The refusal names WHICH deferral, at its own index — not the payload it
+      // was found in, and not merely the first finding.
+      expect(submitted, String(followUpItem)).toContain(DEFERRAL_POINTER);
 
       // Nothing was published, so no record can carry the untracked deferral.
       const storage = await resolveRecordStorage(dir, { storageNamespace: config.storageNamespace });
       const stored = await readdir(storage.storageDir).catch(() => [] as string[]);
       expect(stored.filter((name) => name.endsWith(".json")), String(followUpItem)).toHaveLength(0);
 
+      const before = err.length;
       expect(await runCli(["record"], runtime), String(followUpItem)).toBe(EXIT_POLICY);
-      expect(err.join(""), String(followUpItem)).toContain("review_evidence_missing");
+      // Only what `record` itself wrote: the submission's own refusal is behind us.
+      expect(err.slice(before).join(""), String(followUpItem)).toContain("review_evidence_missing");
       expect(existsSync(path.join(dir, "telemetry/delivery-runs"))).toBe(false);
     }
   });
