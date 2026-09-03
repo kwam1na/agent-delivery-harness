@@ -53,6 +53,12 @@ describe("the arguments", () => {
     expect(() => parseInstallArgs([])).toThrow(InstallError);
     expect(() => parseInstallArgs(["--release-id"])).toThrow(InstallError);
     expect(() => parseInstallArgs(["--release-id", "a", "--release-id", "b"])).toThrow(InstallError);
+    // Both flags are once-only, and for the same reason: a last-wins parser
+    // would install one profile while the operator read another off the
+    // command line they typed.
+    expect(() => parseInstallArgs(["--release-id", "a", "--profile", "core", "--profile", "linear"])).toThrow(
+      InstallError,
+    );
     expect(() => parseInstallArgs(["--profile"])).toThrow(InstallError);
     expect(() => parseInstallArgs(["--unknown"])).toThrow(InstallError);
     expect(() => parseInstallArgs(["linear-v2"])).toThrow(InstallError);
