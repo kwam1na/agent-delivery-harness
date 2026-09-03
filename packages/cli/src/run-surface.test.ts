@@ -26,7 +26,8 @@ import {
 } from "@agent-delivery-harness/kernel";
 import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
-import { startRunServer, type RunServerHandle } from "./run-server.ts";
+import { READOUT_LABELS } from "./run-projection.ts";
+import { escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
 import { buildRunEvent } from "./run-surface.ts";
 
 const exec = promisify(execFile);
@@ -1039,6 +1040,11 @@ async function pageAndState(server: RunServerHandle): Promise<{ readonly page: s
   return { page: page.body, state: JSON.parse(json.body) as ServedState };
 }
 
+/** A worktree root as the page spells it: git's own toplevel, HTML-escaped. */
+function escapedRoot(dir: string): string {
+  return escapeHtml(realpathSync(dir));
+}
+
 const runOf = (state: ServedState, runId: string): ServedState["runs"][number] => {
   const found = state.runs.find((run) => run.runId === runId);
   if (found === undefined) throw new Error(`${runId} not served: ${state.runs.map((run) => run.runId).join(",")}`);
@@ -1103,6 +1109,13 @@ describe("runs serve", () => {
     expect(run.timeline.find((entry) => entry.kind === "command.completed")?.writer).toBe("cli");
     expect(run.timeline.find((entry) => entry.kind === "pr.opened")?.writer).toBe("executor");
 
+    // And the PAGE carries the writer beside each event, not just the JSON:
+    // the confusion this label exists to prevent is an operator reading the
+    // executor's claim to have run a command as the product's own record of
+    // having run it.
+    expect(page).toContain("<td>cli-written</td>");
+    expect(page).toContain("<td>executor-written</td>");
+
     // The per-run timeline carries each round's candidate.
     expect(run.roundDetail.map((round) => round.candidateTreeSha)).toEqual([TREE_SHA]);
     expect(page).toContain(TREE_SHA);
@@ -1119,6 +1132,11 @@ describe("runs serve", () => {
     const live = await pageAndState(server);
     expect(runOf(live.state, runId).live).toBe(true);
     expect(runOf(live.state, runId).open).toBe(true);
+    // The CELL, not the word. The stylesheet names all three states, so
+    // `toContain("ended")` holds on every page ever rendered; only the cell
+    // distinguishes a run the operator is watching from one that has stopped.
+    expect(live.page).toContain('<td class="live">live</td>');
+    expect(live.page).not.toContain('<td class="ended">ended</td>');
     // A live run is what makes the page refresh itself; the interval is the
     // page's own declaration, so an operator can see how stale a row may be.
     expect(live.page).toContain('http-equiv="refresh"');
@@ -1140,7 +1158,8 @@ describe("runs serve", () => {
     const after = await pageAndState(server);
     expect(runOf(after.state, runId).live).toBe(false);
     expect(runOf(after.state, runId).open).toBe(false);
-    expect(after.page).toContain("ended");
+    expect(after.page).toContain('<td class="ended">ended</td>');
+    expect(after.page).not.toContain('<td class="live">live</td>');
     // Nothing is live, so nothing is polled. The refresh is what an operator
     // pays for in requests; a store with only finished runs must cost nothing.
     expect(after.page).not.toContain('http-equiv="refresh"');
@@ -1197,6 +1216,8 @@ describe("runs serve", () => {
     expect(runOf(state, runId).open).toBe(true);
     expect(runOf(state, runId).live).toBe(false);
     expect(page).toContain(runId);
+    expect(page).toContain('<td class="open">open</td>');
+    expect(page).not.toContain('<td class="live">live</td>');
   });
 
   it("binds loopback on an ephemeral port and refuses a foreign Host", async () => {
@@ -1204,6 +1225,11 @@ describe("runs serve", () => {
     await startRun(dir);
     const server = await serve([dir]);
 
+    // `host` is read back off the bound socket, not echoed from the constant
+    // handed to `listen`, so a server that bound every interface would report
+    // `0.0.0.0` (or `::`) here and this row would fail. That is the whole of
+    // the loopback claim: a handle that repeated its own input could not
+    // distinguish the two.
     expect(server.host).toBe("127.0.0.1");
     expect(server.port).toBeGreaterThan(0);
 
@@ -1264,7 +1290,10 @@ describe("runs serve", () => {
     expect(page).not.toContain("<script>alert(1)</script>");
     expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(page).not.toContain("<b>repo");
-    expect(page).toContain("&lt;b&gt;repo");
+    // The NOTE's own line, not merely the escaped path — the path also reaches
+    // the page through the repository heading, so asserting the escaped
+    // spelling alone would hold with the note never rendered at all.
+    expect(page).toContain(`note: no CLI gate completion in this journal; harness.config.ts present at ${escapedRoot(dir)}`);
     expect(runOf(state, runId).readout.note).toContain("<b>repo");
   });
 
@@ -1274,24 +1303,37 @@ describe("runs serve", () => {
     const withoutConfig = await initRepo({ withConfig: false });
     const withoutConfigRunId = await executorOnlyRun(withoutConfig);
 
-    const { page, state } = await pageAndState(await serve([withConfig, withoutConfig]));
-    expect(page).toContain("self-attested");
-    expect(page).toContain("unbound to a record");
-    expect(page).toContain("observability, not evidence");
+    // Served SEPARATELY, because the claim under test is that one page does
+    // not carry the note. One page over both repositories could only ever be
+    // asked whether the note appears somewhere on it.
+    const noted = await pageAndState(await serve([withConfig]));
+    const unnoted = await pageAndState(await serve([withoutConfig]));
 
-    const noted = runOf(state, withConfigRunId);
-    expect(noted.readout.status).toBe("complete-executor-only");
-    expect(noted.readout.missing).toContain("command.completed:gate");
-    expect(noted.readout.note).toContain("no CLI gate completion in this journal");
-    expect(noted.gate).toEqual({ outcome: "pass", writer: "executor" });
-    expect(noted.timeline.find((entry) => entry.kind === "gate.reported")?.writer).toBe("executor");
-    expect(noted.timeline.find((entry) => entry.kind === "pr.opened")?.writer).toBe("executor");
+    // The readout block's own labelled line, which is the only place the
+    // status and the three labels appear together. The page-wide banner also
+    // prints the labels, so asserting them alone would hold with the whole
+    // per-run readout deleted.
+    expect(noted.page).toContain(`complete-executor-only — ${READOUT_LABELS}`);
+    expect(noted.page).toContain("present: run.started, ticket.read");
+    expect(noted.page).toContain("missing: command.completed:gate, command.completed:record");
+    expect(noted.page).toContain("note: no CLI gate completion in this journal");
+    expect(noted.page).toContain(`harness.config.ts present at ${escapedRoot(withConfig)}`);
+
+    const notedRun = runOf(noted.state, withConfigRunId);
+    expect(notedRun.readout.status).toBe("complete-executor-only");
+    expect(notedRun.readout.missing).toContain("command.completed:gate");
+    expect(notedRun.gate).toEqual({ outcome: "pass", writer: "executor" });
+    expect(notedRun.timeline.find((entry) => entry.kind === "gate.reported")?.writer).toBe("executor");
+    expect(notedRun.timeline.find((entry) => entry.kind === "pr.opened")?.writer).toBe("executor");
+    // An adopter's gate is the executor's word, and the page says so.
+    expect(noted.page).toContain("(executor-written)");
+    expect(noted.page).not.toContain("(cli-written)");
 
     // The note is the presence check's, not the page's: the repository without
     // a config gets the same status and no note, exactly as `runs show` does.
-    const unnoted = runOf(state, withoutConfigRunId);
-    expect(unnoted.readout.status).toBe("complete-executor-only");
-    expect(unnoted.readout.note).toBeUndefined();
+    expect(unnoted.page).toContain(`complete-executor-only — ${READOUT_LABELS}`);
+    expect(unnoted.page).not.toContain("no CLI gate completion in this journal");
+    expect(runOf(unnoted.state, withoutConfigRunId).readout.note).toBeUndefined();
 
     const shownWith = await cli(withConfig, ["runs", "show", withConfigRunId]);
     const shownWithout = await cli(withoutConfig, ["runs", "show", withoutConfigRunId]);
@@ -1318,8 +1360,12 @@ describe("runs serve", () => {
     );
     expect(appended.ok, JSON.stringify(appended)).toBe(true);
 
-    const { state } = await pageAndState(await serve([dir]));
+    const { page, state } = await pageAndState(await serve([dir]));
     expect(runOf(state, runId).gate).toEqual({ outcome: "ok", writer: "cli" });
+    // The runs table's gate cell says who wrote the outcome down; without it
+    // an adopter's self-reported gate and the product's own completion read
+    // identically.
+    expect(page).toContain("(cli-written)");
   });
 
   it("renders a run whose journal will not read rather than failing the page", async () => {
@@ -1330,7 +1376,8 @@ describe("runs serve", () => {
 
     const { page, state } = await pageAndState(await serve([dir]));
     expect(runOf(state, runId).readable).toBe(false);
-    expect(page).toContain("unreadable");
+    expect(page).toContain('<td class="open">unreadable</td>');
+    expect(page).toContain("no readable events");
   });
 });
 

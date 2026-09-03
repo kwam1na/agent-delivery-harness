@@ -631,12 +631,18 @@ export async function startRunServer(input: RunServerInput): Promise<RunServerSt
   });
   if (listening !== undefined) return { ok: false, reason: oneLine(listening, 200) };
 
+  // THE BOUND ADDRESS IS READ BACK OFF THE SOCKET, never echoed from the
+  // constant that was passed to `listen`. Reporting the constant would make
+  // "this server is loopback-only" unfalsifiable: dropping the interface
+  // argument would bind every interface, and the handle, the printed URL, and
+  // the `Host` check would all still say `127.0.0.1`. Asking the socket is what
+  // leaves the claim answerable by something other than the claim itself.
   const address = server.address();
   if (address === null || typeof address === "string") {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     return { ok: false, reason: "the server bound no inspectable address" };
   }
-  bound = { host: RUN_SERVER_HOST, port: address.port };
+  bound = { host: address.address, port: address.port };
 
   return {
     ok: true,
