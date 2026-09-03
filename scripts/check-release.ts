@@ -18,7 +18,7 @@
  *       the lockstep rule; this check is what makes forgetting it a red run.
  *   license-coherence — the `LICENSE` file exists at the root, is the
  *       Functional Source License 1.1, and every manifest's `license` field
- *       (root and packages) says `FSL-1.1-Apache-2.0`. A tarball whose
+ *       (root and packages) says `FSL-1.1-ALv2`. A tarball whose
  *       manifest disagrees with the license
  *       text it ships under is a legal statement nobody made. And the PACK
  *       SHAPE is checked, not assumed: what `npm pack --dry-run --json`
@@ -86,7 +86,7 @@ export interface ReleaseFinding {
 }
 
 /** The license this repository is released under. */
-export const EXPECTED_LICENSE_ID = "FSL-1.1-Apache-2.0";
+export const EXPECTED_LICENSE_ID = "FSL-1.1-ALv2";
 
 /**
  * Phrases the LICENSE file must carry to be the verbatim Functional Source
@@ -98,7 +98,7 @@ export const EXPECTED_LICENSE_ID = "FSL-1.1-Apache-2.0";
  * The conversion marker quotes the grant itself rather than its `Grant of
  * Future License` heading, which the steward's MIT-future template carries
  * word for word: a heading pins the section, not what the section converts to,
- * and `FSL-1.1-MIT` swapped in under an `FSL-1.1-Apache-2.0` manifest is
+ * and `FSL-1.1-MIT` swapped in under an `FSL-1.1-ALv2` manifest is
  * exactly the mismatch this rule exists to refuse.
  */
 export const LICENSE_TEXT_MARKERS: readonly string[] = [
