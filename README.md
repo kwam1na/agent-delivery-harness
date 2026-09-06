@@ -91,7 +91,7 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the eleven-command operator surface and
+- **`@agent-delivery-harness/cli`** — the thirteen-command operator surface and
   opt-in `delivery-provider-rails/1` stdio adapter:
   `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
   `check`, `managed` (the managed-delivery facade's host-facing checkpoint and
@@ -253,3 +253,5 @@ next one on.
 [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) sit at the repository root, and the
 release sensor above verifies that both files are present in every package
 tarball rather than assuming npm will include them.
+
+For interrupted host-native work, see [ordinary delivery recovery](docs/ordinary-resume.md).

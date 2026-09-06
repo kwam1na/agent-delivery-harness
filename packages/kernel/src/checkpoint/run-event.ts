@@ -115,6 +115,9 @@ export const RUN_EVENT_KINDS = Object.freeze([
   "blocker.recorded",
   "decision.recorded",
   "compounding.recorded",
+  "context.saved",
+  "action.intent",
+  "action.observed",
 ] as const);
 export type RunEventKind = (typeof RUN_EVENT_KINDS)[number];
 
@@ -227,7 +230,31 @@ const COST_MEMBERS: readonly MemberRule[] = [
 ];
 
 const cost: MemberCheck = (value, at, collector) => {
-  checkClosed(value, at, COST_MEMBERS, collector);
+  // Legacy measured entries stay readable. Unknown coverage carries no numeric
+  // total: zero would claim a measurement the host did not make.
+  if (isSpineRecord(value) && value["coverage"] === "unreported") {
+    checkClosed(value, at, [
+      { name: "coverage", check: oneOf(["unreported"]) },
+      { name: "reportedBy", check: label },
+    ], collector);
+  } else {
+    checkClosed(value, at, [...COST_MEMBERS, { name: "coverage", check: oneOf(["complete", "partial"]), required: false }], collector);
+  }
+};
+
+const digest = patterned(/^[0-9a-f]{64}$/, 64, "a sha256 digest");
+const contract: MemberCheck = (value, at, collector) => {
+  checkClosed(value, at, [
+    { name: "objective", check: freeText },
+    { name: "finishLine", check: label },
+    { name: "acceptanceCriteria", check: (items, pointer, c) => {
+      if (!Array.isArray(items) || items.length === 0 || items.length > 32) {
+        malformed(c, pointer, "expected 1 to 32 bounded acceptance criteria");
+        return;
+      }
+      items.forEach((item, index) => freeText(item, spinePointer(pointer, index), c));
+    } },
+  ], collector);
 };
 
 const FINDINGS_MEMBERS: readonly MemberRule[] = [
@@ -253,6 +280,37 @@ const workflow: MemberCheck = (value, at, collector) => {
 // ── Payload tables ─────────────────────────────────────────────────────────
 
 const PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> = Object.freeze({
+  "context.saved": [
+    { name: "spec", check: oneOf(["ordinary-run-context/1"]) },
+    { name: "contract", check: contract },
+    { name: "stage", check: label },
+    { name: "candidateTreeSha", check: treeSha },
+    { name: "candidateBinding", check: (value, at, c) => void checkClosed(value, at, [
+      { name: "deliverableDigest", check: digest },
+      { name: "identity", check: label },
+      { name: "baseRef", check: label },
+      { name: "baseTipSha", check: treeSha },
+      { name: "mergeBaseSha", check: treeSha },
+      { name: "workspaceId", check: label },
+    ], c) },
+    { name: "policyDigest", check: digest },
+    { name: "release", check: (value, at, c) => void checkClosed(value, at, [
+      { name: "runtimeVersion", check: label },
+      { name: "releaseId", check: label },
+      { name: "profile", check: label },
+      { name: "archiveSha256", check: digest },
+    ], c) },
+  ],
+  "action.intent": [
+    { name: "actionId", check: runStoreId },
+    { name: "operation", check: label },
+    { name: "reference", check: boundedString(MAX_RUN_URL, "a reconciliation reference without credentials") },
+  ],
+  "action.observed": [
+    { name: "actionId", check: runStoreId },
+    { name: "outcome", check: oneOf(["succeeded", "failed", "not-performed", "unknown"]) },
+    { name: "reference", check: boundedString(MAX_RUN_URL, "an observed reconciliation reference without credentials") },
+  ],
   "run.started": [
     { name: "ticket", check: ticketId, required: false },
     { name: "host", check: label },

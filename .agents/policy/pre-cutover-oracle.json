@@ -1,9 +1,9 @@
 {
   "schemaVersion": "delivery-harness-pre-cutover-oracle/1",
   "frozen": true,
-  "capturedAt": "2026-08-31",
+  "capturedAt": "2026-09-06",
   "comparisonAuthority": "npm run check plus the delivery-harness gate loop (prepare, review-context, submit-evidence, gate, record, verify) and the hosted checks in .github/workflows",
-  "description": "Immutable pre-cutover truth for this repository's own policy projection: the phase order, per-candidate-class activation, and blocker vocabulary of the unchanged delivery authority, captured before any managed-policy comparison. scripts/policy-projection-check.ts pins this file's digest, so recharacterizing the pre-cutover truth is a deliberate two-place edit rather than a quiet drift.",
+  "description": "V26-1845 recharacterization adds ordinary context save/resume without changing admission authority; historical 2026-08-31 oracle SHA256 649568cc3ab015441a1f2951c9c9f04f3a75fe28add68ab42bbd68d7cd8be7d5. Immutable pre-cutover truth for this repository's own policy projection: the phase order, per-candidate-class activation, and blocker vocabulary of the unchanged delivery authority, captured before any managed-policy comparison. scripts/policy-projection-check.ts pins this file's digest, so recharacterizing the pre-cutover truth is a deliberate two-place edit rather than a quiet drift.",
   "selfApplication": {
     "position": "This repository's policy governs deliveries into the repository that implements the policy compiler. The direction of authority is: the compiled policy that judges a delivery is the trusted pre-run copy bound at policy-bind time, and the compiler bytes that produced it are the pinned composition generation the product was installed from — never the candidate worktree. A candidate edit to .agents/policy/, to delivery/personas/, or to packages/kernel/src/policy/ is therefore a proposal for a future owner-approved policy generation.",
     "enforcedBy": [
@@ -23,7 +23,7 @@
       { "phase": "record", "command": "delivery-harness record" },
       { "phase": "verify", "command": "delivery-harness verify" }
     ],
-    "standaloneCommands": ["check", "managed", "maintain", "emit", "runs"],
+    "standaloneCommands": ["check", "managed", "maintain", "emit", "runs", "save-context", "resume"],
     "checkSuiteConstituents": ["typecheck", "sensor", "sensor:cli", "test"],
     "recordWrittenOnlyAfterGate": true
   },
