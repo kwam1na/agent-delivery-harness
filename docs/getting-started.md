@@ -332,6 +332,22 @@ the loop's ordering mechanism: no receipt, no review context, no admission. It
 goes stale the moment the candidate moves, the base advances, or a wiring file
 (here, `harness.config.ts` itself) changes.
 
+To require mechanical checks before review, configure `preparationCommands` as
+an ordered list of objects with `id`, `command` (an argv array), and a positive
+`timeoutMs`. For example, a typecheck entry has id `typecheck`, command
+`["npm", "run", "typecheck"]`, and timeout `300000`. Each command runs directly
+from the repository root without shell interpolation; include its scripts and
+configuration in `preparationWiringPaths`. Omission or an empty list keeps the
+capture-only preparation available to repositories without mechanical checks.
+
+A new attempt first invalidates any earlier receipt. Checks then run in order,
+stopping at the first failed exit, timeout, spawn error, or output overflow
+(one MiB per stream). Failure reports a typed blocker and bounded output from
+stderr and stdout. Only successful checks followed by an unchanged candidate, base, and
+wiring fingerprint publish a receipt. Changing command arguments, order, or
+timeouts also changes the preparation fingerprint. Repairing a failed check
+requires a new successful preparation; an earlier success cannot authorize it.
+
 ```sh
 delivery-harness prepare
 delivery-harness review-context

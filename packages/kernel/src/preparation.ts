@@ -358,7 +358,22 @@ export async function computePreparationFingerprint(
     wiring.push({ path: repoPath, digest: digestCanonical(contents.toString("base64")) });
   }
 
-  return digestCanonical({ harnessVersion: options.harnessVersion ?? HARNESS_VERSION, wiring });
+  return digestCanonical({ harnessVersion: options.harnessVersion ?? HARNESS_VERSION, wiring,
+    ...(config.preparationCommands?.length ? { preparationCommands: config.preparationCommands } : {}),
+  });
+}
+
+/** A new preparation attempt cannot inherit a receipt from an earlier success. */
+export async function invalidatePreparationReceipt(
+  rootDir: string, config: HarnessConfig, options: PreparationOptions = {},
+): Promise<void> {
+  const { storageDir } = await resolveReceiptStorage(rootDir, options);
+  const receiptPath = path.join(storageDir, receiptFileName(config.gateId));
+  try {
+    await rm(receiptPath, { force: true });
+  } catch (error) {
+    throw storeUnwritable(receiptPath, error);
+  }
 }
 
 // ── Publication ────────────────────────────────────────────────────────────
@@ -389,11 +404,9 @@ function buildReceipt(
 /**
  * Publishes the current receipt, replacing whatever was there.
  *
- * THE FINGERPRINT IS COMPUTED FIRST, before the directory is created and before
- * anything is written. That ordering is the fail-closed guarantee in practice:
- * an unresolvable wiring path aborts a preparation that has touched nothing, so
- * a failed prepare cannot leave a stale receipt behind that a later evaluation
- * would read as current.
+ * The caller invalidates the previous receipt before starting checks. This
+ * publication computes the fingerprint before writing, so unreadable wiring
+ * cannot produce a new receipt.
  *
  * Write-temp-then-rename, not write-in-place: a reader that opened the receipt
  * while a second preparation was mid-write would otherwise see a truncated file

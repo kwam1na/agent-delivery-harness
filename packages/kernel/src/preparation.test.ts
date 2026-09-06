@@ -171,6 +171,17 @@ async function tempRepo(label = "repo"): Promise<string> {
 // ── Fingerprint ────────────────────────────────────────────────────────────
 
 describe("the preparation fingerprint", () => {
+  it("binds preparation command order, argv, and timeout without changing no-command receipts", async () => {
+    const tree = await tempTree();
+    const first = { id: "first", command: ["npm", "run", "typecheck"] as const, timeoutMs: 1000 };
+    const second = { id: "second", command: ["npm", "run", "sensor"] as const, timeoutMs: 1000 };
+    const fingerprint = await computePreparationFingerprint(tree.rootDir, { ...CONFIG, preparationCommands: [first, second] });
+    for (const commands of [[second, first], [{ ...first, timeoutMs: 2000 }, second], [{ ...first, command: ["npm", "run", "test"] as const }, second], []]) {
+      expect(await computePreparationFingerprint(tree.rootDir, { ...CONFIG, preparationCommands: commands })).not.toBe(fingerprint);
+    }
+    expect(await computePreparationFingerprint(tree.rootDir, { ...CONFIG, preparationCommands: [] }))
+      .toBe(await computePreparationFingerprint(tree.rootDir, CONFIG));
+  });
   it("is a sha256 hex digest over the harness version and the declared wiring bytes", async () => {
     const tree = await tempTree();
     const fingerprint = await computePreparationFingerprint(tree.rootDir, CONFIG);

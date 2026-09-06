@@ -197,6 +197,13 @@ export interface ProviderRegistration {
   readonly command?: NonEmptyTuple<string>;
 }
 
+export interface PreparationCommand {
+  readonly id: string;
+  /** Executed directly from the repository root, in declaration order. */
+  readonly command: NonEmptyTuple<string>;
+  readonly timeoutMs: number;
+}
+
 export interface EnvironmentRequirement {
   readonly variable: string;
   readonly equals: string;
@@ -290,6 +297,7 @@ export interface HarnessConfig {
   readonly ciPolicies: readonly CiPolicy[];
   readonly ciPolicyEnvKey: string;
   readonly preparationWiringPaths: readonly string[];
+  readonly preparationCommands?: readonly PreparationCommand[];
   readonly obligations: readonly ObligationPolicy[];
   readonly deliveryRecordPath: string;
   readonly deliveryRecordVerification: DeliveryRecordVerification;
@@ -795,6 +803,7 @@ const CONFIG_MEMBERS = [
   "ciPolicies",
   "ciPolicyEnvKey",
   "preparationWiringPaths",
+  "preparationCommands",
   "obligations",
   "deliveryRecordPath",
   "deliveryRecordVerification",
@@ -810,7 +819,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
   }
   checkClosed(findings, "<config>", input, CONFIG_MEMBERS);
   for (const name of CONFIG_MEMBERS) {
-    if (input[name] === undefined && !(DEFAULTED_MEMBERS as readonly string[]).includes(name)) {
+    if (input[name] === undefined && name !== "preparationCommands" && !(DEFAULTED_MEMBERS as readonly string[]).includes(name)) {
       findings.add("config_missing_member", name, "is required");
     }
   }
@@ -970,6 +979,41 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
       ? undefined
       : readStringArray(findings, "preparationWiringPaths", input["preparationWiringPaths"], { path: true, describe: "a repo-relative path" });
 
+  let preparationCommands: PreparationCommand[] | undefined;
+  if (input["preparationCommands"] !== undefined) {
+    const entries = readArray(findings, "preparationCommands", input["preparationCommands"]);
+    preparationCommands = [];
+    const ids = new Set<string>();
+    entries?.forEach((entry, index) => {
+      const at = `preparationCommands[${index}]`;
+      if (!isRecord(entry)) {
+        findings.add("config_invalid_member", at, "must be a command object");
+        return;
+      }
+      checkClosed(findings, at, entry, ["id", "command", "timeoutMs"]);
+      const id = readString(findings, `${at}.id`, entry["id"], { pattern: REMEDIATION_ID_PATTERN, describe: "a kebab-case check id" });
+      const command = entry["command"];
+      const timeoutMs = entry["timeoutMs"];
+      if (!Array.isArray(command) || command.length === 0 ||
+          command.some((arg) => typeof arg !== "string" || arg.includes("\0")) ||
+          typeof command[0] !== "string" || command[0].trim().length === 0) {
+        findings.add("config_invalid_member", `${at}.command`, "must be a non-empty argv array with a nonblank executable and no NUL bytes");
+        return;
+      }
+      if (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) {
+        findings.add("config_invalid_member", `${at}.timeoutMs`, "must be a positive integer no greater than 2147483647");
+        return;
+      }
+      if (id === undefined) return;
+      if (ids.has(id)) {
+        findings.add("config_invalid_member", `${at}.id`, "must be unique among preparation commands");
+        return;
+      }
+      ids.add(id);
+      preparationCommands!.push({ id, command: command as [string, ...string[]], timeoutMs });
+    });
+  }
+
   let obligations: readonly ObligationPolicy[] | undefined;
   if (input["obligations"] !== undefined) {
     const array = readArray(findings, "obligations", input["obligations"]);
@@ -1042,6 +1086,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     ciPolicies,
     ciPolicyEnvKey,
     preparationWiringPaths,
+    ...(preparationCommands === undefined ? {} : { preparationCommands }),
     obligations,
     deliveryRecordPath,
     deliveryRecordVerification,

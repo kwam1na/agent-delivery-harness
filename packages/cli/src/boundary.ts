@@ -114,6 +114,7 @@ export interface CommandContext {
   /** Positional and flag arguments after the command name. */
   readonly args: readonly string[];
   readonly readStdin?: () => Promise<string>;
+  readonly signal?: AbortSignal;
   /**
    * Wires capture and the store from this repo, memoized. Lazy so `--help`
    * wires nothing and so a command owns how it renders a store that will not
@@ -501,6 +502,7 @@ async function runConfiguredCommand(
       wire,
       readStdin: runtime.readStdin ?? (async () => ""),
       artifacts,
+      ...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
       // The waiver prompt is offered only under a real TTY. A non-interactive
       // invocation never prompts — it blocks — no matter what the run wired.
       ...(runtime.stdinIsTTY && runtime.stdoutIsTTY && runtime.promptForWaiver !== undefined

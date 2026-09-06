@@ -117,6 +117,102 @@ function makeConfig(overrides: Partial<HarnessConfigInput> = {}): HarnessConfig 
 
 // ── Repo fixtures ────────────────────────────────────────────────────────────
 
+describe("mechanical preparation", () => {
+  it("runs configured argv checks in order before issuing a usable receipt", async () => {
+    const dir = await initRepo();
+    const marker = path.join(dir, ".git", "preparation-order");
+    const literal = "$(touch should-not-exist); `echo unsafe`";
+    const config = makeConfig({ preparationCommands: [
+      { id: "first", command: [process.execPath, "-e", "require('node:fs').writeFileSync(process.argv[1], process.argv[2])", marker, literal], timeoutMs: 5000 },
+      { id: "second", command: [process.execPath, "-e", "if(require('node:fs').readFileSync(process.argv[1], 'utf8') !== process.argv[2]) process.exit(1)", marker, literal], timeoutMs: 5000 },
+    ] });
+    const { runtime } = makeRuntime(dir, config, await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    expect(await readFile(marker, "utf8")).toBe(literal);
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_OK);
+  });
+
+  it("revokes previous success when the same candidate fails a later check", async () => {
+    const dir = await initRepo();
+    const flag = path.join(dir, ".git", "fail-preparation");
+    const config = makeConfig({ preparationCommands: [
+      { id: "check", command: [process.execPath, "-e", "if(require('node:fs').existsSync(process.argv[1])) process.exit(9)", flag], timeoutMs: 5000 },
+    ] });
+    const { runtime, err } = makeRuntime(dir, config, await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    await writeFile(flag, "fail");
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_POLICY);
+    expect(err.join("")).toContain("preparation_command_failed");
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_POLICY);
+    expect(await runCli(["gate"], runtime)).toBe(EXIT_POLICY);
+    expect(err.join("")).toContain("preparation_missing");
+  });
+
+  it.each([
+    ["timeout", [process.execPath, "-e", "setInterval(() => {}, 1000)"], 30],
+    ["spawn", ["/nonexistent/preparation-command"], 1000],
+    ["output-limit", [process.execPath, "-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024))"], 5000],
+  ] as const)("refuses %s and stops before the next check", async (_label, argv, timeoutMs) => {
+    const dir = await initRepo();
+    const marker = path.join(dir, ".git", "must-not-run");
+    const config = makeConfig({ preparationCommands: [
+      { id: "failure", command: [...argv] as [string, ...string[]], timeoutMs },
+      { id: "later", command: [process.execPath, "-e", "require('node:fs').writeFileSync(process.argv[1], 'ran')", marker], timeoutMs: 5000 },
+    ] });
+    const { runtime, err } = makeRuntime(dir, config, await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_POLICY);
+    expect(err.join("")).toContain("preparation_command_failed");
+    expect(err.join("").length).toBeLessThan(6000);
+    expect(existsSync(marker)).toBe(false);
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_POLICY);
+  });
+
+  it.each(["src.txt", "harness.config.ts"])("refuses a check that mutates %s", async (file) => {
+    const dir = await initRepo();
+    const config = makeConfig({ preparationCommands: [
+      { id: "mutation", command: [process.execPath, "-e", "require('node:fs').appendFileSync(process.argv[1], 'changed')", file], timeoutMs: 5000 },
+    ] });
+    const { runtime } = makeRuntime(dir, config, await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_POLICY);
+    await git(dir, "checkout", "--", file);
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_POLICY);
+  });
+
+  it("refuses base movement during a passing check", async () => {
+    const dir = await initRepo();
+    const config = makeConfig({ preparationCommands: [
+      { id: "move-base", command: ["git", "branch", "-f", "origin/main", "HEAD"], timeoutMs: 5000 },
+    ] });
+    const { runtime, err } = makeRuntime(dir, config, await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_POLICY);
+    expect(err.join("")).toContain("preparation_candidate_changed");
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_POLICY);
+  });
+
+  it("refuses changed wiring even when git ignores the wiring file", async () => {
+    const dir = await initRepo();
+    const wiring = ".git/preparation-wiring";
+    await writeFile(path.join(dir, wiring), "before");
+    const config = makeConfig({ preparationWiringPaths: ["harness.config.ts", wiring], preparationCommands: [
+      { id: "wiring", command: [process.execPath, "-e", "require('node:fs').writeFileSync(process.argv[1], 'after')", wiring], timeoutMs: 5000 },
+    ] });
+    const { runtime, err } = makeRuntime(dir, config, await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_POLICY);
+    expect(err.join("")).toContain("preparation_candidate_changed");
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_POLICY);
+  });
+
+  it("revokes an old receipt before rejecting a dirty candidate", async () => {
+    const dir = await initRepo();
+    const { runtime } = makeRuntime(dir, makeConfig(), await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    await writeFile(path.join(dir, "src.txt"), "dirty");
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_POLICY);
+    await git(dir, "checkout", "--", "src.txt");
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_POLICY);
+  });
+});
+
 async function git(cwd: string, ...args: readonly string[]): Promise<string> {
   const { stdout } = await run("git", [...args], { cwd });
   return stdout.trim();
@@ -412,9 +508,11 @@ describe("repo wiring coherence", () => {
 // ── The full loop ────────────────────────────────────────────────────────────
 
 describe("the full delivery loop", () => {
-  it("runs prepare → review-context → submit-evidence → gate → record → verify green", { timeout: 60000 }, async () => {
+  it.each([false, true])("runs prepare → review-context → submit-evidence → gate → record → verify green (mechanical checks: %s)", { timeout: 60000 }, async (mechanical) => {
     const dir = await initRepo();
-    const config = makeConfig();
+    const config = makeConfig(mechanical ? { preparationCommands: [
+      { id: "mechanical", command: [process.execPath, "-e", "process.exit(0)"], timeoutMs: 5000 },
+    ] } : {});
     const artifacts = await makeArtifacts();
     const { runtime, err } = makeRuntime(dir, config, artifacts);
 

@@ -198,6 +198,7 @@ export {
   PREPARATION_RECEIPT_SCHEMA_VERSION,
   computePreparationFingerprint,
   evaluatePreparationReceipt,
+  invalidatePreparationReceipt,
   publishPreparationReceipt,
   receiptFileName,
   resolveReceiptStorage,

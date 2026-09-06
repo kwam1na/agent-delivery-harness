@@ -129,6 +129,29 @@ const validInput = () => ({
 
 type MutableInput = ReturnType<typeof validInput>;
 
+describe("preparation commands", () => {
+  it("accepts an ordered argv list and preserves empty arguments", () => {
+    const preparationCommands = [{ id: "typecheck", command: ["npm", "run", "typecheck", ""], timeoutMs: 120000 }];
+    expect(define({ ...validInput(), preparationCommands }).preparationCommands).toEqual(preparationCommands);
+    expect(define({ ...validInput(), preparationCommands: [] }).preparationCommands).toEqual([]);
+  });
+
+  it.each([
+    null, {}, [null], [{ id: "check", command: [], timeoutMs: 1 }],
+    [{ id: "check", command: "npm run check", timeoutMs: 1 }],
+    [{ id: "check", command: [" "], timeoutMs: 1 }],
+    [{ id: "check", command: ["node", "bad\0argument"], timeoutMs: 1 }],
+    [{ id: "check", command: ["node"], timeoutMs: 0 }],
+    [{ id: "check", command: ["node"], timeoutMs: 1.5 }],
+    [{ id: "check", command: ["node"], timeoutMs: 2147483648 }],
+    [{ id: "check", command: ["node"] }],
+    [{ id: "check", command: ["node"], timeoutMs: 1, shell: true }],
+    [{ id: "check", command: ["node"], timeoutMs: 1 }, { id: "check", command: ["node"], timeoutMs: 1 }],
+  ])("rejects malformed preparation commands %#", (preparationCommands) => {
+    expect(validateHarnessConfig({ ...validInput(), preparationCommands }).ok).toBe(false);
+  });
+});
+
 /**
  * Deep-clones the fixture and hands it to a mutation. The mutation sees an
  * untyped draft on purpose: most rows corrupt the fixture into a shape the

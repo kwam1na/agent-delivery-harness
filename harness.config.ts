@@ -70,7 +70,10 @@ export default defineHarnessConfig({
   ],
   ciPolicyEnvKey: "DELIVERY_HARNESS_CI_POLICY",
 
-  preparationWiringPaths: ["harness.config.ts"],
+  preparationWiringPaths: ["harness.config.ts", "package.json", "tsconfig.json", "tsconfig.vendored.json"],
+  preparationCommands: [
+    { id: "typecheck", command: ["npm", "run", "typecheck"], timeoutMs: 300000 },
+  ],
 
   providers: [{ id: "claude-code.ce-code-review", findingCodes: [] }],
   obligations: [

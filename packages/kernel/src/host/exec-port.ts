@@ -17,12 +17,16 @@ export interface ExecInvocation {
   readonly cwd?: string;
   /** Absent inherits the ambient environment; present replaces it entirely. */
   readonly env?: Readonly<Record<string, string>>;
+  readonly timeoutMs?: number;
+  readonly maxBuffer?: number;
+  readonly signal?: AbortSignal;
 }
 
 export interface ExecOutcome {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
+  readonly errorCode?: string;
 }
 
 export interface ExecPort {
@@ -41,7 +45,9 @@ export function createExecPort(): ExecPort {
             cwd: invocation.cwd,
             ...(invocation.env === undefined ? {} : { env: { ...invocation.env } }),
             encoding: "utf8",
-            maxBuffer: 16 * 1024 * 1024,
+            maxBuffer: invocation.maxBuffer ?? 16 * 1024 * 1024,
+            ...(invocation.timeoutMs === undefined ? {} : { timeout: invocation.timeoutMs, killSignal: "SIGKILL" as const }),
+            ...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
           },
           (error, stdout, stderr) => {
             const code =
@@ -50,7 +56,9 @@ export function createExecPort(): ExecPort {
                 : typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === "number"
                   ? ((error as unknown as { code: number }).code)
                   : 1;
-            resolve({ code, stdout, stderr });
+            resolve({ code, stdout, stderr,
+              ...(error === null ? {} : { errorCode: String(error.code ?? error.signal ?? "execution_failed") }),
+            });
           },
         );
       });
