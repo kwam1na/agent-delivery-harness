@@ -73,6 +73,9 @@ import {
   validateHarnessConfig,
   verifyDeliveryRecord,
   capturePortableVerificationInputs,
+  collectLiveProviderResults,
+  isObligationActive,
+  type CapturedCandidate,
   type Blocker,
   type BlockerSource,
   type CandidateCommandRunner,
@@ -146,6 +149,7 @@ export interface ActionRuntime {
   /** The checked-out repository root. Used as git's cwd, never as the identity source. */
   readonly workspace: string;
   readonly git: CandidateCommandRunner;
+  readonly signal?: AbortSignal;
   readonly readFile: (absolutePath: string) => Promise<string>;
   readonly loadConfig: (rootDir: string) => Promise<HarnessConfig>;
   /** Emits the check summary. In a runner this appends to `$GITHUB_STEP_SUMMARY`. */
@@ -271,6 +275,7 @@ const REFUSED_EVENT = "pull_request_target";
 
 interface PullRequestEvent {
   readonly headSha: string;
+  readonly baseSha: string | null;
   readonly headRef: string | null;
   readonly number: number | null;
 }
@@ -360,12 +365,14 @@ async function resolvePullRequestEvent(runtime: ActionRuntime): Promise<EventRes
   if (typeof headSha !== "string" || !HEAD_SHA_GRAMMAR.test(headSha)) {
     return unreadable(`the payload carries no usable pull_request.head.sha (${JSON.stringify(headSha ?? null)})`);
   }
+  const baseSha = readMember(readMember(pullRequest, "base"), "sha");
   const headRef = readMember(readMember(pullRequest, "head"), "ref");
   const number = readMember(pullRequest, "number");
   return {
     ok: true,
     event: {
       headSha,
+      baseSha: typeof baseSha === "string" && HEAD_SHA_GRAMMAR.test(baseSha) ? baseSha : null,
       headRef: typeof headRef === "string" ? headRef : null,
       number: typeof number === "number" && Number.isSafeInteger(number) ? number : null,
     },
@@ -971,14 +978,24 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
     }
 
     recordPath = selected.path;
-    const inputs = await capturePortableVerificationInputs(runtime.workspace, config, {
+    const candidate: CapturedCandidate = {
       vcs: "git", treeSha, headSha: event.event.headSha, mode: "clean", statusEntries: [], untrackedFiles: [],
       deliverable: { digest: identity.deliverableDigest, identity: identity.identityToken }, base,
       workspaceId: selected.record.workspaceId,
-    }, selected.record, runtime.git);
-    check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths, ...inputs,
+    };
+    const inputs = await capturePortableVerificationInputs(repoRoot, config, candidate, selected.record, runtime.git);
+    const activationThreshold = config.activationThreshold;
+    if (config.obligations.some(obligation => obligation.freshness === "live" &&
+      isObligationActive(obligation.activation, inputs.projection, activationThreshold)) && base.tipSha !== event.event.baseSha) {
+      blockers.push(actionBlocker({code:"live_provider_base_mismatch",summary:"The configured base does not match the pull request event base for live verification.",
+        remediations:[{id:"fetch-the-pull-request-base",kind:"manual_action",summary:"Fetch the pull request head and base, then rerun the check against that exact checkout."}]}));
+      return await settle();
+    }
+    const live = await collectLiveProviderResults({rootDir:repoRoot,config,candidate,projection:inputs.projection,evidenceContext:inputs.evidenceContext,
+      env:runtime.env,run:runtime.git,...(runtime.signal===undefined?{}:{signal:runtime.signal})});
+    check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths, ...inputs, liveResults:live.liveResults,
       executionContext: classifyExecutionContext({ config, env: runtime.env, stdinIsTTY: false, stdoutIsTTY: false }) });
-    blockers.push(...check.blockers);
+    if (!check.ok) blockers.push(...live.blockers, ...check.blockers);
     return await settle();
   } catch (error) {
     blockers.push(

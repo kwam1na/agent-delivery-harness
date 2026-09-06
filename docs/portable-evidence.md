@@ -39,3 +39,28 @@ An attributed durable human exception retains its author, reason, policy, approv
 Historical `delivery-record/1` files remain readable for history and record discovery. A selected version 1 record cannot satisfy verification; acquire and submit current evidence, then record with this version. Older private evidence without retained bytes also requires resubmission while the original artifacts are available.
 
 Each artifact is limited to 2 MiB, a manifest to 128 artifacts, each retained evidence payload to 8 MiB, and a delivery record to 16 MiB. Base64 must be canonical, and the exact retained set must match the manifest. Missing, empty, corrupt or oversized required evidence fails verification. Evidence remains untrusted input; artifact text is never executed.
+
+## Fresh live verification
+
+Both `delivery-harness verify` and the GitHub Action invoke configured active
+live `provider.command` entries through the same bounded provider rail used by
+the gate. Every verification starts new requests; stored run IDs and injected
+CLI observations cannot supply a fresh result. Missing commands, failed or
+cancelled attempts, and candidate movement fail closed through the existing
+evaluator. The CLI's `record` verifies the actual observations from its own gate
+invocation without running the providers twice.
+
+Live verification executes repository-owned code. Configure Actions to check
+out `github.event.pull_request.head.sha` with the configured base fetched.
+Before executing a live provider, the Action requires the working tree and HEAD
+to match that candidate and the configured base to match the event's base SHA.
+A synthetic merge checkout cannot supply live proof for the pull request head.
+The product rechecks source, HEAD, base, preparation wiring and installed release
+after execution. Recorded-only verification still reads evidence from the target
+commit and does not require its checkout.
+
+A repository-specific approval sensor may verify its own issuer and approval
+scope using a live provider. Its green result means that repository acceptance
+policy passed; it does not manufacture a generic human waiver. Preserve any
+attestation artifact separately through the declared evidence contract when the
+record needs to show what the sensor accepted.

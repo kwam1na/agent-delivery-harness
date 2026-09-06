@@ -22,7 +22,7 @@ import { CliInterruption, type CommandContext, type CommandDescriptor, type Comm
 export async function runProviderBackedAdmission(
   context: CommandContext,
   options: { readonly allowPrompt: boolean; readonly includeInjectedLiveResults: boolean },
-): Promise<AdmissionResult> {
+): Promise<AdmissionResult & { readonly observedLiveResults?: readonly LiveProviderResult[] }> {
   const wiring = await context.wire();
   const admissionOptions = {
     captureCandidate: wiring.captureCandidate,
@@ -108,14 +108,14 @@ export async function runProviderBackedAdmission(
     );
   }
 
-  if (admission.admitted) return admission;
+  if (admission.admitted) return { ...admission, observedLiveResults: liveResults };
   const final = await runAdmission(
     { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
     finalAdmissionOptions,
   );
   return attemptBlockers.length === 0 || final.admitted
-    ? final
-    : { ...final, blockers: [...attemptBlockers, ...final.blockers] };
+    ? { ...final, observedLiveResults: liveResults }
+    : { ...final, observedLiveResults: liveResults, blockers: [...attemptBlockers, ...final.blockers] };
 }
 
 export const gateCommand: CommandDescriptor = {

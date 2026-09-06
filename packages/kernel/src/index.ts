@@ -1010,3 +1010,6 @@ export { capturePortableEvidenceContext, repositoryEvidenceReader, verifyPortabl
 export type { PortableEvidence, PortableEvidenceContext } from "./records.types.ts";
 
 export { candidateTreeEvidenceReader, capturePortableVerificationInputs } from "./portable-inputs.ts";
+
+export * from "./provider-rails.ts";
+export * from "./live-providers.ts";

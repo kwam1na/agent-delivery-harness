@@ -90,7 +90,7 @@ export const recordCommand: CommandDescriptor = {
     const verificationInputs = await capturePortableVerificationInputs(context.rootDir, context.config, recheck.candidate, built.record);
     const checked = verifyDeliveryRecord(context.config, built.record,
       { deliverableDigest: recheck.candidate.deliverable.digest, identityToken: recheck.candidate.deliverable.identity }, recheck.candidate.base,
-      { ...verificationInputs, executionContext: context.classifyContext() });
+      { ...verificationInputs, liveResults: admission.observedLiveResults ?? [], executionContext: context.classifyContext() });
     if (!checked.ok) return { kind: "blocked", blockers: [...checked.blockers] };
     const relativePath = deliveryRecordPathFor(context.config, decision.candidate.deliverable.digest);
     const absolutePath = path.join(context.rootDir, relativePath);
