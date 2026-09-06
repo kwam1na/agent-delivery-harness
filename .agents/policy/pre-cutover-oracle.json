@@ -3,7 +3,7 @@
   "frozen": true,
   "capturedAt": "2026-09-06",
   "comparisonAuthority": "npm run check plus the delivery-harness gate loop (prepare, review-context, submit-evidence, gate, record, verify) and the hosted checks in .github/workflows",
-  "description": "Current candidate characterization, deliberately refreshed on 2026-09-06 for V26-1843's shipped emit-review-evidence command. The original 2026-08-31 pre-cutover capture remains in git history; its historical managed trust-lane provenance below does not attest this new command or upgrade self-attested review outcomes. Phase order, activation and blocker vocabulary remain compared with the live authority. scripts/policy-projection-check.ts pins these exact bytes so recharacterization remains a deliberate two-place edit.",
+  "description": "Current candidate characterization, deliberately refreshed on 2026-09-06 for the shipped evidence emitter and ordinary save-context/resume commands. The original 2026-08-31 pre-cutover capture remains in git history; its historical managed trust-lane provenance below does not attest this new command or upgrade self-attested review outcomes. Phase order, activation and blocker vocabulary remain compared with the live authority. scripts/policy-projection-check.ts pins these exact bytes so recharacterization remains a deliberate two-place edit.",
   "selfApplication": {
     "position": "This repository's policy governs deliveries into the repository that implements the policy compiler. The direction of authority is: the compiled policy that judges a delivery is the trusted pre-run copy bound at policy-bind time, and the compiler bytes that produced it are the pinned composition generation the product was installed from — never the candidate worktree. A candidate edit to .agents/policy/, to delivery/personas/, or to packages/kernel/src/policy/ is therefore a proposal for a future owner-approved policy generation.",
     "enforcedBy": [
@@ -23,7 +23,7 @@
       { "phase": "record", "command": "delivery-harness record" },
       { "phase": "verify", "command": "delivery-harness verify" }
     ],
-    "standaloneCommands": ["check", "managed", "maintain", "emit", "runs", "emit-review-evidence"],
+    "standaloneCommands": ["check", "managed", "maintain", "emit", "runs", "emit-review-evidence", "save-context", "resume"],
     "checkSuiteConstituents": ["typecheck", "sensor", "sensor:cli", "test"],
     "recordWrittenOnlyAfterGate": true
   },

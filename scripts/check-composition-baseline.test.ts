@@ -120,8 +120,8 @@ describe("locally executable assertions", () => {
   });
 
   it("ordinary harness execution cannot own a managed delivery run", () => {
-    // No command registers scoped work, persists checkpoints, resumes a
-    // delivery, consumes approvals, or actions a finish line.
+    // Ordinary resume reads observations and existing freshness sensors; it
+    // neither owns managed checkpoints nor consumes approvals or acts a finish line.
     const names = new Set(COMMANDS.map((command) => command.name));
     for (const absent of baseline.repositories.agentDeliveryHarness.absentDeliveryRunCommands) {
       expect(names.has(absent), `CLI already owns '${absent}'`).toBe(false);

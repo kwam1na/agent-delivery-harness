@@ -31,6 +31,47 @@ import { harnessConfigPresentAt, oneLine, oneLineOf } from "./run-surface.ts";
 /** The three labels every readout carries, so no reader mistakes this for evidence. */
 export const READOUT_LABELS = "self-attested; observability, not evidence; unbound to a record";
 
+export function costLabel(value: unknown): string {
+  const cost = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+  if (cost["coverage"] === "unreported" || cost["total"] === undefined) return "unreported";
+  const measured = `${oneLineOf(cost["total"])} ${oneLineOf(cost["unit"])}`.trim();
+  return cost["coverage"] === "partial" ? `${measured} (partial coverage)` : measured;
+}
+
+/** Aggregate only comparable review counters; the run-wide counter overlaps them. */
+export function projectCosts(events: readonly RunEvent[]) {
+  const closed = events.filter((event) => event.kind === "review.round.closed");
+  const totals = new Map<string, { unit: string; reportedBy: string; total: number | null }>();
+  let unreportedEntries = 0;
+  let partial = events.filter((event) => event.kind === "review.round.opened").length !== closed.length;
+  for (const event of closed) {
+    const cost = payloadOf(event)["cost"] as Record<string, unknown>;
+    if (cost["coverage"] === "unreported") {
+      unreportedEntries += 1;
+      continue;
+    }
+    if (cost["coverage"] === "partial") partial = true;
+    const unit = cost["unit"] as string;
+    const reportedBy = cost["reportedBy"] as string;
+    const key = JSON.stringify([reportedBy, unit]);
+    const prior = totals.get(key);
+    const sum = prior?.total === null ? Infinity : (prior?.total ?? 0) + (cost["total"] as number);
+    // The validated event keeps the original finite measurement even if a sum
+    // exceeds the numeric range. Null is unavailable, never measured zero.
+    if (!Number.isFinite(sum)) partial = true;
+    totals.set(key, { unit, total: Number.isFinite(sum) ? sum : null, reportedBy });
+  }
+  const ended = events.find((event) => event.kind === "run.ended");
+  return {
+    review: {
+      coverage: totals.size === 0 ? "unreported" : partial || unreportedEntries > 0 ? "partial" : "complete",
+      unreportedEntries,
+      totals: [...totals.values()],
+    },
+    run: ended === undefined ? { coverage: "unreported" } : payloadOf(ended)["cost"],
+  };
+}
+
 export const payloadOf = (event: RunEvent): Record<string, unknown> =>
   typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
 
@@ -57,7 +98,7 @@ export function detailOf(event: RunEvent): string {
     case "run.started":
       return oneLineOf(payload["host"]) + (payload["displacedRunId"] === undefined ? "" : ` displaced ${oneLineOf(payload["displacedRunId"])}`);
     case "run.ended":
-      return `${oneLineOf(payload["result"])} cost ${oneLineOf((payload["cost"] as { total?: unknown } | undefined)?.total)}`;
+      return `${oneLineOf(payload["result"])} cost ${costLabel(payload["cost"])}`;
     case "ticket.read":
       return `${oneLineOf(payload["ticket"])} via ${oneLineOf(payload["tracker"])}`;
     case "posture.declared":
@@ -80,6 +121,11 @@ export function detailOf(event: RunEvent): string {
       return `${oneLineOf(payload["fork"])} — ${oneLineOf(payload["choice"])}${payload["cited"] === undefined ? "" : ` (cited ${oneLineOf(payload["cited"])})`}`;
     case "compounding.recorded":
       return `${oneLineOf(payload["outcome"])}${payload["reference"] === undefined ? "" : ` — ${oneLineOf(payload["reference"])}`}`;
+    case "context.saved":
+      return `stage ${oneLineOf(payload["stage"])} (observation only)`;
+    case "action.intent":
+    case "action.observed":
+      return `${oneLineOf(payload["actionId"])} ${oneLineOf(payload["outcome"] ?? "unknown")} reference ${oneLineOf(payload["reference"])}`;
     default:
       return "";
   }
@@ -145,7 +191,7 @@ export function roundRows(events: readonly RunEvent[]): readonly string[] {
       `  round ${entry.round}`,
       `candidate ${entry.candidateTreeSha || "(none)"}`,
       entry.opened === undefined ? roundLenses(entry) : `lenses ${roundLenses(entry)}`,
-      closed === undefined ? "open" : `${oneLineOf(closed["outcome"])} findings ${oneLineOf(closed["findings"])} cost ${oneLineOf((closed["cost"] as { total?: unknown } | undefined)?.total)}`,
+      closed === undefined ? "open" : `${oneLineOf(closed["outcome"])} findings ${oneLineOf(closed["findings"])} cost ${costLabel(closed["cost"])}`,
     ].join("  ");
   });
 }

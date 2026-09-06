@@ -1184,6 +1184,54 @@ describe("emit, the boundary wrap, and runs", () => {
 
   // ── Neutralization ─────────────────────────────────────────────────────────
 
+  it("exports actual journal history and product accounting without turning missing cost into zero", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    for (const [round, cost] of [
+      [1, { unit: "tokens", total: 12, reportedBy: "codex" }],
+      [2, { coverage: "unreported", reportedBy: "codex" }],
+      [3, { unit: "usd", total: 0.5, reportedBy: "claude", coverage: "partial" }],
+    ] as const) {
+      expect((await emit(dir, ["review.round.opened"], { round, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code).toBe(EXIT_OK);
+      expect((await emit(dir, ["review.round.closed"], {
+        round, candidateTreeSha: TREE_SHA, outcome: "aligned",
+        findings: { P0: 0, P1: 1, P2: 0, P3: 0 }, cost,
+      })).code).toBe(EXIT_OK);
+    }
+    expect((await emit(dir, ["run.ended"], {
+      result: "partial", cost: { unit: "tokens", total: 100, reportedBy: "codex" },
+    })).code).toBe(EXIT_OK);
+    const before = await journalOf(dir, runId);
+    const shown = await cli(dir, ["runs", "show", runId, "--json"]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    const exported = JSON.parse(shown.out);
+    expect(exported.spec).toBe("delivery-run-export/1");
+    expect(exported.labels).toBe(READOUT_LABELS);
+    expect(exported.events).toEqual(before);
+    expect(exported.summary.roundsClosed).toBe(3);
+    expect(exported.summary.findings.P1).toBe(3);
+    expect(exported.costs.review).toEqual({
+      coverage: "partial", unreportedEntries: 1,
+      totals: [{ unit: "tokens", total: 12, reportedBy: "codex" }, { unit: "usd", total: 0.5, reportedBy: "claude" }],
+    });
+    // Run-wide counters and review counters can overlap. Never add them.
+    expect(exported.costs.run).toEqual({ unit: "tokens", total: 100, reportedBy: "codex" });
+    expect(await journalOf(dir, runId)).toEqual(before);
+  });
+
+  it("exports unreported cost for an open run and rejects ignored export arguments", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const shown = await cli(dir, ["runs", "show", runId, "--json"]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(JSON.parse(shown.out).costs).toEqual({
+      review: { coverage: "unreported", unreportedEntries: 0, totals: [] },
+      run: { coverage: "unreported" },
+    });
+    expect((await cli(dir, ["runs", "show", runId, "--jsno"])).code).toBe(EXIT_USAGE);
+    expect((await cli(dir, ["runs", "show", runId, "--json", "extra"])).code).toBe(EXIT_USAGE);
+  });
+
   it("renders executor free text inert and on one line", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);

@@ -1,5 +1,5 @@
 /**
- * Delivery harness CLI: the twelve-command operator surface.
+ * Delivery harness CLI: the fourteen-command operator surface.
  *
  * THE COMMAND REGISTRY. `COMMANDS` is the single source of truth for which
  * commands exist. Every command module under `commands/` must appear here, and
@@ -23,6 +23,8 @@ import { emitReviewEvidenceCommand } from "./commands/emit-review-evidence.ts";
 import { runsCommand } from "./commands/runs.ts";
 import { submitEvidenceCommand } from "./commands/submit-evidence.ts";
 import { verifyCommand } from "./commands/verify.ts";
+import { saveContextCommand } from "./commands/save-context.ts";
+import { resumeCommand } from "./commands/resume.ts";
 import { runCliBoundary, type AnyCommandDescriptor, type CliRuntime } from "./boundary.ts";
 
 export const PACKAGE_NAME = "@agent-delivery-harness/cli";
@@ -51,6 +53,8 @@ export const COMMANDS: readonly AnyCommandDescriptor[] = [
   maintainCommand,
   emitCommand,
   runsCommand,
+  saveContextCommand,
+  resumeCommand,
 ];
 
 export {
@@ -87,6 +91,8 @@ export { managedCommand } from "./commands/managed.ts";
 export { maintainCommand } from "./commands/maintain.ts";
 export { emitCommand } from "./commands/emit.ts";
 export { runsCommand } from "./commands/runs.ts";
+export { saveContextCommand } from "./commands/save-context.ts";
+export { resumeCommand } from "./commands/resume.ts";
 
 /** Runs the CLI against a runtime and returns the process exit code. */
 export function runCli(argv: readonly string[], runtime: CliRuntime): Promise<number> {
