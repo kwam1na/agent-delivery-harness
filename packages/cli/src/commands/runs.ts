@@ -22,8 +22,11 @@ import { evaluateRunJournal } from "@agent-delivery-harness/kernel";
 import {
   READOUT_LABELS,
   detailOf,
+  projectCosts,
+  readoutOf,
   readoutRows,
   roundRows,
+  summarize,
 } from "../run-projection.ts";
 import { startRunServer, type RunServerHandle } from "../run-server.ts";
 import {
@@ -38,7 +41,7 @@ import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescript
 
 const USAGE = [
   "Usage: delivery-harness runs list",
-  "       delivery-harness runs show <run-id>",
+  "       delivery-harness runs show <run-id> [--json]",
   "       delivery-harness runs serve [--repo <path>]... [--port <n>]",
 ].join("\n");
 
@@ -71,6 +74,9 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
     if (subcommand === "show" && rest[0] === undefined) {
       return { kind: "usage", message: `runs show needs a run id.\n${USAGE}` };
     }
+    if (subcommand === "show" && (rest.length > 2 || (rest[1] !== undefined && rest[1] !== "--json"))) {
+      return { kind: "usage", message: `runs show accepts only a run id and optional --json.\n${USAGE}` };
+    }
     // `serve` resolves its OWN repositories — one per `--repo`, none of them
     // necessarily the invoking worktree — so it never asks the invoking
     // worktree's store to resolve first.
@@ -81,7 +87,7 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
 
     return subcommand === "list"
       ? listRuns(resolved.surface, context)
-      : showRun(resolved.surface, context, rest[0]!);
+      : showRun(resolved.surface, context, rest[0]!, rest[1] === "--json");
   },
 };
 
@@ -128,7 +134,7 @@ async function listRuns(surface: RunSurface, context: ConfigFreeCommandContext):
 
 // ── show ─────────────────────────────────────────────────────────────────────
 
-async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, runId: string): Promise<CommandResult> {
+async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, runId: string, json: boolean): Promise<CommandResult> {
   const read = await surface.store.read(runId);
   if (!read.ok) {
     return {
@@ -145,6 +151,21 @@ async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, r
   }
 
   const events = read.events;
+  if (json) {
+    const worktreeRoot = await resolveWorktreeRoot(context.rootDir);
+    const rootDir = worktreeRoot.ok ? worktreeRoot.root : context.rootDir;
+    context.write(JSON.stringify({
+      spec: "delivery-run-export/1",
+      labels: READOUT_LABELS,
+      runId,
+      events,
+      summary: summarize(events),
+      costs: projectCosts(events),
+      readout: readoutOf(events, evaluateRunJournal(events), rootDir),
+      refusedAppends: await surface.store.readNotes(runId),
+    }, null, 2));
+    return { kind: "ok" };
+  }
   const open = !events.some((event) => event.kind === "run.ended");
   const current = await surface.store.current(surface.worktreeKey);
   const isCurrent = current.ok && current.runId === runId;

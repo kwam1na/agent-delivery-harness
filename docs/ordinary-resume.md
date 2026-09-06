@@ -42,3 +42,19 @@ Review-neutral raw-tree changes are reported; existing freshness sensors decide 
 Legacy `{ "unit": "tokens", "total": 120, "reportedBy": "host" }` remains valid. Hosts with incomplete counters can add `"coverage":"partial"`. A host without a counter reports `{ "coverage":"unreported", "reportedBy":"codex" }` in `review.round.closed` and `run.ended`. An unreported cost cannot carry a unit or numeric total. The terminal and browser show this coverage explicitly; zero is reserved for an actual measured zero.
 
 The recovery events and saved contract are self-attested observations. Admission continues to read the product's preparation receipts and evidence store, never the run journal.
+
+## Export a run
+
+`delivery-harness runs show <run-id> --json` emits `delivery-run-export/1` from
+the existing validated journal. It retains the actual events and refused append
+notes, the product's summary and completeness readout, and review cost totals
+grouped by reporting host and unit. Adopters can retain this output for their
+scorecards without implementing a separate accounting ledger. The export is
+read-only observability, unbound to a delivery record; it grants no admission.
+
+Missing counters remain unreported. Any unreported entry, partial counter, or
+unclosed review makes available review totals partial. A numeric overflow has
+a null total and partial coverage; original measurements remain in the events.
+Run-wide cost stays separate because it may already include the review cost.
+No currencies or units are converted. Consumers render free text as untrusted
+data, and keep the export's observability labels visible.

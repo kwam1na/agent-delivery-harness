@@ -38,6 +38,40 @@ export function costLabel(value: unknown): string {
   return cost["coverage"] === "partial" ? `${measured} (partial coverage)` : measured;
 }
 
+/** Aggregate only comparable review counters; the run-wide counter overlaps them. */
+export function projectCosts(events: readonly RunEvent[]) {
+  const closed = events.filter((event) => event.kind === "review.round.closed");
+  const totals = new Map<string, { unit: string; reportedBy: string; total: number | null }>();
+  let unreportedEntries = 0;
+  let partial = events.filter((event) => event.kind === "review.round.opened").length !== closed.length;
+  for (const event of closed) {
+    const cost = payloadOf(event)["cost"] as Record<string, unknown>;
+    if (cost["coverage"] === "unreported") {
+      unreportedEntries += 1;
+      continue;
+    }
+    if (cost["coverage"] === "partial") partial = true;
+    const unit = cost["unit"] as string;
+    const reportedBy = cost["reportedBy"] as string;
+    const key = JSON.stringify([reportedBy, unit]);
+    const prior = totals.get(key);
+    const sum = prior?.total === null ? Infinity : (prior?.total ?? 0) + (cost["total"] as number);
+    // The validated event keeps the original finite measurement even if a sum
+    // exceeds the numeric range. Null is unavailable, never measured zero.
+    if (!Number.isFinite(sum)) partial = true;
+    totals.set(key, { unit, total: Number.isFinite(sum) ? sum : null, reportedBy });
+  }
+  const ended = events.find((event) => event.kind === "run.ended");
+  return {
+    review: {
+      coverage: totals.size === 0 ? "unreported" : partial || unreportedEntries > 0 ? "partial" : "complete",
+      unreportedEntries,
+      totals: [...totals.values()],
+    },
+    run: ended === undefined ? { coverage: "unreported" } : payloadOf(ended)["cost"],
+  };
+}
+
 export const payloadOf = (event: RunEvent): Record<string, unknown> =>
   typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
 
