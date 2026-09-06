@@ -224,6 +224,10 @@ export function bindingOf(candidate: CandidateBinding): RecordCandidateBinding {
   };
 }
 
+function claimedManifestDigests(claims: readonly DeliveryRecordClaim[]): string[] {
+  return [...new Set(claims.flatMap(claim => [claim.manifestDigest, ...(Array.isArray(claim.supportingEvidence) ? claim.supportingEvidence.map((record: EvidenceRecord) => record?.resolution?.kind === "evidence" ? record.resolution.manifestDigest : undefined) : [])]).filter((digest): digest is string => typeof digest === "string"))];
+}
+
 function claimOf(
   resolution: GateDecision["resolutions"][number],
   evidenceByRecordId: ReadonlyMap<string, EvidenceRecord>,
@@ -297,7 +301,7 @@ export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliv
       return { ok: false, blockers: [portableBlocker("portable_evidence_missing", "Older summary-only evidence must be acquired and submitted again before recording.")] };
     }
   }
-  const distinctManifestDigests = [...new Set(claims.flatMap((claim) => (claim.manifestDigest === undefined ? [] : [claim.manifestDigest])))];
+  const distinctManifestDigests = claimedManifestDigests(claims);
 
   const record: DeliveryRecord = {
     version: DELIVERY_RECORD_VERSION,
@@ -806,14 +810,19 @@ function verifyRecordEvidence(config: HarnessConfig, record: DeliveryRecord, opt
   if (options.projection === undefined || options.executionContext === undefined) {
     return [...blockers, portableBlocker("portable_activation_missing", "Verification requires activation recomputed from the target candidate.")];
   }
-  const distinctDigests = [...new Set(record.claims.flatMap(claim => claim.manifestDigest === undefined ? [] : [claim.manifestDigest]))];
+  const distinctDigests = claimedManifestDigests(record.claims);
   if (record.manifestDigest !== (distinctDigests.length === 1 ? distinctDigests[0] : null)) blockers.push(portableBlocker("portable_manifest_summary", "The record manifest summary differs from its actual claims."));
   const records: EvidenceRecord[] = [];
   const ids = new Set<string>();
   const b = record.candidateBinding;
+  if (record.workspaceId !== b.workspaceId || record.identityToken !== b.identityToken) blockers.push(portableBlocker("portable_record_binding", "The record's audit binding is internally inconsistent."));
   for (const claim of record.claims) {
     if (ids.has(claim.obligationId)) blockers.push(portableBlocker("portable_claim_duplicate", "An obligation is claimed more than once."));
     ids.add(claim.obligationId);
+    if (claim.outcome === "satisfied_live_fact") {
+      const obligation = config.obligations.find(entry => entry.id === claim.obligationId);
+      if (obligation?.freshness !== "live" || claim.providerId === undefined || !obligation.providers.includes(claim.providerId) || !isNonEmptyString(claim.runId)) blockers.push(portableBlocker("portable_live_claim_invalid", "The historical live claim names no configured live provider and run."));
+    }
   }
   const expandedClaims: DeliveryRecordClaim[] = record.claims.flatMap(claim => [claim, ...(Array.isArray(claim.supportingEvidence) ? claim.supportingEvidence.map((evidence: EvidenceRecord) => ({
     ...claim, evidence, recordId: evidence?.recordId,
@@ -829,7 +838,7 @@ function verifyRecordEvidence(config: HarnessConfig, record: DeliveryRecord, opt
       }
       const resolution = evidence.resolution;
       const eb = evidence.candidateBinding;
-      if (evidence.recordId !== computeRecordId(evidence.workspaceId, evidence) || evidence.workspaceId !== eb.workspaceId ||
+      if (evidence.schemaVersion !== 1 || evidence.recordId !== computeRecordId(evidence.workspaceId, evidence) || evidence.workspaceId !== eb.workspaceId ||
           evidence.gateId !== config.gateId || evidence.obligationId !== claim.obligationId ||
           evidence.recordId !== claim.recordId || resolution.providerId !== claim.providerId || resolution.runId !== claim.runId ||
           resolution.finalPassId !== claim.finalPassId || resolution.manifestDigest !== claim.manifestDigest ||

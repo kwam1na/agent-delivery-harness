@@ -66,7 +66,10 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
   const evidenceContext = await capturePortableEvidenceContext(config, read, preparationFingerprint);
   const checkBindings = await captureCheckBindings(rootDir, config, candidate, { readWiring, readReleaseInputs: read,
     readOutput: async (repoPath, providerId) => {
-      const evidence = record.claims.find(claim => claim.providerId === providerId && claim.evidence?.resolution.kind === "evidence")?.evidence;
+      const evidence = record.claims.flatMap(claim => [
+        ...(claim.evidence === undefined ? [] : [claim.evidence]),
+        ...(claim.supportingEvidence ?? []),
+      ]).find(entry => entry.resolution.kind === "evidence" && entry.resolution.providerId === providerId);
       const portable = evidence?.resolution.kind === "evidence" ? evidence.resolution.portable : undefined;
       const contents = portableArtifactContents(portable?.artifacts);
       const index = config.providers.find(provider => provider.id === providerId)?.check?.outputs?.indexOf(repoPath) ?? -1;

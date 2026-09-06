@@ -35,6 +35,24 @@ async function fixture(command: readonly string[], outputs: string[] = [], timeo
 }
 
 describe("declared deterministic check providers", () => {
+  it("verifies retained check outputs after the original ignored output disappears", async () => {
+    const f = await fixture([process.execPath, "-e", "require('fs').writeFileSync('.git/result',Buffer.from([0,255,128,1]))"], [".git/result"]);
+    f.setConfig({ ...f.config,
+      providers: [...f.config.providers, { id: "check.second", findingCodes: [], check: {
+        command: [process.execPath, "-e", "require('fs').writeFileSync('.git/second-result','second')"],
+        timeoutMs: 5000, outputs: [".git/second-result"],
+      } }],
+      obligations: f.config.obligations.map(obligation => obligation.id === "validation.passed"
+        ? { ...obligation, providers: ["check.tests", "check.second"] } : obligation),
+    });
+    expect(await f.run("prepare")).toBe(0);
+    expect(await f.run("record"), f.err.join("\n")).toBe(0);
+    await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "portable evidence");
+    await rm(path.join(f.dir, ".git/result"));
+    await rm(path.join(f.dir, ".git/second-result"));
+    expect(await f.run("verify"), f.err.join("\n")).toBe(0);
+  }, 30_000);
+
   it("executes argv, validates outputs and reuses unchanged evidence", async () => {
     const f = await fixture([process.execPath, "-e", "const f=require('fs');f.appendFileSync('.git/calls','x');f.writeFileSync('.git/result','passed')"], [".git/result"]);
     expect(await f.run("prepare")).toBe(0);
