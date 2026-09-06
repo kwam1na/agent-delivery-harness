@@ -220,10 +220,10 @@ export interface Readout {
  * and a reader would eventually be told an entry is both present and missing —
  * which is exactly what a rewritten copy of the pairing rule did.
  */
-export function readoutOf(events: readonly RunEvent[], evaluation: RunJournalEvaluation, rootDir: string): Readout {
+export function readoutOf(events: readonly RunEvent[], evaluation: RunJournalEvaluation, rootDir?: string): Readout {
   const present = RUN_JOURNAL_REQUIRED_ENTRIES.filter((entry) => runJournalCarries(events, entry));
   const note =
-    evaluation.status === "complete-executor-only" && harnessConfigPresentAt(rootDir)
+    evaluation.status === "complete-executor-only" && rootDir !== undefined && harnessConfigPresentAt(rootDir)
       ? `no CLI gate completion in this journal; harness.config.ts present at ${oneLine(rootDir, 400)}`
       : undefined;
   return {

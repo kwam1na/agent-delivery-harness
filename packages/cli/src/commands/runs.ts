@@ -22,12 +22,10 @@ import { evaluateRunJournal } from "@agent-delivery-harness/kernel";
 import {
   READOUT_LABELS,
   detailOf,
-  projectCosts,
-  readoutOf,
   readoutRows,
   roundRows,
-  summarize,
 } from "../run-projection.ts";
+import { buildRunExport } from "../run-export.ts";
 import { startRunServer, type RunServerHandle } from "../run-server.ts";
 import {
   oneLine,
@@ -154,16 +152,12 @@ async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, r
   if (json) {
     const worktreeRoot = await resolveWorktreeRoot(context.rootDir);
     const rootDir = worktreeRoot.ok ? worktreeRoot.root : context.rootDir;
-    context.write(JSON.stringify({
-      spec: "delivery-run-export/1",
-      labels: READOUT_LABELS,
+    context.write(JSON.stringify(buildRunExport({
       runId,
       events,
-      summary: summarize(events),
-      costs: projectCosts(events),
-      readout: readoutOf(events, evaluateRunJournal(events), rootDir),
+      rootDir,
       refusedAppends: await surface.store.readNotes(runId),
-    }, null, 2));
+    }), null, 2));
     return { kind: "ok" };
   }
   const open = !events.some((event) => event.kind === "run.ended");

@@ -29,6 +29,7 @@ import {
 import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { READOUT_LABELS } from "./run-projection.ts";
+import { parseRunExport } from "./run-export.ts";
 import { DEFAULT_POLL_SECONDS, RUN_SERVER_CSP, escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
 import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface, resolveWorktreeRoot } from "./run-surface.ts";
 
@@ -1216,6 +1217,20 @@ describe("emit, the boundary wrap, and runs", () => {
     });
     // Run-wide counters and review counters can overlap. Never add them.
     expect(exported.costs.run).toEqual({ unit: "tokens", total: 100, reportedBy: "codex" });
+    expect(parseRunExport(shown.out).ok).toBe(true);
+    for (const mutate of [
+      (value: typeof exported) => { value.summary.findings.P1 = 0; },
+      (value: typeof exported) => { value.costs.review.totals[0].total = 0; },
+      (value: typeof exported) => { value.events[0].runId = "another-run"; },
+      (value: typeof exported) => { value.events[1].payload.round = "invalid"; },
+      (value: typeof exported) => { value.readout.missing = []; },
+      (value: typeof exported) => { value.labels = "independently verified evidence"; },
+    ]) {
+      const changed = structuredClone(exported);
+      mutate(changed);
+      expect(parseRunExport(JSON.stringify(changed)).ok).toBe(false);
+    }
+    expect(parseRunExport("{broken").ok).toBe(false);
     expect(await journalOf(dir, runId)).toEqual(before);
   });
 
