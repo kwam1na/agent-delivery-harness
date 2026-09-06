@@ -58,3 +58,10 @@ a null total and partial coverage; original measurements remain in the events.
 Run-wide cost stays separate because it may already include the review cost.
 No currencies or units are converted. Consumers render free text as untrusted
 data, and keep the export's observability labels visible.
+
+Repository sensors can import `parseRunExport` from the CLI API to validate a
+retained export. It validates the original events and recomputes summaries,
+costs, and completeness with the same projection used by the command. Changed
+totals or malformed events fail with `run_export_invalid`. Successful parsing
+only proves an internally consistent observation; it does not authenticate the
+executor, authorize an operation, or replace delivery-record verification.

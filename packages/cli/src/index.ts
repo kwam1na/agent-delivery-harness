@@ -27,6 +27,7 @@ import { resumeCommand } from "./commands/resume.ts";
 import { runCliBoundary, type AnyCommandDescriptor, type CliRuntime } from "./boundary.ts";
 
 export const PACKAGE_NAME = "@agent-delivery-harness/cli";
+export { buildRunExport, parseRunExport, type DeliveryRunExport, type RunExportParseResult } from "./run-export.ts";
 
 /**
  * The command registry. The order here is the order `--help` lists them, and it
