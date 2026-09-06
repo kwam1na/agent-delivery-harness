@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { digestCanonical, manifestDigest as digestManifest, sha256Hex } from "./digest.ts";
 import { defineHarnessConfig, type HarnessConfig, type HarnessConfigInput } from "./config.ts";
-import { RESOLUTION_OUTCOMES, type GateDecision, type ObligationResolution } from "./evaluator.ts";
+import { evaluateGate, RESOLUTION_OUTCOMES, type GateDecision, type ObligationResolution } from "./evaluator.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
 import type { EvidenceRecord, RecordCandidateBinding } from "./records.types.ts";
 import {
@@ -129,8 +129,8 @@ function evidenceResolution(obligationId: string, recordId: string): ObligationR
   };
 }
 
-function evidenceRecord(obligationId: string, _recordId: string, _manifestDigest: string, config = makeConfig()): EvidenceRecord {
-  const provider = { id: "p.reviewer", runId: "run-1", finalPassId: "pass-2", version: "1" };
+function evidenceRecord(obligationId: string, _recordId: string, _manifestDigest: string, config = makeConfig(), providerId = "p.reviewer"): EvidenceRecord {
+  const provider = { id: providerId, runId: "run-1", finalPassId: "pass-2", version: "1" };
   const candidate = { vcs: "git", ...CANDIDATE };
   const bytes = JSON.stringify({ schemaVersion: 1, reviewerId: "correctness", result: "approved", provider: { id: provider.id, runId: provider.runId, finalPassId: provider.finalPassId }, workspaceId: candidate.workspaceId, candidate });
   const manifest = { spec: "delivery-evidence/1", provider, candidate, repository: null, recordedAt: "2026-09-06T00:00:00Z",
@@ -207,6 +207,25 @@ describe("deliveryRecordPathFor", () => {
 // ── build ────────────────────────────────────────────────────────────────────
 
 describe("buildDeliveryRecord", () => {
+  it("retains every provider selected by the existing all-provider evaluator", () => {
+    const config = makeConfig({ providers: [{ id: "p.reviewer", findingCodes: [] }, { id: "p.security", findingCodes: [] }],
+      obligations: [{ ...obligation("review.green"), providers: ["p.reviewer", "p.security"] }] });
+    const evidenceRecords = [evidenceRecord("review.green", "", "", config), evidenceRecord("review.green", "", "", config, "p.security")];
+    const projection = { relevantLineCount: 1, relevantPaths: ["src.ts"], excludedPaths: [], binaryPaths: [], sensitivePathIds: [], hasRelevantBinaryChange: false, hasRelevantZeroLineChange: false, changedEntryCount: 1 };
+    const decision = evaluateGate({ config, candidate: CANDIDATE, projection, context: { kind: "agent", signal: "fixture" }, records: evidenceRecords });
+    expect(decision.admitted).toBe(true);
+    const built = buildDeliveryRecord({ config, decision, evidenceRecords });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.record.claims[0]?.supportingEvidence).toHaveLength(1);
+    expect(built.record.manifestDigest).toBeNull();
+    expect(verifyDeliveryRecord(config, built.record, RECOMPUTED, FRESH_BASE).ok).toBe(true);
+    const { integrityDigest: _, ...changed } = { ...built.record, claims: [{ ...built.record.claims[0]!, supportingEvidence: [] }], manifestDigest: built.record.claims[0]!.manifestDigest! };
+    const result = verifyDeliveryRecord(config, { ...changed, integrityDigest: digestCanonical(changed) }, RECOMPUTED, FRESH_BASE);
+    expect(result.ok).toBe(false);
+    expect(result.blockers.map(blocker => blocker.code)).toContain("review_evidence_missing");
+  });
+
   it("promotes an admitted decision, stamping evidence claims with their manifest digest", () => {
     const built = buildDeliveryRecord({
       config: makeConfig(),

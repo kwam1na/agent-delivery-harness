@@ -52,7 +52,7 @@ import { captureCheckBindings } from "./checks.ts";
 import { BlockedError, createBlocker, sanitizedDetail, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
 import { createArtifactsPort } from "./artifacts.ts";
 import type { ArtifactObservation, ArtifactsPort, RunRoot, RunRootRefusalReason, RunRootResolution } from "./artifacts.types.ts";
-import { capturePortableEvidenceContext, repositoryEvidenceReader, retainPortableEvidence } from "./portable-evidence.ts";
+import { capturePortableEvidenceContext, repositoryEvidenceReader, retainPortableEvidence, verifyPortableEvidence } from "./portable-evidence.ts";
 import {
   classifyCandidateDrift,
   type CandidateBinding,
@@ -532,6 +532,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
   }
 
   // ── The manifest's own rules ──
+  const checkBindings = captured === null ? {} : await captureCheckBindings(input.rootDir, input.config, captured, options);
   const validation = validateManifest(manifest, {
     config: input.config,
     // A candidate that could not be captured matches nothing: SUB-1 requires
@@ -541,7 +542,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
     currentCandidate: captured === null ? undefined : projectCapturedCandidate(captured, readMember(manifest, "candidate")),
     prepared: captured !== null,
     artifactContents,
-    checkBindings: captured === null ? {} : await captureCheckBindings(input.rootDir, input.config, captured, options),
+    checkBindings,
   });
   if (!validation.ok) rejections.push(...validation.rejections);
 
@@ -554,7 +555,10 @@ export async function submitManifest(input: SubmissionInput, options: Submission
   // ── SUB-4 ──
   try {
     const context = await capturePortableEvidenceContext(input.config, repositoryEvidenceReader(input.rootDir, artifacts), preparationFingerprint!);
-    return publishClaims(input, options, validation.manifest, retainPortableEvidence(validation.manifest, observations, context));
+    const portable = retainPortableEvidence(validation.manifest, observations, context);
+    const blockers = verifyPortableEvidence(input.config, portable, recordBinding(validation.manifest), context, checkBindings);
+    if (blockers.length > 0) return blockedOutcome(blockers);
+    return publishClaims(input, options, validation.manifest, portable);
   } catch (error) {
     if (error instanceof BlockedError) return blockedOutcome(error.blockers);
     return blockedOutcome([submissionBlocker("portable_context_invalid", "The accepted evidence inputs could not be retained.", error instanceof Error ? error.message : String(error), RESUBMIT)]);
