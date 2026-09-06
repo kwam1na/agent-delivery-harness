@@ -285,6 +285,13 @@ export interface DeliveryRecordVerification {
   readonly baseMovement: BaseMovementPolicy;
 }
 
+/** Repository-selected review policy, added to the installed default charters. */
+export interface AdditionalReviewLens {
+  readonly lensId: string;
+  readonly reviewerId: string;
+  readonly charterPath: string;
+}
+
 export interface HarnessConfig {
   readonly gateId: string;
   readonly baseRef: string;
@@ -303,6 +310,7 @@ export interface HarnessConfig {
   readonly ciPolicyEnvKey: string;
   readonly preparationWiringPaths: readonly string[];
   readonly preparationCommands?: readonly PreparationCommand[];
+  readonly additionalReviewLenses?: readonly AdditionalReviewLens[];
   readonly obligations: readonly ObligationPolicy[];
   readonly deliveryRecordPath: string;
   readonly deliveryRecordVerification: DeliveryRecordVerification;
@@ -809,13 +817,36 @@ const CONFIG_MEMBERS = [
   "ciPolicyEnvKey",
   "preparationWiringPaths",
   "preparationCommands",
+  "additionalReviewLenses",
   "obligations",
   "deliveryRecordPath",
   "deliveryRecordVerification",
 ] as const;
 
-/** The members `defineHarnessConfig` fills in when the author omits them. */
-const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification"] as const;
+/** Members the author may omit. Optional extensions stay absent when unused. */
+const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification", "preparationCommands", "additionalReviewLenses"] as const;
+
+function readAdditionalReviewLenses(findings: FindingList, value: unknown): readonly AdditionalReviewLens[] | undefined {
+  const entries = readArray(findings, "additionalReviewLenses", value);
+  if (entries === undefined) return undefined;
+  const lenses: AdditionalReviewLens[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const member = `additionalReviewLenses[${index}]`;
+    if (!isRecord(entry)) {
+      findings.add("config_invalid_member", member, "must name a lens, reviewer, and repository charter path");
+      continue;
+    }
+    checkClosed(findings, member, entry, ["lensId", "reviewerId", "charterPath"]);
+    const lensId = readString(findings, `${member}.lensId`, entry["lensId"], { pattern: ID_PATTERN, describe: "a lens id" });
+    const reviewerId = readString(findings, `${member}.reviewerId`, entry["reviewerId"], { pattern: ID_PATTERN, describe: "a reviewer id" });
+    const charterPath = readString(findings, `${member}.charterPath`, entry["charterPath"], { path: true, describe: "a repo-relative charter file" });
+    if (charterPath?.endsWith("/")) findings.add("config_invalid_member", `${member}.charterPath`, "must name a file, not a directory prefix");
+    if (lensId !== undefined && reviewerId !== undefined && charterPath !== undefined) lenses.push({ lensId, reviewerId, charterPath });
+  }
+  checkDuplicateIds(findings, "additionalReviewLenses.lensId", lenses.map((lens) => lens.lensId));
+  checkDuplicateIds(findings, "additionalReviewLenses.reviewerId", lenses.map((lens) => lens.reviewerId));
+  return lenses;
+}
 
 function readShape(findings: FindingList, input: unknown): HarnessConfig | undefined {
   if (!isRecord(input)) {
@@ -983,6 +1014,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     input["preparationWiringPaths"] === undefined
       ? undefined
       : readStringArray(findings, "preparationWiringPaths", input["preparationWiringPaths"], { path: true, describe: "a repo-relative path" });
+  const additionalReviewLenses = input["additionalReviewLenses"] === undefined ? undefined : readAdditionalReviewLenses(findings, input["additionalReviewLenses"]);
 
   let preparationCommands: PreparationCommand[] | undefined;
   if (input["preparationCommands"] !== undefined) {
@@ -1090,7 +1122,9 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     agentEnvSignals,
     ciPolicies,
     ciPolicyEnvKey,
-    preparationWiringPaths,
+    preparationWiringPaths: additionalReviewLenses === undefined ? preparationWiringPaths :
+      [...new Set([...preparationWiringPaths, ...additionalReviewLenses.map((lens) => lens.charterPath)])],
+    ...(additionalReviewLenses === undefined ? {} : { additionalReviewLenses }),
     ...(preparationCommands === undefined ? {} : { preparationCommands }),
     obligations,
     deliveryRecordPath,
