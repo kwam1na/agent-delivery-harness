@@ -21,7 +21,7 @@ export const prepareCommand: CommandDescriptor = {
   summary: "Capture the candidate and publish its preparation receipt.",
   async run(context: CommandContext): Promise<CommandResult> {
     const wiring = await context.wire();
-    await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
+    const attemptId = await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
     const capture = await wiring.captureCandidate();
     if (!capture.ok) {
       return { kind: "blocked", blockers: [...capture.blockers] };
@@ -65,7 +65,7 @@ export const prepareCommand: CommandDescriptor = {
     }
     const published = await publishPreparationReceipt(
       context.rootDir,
-      { config: context.config, candidate: capture.candidate },
+      { config: context.config, candidate: capture.candidate, attemptId },
       wiring.storageOptions,
     );
     // The labelled line exists so a reader — an operator or a review round

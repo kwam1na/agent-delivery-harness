@@ -44,6 +44,7 @@ import {
   PREPARATION_RECEIPT_SCHEMA_VERSION,
   computePreparationFingerprint,
   evaluatePreparationReceipt,
+  invalidatePreparationReceipt,
   publishPreparationReceipt,
   receiptFileName,
   resolveReceiptStorage,
@@ -171,6 +172,24 @@ async function tempRepo(label = "repo"): Promise<string> {
 // ── Fingerprint ────────────────────────────────────────────────────────────
 
 describe("the preparation fingerprint", () => {
+  it("refuses an older receipt even if a racing writer restores its bytes after invalidation", async () => {
+    const tree = await tempTree();
+    const options = { storageRoot: tree.storageRoot };
+    const attemptId = await invalidatePreparationReceipt(tree.rootDir, CONFIG, options);
+    const subject = candidate();
+    const input = { config: CONFIG, candidate: subject, attemptId };
+    const published = await publishPreparationReceipt(tree.rootDir, input, options);
+    const receiptBytes = readFileSync(published.path, "utf8");
+    expect((await evaluatePreparationReceipt(tree.rootDir, input, options)).prepared).toBe(true);
+    const newerAttemptId = await invalidatePreparationReceipt(tree.rootDir, CONFIG, options);
+    writeFileSync(published.path, receiptBytes);
+    const stale = await evaluatePreparationReceipt(tree.rootDir, input, options);
+    expect(stale.prepared).toBe(false);
+    if (!stale.prepared) expect(stale.failure).toBe("stale");
+    await expect(publishPreparationReceipt(tree.rootDir, input, options)).rejects.toThrow(BlockedError);
+    await publishPreparationReceipt(tree.rootDir, { ...input, attemptId: newerAttemptId }, options);
+    expect((await evaluatePreparationReceipt(tree.rootDir, input, options)).prepared).toBe(true);
+  });
   it("binds preparation command order, argv, and timeout without changing no-command receipts", async () => {
     const tree = await tempTree();
     const first = { id: "first", command: ["npm", "run", "typecheck"] as const, timeoutMs: 1000 };

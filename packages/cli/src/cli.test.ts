@@ -24,6 +24,8 @@ import {
   deliveryRecordPathFor,
   parseDeliveryRecord,
   resolveRecordStorage,
+  resolveReceiptStorage,
+  receiptFileName,
   runAdmission,
   sha256Hex,
   withDeliverableIdentity,
@@ -118,6 +120,52 @@ function makeConfig(overrides: Partial<HarnessConfigInput> = {}): HarnessConfig 
 // ── Repo fixtures ────────────────────────────────────────────────────────────
 
 describe("mechanical preparation", () => {
+  it("revokes an earlier receipt before replacement commands execute", async () => {
+    const dir = await initRepo();
+    const { storageDir } = await resolveReceiptStorage(dir);
+    const receipt = path.join(storageDir, receiptFileName("test.gate"));
+    const config = makeConfig({ preparationCommands: [
+      { id: "check-revoked", command: [process.execPath, "-e", "if(require('node:fs').existsSync(process.argv[1])) process.exit(17)", receipt], timeoutMs: 5000 },
+    ] });
+    const { runtime } = makeRuntime(dir, config, await makeArtifacts());
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    expect(existsSync(receipt)).toBe(true);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_OK);
+  });
+
+  it.each(["older-first", "newer-first"])("rejects superseded overlapping preparation (%s)", async (order) => {
+    const dir = await initRepo();
+    const script = `const f=require('node:fs'); const p=require('node:path');
+      const root=process.argv[1]; let older=true;
+      try { f.writeFileSync(p.join(root,'claimed'), '', {flag:'wx'}); } catch { older=false; }
+      const label=older?'older':'newer'; f.writeFileSync(p.join(root,label+'-started'), '');
+      const timer=setInterval(()=>{if(f.existsSync(p.join(root,label+'-release'))){clearInterval(timer); process.exit(older?0:9)}}, 5);`;
+    const config = makeConfig({ preparationCommands: [
+      { id: "overlap", command: [process.execPath, "-e", script, path.join(dir, ".git")], timeoutMs: 10000 },
+    ] });
+    const first = makeRuntime(dir, config, await makeArtifacts());
+    const second = makeRuntime(dir, config, await makeArtifacts());
+    const older = runCli(["prepare"], first.runtime);
+    let newer: Promise<number> | undefined;
+    try {
+      await vi.waitFor(() => expect(existsSync(path.join(dir, ".git/older-started"))).toBe(true), { timeout: 3000 });
+      newer = runCli(["prepare"], second.runtime);
+      await vi.waitFor(() => expect(existsSync(path.join(dir, ".git/newer-started"))).toBe(true), { timeout: 3000 });
+      const firstLabel = order === "older-first" ? "older" : "newer";
+      const secondLabel = order === "older-first" ? "newer" : "older";
+      await writeFile(path.join(dir, `.git/${firstLabel}-release`), "");
+      expect(await (order === "older-first" ? older : newer)).toBe(EXIT_POLICY);
+      expect(await runCli(["review-context"], first.runtime)).toBe(EXIT_POLICY);
+      await writeFile(path.join(dir, `.git/${secondLabel}-release`), "");
+      expect(await (order === "older-first" ? newer : older)).toBe(EXIT_POLICY);
+      expect(await runCli(["review-context"], first.runtime)).toBe(EXIT_POLICY);
+    } finally {
+      await writeFile(path.join(dir, ".git/older-release"), "");
+      await writeFile(path.join(dir, ".git/newer-release"), "");
+      await Promise.all([older, newer]);
+    }
+  });
   it("runs configured argv checks in order before issuing a usable receipt", async () => {
     const dir = await initRepo();
     const marker = path.join(dir, ".git", "preparation-order");

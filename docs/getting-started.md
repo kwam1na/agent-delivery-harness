@@ -347,6 +347,11 @@ stderr and stdout. Only successful checks followed by an unchanged candidate, ba
 wiring fingerprint publish a receipt. Changing command arguments, order, or
 timeouts also changes the preparation fingerprint. Repairing a failed check
 requires a new successful preparation; an earlier success cannot authorize it.
+Each attempt replaces a worktree-local token next to the receipt. Publication
+and evaluation check the token, so an older overlapping attempt cannot restore
+a usable receipt after a newer attempt starts, including when the newer one
+fails. The next preparation supersedes interrupted attempts without a lock or
+manual cleanup.
 
 ```sh
 delivery-harness prepare
