@@ -75,13 +75,9 @@ export interface EvidenceResolution {
 }
 
 /**
- * A waiver, which has no provider and no run: nobody produced evidence, someone
- * decided to proceed without it. Dropping the provider triple from the identity
- * is what makes a waiver idempotent per candidate — a second waiver for the
- * same obligation on the same candidate is the same record, not another one.
- *
- * `scope` rides on the record but stays out of the identity, so re-waiving one
- * candidate at a different scope is a conflict rather than a silent upgrade.
+ * A waiver has no provider run: a human accepted a scoped exception. Its full
+ * attribution participates in identity, so another approval can coexist while
+ * a byte-identical approval remains idempotent. Nothing overwrites prior approval.
  */
 export interface WaiverResolution {
   readonly kind: "waiver";
@@ -129,13 +125,14 @@ export interface EvidenceRecordIdentity {
   readonly finalPassId: string;
 }
 
-/** The same tuple in its waiver spelling: the discriminant replaces the triple. */
+/** The waiver spelling binds the attributed approval instead of a provider run. */
 export interface WaiverRecordIdentity {
   readonly workspaceId: string;
   readonly gateId: string;
   readonly obligationId: string;
   readonly candidateBinding: RecordCandidateBinding;
   readonly kind: "waiver";
+  readonly approval: WaiverResolution;
 }
 
 export type RecordIdentity = EvidenceRecordIdentity | WaiverRecordIdentity;

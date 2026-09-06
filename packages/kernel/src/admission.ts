@@ -87,7 +87,7 @@ export type WaiverApproval = { readonly author: string; readonly reason: string 
 export type WaiverPrompt = (decision: GateDecision, obligationIds: readonly string[]) => Promise<false | WaiverApproval>;
 
 /** How the interactive waiver offer resolved, for a caller that reports it. */
-export type WaiverPromptOutcome = "not_offered" | "accepted" | "declined" | "candidate_changed";
+export type WaiverPromptOutcome = "not_offered" | "accepted" | "declined" | "candidate_changed" | "scope_changed";
 
 export interface AdmissionInput {
   readonly rootDir: string;
@@ -437,6 +437,19 @@ async function admit(input: AdmissionInput, options: AdmissionOptions): Promise<
 
   // Exact-candidate approvals survive the separate human `record` invocation.
   // Live obligations still require approval during each invocation.
+  const currentStore = await mapStore(input, options, candidate);
+  const currentPass = evaluateGate(gateInput(input, candidate, projection, currentStore, [], []));
+  const findingScope = (decision: GateDecision) => decision.resolutions
+    .filter((resolution): resolution is BlockedResolution => resolution.kind === "blocked")
+    .map((resolution) => ({ obligationId: resolution.obligationId, codes: [...new Set(resolution.blockers.map((blocker) => blocker.code))].sort() }))
+    .sort((left, right) => left.obligationId.localeCompare(right.obligationId));
+  if (digestCanonical(findingScope(firstPass)) !== digestCanonical(findingScope(currentPass))) {
+    return blocked({ waiver: "scope_changed", waivedObligationIds: [], waiverRecordIds: [], candidate, context: input.context, decision: currentPass,
+      blockers: [...currentPass.blockers, createBlocker({ code: "waiver_scope_changed", source: { kind: "gate", id: input.config.gateId },
+        summary: "The findings changed while the human exception was being approved.",
+        remediations: [{ id: "reevaluate-waiver", kind: "manual_action", summary: "Run the gate again and review the current findings before approving an exception." }],
+      })] });
+  }
   const publishWaiver = options.publishWaiver ?? ((rootDir, binding, obligationId, resolution) =>
     publishRecord(rootDir, { gateId: input.config.gateId, obligationId, candidateBinding: binding, resolution }, storageOptions(options)));
   const binding = recordBindingOf(candidate);
@@ -454,7 +467,8 @@ async function admit(input: AdmissionInput, options: AdmissionOptions): Promise<
     grantedIds.push(record.record.recordId);
   }
 
-  const secondPass = evaluateGate(gateInput(input, candidate, projection, store, published, grantedIds));
+  const finalStore = await mapStore(input, options, candidate);
+  const secondPass = evaluateGate(gateInput(input, candidate, projection, finalStore, published, grantedIds));
   return {
     admitted: secondPass.admitted,
     blockers: secondPass.blockers,

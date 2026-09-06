@@ -53,6 +53,11 @@ approval. Existing evidence records retain their format. Exact-candidate
 waivers can be consumed by a subsequent human `record` command on that same
 candidate and policy; agent invocations cannot grant or reuse an unattested
 human waiver. Live waivers remain invocation-scoped.
+Each distinct attributed approval has its own content-addressed record; a later
+live approval can name a different author or reason without overwriting history.
+Admission rechecks the evidence store after the prompt and rejects changed
+findings before publishing approval. Portable verification applies the same
+live versus durable scope rule as local admission.
 
 ## The both-neutral-sets requirement
 

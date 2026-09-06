@@ -851,8 +851,15 @@ describe("waiver scoping", () => {
 
   it("does not honor a durable waiver on a live obligation", () => {
     const config = testConfig({ obligations: [obligation({ freshness: "live" })] });
-    const decision = evaluate({ config, context: HUMAN, records: [waiver({ scope: "durable" })] });
+    const decision = evaluate({ config, context: HUMAN, records: [waiver({ config, scope: "durable" })] });
     expect(only(decision).kind).toBe("blocked");
+  });
+
+  it("rejects raw-tree-only movement of an otherwise current human approval", () => {
+    const config = testConfig();
+    expect(evaluate({ config, context: HUMAN, records: [waiver({ config })] }).admitted).toBe(true);
+    const changed = waiver({ config, binding: { ...boundTo(), treeSha: "different-raw-tree" } });
+    expect(evaluate({ config, context: HUMAN, records: [changed] }).admitted).toBe(false);
   });
 
   it("honors an invocation waiver this invocation granted", () => {

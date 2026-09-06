@@ -723,6 +723,7 @@ export function verifyDeliveryRecord(
       const obligation = config.obligations.find((entry) => entry.id === claim.obligationId);
       if (!isAttributedWaiver(waiver) || claim.scope !== waiver.scope ||
           !obligation?.humanWaiverAllowed || !obligation.allowedResolutionKinds.includes("waived") ||
+          (obligation.freshness === "live" && waiver.scope !== "invocation") ||
           waiver.policyDigest !== digestCanonical(config) ||
           BINDING_FIELDS.some((field) => waiver.candidateBinding[field] !== binding[field]) ||
           waiver.findingCodes.some((code) => NON_WAIVABLE_INTEGRITY_CODES.includes(code) ||

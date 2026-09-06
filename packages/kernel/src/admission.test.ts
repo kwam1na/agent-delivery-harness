@@ -351,6 +351,28 @@ describe("admission: the two-pass waiver flow", () => {
     expect(stored.records[0]?.resolution).toMatchObject({ kind: "waiver", scope: "invocation" });
     const later = await runAdmission({ rootDir: repo, config, context: HUMAN }, baseOptions(candidate));
     expect(later.admitted).toBe(false);
+    const renewed = await runAdmission({ rootDir: repo, config, context: HUMAN }, baseOptions(candidate, {
+      promptForWaiver: async () => ({ author: "Another Operator", reason: "Fresh approval of this live check" }),
+    }));
+    expect(renewed.admitted).toBe(true);
+    expect(await waiverRecordCount(repo, config.gateId, "check.live")).toBe(2);
+  });
+
+  it("rejects changed evidence scope while the human prompt is open", async () => {
+    const repo = await tempRepo();
+    const candidate = capturedCandidate(await storeWorkspaceId(repo));
+    const config = testConfig([obligation({ id: "review.green", freshness: "exact_candidate", providers: ["rev"], humanWaiverAllowed: true, waivableCodes: ["review_evidence_missing"] })]);
+    await prepare(repo, config, candidate);
+    const result = await runAdmission({ rootDir: repo, config, context: HUMAN }, baseOptions(candidate, {
+      promptForWaiver: async () => {
+        await publishRecord(repo, { gateId: config.gateId, obligationId: "review.green", candidateBinding: recordBinding(candidate),
+          resolution: { kind: "evidence", providerId: "unknown", runId: "new", finalPassId: "final", manifestDigest: "f".repeat(64) } });
+        return { author: "Test Operator", reason: "Only the displayed missing review was approved" };
+      },
+    }));
+    expect(result.admitted).toBe(false);
+    expect(blockerCodes(result)).toContain("unknown_provider");
+    expect(await waiverRecordCount(repo, config.gateId, "review.green")).toBe(0);
   });
 
   it("refuses approval when policy wiring changes during the prompt", async () => {

@@ -332,6 +332,17 @@ describe("portable human exceptions", () => {
     const value = record();
     expect(parseDeliveryRecord(JSON.stringify({ ...value, claims: [{ obligationId: "review.green", outcome: "waived", scope: "durable" }] })).ok).toBe(false);
   });
+  it("rejects changing both scope fields to durable for a live obligation", () => {
+    const liveObligation = { ...obligation("review.green"), freshness: "live" as const,
+      waivableCodes: [...STRUCTURAL_WAIVABLE, "live_provider_missing"],
+      nonWaivableCodes: STRUCTURAL_NONWAIVABLE.filter((code) => code !== "live_provider_missing") };
+    const config = makeConfig({ obligations: [liveObligation] });
+    const value = record();
+    const waiver = { ...approval, findingCodes: ["live_provider_missing"], scope: "invocation" as const, policyDigest: digestCanonical(config), candidateBinding: RECORD_BINDING };
+    const claim = { ...value.claims[0]!, scope: "invocation", waiver };
+    expect(verifyDeliveryRecord(config, { ...value, claims: [claim] }, RECOMPUTED, FRESH_BASE).ok).toBe(true);
+    expect(verifyDeliveryRecord(config, { ...value, claims: [{ ...claim, scope: "durable", waiver: { ...waiver, scope: "durable" } }] }, RECOMPUTED, FRESH_BASE).ok).toBe(false);
+  });
   it.each(["policy", "candidate", "integrity"])("rejects an exception with mismatched %s in the verifier", (mutation) => {
     const value = record();
     const waiver = { ...approval, candidateBinding: RECORD_BINDING,

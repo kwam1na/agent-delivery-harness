@@ -711,6 +711,7 @@ function waiverFor(input: EvaluateGateInput, obligation: ObligationPolicy, pendi
           record.candidateBinding.treeSha !== input.candidate.treeSha ||
           !waiver.author?.trim() || !waiver.reason?.trim() ||
           !Array.isArray(waiver.findingCodes) ||
+          waiver.findingCodes.some((code) => NON_WAIVABLE_INTEGRITY_CODES.includes(code) || nonWaivable.has(code) || !waivable.has(code)) ||
           pending.some((finding) => !waiver.findingCodes.includes(finding.code))) return false;
       if (record.resolution.scope === "invocation") return granted.has(record.recordId);
       return !invocationOnly;

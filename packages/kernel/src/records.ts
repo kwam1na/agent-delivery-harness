@@ -298,8 +298,8 @@ export async function resolveRecordStorage(
  *
  * The evidence spelling names the run that produced the evidence, so re-running
  * a provider yields a new record rather than overwriting the old one. The
- * waiver spelling has no run to name: it collapses to the discriminant, which
- * is exactly why waiving one obligation on one candidate twice is one record.
+ * waiver spelling binds the attributed approval. Repeating identical approval
+ * is idempotent; a different human, reason or scope yields a distinct record.
  */
 export function recordIdentity(workspaceId: string, input: PublishRecordInput): RecordIdentity {
   const common = {
@@ -309,7 +309,7 @@ export function recordIdentity(workspaceId: string, input: PublishRecordInput): 
     candidateBinding: input.candidateBinding,
   };
   return input.resolution.kind === "waiver"
-    ? { ...common, kind: "waiver" }
+    ? { ...common, kind: "waiver", approval: input.resolution }
     : {
         ...common,
         providerId: input.resolution.providerId,
