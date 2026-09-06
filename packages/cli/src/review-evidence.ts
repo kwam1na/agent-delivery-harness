@@ -1,75 +1,32 @@
 /**
- * This repository's review-evidence provider.
+ * The shipped review-outcome evidence writer. It transcribes concluded host
+ * results without running reviewers or upgrading their self-attestation.
  *
- * The gate declared in `harness.config.ts` carries one obligation — a green
- * code review, submitted as `review.green/1` evidence — and until this script
- * existed nothing in the tree emitted that evidence. Every delivery re-derived
- * an ad-hoc emitter and kept it outside the worktree (an untracked file refuses
- * the capture), which left the one artifact that decides what the gate is told
- * about a review unreviewed, unversioned, and gone with the session.
+ * Capture `delivery-harness review-context --json` before review, then pass
+ * that original document to `emit-review-evidence --context <path>` with a
+ * review-outcome/1 document on stdin naming its contextDigest. Reviewer names
+ * come from the resolved activated charters; for example a named result is
+ * `{ "id": "outcome-correctness", "result": "rejected" }`.
  *
- * WHAT IT IS NOT. It is not a reviewer, and it does not judge. It transcribes a
- * concluded review outcome — read from standard input, so running it needs no
- * file outside the tree — into a `delivery-evidence/1` manifest bound to the
- * candidate the recorder will re-capture, and prints the manifest path. A
- * non-green outcome produces a non-green manifest, which the recorder refuses
- * (RG-1); the refusal is the harness's judgement, and a provider that declined
- * to emit would hide the review instead of reporting it.
- *
- * WHAT IT RESOLVES RATHER THAN ASSERTS, because each of these is a way an
- * emitter can quietly stop describing this repository:
- *
- *   - The reviewer set is the compiled policy's own activated lenses, and each
- *     lens's charter is read from the installed generation the release
- *     shipped it in, its bytes checked against the digest the compiled
- *     snapshot resolved. Activating a lens moves the reviewer set with it; a
- *     charter the installation does not carry, or whose bytes have drifted
- *     from the compiled policy's, refuses the emission rather than reviewing
- *     under a charter nobody approved. An outcome that leaves a lens
- *     unrepresented — or names a reviewer no activated lens defines — is
- *     refused rather than emitted.
- *   - The reviewer IDS of the outcome document itself, when it does not carry
- *     them. They are charter-path basenames inside the installed archive, so a
- *     caller that restates them is redoing this resolution with no way to
- *     check its answer. An outcome may carry one result per selected reviewer
- *     and nothing else. It may not distinguish its reviewers without naming
- *     them: unnamed results that disagree would be assigned by their order,
- *     and are refused.
- *   - The obligation and provider are read from the loaded config: the one
- *     obligation accepting `review.green/1`, and the one provider it names.
- *   - Every telemetry number is derived from the findings the outcome carries,
- *     the way RG-8 re-derives them, so a constant cannot survive submission.
- *
- * Usage (`--silent` keeps npm's banner out of the captured path):
- *
- *   MANIFEST="$(npm run --silent review:evidence <<'JSON'
- *   { "spec": "review-outcome/1", "verdict": "green",
- *     "reviewers": [{ "result": "approved" }, { "result": "approved" }],
- *     "findings": [] }
- *   JSON
- *   )"
- *   delivery-harness submit-evidence --manifest "$MANIFEST"
- *
- * One entry per reviewer the policy selects, in either form: the unnamed one
- * above, or the named one a review whose reviewers disagreed has to use —
- * `{ "id": "outcome-correctness", "result": "rejected" }` — which is held to
- * the same policy-selected set in both directions.
+ * The raw context and outcome remain digest-bound artifacts. Submission is
+ * still the authority on whether the resulting evidence satisfies the gate.
  */
-import { realpathSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   PERSONA_MANIFEST_ENTRY,
   PERSONA_MANIFEST_SPEC,
-  captureGitCandidate,
-  createArtifactsPort,
-  resolveRecordStorage,
+  BlockedError,
+  digestCanonical,
+  evaluatePreparationReceipt,
   sha256Hex,
-  withDeliverableIdentity,
+  type CapturedCandidate,
+  type PreparationReceipt,
   type HarnessConfig,
 } from "@agent-delivery-harness/kernel";
+import type { CommandContext } from "./boundary.ts";
 
 // ── The charters the compiled policy activates ───────────────────────────────
 
@@ -115,6 +72,7 @@ async function readJsonFile(filePath: string, role: string): Promise<unknown> {
 
 /** One activated lens, resolved to the charter bytes the installation carries. */
 export interface ResolvedCharter {
+  readonly lensId: string;
   /** The reviewer id the evidence carries: the charter path's basename. */
   readonly reviewerId: string;
   readonly personaId: string;
@@ -171,7 +129,7 @@ export async function resolveActivatedCharters(rootDir: string): Promise<Resolve
   const resolved: ResolvedCharter[] = [];
   const seen = new Set<string>();
   for (const lens of lenses) {
-    if (!isRecord(lens) || typeof lens["personaId"] !== "string" || typeof lens["personaDigest"] !== "string") {
+    if (!isRecord(lens) || typeof lens["lensId"] !== "string" || typeof lens["personaId"] !== "string" || typeof lens["personaDigest"] !== "string") {
       throw new OutcomeError("a compiled review lens names no reviewer charter and digest");
     }
     const personaId = lens["personaId"];
@@ -210,7 +168,7 @@ export async function resolveActivatedCharters(rootDir: string): Promise<Resolve
       throw new OutcomeError(`two activated lenses resolve to reviewer ${reviewerId}; a reviewer reviews once`);
     }
     seen.add(reviewerId);
-    resolved.push({ reviewerId, personaId, entryPath, digest });
+    resolved.push({ lensId: lens["lensId"], reviewerId, personaId, entryPath, digest });
   }
   return resolved;
 }
@@ -218,6 +176,78 @@ export async function resolveActivatedCharters(rootDir: string): Promise<Resolve
 /** The reviewer ids of `resolveActivatedCharters`, sorted, as the evidence lists them. */
 export async function resolveReviewerCharters(rootDir: string): Promise<string[]> {
   return (await resolveActivatedCharters(rootDir)).map((charter) => charter.reviewerId).sort();
+}
+
+/** Exact review input, retained by the host before acquiring any outcomes. */
+export const REVIEW_CONTEXT_SPEC = "review-context/1";
+
+function manifestCandidate(captured: CapturedCandidate) {
+  return {
+    vcs: captured.vcs,
+    treeSha: captured.treeSha,
+    headSha: captured.headSha,
+    deliverable: { digest: captured.deliverable.digest, identity: captured.deliverable.identity },
+    base: { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
+    workspaceId: captured.workspaceId,
+  };
+}
+
+export async function buildReviewContext(
+  rootDir: string,
+  config: HarnessConfig,
+  candidate: CapturedCandidate,
+  receipt: PreparationReceipt,
+) {
+  const charters = await resolveActivatedCharters(rootDir);
+  if (charters.length === 0) throw new OutcomeError("the compiled policy activates no review lens");
+  const active = await readJsonFile(path.join(rootDir, ".agent-skills/active.json"), "the installed workflow receipt");
+  const release = isRecord(active) ? active["release"] : undefined;
+  if (!isRecord(release) || typeof release["releaseId"] !== "string" || !release["releaseId"] ||
+      typeof release["profile"] !== "string" || !release["profile"] ||
+      !["archiveSha256", "metadataSha256"].every((key) => typeof release[key] === "string" && /^[a-f0-9]{64}$/.test(release[key] as string))) {
+    throw new OutcomeError("the installed workflow receipt has no exact release identity");
+  }
+  const binding = {
+    gate: resolveGateBinding(config),
+    candidate: manifestCandidate(candidate),
+    preparationFingerprint: receipt.preparationFingerprint,
+    configurationDigest: digestCanonical(config),
+    policyDigest: sha256Hex(await readFile(path.join(rootDir, COMPILED_SNAPSHOT_FILE))),
+    release,
+    workflowGraphSha256: sha256Hex(await readFile(path.join(rootDir, INSTALLED_ARCHIVE_DIR, "workflows/delivery-v1.json"))),
+    charters,
+  };
+  return { spec: REVIEW_CONTEXT_SPEC, digest: digestCanonical(binding), binding };
+}
+
+export type ReviewContextDocument = Awaited<ReturnType<typeof buildReviewContext>>;
+
+/** Reuse only the existing deliverable identity, with base, policy and wiring fixed. */
+export function validateReviewedContext(original: unknown, current: ReviewContextDocument, outcome: unknown): void {
+  if (!isRecord(original) || original["spec"] !== REVIEW_CONTEXT_SPEC ||
+      Object.keys(original).sort().join(",") !== "binding,digest,spec" || !isRecord(original["binding"]) ||
+      original["digest"] !== digestCanonical(original["binding"])) {
+    throw new OutcomeError("the original review context is missing, malformed, or has a mismatched digest");
+  }
+  if (!isRecord(outcome) || outcome["contextDigest"] !== original["digest"]) {
+    throw new OutcomeError("the outcome does not name the original review context digest");
+  }
+  const binding = original["binding"];
+  const candidate = binding["candidate"];
+  if (!isRecord(candidate) || !["treeSha", "headSha"].every((key) =>
+    typeof candidate[key] === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(candidate[key] as string))) {
+    throw new OutcomeError("the original review context names no valid candidate");
+  }
+  // Raw tree and head may move when only review-neutral paths changed. Keep
+  // the original coordinates in the retained context, while the manifest binds
+  // the current prepared candidate, exactly as submission requires.
+  const comparable = {
+    ...binding,
+    candidate: { ...candidate, treeSha: current.binding.candidate.treeSha, headSha: current.binding.candidate.headSha },
+  };
+  if (digestCanonical(comparable) !== digestCanonical(current.binding)) {
+    throw new OutcomeError("the reviewed context differs from the current candidate, base, policy, wiring, release, or charters; acquire review for the current context");
+  }
 }
 
 // ── The review outcome ───────────────────────────────────────────────────────
@@ -236,6 +266,9 @@ export interface ReviewOutcome {
   readonly reviewers: readonly ReviewerOutcome[];
   /** Findings, as the `review.green/1` payload defines them. Passed through. */
   readonly findings: readonly Record<string, unknown>[];
+  readonly runHistory?: readonly Record<string, unknown>[];
+  readonly finalPassId?: string;
+  readonly cost?: Readonly<Record<string, unknown>>;
 }
 
 /** A refusal this emitter makes about its own inputs, before any manifest exists. */
@@ -351,7 +384,21 @@ export function parseReviewOutcome(document: unknown, charters: readonly string[
     );
   }
 
-  return { verdict, reviewers: parsed, findings: findings as Record<string, unknown>[] };
+  const runHistory = document["runHistory"];
+  const finalPassId = document["finalPassId"];
+  if (runHistory !== undefined && (!Array.isArray(runHistory) || runHistory.length === 0 || !runHistory.every(isRecord) ||
+      typeof finalPassId !== "string" || finalPassId === "")) {
+    throw new OutcomeError("review runHistory requires a nonempty history and its actual finalPassId");
+  }
+  const cost = document["cost"];
+  if (cost !== undefined && (!isRecord(cost) || typeof document["costCoverage"] !== "string" || !document["costCoverage"].trim())) {
+    throw new OutcomeError("reported review cost requires an explicit costCoverage description");
+  }
+  return {
+    verdict, reviewers: parsed, findings: findings as Record<string, unknown>[],
+    ...(runHistory === undefined ? {} : { runHistory: runHistory as Record<string, unknown>[], finalPassId: finalPassId as string }),
+    ...(cost === undefined ? {} : { cost: cost as Record<string, unknown> }),
+  };
 }
 
 // ── The gate this provider serves ────────────────────────────────────────────
@@ -449,55 +496,69 @@ export interface EmitResult {
  * same identity computation): anything else describes a tree the recorder will
  * refuse to recognise.
  */
-export async function emitReviewEvidence(rootDir: string, document: unknown): Promise<EmitResult> {
-  const configPath = path.join(rootDir, "harness.config.ts");
-  const module = (await import(pathToFileURL(configPath).href)) as { default?: HarnessConfig };
-  const config = module.default;
-  if (config === undefined) throw new OutcomeError(`${configPath} has no default export`);
-
-  const charters = await resolveReviewerCharters(rootDir);
-  if (charters.length === 0) {
-    throw new OutcomeError(
-      `the compiled policy at ${COMPILED_SNAPSHOT_FILE} activates no review lens; a review with no reviewers is not a review`,
-    );
-  }
-  const outcome = parseReviewOutcome(document, charters);
-  const binding = resolveGateBinding(config);
-
-  const storage = await resolveRecordStorage(rootDir, { storageNamespace: config.storageNamespace });
-  const capture = await captureGitCandidate({
-    rootDir,
-    config,
-    workspaceId: storage.workspaceId,
-    computeIdentity: withDeliverableIdentity(),
-  });
+export async function emitReviewEvidence(context: CommandContext, original: unknown, document: unknown): Promise<EmitResult> {
+  const { rootDir, config } = context;
+  const wiring = await context.wire();
+  const capture = await wiring.captureCandidate();
   if (!capture.ok) throw new OutcomeError(`the candidate could not be captured: ${capture.code}`);
   const captured = capture.candidate;
-  const candidate = {
-    vcs: captured.vcs,
-    treeSha: captured.treeSha,
-    headSha: captured.headSha,
-    deliverable: { digest: captured.deliverable.digest, identity: captured.deliverable.identity },
-    base: { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
-    workspaceId: captured.workspaceId,
-  };
+  const preparation = await evaluatePreparationReceipt(rootDir, { config, candidate: captured }, wiring.storageOptions);
+  if (!preparation.prepared) throw new BlockedError([...preparation.blockers]);
+  const current = await buildReviewContext(rootDir, config, captured, preparation.receipt);
+  validateReviewedContext(original, current, document);
+  const charters = current.binding.charters.map((charter) => charter.reviewerId).sort();
+  const outcome = parseReviewOutcome(document, charters);
+  const binding = current.binding.gate;
+  const candidate = manifestCandidate(captured);
 
   const provider = {
     id: binding.providerId,
     version: EMITTER_VERSION,
     // One emitter run is one evaluated pass over this candidate.
-    runId: `r-${Date.now().toString(36)}`,
-    finalPassId: "pass-1",
+    runId: `r-${randomUUID()}`,
+    finalPassId: outcome.finalPassId ?? "pass-1",
   };
+  const reviewed = original as ReviewContextDocument;
+  const originalRunHistory = outcome.runHistory ?? [{
+    preparedTreeSha: reviewed.binding.candidate.treeSha,
+    evaluatedInPassId: provider.finalPassId,
+  }];
+  const finalEntry = originalRunHistory.at(-1)!;
+  if (finalEntry["preparedTreeSha"] !== reviewed.binding.candidate.treeSha ||
+      finalEntry["evaluatedInPassId"] !== provider.finalPassId) {
+    throw new OutcomeError("the supplied final review pass does not name the original reviewed candidate");
+  }
+  // ENV-9's final tree is a preparation coordinate. A proven neutral reuse
+  // projects that coordinate without claiming the reviewers saw a new raw
+  // tree, adding a round, or overwriting their original history.
+  const runHistory = originalRunHistory.map((entry, index) => index === originalRunHistory.length - 1
+    ? { ...entry, preparedTreeSha: captured.treeSha } : entry);
 
-  const artifactsPort = createArtifactsPort();
-  const allocation = await artifactsPort.allocateRunRoot({ providerId: provider.id, runId: provider.runId });
+  const allocation = await context.artifacts.allocateRunRoot({ providerId: provider.id, runId: provider.runId });
   if (!allocation.ok) throw new OutcomeError(`the run root was refused: ${allocation.reason}`);
   const runRoot = allocation.runRoot.path;
 
   const lists = reviewerLists(charters, outcome);
   await mkdir(path.join(runRoot, "reviewers"), { recursive: true });
   const artifacts: { path: string; sha256: string; role: string }[] = [];
+  for (const [name, value] of [["review-context", original], ["review-outcome", document]] as const) {
+    const bytes = `${JSON.stringify(value, null, 2)}\n`;
+    await writeFile(path.join(runRoot, `${name}.json`), bytes, "utf8");
+    artifacts.push({ path: `${name}.json`, sha256: sha256Hex(bytes), role: name });
+  }
+  if (digestCanonical(reviewed.binding.candidate) !== digestCanonical(candidate)) {
+    const bytes = `${JSON.stringify({
+      spec: "review-context-projection/1",
+      basis: "unchanged-deliverable-and-review-inputs",
+      originalContextDigest: reviewed.digest,
+      reviewedCandidate: reviewed.binding.candidate,
+      preparedCandidate: candidate,
+      originalRunHistory,
+      reviewRoundAdded: false,
+    }, null, 2)}\n`;
+    await writeFile(path.join(runRoot, "review-context-projection.json"), bytes, "utf8");
+    artifacts.push({ path: "review-context-projection.json", sha256: sha256Hex(bytes), role: "review-context-projection" });
+  }
   for (const reviewerId of lists.approved) {
     // §9.2: the stamp re-states the whole binding, so each approval is
     // independently interpretable in an audit.
@@ -518,7 +579,6 @@ export async function emitReviewEvidence(rootDir: string, document: unknown): Pr
     artifacts.push({ path: relativePath, sha256: sha256Hex(stamp), role: "reviewer-approval" });
   }
 
-  const runHistory = [{ preparedTreeSha: captured.treeSha, evaluatedInPassId: provider.finalPassId }];
   const manifest = {
     spec: ENVELOPE_SPEC,
     provider,
@@ -543,7 +603,7 @@ export async function emitReviewEvidence(rootDir: string, document: unknown): Pr
             timedOut: lists.timedOut,
           },
           findings: outcome.findings,
-          telemetry: deriveTelemetry(outcome.findings, runHistory.length),
+          telemetry: { ...deriveTelemetry(outcome.findings, runHistory.length), ...(outcome.cost === undefined ? {} : { cost: outcome.cost }) },
         },
       },
     ],
@@ -553,55 +613,3 @@ export async function emitReviewEvidence(rootDir: string, document: unknown): Pr
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   return { manifestPath, runRoot };
 }
-
-// ── CLI ──────────────────────────────────────────────────────────────────────
-
-async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
-  const chunks: string[] = [];
-  stream.setEncoding("utf8");
-  for await (const chunk of stream) chunks.push(chunk as string);
-  return chunks.join("");
-}
-
-async function main(): Promise<void> {
-  const raw = await readAll(process.stdin);
-  if (raw.trim() === "") {
-    process.stderr.write(
-      `emit-review-evidence: the ${OUTCOME_SPEC} review outcome is read from standard input, and none was given\n`,
-    );
-    process.exitCode = 2;
-    return;
-  }
-  let document: unknown;
-  try {
-    document = JSON.parse(raw);
-  } catch (error) {
-    process.stderr.write(
-      `emit-review-evidence: the review outcome is not valid JSON: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exitCode = 2;
-    return;
-  }
-
-  try {
-    const result = await emitReviewEvidence(process.cwd(), document);
-    process.stdout.write(`${result.manifestPath}\n`);
-  } catch (error) {
-    process.stderr.write(`emit-review-evidence: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = error instanceof OutcomeError ? 2 : 1;
-  }
-}
-
-/** The spelling the filesystem can vouch for, so a symlinked temp root still matches. */
-function canonicalEntryPath(entryPath: string): string {
-  try {
-    return realpathSync(entryPath);
-  } catch {
-    return entryPath;
-  }
-}
-
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  canonicalEntryPath(path.resolve(process.argv[1])) === canonicalEntryPath(fileURLToPath(import.meta.url));
-if (invokedDirectly) await main();

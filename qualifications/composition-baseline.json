@@ -28,6 +28,7 @@
       "cliCommands": [
         "prepare",
         "review-context",
+        "emit-review-evidence",
         "submit-evidence",
         "gate",
         "record",
@@ -38,7 +39,7 @@
         "emit",
         "runs"
       ],
-      "cliCommandsNote": "The seven-command evidence loop was the recorded baseline surface; the walking skeleton added `managed` — the managed-delivery facade's host-facing checkpoint and status surface — and the facade unit added `maintain`, the installation-scoped maintenance lane whose every operation consumes a maintenance-lane sensitive assertion, and the run surface added the config-free pair `emit` and `runs`, which write and read the run-event journal and are dispatched before any config load. Delivery-run ownership still lives in the checkpoint journal and facade modules, not in the evidence loop: the run journal `emit` and `runs` reach is observability that nothing authoritative reads. The absent-command guard below still holds for top-level ordinary execution: none of those operations exists as a top-level command outside the facade surface.",
+      "cliCommandsNote": "The original 2026-08-30 capture remains the historical baseline. On 2026-09-06, V26-1843 added the shipped emit-review-evidence command to the current executable surface; it transcribes actual host outcomes bound to an original prepared context and preserves self-attestation. The seven-command evidence loop was the recorded baseline surface; the walking skeleton added `managed` — the managed-delivery facade's host-facing checkpoint and status surface — and the facade unit added `maintain`, the installation-scoped maintenance lane whose every operation consumes a maintenance-lane sensitive assertion, and the run surface added the config-free pair `emit` and `runs`, which write and read the run-event journal and are dispatched before any config load. Delivery-run ownership still lives in the checkpoint journal and facade modules, not in the evidence loop: the run journal `emit` and `runs` reach is observability that nothing authoritative reads. The absent-command guard below still holds for top-level ordinary execution: none of those operations exists as a top-level command outside the facade surface.",
       "absentDeliveryRunCommands": [
         "start",
         "resume",

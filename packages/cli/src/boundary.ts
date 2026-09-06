@@ -113,6 +113,7 @@ export interface CommandContext {
   readonly stdoutIsTTY: boolean;
   /** Positional and flag arguments after the command name. */
   readonly args: readonly string[];
+  readonly readStdin?: () => Promise<string>;
   /**
    * Wires capture and the store from this repo, memoized. Lazy so `--help`
    * wires nothing and so a command owns how it renders a store that will not
@@ -328,6 +329,7 @@ export const COMPLETION_WRAPPED_COMMANDS: readonly string[] = [
   "check",
   "prepare",
   "review-context",
+  "emit-review-evidence",
   "submit-evidence",
   "gate",
   "record",
@@ -497,6 +499,7 @@ async function runConfiguredCommand(
       stdoutIsTTY: runtime.stdoutIsTTY,
       args,
       wire,
+      readStdin: runtime.readStdin ?? (async () => ""),
       artifacts,
       // The waiver prompt is offered only under a real TTY. A non-interactive
       // invocation never prompts — it blocks — no matter what the run wired.

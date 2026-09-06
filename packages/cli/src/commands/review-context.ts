@@ -8,12 +8,16 @@
 import { evaluatePreparationReceipt } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
+import { buildReviewContext, OutcomeError } from "../review-evidence.ts";
 
 export const reviewContextCommand: CommandDescriptor = {
   name: "review-context",
   sourceId: "delivery-harness.cli.review-context",
   summary: "Show the reviewable-change context for the prepared candidate.",
   async run(context: CommandContext): Promise<CommandResult> {
+    if (context.args.length > 0 && !(context.args.length === 1 && context.args[0] === "--json")) {
+      return { kind: "usage", message: "review-context accepts only --json." };
+    }
     const wiring = await context.wire();
     const capture = await wiring.captureCandidate();
     if (!capture.ok) {
@@ -49,6 +53,18 @@ export const reviewContextCommand: CommandDescriptor = {
       return { kind: "blocked", blockers };
     }
 
+    if (context.args[0] === "--json") {
+      try {
+        const document = await buildReviewContext(context.rootDir, context.config, capture.candidate, evaluation.receipt);
+        return { kind: "ok", summary: JSON.stringify(document, null, 2) };
+      } catch (error) {
+        if (!(error instanceof OutcomeError)) throw error;
+        return { kind: "blocked", blockers: [commandBlocker({
+          code: "review_context_unavailable", sourceId: "delivery-harness.cli.review-context", summary: error.message,
+          remediations: [{ id: "restore-review-inputs", kind: "manual_action", summary: "Restore the installed workflow release and compiled policy charters before acquiring review." }],
+        })] };
+      }
+    }
     const projection = await wiring.projectActivation(capture.candidate);
     const active = projection.relevantLineCount >= context.config.activationThreshold || projection.hasRelevantBinaryChange;
     return {

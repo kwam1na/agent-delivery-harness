@@ -1,5 +1,5 @@
 /**
- * Delivery harness CLI: the eleven-command operator surface.
+ * Delivery harness CLI: the twelve-command operator surface.
  *
  * THE COMMAND REGISTRY. `COMMANDS` is the single source of truth for which
  * commands exist. Every command module under `commands/` must appear here, and
@@ -19,6 +19,7 @@ import { managedCommand } from "./commands/managed.ts";
 import { prepareCommand } from "./commands/prepare.ts";
 import { recordCommand } from "./commands/record.ts";
 import { reviewContextCommand } from "./commands/review-context.ts";
+import { emitReviewEvidenceCommand } from "./commands/emit-review-evidence.ts";
 import { runsCommand } from "./commands/runs.ts";
 import { submitEvidenceCommand } from "./commands/submit-evidence.ts";
 import { verifyCommand } from "./commands/verify.ts";
@@ -40,6 +41,7 @@ export const PACKAGE_NAME = "@agent-delivery-harness/cli";
 export const COMMANDS: readonly AnyCommandDescriptor[] = [
   prepareCommand,
   reviewContextCommand,
+  emitReviewEvidenceCommand,
   submitEvidenceCommand,
   gateCommand,
   recordCommand,
@@ -75,6 +77,7 @@ export {
 
 export { prepareCommand } from "./commands/prepare.ts";
 export { reviewContextCommand } from "./commands/review-context.ts";
+export { emitReviewEvidenceCommand } from "./commands/emit-review-evidence.ts";
 export { submitEvidenceCommand } from "./commands/submit-evidence.ts";
 export { gateCommand } from "./commands/gate.ts";
 export { recordCommand } from "./commands/record.ts";

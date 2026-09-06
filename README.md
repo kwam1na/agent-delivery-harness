@@ -91,9 +91,9 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the eleven-command operator surface and
+- **`@agent-delivery-harness/cli`** — the twelve-command operator surface and
   opt-in `delivery-provider-rails/1` stdio adapter:
-  `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
+  `prepare`, `review-context`, `emit-review-evidence`, `submit-evidence`, `gate`, `record`, `verify`,
   `check`, `managed` (the managed-delivery facade's host-facing checkpoint and
   status surface), `maintain` (the installation-scoped maintenance lane:
   update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark), and
@@ -101,7 +101,7 @@ cannot drift from the tool.
   `run-event/1` event to the current delivery run's journal, `runs list` and
   `runs show` render that journal back, and `runs serve` puts the same
   projection on a script-free loopback page over one or more `--repo` paths,
-  refreshing itself only while a run is live. The seven candidate-facing commands
+  refreshing itself only while a run is live. The eight candidate-facing commands
   append their own `command.completed` automatically whenever a run is current
   for the invoking worktree, unless `DELIVERY_HARNESS_RUN_STORE` points the
   store somewhere other than the repository's git common directory. The run
@@ -156,7 +156,8 @@ This repository's review evidence is emitted by a committed provider rather
 than by whatever script a delivery session happened to write:
 
 ```
-npm run review:evidence   # a review outcome on stdin -> a delivery-evidence/1 manifest
+npm run review:evidence -- --context /tmp/original-review-context.json
+# a concluded outcome naming the original context digest on stdin -> a manifest
 ```
 
 It is a provider, not a sensor: it transcribes the review outcome it is given

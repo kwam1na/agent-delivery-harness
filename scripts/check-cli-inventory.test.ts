@@ -99,7 +99,7 @@ describe("runCliInventorySensor", () => {
   it("passes on the repository's own CLI registry (all eleven commands)", () => {
     const result = runCliInventorySensor({ root: repoRootFromHere() });
     expect(result.findings).toEqual([]);
-    expect(result.commandFiles).toHaveLength(11);
-    expect(result.registeredFiles).toHaveLength(11);
+    expect(result.commandFiles).toHaveLength(12);
+    expect(result.registeredFiles).toHaveLength(12);
   });
 });

@@ -168,6 +168,7 @@ const NUMBER_WORDS: Readonly<Record<number, string>> = Object.freeze({
   9: "nine",
   10: "ten",
   11: "eleven",
+  12: "twelve",
 });
 
 /**

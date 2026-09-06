@@ -1008,7 +1008,7 @@ describe("emit, the boundary wrap, and runs", () => {
     // being wrapped — and `command.completed:record` is a required journal
     // entry, so every journal in the repository would become permanently
     // incomplete with nothing red.
-    const WRAPPED = ["check", "prepare", "review-context", "submit-evidence", "gate", "record", "verify"];
+    const WRAPPED = ["check", "prepare", "review-context", "emit-review-evidence", "submit-evidence", "gate", "record", "verify"];
     expect([...COMPLETION_WRAPPED_COMMANDS].sort()).toEqual([...WRAPPED].sort());
 
     // Every member driven, not four of seven. The wrap runs whatever the
