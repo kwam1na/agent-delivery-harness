@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { install, parseInstallArgs } from "./install-agent-skills-release.ts";
+import { buildProductRuntime } from "./build-product-runtime.ts";
 
 async function main(): Promise<void> {
   const request = parseInstallArgs(process.argv.slice(2));
@@ -23,6 +24,17 @@ async function main(): Promise<void> {
     await run("git", ["commit", "-qm", "consumer base"], { cwd: consumer });
     await run("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: consumer });
     await install(request, consumer);
+    // Producer qualification also proves the artifact carries this source's
+    // exact runtime closure. Consumer execution below still uses installed bytes.
+    const descriptor = JSON.parse(await readFile(path.join(consumer, ".agent-skills/current/runtime/runtime.json"), "utf8")) as { workflowContentSha256: string; files: unknown };
+    const workflowManifest = path.join(consumer, "qualified-workflow.json");
+    await writeFile(workflowManifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: descriptor.workflowContentSha256 }));
+    const rebuilt = path.join(consumer, "rebuilt-runtime");
+    await buildProductRuntime(process.cwd(), workflowManifest, rebuilt);
+    const currentDescriptor = JSON.parse(await readFile(path.join(rebuilt, "runtime.json"), "utf8")) as { files: unknown };
+    if (JSON.stringify(currentDescriptor.files) !== JSON.stringify(descriptor.files)) throw new Error("artifact sensor: installed runtime differs from current producer source");
+    await rm(rebuilt, { recursive: true });
+    await rm(workflowManifest);
     await writeFile(path.join(consumer, "change.txt"), "candidate\n");
     await run("git", ["add", "change.txt"], { cwd: consumer });
     for (const host of [".agents", ".claude"]) await readFile(path.join(consumer, host, "skills/execute-work/SKILL.md"));

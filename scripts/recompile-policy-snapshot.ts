@@ -26,8 +26,11 @@
  * the recorded policy was produced by; re-stamping it is an operator decision
  * about which compiler this repository is judged under, not a side effect of
  * re-recording an unchanged policy. That is also what makes an unchanged
- * policy regenerate byte-identically, which is the property that makes running
- * this script safe.
+ * policy regenerate byte-identically. Product lifecycle reconciliation adds
+ * one explicit exception: `--product` updates an already-declared personaSource
+ * archive digest to the selected generation, then validates the proposed
+ * snapshot against its current policy sources and shipped charters. Other
+ * compiler provenance and comparison adjudications remain unchanged.
  *
  * Usage:
  *
@@ -40,7 +43,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compileRepositoryPolicy, projectShippedPersonas } from "@agent-delivery-harness/kernel";
+import { compileRepositoryPolicy, projectShippedPersonas, createArtifactsPort, repositoryEvidenceReader, readWorkflowRelease, resolveReviewCharters } from "@agent-delivery-harness/kernel";
 
 /** The policy projection this repository records, and the installation it is compiled against. */
 export const POLICY_PROJECTION_DIR = ".agents/policy";
@@ -74,7 +77,7 @@ function installedArchiveReader(archiveDir: string) {
   };
 }
 
-/** The provenance block a recorded snapshot carries, and this script preserves. */
+/** Recorded provenance; product reconciliation may update its declared persona archive. */
 interface CompiledWith {
   readonly productTrustRevocationEpoch: number;
   readonly repositoryAuthorityRevocationEpoch: number;
@@ -119,7 +122,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * `--check` report, and a test can assert byte-identity without touching the
  * authority tree.
  */
-export async function recompilePolicySnapshot(rootDir: string): Promise<RecompileResult> {
+export async function recompilePolicySnapshot(rootDir: string, options: { readonly product?: boolean } = {}): Promise<RecompileResult> {
   const policyDir = path.join(rootDir, POLICY_PROJECTION_DIR);
   const snapshotPath = path.join(policyDir, SNAPSHOT_FILE);
 
@@ -138,7 +141,7 @@ export async function recompilePolicySnapshot(rootDir: string): Promise<Recompil
       `${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const compiledWith = recorded.compiledWith;
+  let compiledWith = recorded.compiledWith;
   if (
     !isRecord(compiledWith) ||
     typeof compiledWith["productTrustRevocationEpoch"] !== "number" ||
@@ -147,6 +150,16 @@ export async function recompilePolicySnapshot(rootDir: string): Promise<Recompil
     throw new RecompileError(
       `${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE} carries no compiledWith block declaring both revocation epochs; the epochs a policy is compiled under are provenance, not a default this script supplies`,
     );
+  }
+
+  const read = repositoryEvidenceReader(rootDir, createArtifactsPort());
+  if (options.product) {
+    const release = await readWorkflowRelease(read);
+    if (release === null) throw new RecompileError("product reconciliation requires an installed release");
+    const source = compiledWith["personaSource"];
+    if (isRecord(source) && source["archiveSha256"] !== undefined) {
+      compiledWith = { ...compiledWith, personaSource: { ...source, archiveSha256: release["archiveSha256"] } };
+    }
   }
 
   const documentBytes = await readFile(path.join(policyDir, DOCUMENT_FILE)).catch((error: unknown) => {
@@ -205,6 +218,12 @@ export async function recompilePolicySnapshot(rootDir: string): Promise<Recompil
     2,
   )}\n`;
 
+  if (options.product) {
+    // Validate the proposed snapshot through the same product reader that
+    // evidence/portable verification uses, before publishing any repair.
+    await resolveReviewCharters(async (relative) => relative === `${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE}` ? Buffer.from(text) : read(relative));
+  }
+
   // The comparison report pins the snapshot's own bytes and compiled digest,
   // so a snapshot that moved leaves the report describing the previous one.
   // Re-recording it is not this script's to do — its adjudications are a
@@ -230,7 +249,7 @@ async function main(argv: readonly string[], rootDir: string): Promise<void> {
   const checkOnly = argv.includes("--check");
   let result: RecompileResult;
   try {
-    result = await recompilePolicySnapshot(rootDir);
+    result = await recompilePolicySnapshot(rootDir, { product: argv.includes("--product") });
   } catch (error) {
     process.stderr.write(
       `recompile-policy-snapshot: ${error instanceof RecompileError ? error.message : String(error)}\n`,

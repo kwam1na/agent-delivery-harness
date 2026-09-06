@@ -118,6 +118,25 @@ const writePolicyJson = (dir: string, file: string, value: unknown): Promise<voi
   writeFile(path.join(dir, POLICY_PROJECTION_DIR, file), `${JSON.stringify(value, null, 2)}\n`, "utf8");
 
 describe("re-recording the compiled policy snapshot", () => {
+  it("product reconciliation follows the selected archive while preserving other provenance", async () => {
+    const dir = await fixture();
+    await cp(path.join(REPO_ROOT, ".agent-skills/active.json"), path.join(dir, ".agent-skills/active.json"));
+    const active = JSON.parse(await readFile(path.join(dir, ".agent-skills/active.json"), "utf8")) as { release: { archiveSha256: string } };
+    const recorded = JSON.parse(await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8")) as Snapshot;
+    const provenance = { ...recorded.compiledWith, personaSource: { archiveSha256: "0".repeat(64), origin: "distributed release" } };
+    await writePolicyJson(dir, SNAPSHOT_FILE, { ...recorded, compiledWith: provenance });
+    const legacy = JSON.parse((await recompilePolicySnapshot(dir)).text) as Snapshot;
+    expect(legacy.compiledWith).toEqual(provenance);
+    const product = JSON.parse((await recompilePolicySnapshot(dir, { product: true })).text) as Snapshot;
+    expect(product.compiledWith).toEqual({ ...provenance, personaSource: { ...provenance.personaSource, archiveSha256: active.release.archiveSha256 } });
+    // Planning the repair must not silently change the adopter's snapshot.
+    expect((JSON.parse(await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8")) as Snapshot).compiledWith).toEqual(provenance);
+    const check = await run(dir, "--product", "--check");
+    expect(check.code).not.toBe(0);
+    expect((await run(dir, "--product")).code).toBe(0);
+    expect((await run(dir, "--product", "--check")).code).toBe(0);
+  });
+
   it("reads the policy and the installation from where the projection sensor reads them", () => {
     // One projection, one installation. Two roots would let the recorded
     // snapshot be compiled from documents the sensor never compares against.

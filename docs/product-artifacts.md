@@ -45,8 +45,20 @@ still leave `productReady: false` when recompiling adopter-owned policy fails.
 The command then fails, `--product status` reports the reconciliation blocker,
 and `harness` refuses execution. Fix the reported policy issue and retry
 `--product recover`; rollback also recompiles with the selected retained runtime.
-The existing policy compiler preserves declared provenance and reports stale
-comparison adjudications rather than inventing replacements.
+Product reconciliation updates an already-declared
+`compiledWith.personaSource.archiveSha256` to the selected generation and checks
+the proposed snapshot against current policy sources and shipped charters.
+Other compiler provenance is preserved; stale comparison adjudications are
+reported for the adopter to resolve.
+
+Repository sensors can import the supported APIs from
+`.agent-skills/current/runtime/kernel.mjs` and
+`.agent-skills/current/runtime/cli-api.mjs`. Adjacent `kernel.d.mts` and
+`cli-api.d.mts` declarations are built from the same source and travel in the
+same verified generation. The kernel exports candidate and record operations;
+the CLI API exports `buildRunExport` and `parseRunExport` for the product's
+observational run summaries. Consumers do not need an independently installed
+npm package to supply these implementations or types.
 
 ## Producer commands
 
@@ -65,7 +77,15 @@ no runtime file embeds that outer digest. Core and Linear select distinct workfl
 payloads. The historical managed-composition pin is a separate lane and is not
 used by ordinary product readiness.
 
-The artifact sensor exercises actual installed prepare/context and verifies
+The retained `qualify:provider` interoperability record also names an immutable
+historical source baseline. Its original inputs and scenarios remain checked,
+and the driver refuses to stamp those identities onto current source. Current
+qualification uses the newly built product artifacts and fresh workflow,
+provider, live connector, and installed runtime evidence; the historical record
+does not stand in for any of those checks.
+
+The artifact sensor compares every shipped runtime file digest with a fresh
+build from the current producer source, exercises actual installed prepare/context, and verifies
 that absent independent review blocks the gate. It does not manufacture review
 or replace final host proofs. Rebuild all affected qualification records against
 the final archive, metadata, runtime descriptor, and selected profile. Old exact
