@@ -164,6 +164,8 @@ export interface SatisfiedEvidenceResolution extends ResolutionBase {
   readonly kind: "satisfied_evidence";
   readonly providerId: string;
   readonly recordId: string;
+  /** Every provider record supporting an all-provider obligation. */
+  readonly supportingRecordIds?: readonly string[];
   readonly runId: string;
   readonly finalPassId: string;
   readonly candidateBinding: RecordCandidateBinding;
@@ -209,6 +211,7 @@ export type ObligationResolution =
   | BlockedResolution;
 
 export interface EvaluateGateInput {
+  readonly checkBindings?: Readonly<Record<string, import("./records.types.ts").CheckBinding>>;
   readonly config: HarnessConfig;
   readonly candidate: CandidateBinding;
   readonly projection: ReviewActivationProjection;
@@ -317,7 +320,7 @@ function blockedWith(
 ): BlockedResolution {
   const source = findings.length > 0 ? findings : [fallback];
   const [first, ...rest] = source.map((entry) => entry.blocker);
-  const commandProviders = new Set(config.providers.filter((provider) => provider.command !== undefined).map((provider) => provider.id));
+  const commandProviders = new Set(config.providers.filter((provider) => provider.command !== undefined || provider.check !== undefined).map((provider) => provider.id));
   const providerFindings = source.filter(
     (entry): entry is ObligationFinding & { readonly providerId: string } =>
       entry.providerId !== undefined && commandProviders.has(entry.providerId),
@@ -517,6 +520,7 @@ function evidenceSlot(record: StoredEvidence): string {
 
 interface EvidenceScan {
   readonly evidence: StoredEvidence | undefined;
+  readonly supportingRecordIds?: readonly string[];
   readonly blocking: readonly ObligationFinding[];
   readonly diagnostics: readonly ObligationFinding[];
   /** A subset of `blocking`, kept apart because it blocks ahead of everything. */
@@ -564,6 +568,11 @@ function scanEvidence(input: EvaluateGateInput, obligation: ObligationPolicy): E
       );
       continue;
     }
+    if (input.config.providers.find(provider => provider.id === providerId)?.check !== undefined) {
+      const expected = input.checkBindings?.[providerId];
+      if (expected === undefined || record.resolution.checkBinding === undefined ||
+          Object.keys(expected).some(key => expected[key as keyof typeof expected] !== record.resolution.checkBinding?.[key as keyof typeof expected])) continue;
+    }
     fresh.push(record);
   }
 
@@ -596,6 +605,9 @@ function scanEvidence(input: EvaluateGateInput, obligation: ObligationPolicy): E
   const satisfied = missing.length === 0 && fresh.length > 0;
   return {
     evidence: satisfied ? fresh[0] : undefined,
+    ...(satisfied && new Set(fresh.map(record => record.resolution.providerId)).size > 1 ? {
+      supportingRecordIds: [...new Map([...fresh].reverse().map(record => [record.resolution.providerId, record.recordId])).values()].sort(),
+    } : {}),
     blocking: satisfied ? [] : [...invalid, ...missing],
     diagnostics: satisfied ? invalid : [],
     malformed: satisfied ? [] : malformed,
@@ -629,6 +641,7 @@ function evaluateRecordedObligation(input: EvaluateGateInput, obligation: Obliga
         obligationId: obligation.id,
         providerId: record.resolution.providerId,
         recordId: record.recordId,
+        ...(scan.supportingRecordIds === undefined ? {} : { supportingRecordIds: scan.supportingRecordIds }),
         runId: record.resolution.runId,
         finalPassId: record.resolution.finalPassId,
         candidateBinding: record.candidateBinding,
@@ -705,6 +718,7 @@ function waiverFor(input: EvaluateGateInput, obligation: ObligationPolicy, pendi
           record.candidateBinding.treeSha !== input.candidate.treeSha ||
           !waiver.author?.trim() || !waiver.reason?.trim() ||
           !Array.isArray(waiver.findingCodes) ||
+          waiver.findingCodes.some((code) => NON_WAIVABLE_INTEGRITY_CODES.includes(code) || nonWaivable.has(code) || !waivable.has(code)) ||
           pending.some((finding) => !waiver.findingCodes.includes(finding.code))) return false;
       if (record.resolution.scope === "invocation") return granted.has(record.recordId);
       return !invocationOnly;

@@ -72,6 +72,7 @@ import {
   selectDeliveryRecordForIdentity,
   validateHarnessConfig,
   verifyDeliveryRecord,
+  capturePortableVerificationInputs,
   type Blocker,
   type BlockerSource,
   type CandidateCommandRunner,
@@ -970,7 +971,13 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
     }
 
     recordPath = selected.path;
-    check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths });
+    const inputs = await capturePortableVerificationInputs(runtime.workspace, config, {
+      vcs: "git", treeSha, headSha: event.event.headSha, mode: "clean", statusEntries: [], untrackedFiles: [],
+      deliverable: { digest: identity.deliverableDigest, identity: identity.identityToken }, base,
+      workspaceId: selected.record.workspaceId,
+    }, selected.record, runtime.git);
+    check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths, ...inputs,
+      executionContext: classifyExecutionContext({ config, env: runtime.env, stdinIsTTY: false, stdoutIsTTY: false }) });
     blockers.push(...check.blockers);
     return await settle();
   } catch (error) {

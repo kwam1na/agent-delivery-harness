@@ -37,6 +37,7 @@ import {
   parseDeliveryRecord,
   runGitCommand,
   verifyDeliveryRecord,
+  capturePortableVerificationInputs,
   type CandidateTreeEntry,
   type RunJournalRow,
 } from "@agent-delivery-harness/kernel";
@@ -205,7 +206,8 @@ export const verifyCommand: CommandDescriptor = {
       ...(parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }),
     });
 
-    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths, runJournal });
+    const inputs = await capturePortableVerificationInputs(context.rootDir, context.config, capture.candidate, parsed.record);
+    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths, runJournal, ...inputs, executionContext: context.classifyContext() });
     if (!check.ok) {
       return { kind: "blocked", blockers: [...check.blockers] };
     }

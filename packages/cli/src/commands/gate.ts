@@ -1,3 +1,4 @@
+import { runDeclaredCheck } from "../declared-checks.ts";
 /**
  * `gate` — evaluate the delivery gate and, under a TTY, offer a scoped waiver.
  *
@@ -39,7 +40,7 @@ export async function runProviderBackedAdmission(
     ...(options.allowPrompt && context.promptForWaiver !== undefined ? { promptForWaiver: context.promptForWaiver } : {}),
   };
 
-  if (!context.config.providers.some((provider) => provider.command !== undefined)) {
+  if (!context.config.providers.some((provider) => provider.command !== undefined || provider.check !== undefined)) {
     return runAdmission(input, finalAdmissionOptions);
   }
 
@@ -58,7 +59,8 @@ export async function runProviderBackedAdmission(
       for (const finding of resolution.providerFindings ?? []) {
         if (finding.code !== missingCode || finding.providerId === undefined || attempted.has(finding.providerId)) continue;
         const registration = context.config.providers.find((provider) => provider.id === finding.providerId);
-        if (registration?.command === undefined || !obligation.providers.includes(registration.id)) continue;
+        if (registration === undefined || (registration.command === undefined && registration.check === undefined) || !obligation.providers.includes(registration.id)) continue;
+        if (registration.check !== undefined && (obligation.freshness !== "exact_candidate" || !obligation.acceptedPayloadSpecs.includes("checks.passed/1") || admission.decision.resolutions.some(resolution => resolution.kind !== "satisfied_evidence" && resolution.kind !== "not_applicable" && resolution.kind !== "waived" && context.config.obligations.find(entry => entry.id === resolution.obligationId)?.acceptedPayloadSpecs.includes("review.green/1")))) continue;
         const entry = requested.get(registration.id) ?? { obligationIds: [], requiresEvidence: false, needsLiveResult: false };
         entry.obligationIds.push(obligation.id);
         entry.requiresEvidence ||= obligation.freshness === "exact_candidate";
@@ -73,6 +75,12 @@ export async function runProviderBackedAdmission(
     if (next === undefined) break;
     const [providerId, request] = next;
     attempted.add(providerId);
+    const registration = context.config.providers.find(provider => provider.id === providerId)!;
+    if (registration.check !== undefined) {
+      attemptBlockers.push(...await runDeclaredCheck(context, registration, request.obligationIds, admission.candidate));
+      admission = await runAdmission({ ...input, ...(liveResults.length === 0 ? {} : { liveResults }) }, admissionOptions);
+      continue;
+    }
     const result = await context.invokeProvider?.({
       providerId,
       requiresEvidence: request.requiresEvidence,

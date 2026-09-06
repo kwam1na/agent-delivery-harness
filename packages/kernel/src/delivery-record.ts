@@ -1,5 +1,5 @@
 /**
- * The tracked delivery record — `delivery-record/1` — and the pure verification
+ * The tracked delivery record — `delivery-record/2` — and the pure verification
  * core the CLI `verify` command and the GitHub Action both call.
  *
  * WHAT THIS IS, AND WHAT IT IS NOT. The delivery record is a product-layer
@@ -46,16 +46,19 @@ import {
 import { canonicalize } from "./canonical.ts";
 import { digestCanonical } from "./digest.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
-import type { EvidenceRecord, RecordCandidateBinding, WaiverResolution } from "./records.types.ts";
+import type { EvidenceRecord, RecordCandidateBinding, WaiverResolution, PortableEvidenceContext, CheckBinding } from "./records.types.ts";
 // TYPE ONLY, DELIBERATELY. The row is echoed, never evaluated, so this module
 // takes the shape and nothing that could read one.
 import type { RunJournalRow } from "./checkpoint/run-journal-completeness.ts";
-import { RESOLUTION_OUTCOMES, type GateDecision, type ResolutionOutcome } from "./evaluator.ts";
+import { evaluateGate, RESOLUTION_OUTCOMES, type EvaluateGateInput, type GateDecision, type ResolutionOutcome } from "./evaluator.ts";
 
+import { verifyPortableEvidence, MAX_PORTABLE_RECORD_BYTES, portableBlocker } from "./portable-evidence.ts";
+import { computeRecordId } from "./record-identity.ts";
+import { manifestDigest as computeManifestDigest } from "./digest.ts";
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /** The product-layer version token. Not a delivery-evidence/1 spec value. */
-export const DELIVERY_RECORD_VERSION = "delivery-record/1";
+export const DELIVERY_RECORD_VERSION = "delivery-record/2";
 
 /**
  * The honest attestation label. L0 is workspace-scoped process discipline and
@@ -168,6 +171,8 @@ export interface DeliveryRecordClaim {
   readonly scope?: string;
   readonly waiver?: WaiverResolution & { readonly candidateBinding: RecordCandidateBinding };
   readonly ciPolicyId?: string;
+  readonly evidence?: EvidenceRecord;
+  readonly supportingEvidence?: readonly EvidenceRecord[];
 }
 
 export interface DeliveryRecordAttestation {
@@ -175,12 +180,12 @@ export interface DeliveryRecordAttestation {
 }
 
 /**
- * The tracked `delivery-record/1` artifact. `workspaceId` is recorded for audit
+ * The tracked `delivery-record/2` artifact. `workspaceId` is recorded for audit
  * but is deliberately *excluded* from verification: CI verifies from a different
  * workspace by construction, so binding on it would fail every real PR.
  */
 export interface DeliveryRecord {
-  readonly version: typeof DELIVERY_RECORD_VERSION;
+  readonly version: typeof DELIVERY_RECORD_VERSION | "delivery-record/1";
   readonly gateId: string;
   readonly identityToken: string;
   readonly candidateBinding: RecordCandidateBinding;
@@ -188,6 +193,8 @@ export interface DeliveryRecord {
   readonly manifestDigest: string | null;
   readonly workspaceId: string;
   readonly attestation: DeliveryRecordAttestation;
+  readonly context?: PortableEvidenceContext;
+  readonly integrityDigest?: string;
 }
 
 // ── Build (produce-only) ─────────────────────────────────────────────────────
@@ -197,6 +204,7 @@ export interface BuildDeliveryRecordInput {
   readonly decision: GateDecision;
   /** The evidence records backing the decision, used to stamp manifest digests. */
   readonly evidenceRecords: readonly EvidenceRecord[];
+  readonly context?: PortableEvidenceContext;
 }
 
 export type BuildDeliveryRecordResult =
@@ -218,11 +226,12 @@ export function bindingOf(candidate: CandidateBinding): RecordCandidateBinding {
 
 function claimOf(
   resolution: GateDecision["resolutions"][number],
-  manifestDigestByRecordId: ReadonlyMap<string, string>,
+  evidenceByRecordId: ReadonlyMap<string, EvidenceRecord>,
 ): DeliveryRecordClaim {
   switch (resolution.kind) {
     case "satisfied_evidence": {
-      const manifestDigest = manifestDigestByRecordId.get(resolution.recordId);
+      const evidence = evidenceByRecordId.get(resolution.recordId);
+      const manifestDigest = evidence?.resolution.kind === "evidence" ? evidence.resolution.manifestDigest : undefined;
       return {
         obligationId: resolution.obligationId,
         outcome: resolution.kind,
@@ -231,6 +240,8 @@ function claimOf(
         runId: resolution.runId,
         finalPassId: resolution.finalPassId,
         ...(manifestDigest === undefined ? {} : { manifestDigest }),
+        ...(evidence === undefined ? {} : { evidence }),
+        ...(resolution.supportingRecordIds === undefined ? {} : { supportingEvidence: resolution.supportingRecordIds.filter(id => id !== resolution.recordId).map(id => evidenceByRecordId.get(id)!).filter(record => record !== undefined) }),
       };
     }
     case "satisfied_live_fact":
@@ -276,14 +287,16 @@ export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliv
     };
   }
 
-  const manifestDigestByRecordId = new Map<string, string>();
-  for (const record of evidenceRecords) {
-    if (record.resolution.kind === "evidence") {
-      manifestDigestByRecordId.set(record.recordId, record.resolution.manifestDigest);
+  const evidenceByRecordId = new Map(evidenceRecords.map((record) => [record.recordId, record]));
+  const claims = decision.resolutions.map((resolution) => claimOf(resolution, evidenceByRecordId));
+  const context = input.context;
+  if (context === undefined) return { ok: false, blockers: [portableBlocker("portable_context_missing", "Recording requires current policy, wiring and compatible release inputs.")] };
+  for (const claim of claims) {
+    if (claim.outcome !== "satisfied_evidence") continue;
+    if (claim.evidence?.resolution.kind !== "evidence" || claim.evidence.resolution.portable === undefined) {
+      return { ok: false, blockers: [portableBlocker("portable_evidence_missing", "Older summary-only evidence must be acquired and submitted again before recording.")] };
     }
   }
-
-  const claims = decision.resolutions.map((resolution) => claimOf(resolution, manifestDigestByRecordId));
   const distinctManifestDigests = [...new Set(claims.flatMap((claim) => (claim.manifestDigest === undefined ? [] : [claim.manifestDigest])))];
 
   const record: DeliveryRecord = {
@@ -295,8 +308,11 @@ export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliv
     manifestDigest: distinctManifestDigests.length === 1 ? (distinctManifestDigests[0] as string) : null,
     workspaceId: decision.candidate.workspaceId,
     attestation: { level: V1_ATTESTATION_LEVEL },
+    context,
   };
-  return { ok: true, record };
+  const sealed = { ...record, integrityDigest: digestCanonical(record) };
+  if (Buffer.byteLength(JSON.stringify(sealed)) > MAX_PORTABLE_RECORD_BYTES) return { ok: false, blockers: [portableBlocker("portable_record_oversized", "The portable record exceeds its size limit.")] };
+  return { ok: true, record: sealed };
 }
 
 /**
@@ -365,6 +381,7 @@ function isAttributedWaiver(value: unknown): value is NonNullable<DeliveryRecord
 }
 
 export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
+  if (Buffer.byteLength(text) > MAX_PORTABLE_RECORD_BYTES) return malformed("the record exceeds the portable size limit");
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -372,7 +389,7 @@ export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
     return malformed(`not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!isRecord(parsed)) return malformed("the record is not a JSON object");
-  if (parsed["version"] !== DELIVERY_RECORD_VERSION) {
+  if (parsed["version"] !== DELIVERY_RECORD_VERSION && parsed["version"] !== "delivery-record/1") {
     return malformed(`unsupported version token ${JSON.stringify(parsed["version"])}; expected ${DELIVERY_RECORD_VERSION}`);
   }
   if (!isNonEmptyString(parsed["gateId"])) return malformed("missing gateId");
@@ -488,6 +505,12 @@ export interface DeliveryRecordCheck {
  * state. `workspaceId` is never consulted.
  */
 export interface VerifyDeliveryRecordOptions {
+  readonly evidenceContext?: PortableEvidenceContext;
+  readonly projection?: EvaluateGateInput["projection"];
+  readonly executionContext?: EvaluateGateInput["context"];
+  readonly checkBindings?: Readonly<Record<string, CheckBinding>>;
+  /** Fresh caller-observed results; never reconstructed from a recorded live claim. */
+  readonly liveResults?: EvaluateGateInput["liveResults"];
   /**
    * The candidate tree's entries, when the caller can enumerate them. Supplied,
    * the verifier independently rejects any tree carrying a projection or
@@ -723,6 +746,7 @@ export function verifyDeliveryRecord(
       const obligation = config.obligations.find((entry) => entry.id === claim.obligationId);
       if (!isAttributedWaiver(waiver) || claim.scope !== waiver.scope ||
           !obligation?.humanWaiverAllowed || !obligation.allowedResolutionKinds.includes("waived") ||
+          (obligation.freshness === "live" && waiver.scope !== "invocation") ||
           waiver.policyDigest !== digestCanonical(config) ||
           BINDING_FIELDS.some((field) => waiver.candidateBinding[field] !== binding[field]) ||
           waiver.findingCodes.some((code) => NON_WAIVABLE_INTEGRITY_CODES.includes(code) ||
@@ -731,6 +755,8 @@ export function verifyDeliveryRecord(
       }
     }
   }
+
+  blockers.push(...verifyRecordEvidence(config, record, options));
 
   // The delivery-owned path sets, judged on the tree's own evidence. This is
   // the verifier's independent half of the protected-authority-path rule: no
@@ -766,4 +792,85 @@ export function verifyDeliveryRecord(
     claims: record.claims,
     ...(options.runJournal === undefined ? {} : { runJournal: options.runJournal }),
   };
+}
+
+/** Reconstruct admission from retained evidence using the existing evaluator. */
+function verifyRecordEvidence(config: HarnessConfig, record: DeliveryRecord, options: VerifyDeliveryRecordOptions): readonly Blocker[] {
+  const blockers: Blocker[] = [];
+  const { integrityDigest, ...unsigned } = record;
+  if (integrityDigest !== digestCanonical(unsigned)) blockers.push(portableBlocker("portable_record_integrity", "The serialized record changed after it was built."));
+  if (record.context === undefined || options.evidenceContext === undefined ||
+      digestCanonical(record.context) !== digestCanonical(options.evidenceContext)) {
+    return [...blockers, portableBlocker("portable_context_mismatch", "Current policy, wiring, release and reviewer inputs must match the portable record.")];
+  }
+  if (options.projection === undefined || options.executionContext === undefined) {
+    return [...blockers, portableBlocker("portable_activation_missing", "Verification requires activation recomputed from the target candidate.")];
+  }
+  const distinctDigests = [...new Set(record.claims.flatMap(claim => claim.manifestDigest === undefined ? [] : [claim.manifestDigest]))];
+  if (record.manifestDigest !== (distinctDigests.length === 1 ? distinctDigests[0] : null)) blockers.push(portableBlocker("portable_manifest_summary", "The record manifest summary differs from its actual claims."));
+  const records: EvidenceRecord[] = [];
+  const ids = new Set<string>();
+  const b = record.candidateBinding;
+  for (const claim of record.claims) {
+    if (ids.has(claim.obligationId)) blockers.push(portableBlocker("portable_claim_duplicate", "An obligation is claimed more than once."));
+    ids.add(claim.obligationId);
+  }
+  const expandedClaims: DeliveryRecordClaim[] = record.claims.flatMap(claim => [claim, ...(Array.isArray(claim.supportingEvidence) ? claim.supportingEvidence.map((evidence: EvidenceRecord) => ({
+    ...claim, evidence, recordId: evidence?.recordId,
+    ...(evidence?.resolution?.kind === "evidence" ? { providerId: evidence.resolution.providerId, runId: evidence.resolution.runId,
+      finalPassId: evidence.resolution.finalPassId, manifestDigest: evidence.resolution.manifestDigest } : {}),
+  })) : [])]);
+  for (const claim of expandedClaims) {
+    if (claim.outcome === "satisfied_evidence") {
+      const evidence = claim.evidence;
+      if (!isRecord(evidence) || !isRecord(evidence.resolution) || evidence.resolution.kind !== "evidence" ||
+          evidence.resolution.portable === undefined || !isRecord(evidence.candidateBinding)) {
+        blockers.push(portableBlocker("portable_evidence_missing", "The claim carries no original accepted manifest and artifact bytes.")); continue;
+      }
+      const resolution = evidence.resolution;
+      const eb = evidence.candidateBinding;
+      if (evidence.recordId !== computeRecordId(evidence.workspaceId, evidence) || evidence.workspaceId !== eb.workspaceId ||
+          evidence.gateId !== config.gateId || evidence.obligationId !== claim.obligationId ||
+          evidence.recordId !== claim.recordId || resolution.providerId !== claim.providerId || resolution.runId !== claim.runId ||
+          resolution.finalPassId !== claim.finalPassId || resolution.manifestDigest !== claim.manifestDigest ||
+          BINDING_FIELDS.filter(field => field !== "treeSha").some(field => eb[field] !== b[field])) {
+        blockers.push(portableBlocker("portable_claim_binding", "The claim differs from its original accepted evidence binding.")); continue;
+      }
+      blockers.push(...verifyPortableEvidence(config, resolution.portable!, eb, options.evidenceContext, options.checkBindings));
+      const manifest = resolution.portable!.manifest;
+      if (!isRecord(manifest) || !isRecord(manifest["provider"]) || !Array.isArray(manifest["claims"]) ||
+          resolution.manifestDigest !== computeManifestDigest(manifest) || manifest["provider"]["id"] !== resolution.providerId ||
+          manifest["provider"]["runId"] !== resolution.runId || manifest["provider"]["finalPassId"] !== resolution.finalPassId ||
+          !manifest["claims"].some(value => isRecord(value) && value["obligation"] === claim.obligationId)) {
+        blockers.push(portableBlocker("portable_manifest_binding", "The accepted manifest does not substantiate this claim.")); continue;
+      }
+      records.push(evidence);
+    } else if (claim.outcome === "waived" && isAttributedWaiver(claim.waiver) && claim.recordId !== undefined) {
+      const { candidateBinding, ...waiver } = claim.waiver;
+      records.push({ schemaVersion: 1, recordId: claim.recordId, workspaceId: b.workspaceId, gateId: config.gateId,
+        obligationId: claim.obligationId, candidateBinding, resolution: waiver });
+    }
+  }
+  if (blockers.length > 0) return blockers;
+  const decision = evaluateGate({ config, candidate: { treeSha: b.treeSha,
+    deliverable: { digest: b.deliverableDigest, identity: b.identityToken },
+    base: { ref: b.baseRef, tipSha: b.baseTipSha, mergeBaseSha: b.mergeBaseSha }, workspaceId: b.workspaceId },
+    projection: options.projection, context: options.executionContext, records,
+    ...(options.checkBindings === undefined ? {} : { checkBindings: options.checkBindings }),
+    ...(options.liveResults === undefined ? {} : { liveResults: options.liveResults }),
+  });
+  for (const actual of decision.resolutions) {
+    const claim = record.claims.find(entry => entry.obligationId === actual.obligationId);
+    // A portable exception is validated as the original human decision, never
+    // as CI or an agent gaining a human execution context. The existing gate
+    // supplies the complete current finding set it would otherwise block on.
+    if (claim?.outcome === "waived" && actual.kind === "blocked" && isAttributedWaiver(claim.waiver) &&
+        claim.waiver.scope === "durable" && actual.blockers.length > 0 &&
+        actual.blockers.every(blocker => claim.waiver!.findingCodes.includes(blocker.code))) continue;
+    if (claim?.outcome !== actual.kind || (actual.kind === "satisfied_evidence" && claim.recordId !== actual.recordId)) {
+      blockers.push(portableBlocker("portable_claim_outcome", "The actual evidence and current activation do not produce the claimed gate outcome."));
+      if (actual.kind === "blocked") blockers.push(...actual.blockers);
+    }
+  }
+  return blockers;
 }

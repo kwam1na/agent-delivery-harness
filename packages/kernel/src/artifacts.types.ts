@@ -122,6 +122,8 @@ export interface ArtifactObservation {
    * is never interpolated into a rejection message.
    */
   readonly contents: string | null;
+  /** Exact bytes for portable retention, including non-UTF-8 artifacts. */
+  readonly base64?: string;
   /** Operator-facing diagnostic for the failure statuses. Never parsed. */
   readonly detail: string | null;
 }

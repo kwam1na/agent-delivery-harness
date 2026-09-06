@@ -769,6 +769,15 @@ describe("the activation projection", () => {
     return { path: repoPath, additions: total, deletions: 0, binary: false };
   }
 
+  it("keeps record and review-neutral narration from activating their own record", () => {
+    for (const repoPath of ["delivery/records/proof.json", "docs/narration/report.md"]) {
+      const projection = projectReviewActivation([counted(repoPath, ACTIVATION_THRESHOLD + 1)], config);
+      expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(false);
+    }
+    const moved = projectReviewActivation([{ ...counted("docs/narration/moved.ts", ACTIVATION_THRESHOLD + 1), oldPath: "src/app.ts" }], config);
+    expect(isObligationActive(RELEVANT_CHANGE, moved, config.activationThreshold)).toBe(true);
+  });
+
   it("is inactive one line below the threshold", () => {
     const projection = projectReviewActivation([counted("src/app.ts", ACTIVATION_THRESHOLD - 1)], config);
     expect(projection.relevantLineCount).toBe(ACTIVATION_THRESHOLD - 1);

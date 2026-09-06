@@ -1,3 +1,4 @@
+import { recordIdentity, computeRecordId } from "./record-identity.ts";
 /**
  * The git-private, content-addressed evidence record store.
  *
@@ -298,31 +299,10 @@ export async function resolveRecordStorage(
  *
  * The evidence spelling names the run that produced the evidence, so re-running
  * a provider yields a new record rather than overwriting the old one. The
- * waiver spelling has no run to name: it collapses to the discriminant, which
- * is exactly why waiving one obligation on one candidate twice is one record.
+ * waiver spelling binds the attributed approval. Repeating identical approval
+ * is idempotent; a different human, reason or scope yields a distinct record.
  */
-export function recordIdentity(workspaceId: string, input: PublishRecordInput): RecordIdentity {
-  const common = {
-    workspaceId,
-    gateId: input.gateId,
-    obligationId: input.obligationId,
-    candidateBinding: input.candidateBinding,
-  };
-  return input.resolution.kind === "waiver"
-    ? { ...common, kind: "waiver" }
-    : {
-        ...common,
-        providerId: input.resolution.providerId,
-        runId: input.resolution.runId,
-        finalPassId: input.resolution.finalPassId,
-      };
-}
-
-/** `recordId` = lowercase-hex sha256 over the canonical identity tuple. */
-export function computeRecordId(workspaceId: string, input: PublishRecordInput): string {
-  return digestCanonical(recordIdentity(workspaceId, input));
-}
-
+export { recordIdentity, computeRecordId } from "./record-identity.ts";
 /**
  * Slot characters are restricted rather than trusted. Gate and obligation ids
  * are already pattern-validated by the config loader, so this changes nothing
@@ -423,7 +403,17 @@ function parseResolution(value: unknown): EvidenceRecord["resolution"] {
   if (!isRecordObject(value)) throw new RecordShapeError("malformed_shape", "resolution must be an object");
   const kind = value["kind"];
   if (kind === "evidence") {
-    requireExactMembers(value, EVIDENCE_MEMBERS, "resolution");
+    requireExactMembers(value, [...EVIDENCE_MEMBERS, ...(value["checkBinding"] === undefined ? [] : ["checkBinding"]), ...(value["portable"] === undefined ? [] : ["portable"])], "resolution");
+    if (value["checkBinding"] !== undefined) {
+      const binding = value["checkBinding"];
+      const members = ["definitionDigest", "validationDigest", "policyDigest", "wiringFingerprint", "outputsDigest"];
+      if (!isRecordObject(binding)) throw new RecordShapeError("malformed_shape", "checkBinding must be an object");
+      requireExactMembers(binding, members, "checkBinding");
+      if (members.some(key => typeof binding[key] !== "string" || !/^[a-f0-9]{64}$/.test(binding[key] as string))) throw new RecordShapeError("malformed_shape", "checkBinding requires sha256 digests");
+    }
+    if (value["portable"] !== undefined && (!isRecordObject(value["portable"]) || value["portable"]["version"] !== "portable-evidence/1")) {
+      throw new RecordShapeError("malformed_shape", "resolution.portable must carry a supported portable evidence payload");
+    }
     for (const member of ["providerId", "runId", "finalPassId", "manifestDigest"] as const) {
       if (!isNonEmptyString(value[member])) {
         throw new RecordShapeError("malformed_shape", `resolution.${member} must be a non-empty string`);

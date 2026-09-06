@@ -1,3 +1,4 @@
+import { withPortableEvidence } from "../fixtures/portable-record.ts";
 /**
  * The gate this repository runs on itself, driven by simulated pull-request
  * events BEFORE the workflow that runs it live exists.
@@ -73,7 +74,7 @@ async function initRepo(): Promise<string> {
   await git(dir, "config", "user.email", "harness@example.invalid");
   await git(dir, "config", "user.name", "Delivery Harness");
   await git(dir, "config", "commit.gpgsign", "false");
-  await writeAt(dir, "harness.config.ts", "export default {};\n");
+  for (const wiring of harnessConfig.preparationWiringPaths) await writeAt(dir, wiring, "{}\n");
   await commit(dir, "root");
   await git(dir, "branch", harnessConfig.baseRef);
   await git(dir, "checkout", "--quiet", "-b", "feature");
@@ -93,7 +94,7 @@ async function commitFreshRecord(dir: string): Promise<{ digest: string; relativ
   const treeSha = await git(dir, "rev-parse", "--verify", "HEAD^{tree}");
   const baseTipSha = await git(dir, "rev-parse", "--verify", `${harnessConfig.baseRef}^{commit}`);
   const mergeBaseSha = await git(dir, "merge-base", harnessConfig.baseRef, "HEAD");
-  const record: DeliveryRecord = {
+  const summary: DeliveryRecord = {
     version: DELIVERY_RECORD_VERSION,
     gateId: harnessConfig.gateId,
     identityToken: harnessConfig.computingIdentityVersion,
@@ -119,6 +120,7 @@ async function commitFreshRecord(dir: string): Promise<{ digest: string; relativ
     workspaceId: "workspace-local",
     attestation: { level: "self" },
   } as DeliveryRecord;
+  const record = await withPortableEvidence(dir, harnessConfig, summary);
   const relativePath = deliveryRecordPathFor(harnessConfig, digest);
   await writeAt(dir, relativePath, `${JSON.stringify(record)}\n`);
   await commit(dir, "delivery record");

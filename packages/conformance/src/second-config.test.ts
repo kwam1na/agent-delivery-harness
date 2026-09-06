@@ -1,3 +1,4 @@
+import { digestCanonical } from "@agent-delivery-harness/kernel";
 /**
  * Config-independence, second half: the kernel exercised under the
  * full-divergence configuration.
@@ -221,7 +222,9 @@ describe("the gate under the full-divergence config", () => {
 
 function secondRecord(overrides: { identityToken?: string; baseTipSha?: string } = {}): DeliveryRecord {
   const identityToken = overrides.identityToken ?? secondConfig.computingIdentityVersion;
-  return {
+  const context = { configurationDigest: digestCanonical(secondConfig), preparationFingerprint: "f".repeat(64), policyDigest: null, release: null, workflowGraphSha256: null, reviewerCharters: [] };
+  const value: DeliveryRecord = {
+    context,
     version: DELIVERY_RECORD_VERSION,
     gateId: secondConfig.gateId,
     identityToken,
@@ -239,6 +242,7 @@ function secondRecord(overrides: { identityToken?: string; baseTipSha?: string }
     workspaceId: SECOND_CANDIDATE.workspaceId,
     attestation: { level: "self" },
   };
+  return { ...value, integrityDigest: digestCanonical(value) };
 }
 
 describe("the delivery record under the full-divergence config", () => {
@@ -255,6 +259,8 @@ describe("the delivery record under the full-divergence config", () => {
       secondRecord({ baseTipSha: "e".repeat(40) }),
       { deliverableDigest: SECOND_CANDIDATE.deliverable.digest, identityToken: secondConfig.computingIdentityVersion },
       { ref: secondConfig.baseRef, tipSha: SECOND_CANDIDATE.base.tipSha, mergeBaseSha: SECOND_CANDIDATE.base.mergeBaseSha },
+      { evidenceContext: secondRecord().context!, projection: ACTIVE_PROJECTION, executionContext: UNKNOWN,
+        liveResults: [{ providerId: "second.auditor", runId: "fresh-verification", status: "green", findings: [] }] },
     );
     // The kit's config stales on base movement; this one is configured to
     // relax it — a kernel reading a hardcoded default goes red here.
@@ -269,6 +275,8 @@ describe("the delivery record under the full-divergence config", () => {
       secondRecord({ identityToken: "deliverable-tree/v1" }),
       { deliverableDigest: SECOND_CANDIDATE.deliverable.digest, identityToken: secondConfig.computingIdentityVersion },
       { ref: secondConfig.baseRef, tipSha: SECOND_CANDIDATE.base.tipSha, mergeBaseSha: SECOND_CANDIDATE.base.mergeBaseSha },
+      { evidenceContext: secondRecord().context!, projection: ACTIVE_PROJECTION, executionContext: UNKNOWN,
+        liveResults: [{ providerId: "second.auditor", runId: "fresh-verification", status: "green", findings: [] }] },
     );
     expect(check.ok).toBe(false);
     expect(check.blockers.map((blocker) => blocker.code)).toContain("record_identity_token_unknown");
