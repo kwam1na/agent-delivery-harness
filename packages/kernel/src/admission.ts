@@ -44,7 +44,7 @@
  * THE TWO-PASS WAIVER EVALUATION. A blocked first pass whose every finding an
  * interactive human may waive earns exactly one prompt, naming every obligation
  * that one "yes" covers. On acceptance the candidate is re-captured — a change
- * while the prompt was open voids the offer — and then invocation-scope waiver
+ * while the prompt was open voids the offer — and then candidate-bound waiver
  * records are written to disk and the gate is evaluated a second time, with
  * those record ids handed in as this invocation's grants. The write happens only
  * after an accepted prompt and a clean re-capture, so a decline or a drift
@@ -66,14 +66,15 @@
  */
 import { BlockedError, createBlocker, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
 import { classifyCandidateDrift, type CandidateBinding, type CandidateCapture, type CapturedCandidate, type CaptureCandidate, type ReviewActivationProjection } from "./candidate.types.ts";
-import type { HarnessConfig, ObligationPolicy } from "./config.ts";
+import { NON_WAIVABLE_INTEGRITY_CODES, type HarnessConfig, type ObligationPolicy } from "./config.ts";
+import { digestCanonical } from "./digest.ts";
 import type { ExecutionContext } from "./context.ts";
 import { evaluateGate, isRecordFreshForCandidate, type BlockedResolution, type EvaluateGateInput, type GateDecision, type LiveProviderResult, type UnreadableRecordInput } from "./evaluator.ts";
 import { evaluatePreparationReceipt, type PreparationEvaluation } from "./preparation.ts";
 import { discoverRecords as defaultDiscoverRecords, publishRecord, resolveRecordStorage, type RecordStorageOptions } from "./records.ts";
-import type { EvidenceRecord, PublishedRecord, RecordCandidateBinding, RecordDiscovery } from "./records.types.ts";
+import type { EvidenceRecord, PublishedRecord, RecordCandidateBinding, RecordDiscovery, WaiverResolution } from "./records.types.ts";
 
-/** Synthesized waivers are good for this invocation only; a later run must re-earn them. */
+/** Live obligations must obtain approval during each invocation. */
 export const INVOCATION_WAIVER_SCOPE = "invocation" as const;
 
 /**
@@ -81,7 +82,8 @@ export const INVOCATION_WAIVER_SCOPE = "invocation" as const;
  * never renders — the command surface wires an implementation over its own I/O,
  * and a run with none supplied simply cannot be offered a waiver.
  */
-export type WaiverPrompt = (decision: GateDecision, obligationIds: readonly string[]) => Promise<boolean>;
+export type WaiverApproval = { readonly author: string; readonly reason: string };
+export type WaiverPrompt = (decision: GateDecision, obligationIds: readonly string[]) => Promise<false | WaiverApproval>;
 
 /** How the interactive waiver offer resolved, for a caller that reports it. */
 export type WaiverPromptOutcome = "not_offered" | "accepted" | "declined" | "candidate_changed";
@@ -108,7 +110,7 @@ export interface AdmissionOptions extends RecordStorageOptions {
   readonly promptForWaiver?: WaiverPrompt;
   readonly evaluatePreparation?: (rootDir: string, config: HarnessConfig, candidate: CapturedCandidate) => Promise<PreparationEvaluation>;
   readonly discoverRecords?: (rootDir: string, gateId: string, obligationId: string) => Promise<RecordDiscovery>;
-  readonly publishWaiver?: (rootDir: string, binding: RecordCandidateBinding, obligationId: string) => Promise<PublishedRecord>;
+  readonly publishWaiver?: (rootDir: string, binding: RecordCandidateBinding, obligationId: string, resolution: WaiverResolution) => Promise<PublishedRecord>;
   /** Passed through to receipt evaluation. Tests use it; callers do not. */
   readonly harnessVersion?: string;
 }
@@ -123,7 +125,7 @@ export interface AdmissionResult {
   readonly waiver: WaiverPromptOutcome;
   /** The obligations one "yes" would cover (or did cover). Empty unless a waiver was offerable. */
   readonly waivedObligationIds: readonly string[];
-  /** The invocation-scope waiver records written this run. Non-empty only on an accepted waiver. */
+  /** The waiver records written this run. Non-empty only on an accepted waiver. */
   readonly waiverRecordIds: readonly string[];
 }
 
@@ -304,7 +306,7 @@ function waivableBlockedObligationIds(config: HarnessConfig, context: ExecutionC
     const obligation = obligationsById.get(resolution.obligationId);
     if (obligation === undefined || !obligation.humanWaiverAllowed) return false;
     const waivable = new Set(obligation.waivableCodes);
-    return resolution.blockers.every((blocker) => waivable.has(blocker.code));
+    return resolution.blockers.every((blocker) => !NON_WAIVABLE_INTEGRITY_CODES.includes(blocker.code) && waivable.has(blocker.code));
   });
 
   return fullyWaivable ? blockedResolutions.map((resolution) => resolution.obligationId) : [];
@@ -402,10 +404,23 @@ async function admit(input: AdmissionInput, options: AdmissionOptions): Promise<
     });
   }
 
+  if (typeof accepted !== "object" || accepted === null ||
+      typeof accepted.author !== "string" || !accepted.author.trim() || accepted.author.length > 256 ||
+      typeof accepted.reason !== "string" || !accepted.reason.trim() || accepted.reason.length > 4096) {
+    return blocked({ ...NOT_OFFERED, candidate, context: input.context, decision: firstPass,
+      blockers: [...firstPass.blockers, createBlocker({ code: "waiver_attribution_invalid",
+        source: { kind: "gate", id: input.config.gateId },
+        summary: "A human exception requires an author and reason.",
+        remediations: [{ id: "provide-attribution", kind: "manual_action", summary: "Provide bounded non-empty author and reason through the human waiver prompt." }],
+      })] });
+  }
+
   // The last observation before any write. A candidate that moved while the
   // prompt was open voids the offer, and nothing has been written yet.
   const recapture = await options.captureCandidate();
-  if (!recapture.ok || !sameCandidate(candidate, recapture.candidate)) {
+  const currentPreparation = recapture.ok ? await evaluateReceipt(input.rootDir, input.config, recapture.candidate) : undefined;
+  if (!recapture.ok || !sameCandidate(candidate, recapture.candidate) || !currentPreparation?.prepared ||
+      currentPreparation.receipt.preparationFingerprint !== preparation.receipt.preparationFingerprint) {
     return blocked({
       waiver: "candidate_changed",
       waivedObligationIds: covered,
@@ -417,14 +432,21 @@ async function admit(input: AdmissionInput, options: AdmissionOptions): Promise<
     });
   }
 
-  // Now, and only now, the invocation-scope waivers reach disk.
-  const publishWaiver = options.publishWaiver ?? ((rootDir, binding, obligationId) =>
-    publishRecord(rootDir, { gateId: input.config.gateId, obligationId, candidateBinding: binding, resolution: { kind: "waiver", scope: INVOCATION_WAIVER_SCOPE } }, storageOptions(options)));
+  // Exact-candidate approvals survive the separate human `record` invocation.
+  // Live obligations still require approval during each invocation.
+  const publishWaiver = options.publishWaiver ?? ((rootDir, binding, obligationId, resolution) =>
+    publishRecord(rootDir, { gateId: input.config.gateId, obligationId, candidateBinding: binding, resolution }, storageOptions(options)));
   const binding = recordBindingOf(candidate);
   const published: EvidenceRecord[] = [];
   const grantedIds: string[] = [];
   for (const obligationId of covered) {
-    const record = await publishWaiver(input.rootDir, binding, obligationId);
+    const findingCodes = [...new Set(firstPass.resolutions.filter((r) => r.obligationId === obligationId && r.kind === "blocked")
+      .flatMap((r) => r.kind === "blocked" ? r.blockers.map((b) => b.code) : []))].sort();
+    const record = await publishWaiver(input.rootDir, binding, obligationId, {
+      kind: "waiver", scope: input.config.obligations.find((o) => o.id === obligationId)?.freshness === "live" ? INVOCATION_WAIVER_SCOPE : "durable",
+      author: accepted.author.trim(), reason: accepted.reason.trim(),
+      findingCodes, policyDigest: digestCanonical(input.config),
+    });
     published.push(record.record);
     grantedIds.push(record.record.recordId);
   }

@@ -77,6 +77,10 @@ export interface EvidenceResolution {
 export interface WaiverResolution {
   readonly kind: "waiver";
   readonly scope: WaiverScope;
+  readonly author: string;
+  readonly reason: string;
+  readonly findingCodes: readonly string[];
+  readonly policyDigest: string;
 }
 
 export type RecordResolution = EvidenceResolution | WaiverResolution;

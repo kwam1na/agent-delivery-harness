@@ -30,6 +30,7 @@
  */
 import {
   BASE_MOVEMENT_POLICIES,
+  NON_WAIVABLE_INTEGRITY_CODES,
   V1_ATTESTATION_LEVEL,
   type AttestationLevel,
   type BaseMovementPolicy,
@@ -43,8 +44,9 @@ import {
   type Remediation,
 } from "./blockers.ts";
 import { canonicalize } from "./canonical.ts";
+import { digestCanonical } from "./digest.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
-import type { EvidenceRecord, RecordCandidateBinding } from "./records.types.ts";
+import type { EvidenceRecord, RecordCandidateBinding, WaiverResolution } from "./records.types.ts";
 // TYPE ONLY, DELIBERATELY. The row is echoed, never evaluated, so this module
 // takes the shape and nothing that could read one.
 import type { RunJournalRow } from "./checkpoint/run-journal-completeness.ts";
@@ -164,6 +166,7 @@ export interface DeliveryRecordClaim {
   readonly finalPassId?: string;
   readonly manifestDigest?: string;
   readonly scope?: string;
+  readonly waiver?: WaiverResolution & { readonly candidateBinding: RecordCandidateBinding };
   readonly ciPolicyId?: string;
 }
 
@@ -233,7 +236,8 @@ function claimOf(
     case "satisfied_live_fact":
       return { obligationId: resolution.obligationId, outcome: resolution.kind, providerId: resolution.providerId, runId: resolution.runId };
     case "waived":
-      return { obligationId: resolution.obligationId, outcome: resolution.kind, recordId: resolution.waiverRecordId, scope: resolution.scope };
+      return { obligationId: resolution.obligationId, outcome: resolution.kind, recordId: resolution.waiverRecordId, scope: resolution.scope,
+        waiver: { ...resolution.waiver, candidateBinding: resolution.candidateBinding } };
     case "delegated":
       return { obligationId: resolution.obligationId, outcome: resolution.kind, ciPolicyId: resolution.ciPolicyId };
     case "not_applicable":
@@ -346,6 +350,20 @@ function malformed(detail: string): { readonly ok: false; readonly blockers: Non
   return { ok: false, blockers: [drBlocker("delivery_record_malformed", "The delivery record could not be read.", detail)] };
 }
 
+function isAttributedWaiver(value: unknown): value is NonNullable<DeliveryRecordClaim["waiver"]> {
+  if (!isRecord(value) || value["kind"] !== "waiver" || !["invocation", "durable"].includes(String(value["scope"]))) return false;
+  for (const [field, limit] of [["author", 256], ["reason", 4096]] as const) {
+    const text = value[field];
+    if (typeof text !== "string" || !text.trim() || text.length > limit) return false;
+  }
+  const codes = value["findingCodes"];
+  const candidate = value["candidateBinding"];
+  return typeof value["policyDigest"] === "string" && /^[a-f0-9]{64}$/.test(value["policyDigest"]) &&
+    Array.isArray(codes) && codes.length > 0 && new Set(codes).size === codes.length &&
+    codes.every((code) => typeof code === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(code)) &&
+    isRecord(candidate) && BINDING_FIELDS.every((field) => isNonEmptyString(candidate[field]));
+}
+
 export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
   let parsed: unknown;
   try {
@@ -382,6 +400,9 @@ export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
       return malformed(
         `claim for ${JSON.stringify(claim["obligationId"])} carries outcome ${JSON.stringify(claim["outcome"])}, which is not a resolution outcome`,
       );
+    }
+    if (claim["outcome"] === "waived" && (!isAttributedWaiver(claim["waiver"]) || claim["scope"] !== claim["waiver"].scope)) {
+      return malformed("a waived claim requires attributed, scoped approval bound to its policy and candidate");
     }
   }
 
@@ -696,6 +717,18 @@ export function verifyDeliveryRecord(
   for (const claim of record.claims) {
     if (claim.outcome === "blocked") {
       blockers.push(drBlocker("record_claim_blocked", `Claim for ${claim.obligationId} carries a blocked outcome; a record must not.`));
+    }
+    if (claim.outcome === "waived") {
+      const waiver = claim.waiver;
+      const obligation = config.obligations.find((entry) => entry.id === claim.obligationId);
+      if (!isAttributedWaiver(waiver) || claim.scope !== waiver.scope ||
+          !obligation?.humanWaiverAllowed || !obligation.allowedResolutionKinds.includes("waived") ||
+          waiver.policyDigest !== digestCanonical(config) ||
+          BINDING_FIELDS.some((field) => waiver.candidateBinding[field] !== binding[field]) ||
+          waiver.findingCodes.some((code) => NON_WAIVABLE_INTEGRITY_CODES.includes(code) ||
+            obligation.nonWaivableCodes.includes(code) || !obligation.waivableCodes.includes(code))) {
+        blockers.push(drBlocker("record_waiver_invalid", `The human exception for ${claim.obligationId} does not match its attribution, scope, policy, or candidate.`));
+      }
     }
   }
 

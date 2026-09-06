@@ -68,9 +68,10 @@
  */
 import { createBlocker, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
 import { isObligationActive, type CandidateBinding, type ReviewActivationProjection } from "./candidate.types.ts";
-import type { HarnessConfig, ObligationPolicy } from "./config.ts";
+import { NON_WAIVABLE_INTEGRITY_CODES, type HarnessConfig, type ObligationPolicy } from "./config.ts";
+import { digestCanonical } from "./digest.ts";
 import type { ExecutionContext } from "./context.ts";
-import type { EvidenceRecord, EvidenceResolution, QuarantinedRecord, RecordCandidateBinding, WaiverScope } from "./records.types.ts";
+import type { EvidenceRecord, EvidenceResolution, QuarantinedRecord, RecordCandidateBinding, WaiverScope, WaiverResolution } from "./records.types.ts";
 
 /**
  * The five kinds a config may permit, plus the one it cannot. Kept in this
@@ -172,6 +173,7 @@ export interface WaivedResolution extends ResolutionBase {
   readonly kind: "waived";
   readonly waiverRecordId: string;
   readonly scope: WaiverScope;
+  readonly waiver: WaiverResolution;
   readonly candidateBinding: RecordCandidateBinding;
 }
 
@@ -690,7 +692,7 @@ function waiverFor(input: EvaluateGateInput, obligation: ObligationPolicy, pendi
 
   const waivable = new Set(obligation.waivableCodes);
   const nonWaivable = new Set(obligation.nonWaivableCodes);
-  if (pending.some((entry) => nonWaivable.has(entry.code) || !waivable.has(entry.code))) return undefined;
+  if (pending.some((entry) => NON_WAIVABLE_INTEGRITY_CODES.includes(entry.code) || nonWaivable.has(entry.code) || !waivable.has(entry.code))) return undefined;
 
   const granted = new Set(input.invocationWaiverRecordIds ?? []);
   const invocationOnly = obligation.freshness === "live";
@@ -698,6 +700,12 @@ function waiverFor(input: EvaluateGateInput, obligation: ObligationPolicy, pendi
     .filter((record) => record.gateId === input.config.gateId && record.obligationId === obligation.id)
     .filter((record) => {
       if (record.resolution.kind !== "waiver") return false;
+      const waiver = record.resolution;
+      if (waiver.policyDigest !== digestCanonical(input.config) ||
+          record.candidateBinding.treeSha !== input.candidate.treeSha ||
+          !waiver.author?.trim() || !waiver.reason?.trim() ||
+          !Array.isArray(waiver.findingCodes) ||
+          pending.some((finding) => !waiver.findingCodes.includes(finding.code))) return false;
       if (record.resolution.scope === "invocation") return granted.has(record.recordId);
       return !invocationOnly;
     })
@@ -712,6 +720,7 @@ function waiverFor(input: EvaluateGateInput, obligation: ObligationPolicy, pendi
     obligationId: obligation.id,
     waiverRecordId: chosen.recordId,
     scope: chosen.resolution.scope,
+    waiver: chosen.resolution,
     candidateBinding: chosen.candidateBinding,
   };
 }

@@ -121,6 +121,11 @@ export const RESOLUTION_KINDS = [
 ] as const;
 export type ResolutionKind = (typeof RESOLUTION_KINDS)[number];
 
+/** Integrity failures are never discharged by policy exceptions. */
+export const NON_WAIVABLE_INTEGRITY_CODES: readonly string[] = Object.freeze([
+  "ambiguous_records", "malformed_record", "unknown_provider", "stale_evidence", "resolution_not_allowed",
+]);
+
 /** When an obligation applies to a candidate. */
 export const ACTIVATION_KINDS = ["always", "relevant_change"] as const;
 export type ActivationKind = (typeof ACTIVATION_KINDS)[number];

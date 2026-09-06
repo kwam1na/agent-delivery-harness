@@ -8,6 +8,7 @@
  * plus self-neutrality) lives in the CLI suite.
  */
 import { describe, expect, it } from "vitest";
+import { digestCanonical } from "./digest.ts";
 import { defineHarnessConfig, type HarnessConfig, type HarnessConfigInput } from "./config.ts";
 import { RESOLUTION_OUTCOMES, type GateDecision, type ObligationResolution } from "./evaluator.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
@@ -299,10 +300,48 @@ describe("parseDeliveryRecord", () => {
   it("accepts every outcome the evaluator can actually produce", () => {
     const record = buildFreshRecord();
     for (const outcome of RESOLUTION_OUTCOMES.filter((kind) => kind !== "blocked")) {
-      const rewritten = { ...record, claims: [{ ...record.claims[0], outcome }] };
+      const rewritten = { ...record, claims: [{ ...record.claims[0], outcome, ...(outcome === "waived" ? {
+        scope: "durable", waiver: { kind: "waiver", scope: "durable", author: "Release owner", reason: "Accepted missing review",
+          findingCodes: ["review_evidence_missing"], policyDigest: digestCanonical(makeConfig()), candidateBinding: RECORD_BINDING },
+      } : {}) }] };
       const parsed = parseDeliveryRecord(`${JSON.stringify(rewritten)}\n`);
       expect(parsed.ok, `expected ${outcome} to parse`).toBe(true);
     }
+  });
+});
+
+describe("portable human exceptions", () => {
+  const approval = { kind: "waiver" as const, scope: "durable" as const, author: "Release owner", reason: "Accepted missing review",
+    findingCodes: ["review_evidence_missing"], policyDigest: digestCanonical(makeConfig()) };
+  function record(): DeliveryRecord {
+    const built = buildDeliveryRecord({ config: makeConfig(), evidenceRecords: [], decision: admittedDecision([{
+      kind: "waived", gateId: "test.gate", obligationId: "review.green", waiverRecordId: "waiver-1",
+      scope: "durable", candidateBinding: RECORD_BINDING, waiver: approval,
+    }]) });
+    if (!built.ok) throw new Error("expected admitted waiver");
+    return built.record;
+  }
+  it("retains attribution, finding scope, policy, and approved candidate through serialization", () => {
+    const parsed = parseDeliveryRecord(deliveryRecordBytes(record()));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.claims[0]?.waiver).toEqual({ ...approval, candidateBinding: RECORD_BINDING });
+    expect(verifyDeliveryRecord(makeConfig(), parsed.record, RECOMPUTED, FRESH_BASE).ok).toBe(true);
+  });
+  it("rejects a legacy unattributed waiver claim", () => {
+    const value = record();
+    expect(parseDeliveryRecord(JSON.stringify({ ...value, claims: [{ obligationId: "review.green", outcome: "waived", scope: "durable" }] })).ok).toBe(false);
+  });
+  it.each(["policy", "candidate", "integrity"])("rejects an exception with mismatched %s in the verifier", (mutation) => {
+    const value = record();
+    const waiver = { ...approval, candidateBinding: RECORD_BINDING,
+      ...(mutation === "policy" ? { policyDigest: "f".repeat(64) } : {}),
+      ...(mutation === "candidate" ? { candidateBinding: { ...RECORD_BINDING, treeSha: "other-tree" } } : {}),
+      ...(mutation === "integrity" ? { findingCodes: ["stale_evidence"] } : {}),
+    };
+    const result = verifyDeliveryRecord(makeConfig(), { ...value, claims: [{ ...value.claims[0]!, waiver }] }, RECOMPUTED, FRESH_BASE);
+    expect(result.ok).toBe(false);
+    expect(result.blockers.map((b) => b.code)).toContain("record_waiver_invalid");
   });
 });
 

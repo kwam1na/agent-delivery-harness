@@ -35,6 +35,7 @@
  * the scenario beside it discriminates between the two.
  */
 import { describe, expect, it } from "vitest";
+import { digestCanonical } from "./digest.ts";
 import { GATE_STRUCTURAL_FINDING_CODES, renderBlockers, type Blocker } from "./blockers.ts";
 import type { CandidateBinding, ReviewActivationProjection } from "./candidate.types.ts";
 import {
@@ -210,6 +211,8 @@ function waiver(
     readonly gateId?: string;
     readonly obligationId?: string;
     readonly scope?: WaiverScope;
+    readonly config?: HarnessConfig;
+    readonly findingCodes?: readonly string[];
     readonly binding?: RecordCandidateBinding;
   } = {},
 ): EvidenceRecord {
@@ -220,7 +223,7 @@ function waiver(
     gateId: spec.gateId ?? "test.gate",
     obligationId: spec.obligationId ?? "review.green",
     candidateBinding: spec.binding ?? boundTo(),
-    resolution: { kind: "waiver", scope: spec.scope ?? "durable" },
+    resolution: { kind: "waiver", scope: spec.scope ?? "durable", author: "Test Operator", reason: "Explicit exception", findingCodes: spec.findingCodes ?? ["review_evidence_missing", "live_provider_missing"], policyDigest: digestCanonical(spec.config ?? testConfig()) },
   };
 }
 
@@ -317,6 +320,7 @@ describe("the six outcomes", () => {
       obligationId: "review.green",
       waiverRecordId: "waiver-1",
       scope: "durable",
+      waiver: waiver().resolution,
       candidateBinding: boundTo(),
     });
     expect(decision.admitted).toBe(true);
@@ -796,7 +800,7 @@ describe("a provider's own finding codes", () => {
       config: liveConfig,
       context: HUMAN,
       liveResults: [{ providerId: "review.provider", runId: "live-1", status: "failed", findings: [{ code: "not-declared", summary: "Something else." }] }],
-      records: [waiver({ scope: "invocation" })],
+      records: [waiver({ config: liveConfig, findingCodes: ["live_provider_failed"], scope: "invocation" })],
       invocationWaiverRecordIds: ["waiver-1"],
     });
     expect(only(decision).kind).toBe("waived");
@@ -817,6 +821,29 @@ describe("a provider's own finding codes", () => {
 // ── Waivers ────────────────────────────────────────────────────────────────
 
 describe("waiver scoping", () => {
+  it("rejects a waiver after policy changes even when its candidate is unchanged", () => {
+    const config = testConfig({ activationThreshold: 1 });
+    expect(only(evaluate({ config, context: HUMAN, records: [waiver()] })).kind).toBe("blocked");
+    expect(only(evaluate({ config, context: HUMAN, records: [waiver({ config })] })).kind).toBe("waived");
+  });
+
+  it("rejects an exception for a different finding on the same candidate", () => {
+    expect(only(evaluate({ config: testConfig(), context: HUMAN,
+      records: [waiver({ findingCodes: ["live_provider_missing"] })],
+    })).kind).toBe("blocked");
+  });
+
+  it("cannot waive stale evidence even when policy lists its code as waivable", () => {
+    const config = testConfig();
+    expect(config.obligations[0]!.waivableCodes).toContain("stale_evidence");
+    const decision = evaluate({ config, context: HUMAN,
+      records: [evidence({ binding: boundTo({ deliverableDigest: "e".repeat(64) }) }),
+        waiver({ findingCodes: ["stale_evidence"] })],
+    });
+    expect(only(decision).kind).toBe("blocked");
+    expect(codesOf(decision)).toContain("stale_evidence");
+  });
+
   it("honors a durable waiver on a candidate-bound obligation", () => {
     const decision = evaluate({ config: testConfig(), context: HUMAN, records: [waiver({ scope: "durable" })] });
     expect(only(decision).kind).toBe("waived");
@@ -832,7 +859,7 @@ describe("waiver scoping", () => {
     const decision = evaluate({
       config: testConfig({ obligations: [obligation({ freshness: "live" })] }),
       context: HUMAN,
-      records: [waiver({ scope: "invocation" })],
+      records: [waiver({ config: testConfig({ obligations: [obligation({ freshness: "live" })] }), scope: "invocation" })],
       invocationWaiverRecordIds: ["waiver-1"],
     });
     expect(only(decision).kind).toBe("waived");
@@ -925,7 +952,7 @@ describe("waiver scoping", () => {
     const decision = evaluate({
       config,
       context,
-      records: [waiver({ scope: freshness === "live" ? "invocation" : "durable" })],
+      records: [waiver({ config, scope: freshness === "live" ? "invocation" : "durable" })],
       invocationWaiverRecordIds: ["waiver-1"],
     });
     expect(only(decision).kind).toBe(expected);

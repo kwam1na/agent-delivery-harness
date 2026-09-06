@@ -84,12 +84,12 @@ const REPAID: PublishRecordInput = {
   resolution: { ...RESOLUTION, manifestDigest: "0".repeat(64) },
 };
 
-const WAIVER: PublishRecordInput = {
+const WAIVER = {
   gateId: "delivery",
   obligationId: "review.green",
   candidateBinding: BINDING,
-  resolution: { kind: "waiver", scope: "invocation" },
-};
+  resolution: { kind: "waiver", scope: "invocation", author: "Test Operator", reason: "Explicit exception", findingCodes: ["review_evidence_missing"], policyDigest: "a".repeat(64) },
+} satisfies PublishRecordInput;
 
 const WORKSPACE = "9".repeat(64);
 
@@ -337,7 +337,7 @@ describe("record identity — waiver variant", () => {
     const invocation = computeRecordId(WORKSPACE, WAIVER);
     const durable = computeRecordId(WORKSPACE, {
       ...WAIVER,
-      resolution: { kind: "waiver", scope: "durable" },
+      resolution: { ...WAIVER.resolution, kind: "waiver", scope: "durable" },
     });
 
     expect(invocation).toBe(durable);
@@ -429,7 +429,7 @@ describe("publication", () => {
     await publishRecord(storageRoot, WAIVER, { storageRoot });
 
     const code = await captureBlocker(() =>
-      publishRecord(storageRoot, { ...WAIVER, resolution: { kind: "waiver", scope: "durable" } }, { storageRoot }),
+      publishRecord(storageRoot, { ...WAIVER, resolution: { ...WAIVER.resolution, kind: "waiver", scope: "durable" } }, { storageRoot }),
     );
     expect(code).toBe("record_conflict");
   });

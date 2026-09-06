@@ -406,7 +406,7 @@ const RECORD_MEMBERS = [
 
 const EVIDENCE_MEMBERS = ["kind", "providerId", "runId", "finalPassId", "manifestDigest"] as const;
 
-const WAIVER_MEMBERS = ["kind", "scope"] as const;
+const WAIVER_MEMBERS = ["kind", "scope", "author", "reason", "findingCodes", "policyDigest"] as const;
 
 function parseBinding(value: unknown): RecordCandidateBinding {
   if (!isRecordObject(value)) throw new RecordShapeError("malformed_shape", "candidateBinding must be an object");
@@ -433,6 +433,19 @@ function parseResolution(value: unknown): EvidenceRecord["resolution"] {
     requireExactMembers(value, WAIVER_MEMBERS, "resolution");
     if (!WAIVER_SCOPES.includes(value["scope"] as never)) {
       throw new RecordShapeError("malformed_shape", `resolution.scope must be one of ${WAIVER_SCOPES.join(", ")}`);
+    }
+    for (const [member, limit] of [["author", 256], ["reason", 4096]] as const) {
+      if (typeof value[member] !== "string" || value[member].trim().length === 0 || value[member].length > limit) {
+        throw new RecordShapeError("malformed_shape", `resolution.${member} must be bounded non-empty text`);
+      }
+    }
+    const codes = value["findingCodes"];
+    if (!Array.isArray(codes) || codes.length === 0 || new Set(codes).size !== codes.length ||
+        codes.some((code) => typeof code !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(code))) {
+      throw new RecordShapeError("malformed_shape", "resolution.findingCodes must name unique bounded finding codes");
+    }
+    if (typeof value["policyDigest"] !== "string" || !/^[0-9a-f]{64}$/.test(value["policyDigest"])) {
+      throw new RecordShapeError("malformed_shape", "resolution.policyDigest must be a sha256 digest");
     }
   } else {
     throw new RecordShapeError("malformed_shape", `resolution.kind must be "evidence" or "waiver"`);

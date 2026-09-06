@@ -39,6 +39,21 @@ A claim outcome must be one of the evaluator's six resolution kinds. The
 parser rejects anything else: a committed file is editable, and an invented
 outcome (`rubber_stamped`) must read as a malformed record, not verify clean.
 
+A `waived` claim carries its `scope` and a `waiver` object with `kind`,
+`scope`, `author`, `reason`, `findingCodes`, `policyDigest`, and the original
+`candidateBinding`. The verifier requires those fields, the same candidate and
+policy, and only findings that policy permits a human to waive. Integrity
+failures remain blocking. Attribution is self-reported through the interactive
+human boundary; it does not increase the record's attestation level.
+
+Older unattributed waiver records, both git-private schema version 1 records
+and tracked `delivery-record/1` claims, are deliberately rejected. Re-obtain
+human approval for the current candidate; do not invent attribution for an old
+approval. Existing evidence records retain their format. Exact-candidate
+waivers can be consumed by a subsequent human `record` command on that same
+candidate and policy; agent invocations cannot grant or reuse an unattested
+human waiver. Live waivers remain invocation-scoped.
+
 ## The both-neutral-sets requirement
 
 `config.deliveryRecordPath` must satisfy **both** neutral predicates, and the

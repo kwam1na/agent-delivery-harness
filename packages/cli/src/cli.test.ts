@@ -957,7 +957,7 @@ describe("waiver wiring", () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
-    const prompt: WaiverPrompt = vi.fn(async () => true);
+    const prompt: WaiverPrompt = vi.fn(async () => ({ author: "Test Operator", reason: "Explicit test exception" }));
     const { runtime } = makeRuntime(dir, config, artifacts, { stdinIsTTY: false, stdoutIsTTY: false, promptForWaiver: prompt });
 
     expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
@@ -970,11 +970,16 @@ describe("waiver wiring", () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
-    const prompt: WaiverPrompt = vi.fn(async () => true);
-    const { runtime } = makeRuntime(dir, config, artifacts, { stdinIsTTY: true, stdoutIsTTY: true, promptForWaiver: prompt });
+    const prompt: WaiverPrompt = vi.fn(async () => ({ author: "Test Operator", reason: "Explicit test exception" }));
+    const { runtime, err } = makeRuntime(dir, config, artifacts, { stdinIsTTY: true, stdoutIsTTY: true, promptForWaiver: prompt });
 
     expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
     expect(await runCli(["gate"], runtime)).toBe(EXIT_OK);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+    await git(dir, "add", "-A", "telemetry");
+    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "record human exception");
+    expect(await runCli(["verify"], runtime), err.join("\n")).toBe(EXIT_OK);
     expect(prompt).toHaveBeenCalledTimes(1);
   });
 
@@ -985,7 +990,7 @@ describe("waiver wiring", () => {
     const dir = await initRepo();
     const config = makeConfig();
     const artifacts = await makeArtifacts();
-    const prompt: WaiverPrompt = vi.fn(async () => false);
+    const prompt: WaiverPrompt = vi.fn(async () => false as const);
     const { runtime } = makeRuntime(dir, config, artifacts, { stdinIsTTY: true, stdoutIsTTY: true, promptForWaiver: prompt });
 
     expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);

@@ -297,6 +297,7 @@ export {
   type AdmissionOptions,
   type AdmissionResult,
   type WaiverPrompt,
+  type WaiverApproval,
   type WaiverPromptOutcome,
 } from "./admission.ts";
 

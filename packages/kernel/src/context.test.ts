@@ -40,6 +40,19 @@ import {
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
+describe("supported coding hosts cannot acquire human waiver authority", () => {
+  for (const signal of ["CODEX_THREAD_ID", "CODEX_CI", "CODEX_SANDBOX", "CLAUDE_CODE", "CLAUDECODE"]) {
+    it(`recognizes ${signal} even when repository signals omit it`, () => {
+      expect(classifyExecutionContext({
+        config: testConfig({ agentEnvSignals: [] }),
+        env: { [signal]: "present" },
+        stdinIsTTY: true,
+        stdoutIsTTY: true,
+      })).toEqual({ kind: "agent", signal });
+    });
+  }
+});
+
 const PROVIDER_CODES = ["review-incomplete"] as const;
 
 function partitionedCodes(): { waivableCodes: string[]; nonWaivableCodes: string[] } {

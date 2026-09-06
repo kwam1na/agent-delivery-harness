@@ -14,7 +14,7 @@
  * git capture would test `candidate.ts`, not this seam.
  *
  * THE TWO-PASS WAIVER FLOW IS PROVEN IN EVERY DIRECTION:
- *   - accept  → `waived`, with an invocation-scope waiver record on disk;
+ *   - accept  → `waived`, with an attributed waiver record on disk;
  *   - decline → blocked, with ZERO waiver records on disk (the write happens
  *               only after an accepted prompt and a clean re-capture);
  *   - the prompt is issued EXACTLY once, and its obligation-id argument is
@@ -194,9 +194,9 @@ const AGENT: ExecutionContext = { kind: "agent", signal: "TEST_AGENT" };
 /** A prompt port that records every call, so "exactly once" is a count. */
 function fakePrompt(answer: boolean) {
   const calls: { readonly obligationIds: readonly string[] }[] = [];
-  const port = async (_decision: unknown, obligationIds: readonly string[]): Promise<boolean> => {
+  const port = async (_decision: unknown, obligationIds: readonly string[]) => {
     calls.push({ obligationIds });
-    return answer;
+    return answer ? { author: "Test Operator", reason: "Explicit test exception" } : false as const;
   };
   return { port, calls };
 }
@@ -294,7 +294,7 @@ describe("admission: the receipt gate", () => {
 // ── The two-pass waiver flow ─────────────────────────────────────────────────
 
 describe("admission: the two-pass waiver flow", () => {
-  it("accept → waived, with an invocation waiver record on disk, prompting exactly once", async () => {
+  it("accept → waived, with a candidate-bound waiver record on disk, prompting exactly once", async () => {
     const repo = await tempRepo();
     const workspaceId = await storeWorkspaceId(repo);
     const candidate = capturedCandidate(workspaceId);
@@ -313,9 +313,60 @@ describe("admission: the two-pass waiver flow", () => {
     // Exactly once, naming every covered obligation.
     expect(prompt.calls.length).toBe(1);
     expect(prompt.calls[0]?.obligationIds).toEqual(["review.green"]);
-    // The invocation waiver is on disk, and its id is the one the result reports.
+    // The candidate-bound waiver is on disk, and its id is the one the result reports.
     expect(await waiverRecordCount(repo, "test.gate", "review.green")).toBe(1);
     expect(result.waiverRecordIds.length).toBe(1);
+    const records = await discoverRecords(repo, { gateId: "test.gate", obligationId: "review.green" });
+    expect(records.records[0]?.resolution).toMatchObject({
+      scope: "durable",
+      author: "Test Operator",
+      reason: "Explicit test exception",
+      findingCodes: ["review_evidence_missing"],
+    });
+  });
+
+  it("refuses an affirmative waiver without human attribution", async () => {
+    const repo = await tempRepo();
+    const candidate = capturedCandidate(await storeWorkspaceId(repo));
+    const config = testConfig([
+      obligation({ id: "review.green", freshness: "exact_candidate", providers: ["rev"], humanWaiverAllowed: true, waivableCodes: ["review_evidence_missing"] }),
+    ]);
+    await prepare(repo, config, candidate);
+    const result = await runAdmission({ rootDir: repo, config, context: HUMAN }, baseOptions(candidate, {
+      promptForWaiver: (async () => true) as unknown as AdmissionOptions["promptForWaiver"],
+    }));
+    expect(result.admitted).toBe(false);
+    expect(blockerCodes(result)).toContain("waiver_attribution_invalid");
+    expect(await waiverRecordCount(repo, "test.gate", "review.green")).toBe(0);
+  });
+
+  it("keeps live approval invocation-scoped and refuses later reuse", async () => {
+    const repo = await tempRepo();
+    const candidate = capturedCandidate(await storeWorkspaceId(repo));
+    const config = testConfig([obligation({ id: "check.live", freshness: "live", providers: ["check"], humanWaiverAllowed: true, waivableCodes: ["live_provider_missing"] })]);
+    await prepare(repo, config, candidate);
+    const first = await runAdmission({ rootDir: repo, config, context: HUMAN }, baseOptions(candidate, { promptForWaiver: fakePrompt(true).port }));
+    expect(first.admitted).toBe(true);
+    const stored = await discoverRecords(repo, { gateId: config.gateId, obligationId: "check.live" });
+    expect(stored.records[0]?.resolution).toMatchObject({ kind: "waiver", scope: "invocation" });
+    const later = await runAdmission({ rootDir: repo, config, context: HUMAN }, baseOptions(candidate));
+    expect(later.admitted).toBe(false);
+  });
+
+  it("refuses approval when policy wiring changes during the prompt", async () => {
+    const repo = await tempRepo();
+    const candidate = capturedCandidate(await storeWorkspaceId(repo));
+    const config = testConfig([obligation({ id: "review.green", freshness: "exact_candidate", providers: ["rev"], humanWaiverAllowed: true, waivableCodes: ["review_evidence_missing"] })]);
+    await prepare(repo, config, candidate);
+    const result = await runAdmission({ rootDir: repo, config, context: HUMAN }, baseOptions(candidate, {
+      promptForWaiver: async () => {
+        writeFileSync(path.join(repo, "harness.config.ts"), "export default { changed: true };\n");
+        return { author: "Test Operator", reason: "Policy was changed while answering" };
+      },
+    }));
+    expect(result.admitted).toBe(false);
+    expect(result.waiver).toBe("candidate_changed");
+    expect(await waiverRecordCount(repo, config.gateId, "review.green")).toBe(0);
   });
 
   it("decline → blocked, with ZERO waiver records on disk", async () => {

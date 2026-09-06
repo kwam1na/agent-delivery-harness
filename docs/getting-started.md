@@ -396,8 +396,14 @@ delivery-harness verify
   evidence, satisfied by a live fact, waived, delegated, not applicable,
   blocked). Freshness is judged by deliverable identity — narration-only
   changes do not stale a review — and under a TTY a fully-waivable block offers
-  a human one explicit, all-or-nothing waiver prompt. Non-interactive runs
-  never prompt.
+  a human one explicit, all-or-nothing waiver prompt. Approval requires an
+  author and reason. Exact-candidate approvals cover only the shown finding
+  codes under the current policy and raw candidate; live approvals last for
+  one invocation. Non-interactive runs and recognized Codex/Claude hosts
+  never prompt. Repositories may add host signals, but cannot remove the
+  supported-host denial floor. These are host conventions, not authenticated
+  human identity. Stale, malformed, ambiguous, unknown-provider, or disallowed
+  evidence remains blocking even if repository policy calls it waivable.
 - `record` re-runs the gate, refuses unless it admitted, re-captures the
   candidate adjacent to the write, and writes the tracked
   [delivery record](delivery-record.md) — the one artifact that crosses from
