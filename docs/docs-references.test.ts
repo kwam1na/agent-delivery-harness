@@ -116,6 +116,7 @@ describe("the documentation's references", () => {
       "docs/delivery-record.md",
       "docs/getting-started.md",
       "docs/managed-delivery.md",
+      "docs/product-artifacts.md",
       "docs/provider-guide.md",
       "docs/spec-errata.md",
     ]);

@@ -1,0 +1,72 @@
+# Distributed delivery product
+
+Use the installed commands with the [delivery loop](getting-started.md).
+
+The product ZIP contains the portable workflows, Python lifecycle, and bundled
+JavaScript CLI, kernel, and policy compiler. Python 3 and Node >=22.6.0 are the
+consumer prerequisites; no npm install or producer checkout is required. The
+bundled loader resolves the kernel import in `harness.config.ts`; configuration
+uses Node's erasable TypeScript syntax.
+
+Install a trusted distributed archive with its detached checksum metadata:
+
+```sh
+npm run skills:install -- --archive /artifacts/product.zip --metadata /artifacts/product.json
+```
+
+That repository wrapper checks the checksum before executing a private copy of
+the supplied archive. The equivalent lifecycle entry point works in any adopter:
+
+```sh
+python3 -B /artifacts/product.zip --root /repo --product install --archive /artifacts/product.zip --metadata /artifacts/product.json --maintenance
+python3 -B /repo/.agent-skills/current --root /repo harness check
+python3 -B /repo/.agent-skills/current --root /repo harness prepare
+python3 -B /repo/.agent-skills/current --root /repo harness review-context --json
+```
+
+`--maintenance` confirms the existing lifecycle's maintainer authority. Use the
+wrapper or authenticate the artifact against trusted distribution metadata
+before directly executing the ZIP. Its checksum is integrity evidence, not a
+new publisher authentication mechanism.
+
+Update uses the next distributed ZIP with the same options and `update` in
+place of `install`. Rollback and recovery need only retained installed bytes:
+
+```sh
+python3 -B /repo/.agent-skills/current --root /repo --product status
+python3 -B /repo/.agent-skills/current --root /repo --product rollback --maintenance
+python3 -B /repo/.agent-skills/current --root /repo recovery-plan
+python3 -B /repo/.agent-skills/current --root /repo --product recover --maintenance
+```
+
+There is one active generation and the existing lifecycle journal. Both host
+exposures and runtime follow `.agent-skills/current`. A successful switch can
+still leave `productReady: false` when recompiling adopter-owned policy fails.
+The command then fails, `--product status` reports the reconciliation blocker,
+and `harness` refuses execution. Fix the reported policy issue and retry
+`--product recover`; rollback also recompiles with the selected retained runtime.
+The existing policy compiler preserves declared provenance and reports stale
+comparison adjudications rather than inventing replacements.
+
+## Producer commands
+
+Build only after the compatible source batch has settled. First build and verify
+the selected workflow profile with `agent-skills/scripts/build-release.py`. Then:
+
+```sh
+npm run product:build-runtime -- /verified-workflows/release-manifest.json /build/runtime
+python3 -B /skills-source/scripts/build-release.py build --root /skills-source --archive /build/product.zip --metadata /build/product.json --release-id <batch-release> --profile linear --runtime-directory /build/runtime
+npm run sensor:product-install -- --archive /build/product.zip --metadata /build/product.json
+```
+
+The runtime descriptor binds the exact workflow-only payload digest and each
+runtime file digest. The active receipt's archive digest binds the complete ZIP;
+no runtime file embeds that outer digest. Core and Linear select distinct workflow
+payloads. The historical managed-composition pin is a separate lane and is not
+used by ordinary product readiness.
+
+The artifact sensor exercises actual installed prepare/context and verifies
+that absent independent review blocks the gate. It does not manufacture review
+or replace final host proofs. Rebuild all affected qualification records against
+the final archive, metadata, runtime descriptor, and selected profile. Old exact
+release attestations cannot qualify changed bytes.
