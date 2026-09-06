@@ -40,7 +40,7 @@ describe("envelope and payload spec tokens", () => {
     expect([...SUPPORTED_ENVELOPE_SPECS]).toEqual(["delivery-evidence/1"]);
     // V26-1846 adds declared check evidence; historical review tokens retain their meaning.
     expect([...SUPPORTED_PAYLOAD_SPECS]).toEqual(["review.green/1", "checks.passed/1"]);
-    expect(DELIVERY_RECORD_VERSION).toBe("delivery-record/1");
+    expect(DELIVERY_RECORD_VERSION).toBe("delivery-record/2");
   });
 });
 
@@ -69,7 +69,7 @@ describe("tracked delivery-record parsing", () => {
   it("rejects an unsupported version token as malformed, never skips it", () => {
     const first = recordFiles[0] as string;
     const parsed = JSON.parse(readFileSync(path.join(recordsDir, first), "utf8")) as Record<string, unknown>;
-    const mutated = { ...parsed, version: "delivery-record/2" };
+    const mutated = { ...parsed, version: "delivery-record/999" };
     const result = parseDeliveryRecord(JSON.stringify(mutated));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.blockers[0].code).toBe("delivery_record_malformed");

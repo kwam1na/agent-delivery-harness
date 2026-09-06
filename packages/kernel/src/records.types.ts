@@ -72,6 +72,33 @@ export interface EvidenceResolution {
   /** Stamped from the accepted manifest (SUB-4). */
   readonly manifestDigest: string;
   readonly checkBinding?: CheckBinding;
+  /** Accepted original evidence retained before its temporary run root disappears. */
+  readonly portable?: PortableEvidence;
+}
+
+export interface PortableEvidenceContext {
+  readonly configurationDigest: string;
+  readonly preparationFingerprint: string;
+  readonly policyDigest: string | null;
+  readonly release: Readonly<Record<string, unknown>> | null;
+  readonly workflowGraphSha256: string | null;
+  readonly reviewerCharters: readonly {
+    readonly origin: "composition" | "repository";
+    readonly sourcePath: string;
+    readonly lensId: string;
+    readonly reviewerId: string;
+    readonly personaId: string;
+    readonly entryPath: string;
+    readonly digest: string;
+  }[];
+}
+
+export interface PortableEvidence {
+  readonly version: "portable-evidence/1";
+  readonly manifest: unknown;
+  /** Safe manifest-relative path to canonical base64 of the original file bytes. */
+  readonly artifacts: Readonly<Record<string, string>>;
+  readonly context: PortableEvidenceContext;
 }
 
 /**

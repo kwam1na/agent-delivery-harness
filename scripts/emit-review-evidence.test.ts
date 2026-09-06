@@ -1,3 +1,4 @@
+type Mutable<T> = { -readonly [P in keyof T]: T[P] extends object ? Mutable<T[P]> : T[P] };
 /**
  * The review-evidence emitter, run for real against fixture repositories.
  *
@@ -56,6 +57,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
+import { digestCanonical, manifestDigest as digestManifest } from "../packages/kernel/src/digest.ts";
+import { runAction, defaultRuntime } from "../packages/action/src/main.ts";
 import harnessConfig from "../harness.config.ts";
 import { INSTALLED_ARCHIVE_DIR as SENSOR_INSTALLED_ARCHIVE_DIR } from "./policy-projection-check.ts";
 import {
@@ -67,6 +70,7 @@ import {
   resolveGateBinding,
   resolveReviewerCharters,
   validateReviewedContext,
+  resolveActivatedCharters,
 } from "../packages/cli/src/review-evidence.ts";
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -570,11 +574,113 @@ describe("the gate binding the emitter answers as", () => {
 });
 
 describe("emitting a manifest", () => {
+  it("validates original outcomes, lens coverage and bindings identically locally and in CI", { timeout: 180_000 }, async () => {
+    const fixture = await createFixture();
+    const emitted = await emit(fixture, { ...greenOutcome, findings: [deferral("followup", "V26-9999")] });
+    expect(emitted.code, emitted.stderr).toBe(0);
+    expect((await harness(fixture, "submit-evidence", "--manifest", emitted.stdout.trim())).code).toBe(0);
+    const recorded = await harness(fixture, "record");
+    expect(recorded.code, recorded.stderr).toBe(0);
+    const recordPath = path.join(fixture.dir, recorded.stdout.trim().replace(/^recorded /, ""));
+    const original = JSON.parse(await readFile(recordPath, "utf8"));
+    await rm(path.dirname(emitted.stdout.trim()), { recursive: true, force: true });
+    const eventPath = path.join(await scratchDir("portable-action-event-"), "event.json");
+    const verifyBoth = async () => {
+      await git(fixture.dir, fixture.env, "add", recordPath);
+      await git(fixture.dir, fixture.env, "commit", "--quiet", "--allow-empty", "-m", "portable evidence probe");
+      const head = await runCommand("git", ["rev-parse", "HEAD"], { cwd: fixture.dir, env: fixture.env });
+      await writeFile(eventPath, JSON.stringify({ pull_request: { head: { sha: head.stdout.trim() } } }));
+      const local = await harness(fixture, "verify");
+      const ci = await runAction({ ...defaultRuntime(), workspace: fixture.dir,
+        env: { ...fixture.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_ACTIONS: "true", CI: "true" },
+        writeSummary: async () => {}, log: () => {}, writeOutputs: async () => {} });
+      return { local, ci };
+    };
+    expect((await verifyBoth()).local.code).toBe(0);
+    expect((await verifyBoth()).ci.ok).toBe(true);
+    const changes: readonly [string, (record: typeof original) => void][] = [
+      ["candidate", record => { record.candidateBinding.deliverableDigest = "f".repeat(64); }],
+      ["base", record => { record.candidateBinding.baseTipSha = "f".repeat(40); }],
+      ["policy", record => { record.context.configurationDigest = "f".repeat(64); }],
+      ["release", record => { record.context.release.archiveSha256 = "f".repeat(64); }],
+      ["artifact", record => { record.claims[0].evidence.resolution.portable.artifacts["review-outcome.json"] = Buffer.from("{}").toString("base64"); }],
+      ["missing bytes", record => { record.claims[0].evidence.resolution.portable.artifacts = {}; }],
+      ["outcome", record => {
+        const portable = record.claims[0].evidence.resolution.portable;
+        const raw = JSON.parse(Buffer.from(portable.artifacts["review-outcome.json"], "base64").toString());
+        raw.reviewers[0].result = "rejected";
+        const bytes = JSON.stringify(raw);
+        portable.artifacts["review-outcome.json"] = Buffer.from(bytes).toString("base64");
+        portable.manifest.artifacts.find((entry: { path: string }) => entry.path === "review-outcome.json").sha256 = sha256(bytes);
+      }],
+      ["lens", record => { record.claims[0].evidence.resolution.portable.manifest.claims[0].payload.reviewers.selected.pop(); }],
+      ["deferral", record => { delete record.claims[0].evidence.resolution.portable.manifest.claims[0].payload.findings[0].deferredIssueId; }],
+      ["invented outcome", record => { record.claims[0].outcome = "not_applicable"; }],
+      ["legacy summary", record => { record.version = "delivery-record/1"; delete record.claims[0].evidence; }],
+    ];
+    for (const [name, change] of changes) {
+      const record = structuredClone(original);
+      change(record);
+      // Rehash transport metadata: semantic validation must still reject it.
+      const resolution = record.claims[0].evidence?.resolution;
+      if (resolution) record.manifestDigest = record.claims[0].manifestDigest = resolution.manifestDigest = digestManifest(resolution.portable.manifest);
+      delete record.integrityDigest;
+      record.integrityDigest = digestCanonical(record);
+      await writeFile(recordPath, JSON.stringify(record));
+      const result = await verifyBoth();
+      expect(result.local.code, `${name}: ${result.local.stdout} ${result.local.stderr}`).toBe(1);
+      expect(result.ci.ok, `${name}: ${result.ci.summary}`).toBe(false);
+    }
+  });
+
+  it("requires additional repository reviewer charters without replacing the activated set", { timeout: 120_000 }, async () => {
+    const fixture = await createFixture();
+    await mkdir(path.join(fixture.dir, ".agents/agents"), { recursive: true });
+    const charterPath = ".agents/agents/repository-review.md";
+    await writeFile(path.join(fixture.dir, charterPath), "Review repository-specific requirements.\n");
+    const extra = { lensId: "lens.repository", reviewerId: "repository-review", charterPath };
+    const resolved = await resolveActivatedCharters(fixture.dir, { additionalReviewLenses: [extra] });
+    expect(resolved.map(entry => entry.reviewerId)).toEqual([...FIXTURE_CHARTERS, "repository-review"]);
+    expect(resolved.at(-1)).toMatchObject({ origin: "repository", sourcePath: charterPath });
+    await expect(resolveActivatedCharters(fixture.dir, { additionalReviewLenses: [{ ...extra, reviewerId: FIXTURE_CHARTERS[0] }] })).rejects.toThrow("collides");
+    const configPath = path.join(fixture.dir, "harness.config.ts");
+    await writeFile(configPath, (await readFile(configPath, "utf8")).replace('gateId: "fixture.pr-admission",', `gateId: "fixture.pr-admission", additionalReviewLenses: ${JSON.stringify([extra])},`));
+    await git(fixture.dir, fixture.env, "add", ".");
+    await git(fixture.dir, fixture.env, "commit", "--quiet", "-m", "declare repository review lens");
+    expect((await emit(fixture, greenOutcome)).code).toBe(1);
+    const result = await emit(fixture, { ...greenOutcome, reviewers: approvedBy([...FIXTURE_CHARTERS, "repository-review"]) });
+    expect(result.code, result.stderr).toBe(0);
+    expect((await harness(fixture, "submit-evidence", "--manifest", result.stdout.trim())).code).toBe(0);
+    const record = await harness(fixture, "record");
+    expect(record.code, record.stderr).toBe(0);
+    await writeFile(path.join(fixture.dir, charterPath), " ");
+    await expect(resolveActivatedCharters(fixture.dir, { additionalReviewLenses: [extra] })).rejects.toThrow("missing or empty");
+    await rm(path.join(fixture.dir, charterPath));
+    await expect(resolveActivatedCharters(fixture.dir, { additionalReviewLenses: [extra] })).rejects.toThrow("missing or empty");
+  });
+
+  it("rejects a mutated manifest digest after serializing the portable record", { timeout: 120_000 }, async () => {
+    const fixture = await createFixture();
+    const emitted = await emit(fixture, greenOutcome);
+    expect(emitted.code, emitted.stderr).toBe(0);
+    expect((await harness(fixture, "submit-evidence", "--manifest", emitted.stdout.trim())).code).toBe(0);
+    const recorded = await harness(fixture, "record");
+    expect(recorded.code, recorded.stderr).toBe(0);
+    const recordPath = path.join(fixture.dir, recorded.stdout.trim().replace(/^recorded /, ""));
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    record.claims[0].manifestDigest = "f".repeat(64);
+    await writeFile(recordPath, JSON.stringify(record));
+    await git(fixture.dir, fixture.env, "add", recordPath);
+    await git(fixture.dir, fixture.env, "commit", "--quiet", "-m", "retain corrupted evidence digest");
+    const verified = await harness(fixture, "verify");
+    expect(verified.code).toBe(1);
+  });
+
   it("binds every review input independently of deliverable identity", { timeout: 120_000 }, async () => {
     const fixture = await createFixture();
     const saved = await savedReviewContext(fixture);
     if ("code" in saved) throw new Error(saved.stderr);
-    const original = JSON.parse(await readFile(saved.path, "utf8")) as Parameters<typeof validateReviewedContext>[1];
+    const original = JSON.parse(await readFile(saved.path, "utf8")) as Mutable<Parameters<typeof validateReviewedContext>[1]>;
     const outcome = { ...greenOutcome, contextDigest: saved.digest };
     expect(() => validateReviewedContext(original, original, outcome)).not.toThrow();
     const changes = [
@@ -703,7 +809,7 @@ describe("emitting a manifest", () => {
     const fixture = await createFixture();
     const packedDir = await scratchDir("dh-review-pack-");
     const archives: Record<string, string> = {};
-    for (const name of ["kernel", "cli"]) {
+    for (const name of ["kernel", "cli", "action"]) {
       const packed = await runCommand("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", packedDir], {
         cwd: path.join(CHECKOUT_ROOT, "packages", name), env: fixture.env,
       });
@@ -713,7 +819,7 @@ describe("emitting a manifest", () => {
     await rm(path.join(fixture.dir, "node_modules"), { recursive: true, force: true });
     await writeFile(path.join(fixture.dir, "package.json"), JSON.stringify({
       name: "installed-review-consumer", private: true, type: "module",
-      dependencies: { "@agent-delivery-harness/cli": `file:${archives["cli"]}`, tsx: "4.23.12" },
+      dependencies: { "@agent-delivery-harness/cli": `file:${archives["cli"]}`, "@agent-delivery-harness/action": `file:${archives["action"]}`, tsx: "4.23.12" },
       overrides: { "@agent-delivery-harness/kernel": `file:${archives["kernel"]}` },
     }));
     const installed = await runCommand("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", path.join(os.homedir(), ".npm")], { cwd: fixture.dir, env: fixture.env });
@@ -728,6 +834,29 @@ describe("emitting a manifest", () => {
     const gate = await harness(consumer, "gate");
     expect(gate.code, gate.stderr).toBe(0);
     expect(gate.stdout).toContain("admitted: review.green=satisfied_evidence");
+    const recorded = await harness(consumer, "record");
+    expect(recorded.code, recorded.stderr).toBe(0);
+    await git(fixture.dir, fixture.env, "add", ".");
+    await git(fixture.dir, fixture.env, "commit", "--quiet", "-m", "retain portable delivery evidence");
+    const base = await runCommand("git", ["rev-parse", "origin/main"], { cwd: fixture.dir, env: fixture.env });
+    const freshDir = path.join(await scratchDir("dh-portable-clone-"), "consumer");
+    await git(packedDir, fixture.env, "clone", "--quiet", "--no-local", fixture.dir, freshDir);
+    await git(freshDir, fixture.env, "update-ref", "refs/remotes/origin/main", base.stdout.trim());
+    await rm(path.dirname(emitted.stdout.trim()), { recursive: true, force: true });
+    await rm(fixture.dir, { recursive: true, force: true });
+    const freshInstall = await runCommand("npm", ["ci", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", path.join(os.homedir(), ".npm")], { cwd: freshDir, env: fixture.env });
+    expect(freshInstall.code, freshInstall.stderr).toBe(0);
+    const fresh = { ...consumer, dir: freshDir, installedCli: path.join(freshDir, "node_modules/@agent-delivery-harness/cli/src/main.ts") };
+    const verified = await harness(fresh, "verify");
+    expect(verified.code, verified.stderr).toBe(0);
+    const head = await runCommand("git", ["rev-parse", "HEAD"], { cwd: freshDir, env: fixture.env });
+    const eventPath = path.join(packedDir, "event.json");
+    await writeFile(eventPath, JSON.stringify({ pull_request: { head: { sha: head.stdout.trim() } } }));
+    const ci = await runCommand(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", 'const {main}=await import("@agent-delivery-harness/action");process.exitCode=await main();'], {
+      cwd: freshDir, env: { ...fixture.env, GITHUB_WORKSPACE: freshDir, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, CI: "true", GITHUB_ACTIONS: "true" },
+    });
+    expect(ci.code, ci.stdout + ci.stderr).toBe(0);
+
   });
 
   it("refuses an outcome bound to another review context", { timeout: 120_000 }, async () => {

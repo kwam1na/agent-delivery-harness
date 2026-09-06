@@ -25,6 +25,7 @@
  * the same reason rather than quietly translating them.
  */
 import type { Blocker, NonEmptyTuple } from "./blockers.ts";
+import { matchesNeutralSet } from "./config.ts";
 import type { HarnessConfig, ObligationActivation, PathClassification, PathMatcher, SensitivePathGroup } from "./config.ts";
 
 // ── The candidate ──────────────────────────────────────────────────────────
@@ -367,6 +368,10 @@ export function projectReviewActivation(entries: readonly CandidateDiffEntry[], 
 
   for (const entry of entries) {
     const paths = entryPaths(entry);
+    if (paths.every(repoPath => matchesNeutralSet(config.reviewNeutral, repoPath))) {
+      for (const repoPath of paths) excludedPaths.add(repoPath);
+      continue;
+    }
     for (const repoPath of paths) {
       for (const id of sensitiveGroupsFor(config.sensitivePaths, repoPath)) sensitivePathIds.add(id);
     }

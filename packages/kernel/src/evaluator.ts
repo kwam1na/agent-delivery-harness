@@ -164,6 +164,8 @@ export interface SatisfiedEvidenceResolution extends ResolutionBase {
   readonly kind: "satisfied_evidence";
   readonly providerId: string;
   readonly recordId: string;
+  /** Every provider record supporting an all-provider obligation. */
+  readonly supportingRecordIds?: readonly string[];
   readonly runId: string;
   readonly finalPassId: string;
   readonly candidateBinding: RecordCandidateBinding;
@@ -518,6 +520,7 @@ function evidenceSlot(record: StoredEvidence): string {
 
 interface EvidenceScan {
   readonly evidence: StoredEvidence | undefined;
+  readonly supportingRecordIds?: readonly string[];
   readonly blocking: readonly ObligationFinding[];
   readonly diagnostics: readonly ObligationFinding[];
   /** A subset of `blocking`, kept apart because it blocks ahead of everything. */
@@ -602,6 +605,9 @@ function scanEvidence(input: EvaluateGateInput, obligation: ObligationPolicy): E
   const satisfied = missing.length === 0 && fresh.length > 0;
   return {
     evidence: satisfied ? fresh[0] : undefined,
+    ...(satisfied && new Set(fresh.map(record => record.resolution.providerId)).size > 1 ? {
+      supportingRecordIds: [...new Map([...fresh].reverse().map(record => [record.resolution.providerId, record.recordId])).values()].sort(),
+    } : {}),
     blocking: satisfied ? [] : [...invalid, ...missing],
     diagnostics: satisfied ? invalid : [],
     malformed: satisfied ? [] : malformed,
@@ -635,6 +641,7 @@ function evaluateRecordedObligation(input: EvaluateGateInput, obligation: Obliga
         obligationId: obligation.id,
         providerId: record.resolution.providerId,
         recordId: record.recordId,
+        ...(scan.supportingRecordIds === undefined ? {} : { supportingRecordIds: scan.supportingRecordIds }),
         runId: record.resolution.runId,
         finalPassId: record.resolution.finalPassId,
         candidateBinding: record.candidateBinding,

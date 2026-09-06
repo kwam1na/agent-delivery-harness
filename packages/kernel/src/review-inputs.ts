@@ -52,6 +52,20 @@ export interface ResolvedCharter {
 export async function resolveReviewCharters(read: ReviewInputReader, config?: { readonly additionalReviewLenses?: readonly { readonly lensId: string; readonly reviewerId: string; readonly charterPath: string }[] }): Promise<ResolvedCharter[]> {
   const snapshotPath = COMPILED_SNAPSHOT_FILE;
   const snapshot = await readJsonFile(read, snapshotPath, `the compiled policy snapshot at ${COMPILED_SNAPSHOT_FILE}`);
+  if (isRecord(snapshot) && snapshot["inputDigests"] !== undefined) {
+    if (!isRecord(snapshot["inputDigests"])) throw new OutcomeError("the compiled policy input digests are malformed");
+    for (const [file, digest] of Object.entries(snapshot["inputDigests"])) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(file) || !/^[a-f0-9]{64}$/.test(String(digest))) throw new OutcomeError("the compiled policy declares an invalid input digest");
+      const bytes = await read(path.posix.join(path.posix.dirname(COMPILED_SNAPSHOT_FILE), file));
+      if (bytes === null || sha256Hex(bytes) !== digest) throw new OutcomeError("the compiled policy snapshot is stale against its declared input bytes; recompile policy");
+    }
+  }
+  const compiledWith = isRecord(snapshot) ? snapshot["compiledWith"] : undefined;
+  const personaSource = isRecord(compiledWith) ? compiledWith["personaSource"] : undefined;
+  if (isRecord(personaSource) && personaSource["archiveSha256"] !== undefined) {
+    const release = await readWorkflowRelease(read);
+    if (release === null || personaSource["archiveSha256"] !== release["archiveSha256"]) throw new OutcomeError("the compiled policy persona source differs from the active workflow generation; recompile policy");
+  }
   const compiled = isRecord(snapshot) ? snapshot["compiled"] : undefined;
   const inner = isRecord(compiled) ? compiled["snapshot"] : undefined;
   const lenses = isRecord(inner) ? inner["reviewLenses"] : undefined;
@@ -127,7 +141,7 @@ export async function resolveReviewCharters(read: ReviewInputReader, config?: { 
   for (const extra of config?.additionalReviewLenses ?? []) {
     if (lensIds.has(extra.lensId) || seen.has(extra.reviewerId)) throw new OutcomeError("an additional review lens collides with an activated lens or reviewer");
     const normalized = path.posix.normalize(extra.charterPath);
-    if (normalized !== extra.charterPath || normalized.startsWith("/") || normalized.startsWith("../") || normalized.includes("\\") || normalized.includes("\0")) {
+    if (normalized !== extra.charterPath || normalized.startsWith("/") || normalized === "." || normalized === ".." || normalized.endsWith("/") || normalized.startsWith("../") || normalized.includes("\\") || normalized.includes("\0")) {
       throw new OutcomeError("an additional review charter must name a repository-relative file");
     }
     const bytes = await read(extra.charterPath);

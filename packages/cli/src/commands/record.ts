@@ -13,6 +13,7 @@
  */
 import {
   buildDeliveryRecord,
+  computePreparationFingerprint, capturePortableEvidenceContext, repositoryEvidenceReader, capturePortableVerificationInputs, verifyDeliveryRecord,
   deliveryRecordBytes,
   deliveryRecordPathFor,
   discoverRecords,
@@ -79,11 +80,18 @@ export const recordCommand: CommandDescriptor = {
       evidenceRecords.push(...discovery.records);
     }
 
-    const built = buildDeliveryRecord({ config: context.config, decision, evidenceRecords });
+    const evidenceContext = await capturePortableEvidenceContext(context.config, repositoryEvidenceReader(context.rootDir, context.artifacts),
+      await computePreparationFingerprint(context.rootDir, context.config));
+    const built = buildDeliveryRecord({ config: context.config, decision, evidenceRecords, context: evidenceContext });
     if (!built.ok) {
       return { kind: "blocked", blockers: [...built.blockers] };
     }
 
+    const verificationInputs = await capturePortableVerificationInputs(context.rootDir, context.config, recheck.candidate, built.record);
+    const checked = verifyDeliveryRecord(context.config, built.record,
+      { deliverableDigest: recheck.candidate.deliverable.digest, identityToken: recheck.candidate.deliverable.identity }, recheck.candidate.base,
+      { ...verificationInputs, executionContext: context.classifyContext() });
+    if (!checked.ok) return { kind: "blocked", blockers: [...checked.blockers] };
     const relativePath = deliveryRecordPathFor(context.config, decision.candidate.deliverable.digest);
     const absolutePath = path.join(context.rootDir, relativePath);
     await context.artifacts.writeTextFile(absolutePath, deliveryRecordBytes(built.record));

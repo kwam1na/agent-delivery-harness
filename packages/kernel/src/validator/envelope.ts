@@ -494,7 +494,7 @@ function checkArtifacts(root: Record<string, unknown>, collector: Collector): re
  * admits one in a path segment, and letting it through turns the port's
  * classification into an argument-validation throw.
  */
-function isSafeRelativePath(value: string): boolean {
+export function isSafeRelativePath(value: string): boolean {
   if (value.includes("\u0000")) return false;
   if (value.startsWith("/") || value.startsWith("\\")) return false;
   if (/^[A-Za-z]:/.test(value)) return false;

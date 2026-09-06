@@ -81,12 +81,13 @@ export interface CandidateCommandResult {
   /** `-1` when the command could not be started at all. */
   readonly exitCode: number;
   readonly stdout: string;
+  readonly stdoutBase64?: string;
   readonly stderr: string;
 }
 
 export type CandidateCommandRunner = (
   command: readonly string[],
-  options: { readonly cwd: string },
+  options: { readonly cwd: string; readonly captureBytes?: boolean },
 ) => Promise<CandidateCommandResult>;
 
 /**
@@ -137,9 +138,11 @@ export const runGitCommand: CandidateCommandRunner = (command, options) =>
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+    const chunks: Buffer[] = [];
+    if (!options.captureBytes) child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string | Buffer) => {
+      if (options.captureBytes) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      else stdout += chunk;
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
@@ -151,7 +154,8 @@ export const runGitCommand: CandidateCommandRunner = (command, options) =>
     // `close` rather than `exit`: it fires once the pipes are drained, so the
     // output is complete when the exit code is read.
     child.once("close", (code) => {
-      resolve({ exitCode: code ?? -1, stdout, stderr });
+      const bytes = options.captureBytes ? Buffer.concat(chunks) : undefined;
+      resolve({ exitCode: code ?? -1, stdout: bytes?.toString("utf8") ?? stdout, stderr, ...(bytes === undefined ? {} : { stdoutBase64: bytes.toString("base64") }) });
     });
   });
 

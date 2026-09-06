@@ -1,3 +1,4 @@
+import { withPortableEvidence } from "../fixtures/portable-record.ts";
 /**
  * The Action surface, driven from simulated events.
  *
@@ -34,6 +35,7 @@ import {
   deliveryRecordPathFor,
   runGitCommand,
   verifyDeliveryRecord,
+  capturePortableVerificationInputs,
   type DeliveryRecord,
   type HarnessConfig,
   type HarnessConfigInput,
@@ -183,7 +185,7 @@ async function buildRecord(dir: string, config: HarnessConfig, digest: string, o
   const baseTipSha = overrides.baseTipSha ?? (await git(dir, "rev-parse", "--verify", `${baseRef}^{commit}`));
   const mergeBaseSha = overrides.mergeBaseSha ?? (await git(dir, "merge-base", baseRef, "HEAD"));
   const treeSha = await git(dir, "rev-parse", "--verify", "HEAD^{tree}");
-  return {
+  const summary: DeliveryRecord = {
     version: DELIVERY_RECORD_VERSION,
     gateId: overrides.gateId ?? config.gateId,
     identityToken: overrides.identityToken ?? config.computingIdentityVersion,
@@ -209,6 +211,7 @@ async function buildRecord(dir: string, config: HarnessConfig, digest: string, o
     workspaceId: overrides.workspaceId ?? "workspace-local",
     attestation: { level: (overrides.attestationLevel ?? "self") as "self" },
   } as DeliveryRecord;
+  return withPortableEvidence(dir, config, summary);
 }
 
 /** Writes a record at the digest-keyed path the Action recomputes, then commits it. */
@@ -357,8 +360,12 @@ describe("the pull request head is what gets verified", () => {
         ref: config.baseRef,
         tipSha: baseSha,
         mergeBaseSha: baseStart,
-      });
-      expect(wouldPass.ok).toBe(true);
+      }, { ...await capturePortableVerificationInputs(dir, config, {
+        vcs: "git", treeSha: record.candidateBinding.treeSha, headSha: record.candidateBinding.treeSha,
+        mode: "clean", statusEntries: [], untrackedFiles: [], deliverable: { digest: mergeDigest, identity: config.computingIdentityVersion },
+        base: { ref: config.baseRef, tipSha: baseSha, mergeBaseSha: baseStart }, workspaceId: record.workspaceId,
+      }, record), executionContext: { kind: "agent", signal: "fixture" } });
+      expect(wouldPass.ok, JSON.stringify(wouldPass.blockers)).toBe(true);
 
       const { runtime, summaries } = await driveRuntime(dir, {
         fixture: "pull-request-merge-ref-would-pass.json",
@@ -385,7 +392,7 @@ describe("the pull request head is what gets verified", () => {
 
     const { runtime } = await driveRuntime(dir, { config, mergeSha: "0".repeat(40) });
     const result = await runAction(runtime);
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     expect(result.mergeRefSha).toBe("0".repeat(40));
   });
 
@@ -426,7 +433,7 @@ describe("the failure-class table", () => {
     const { runtime, summaries } = await driveRuntime(dir, { config });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     expect(result.exitCode).toBe(ACTION_EXIT_OK);
     expect(result.recordPath).toBe(relativePath);
     expect(result.deliverableDigest).toBe(digest);
@@ -492,7 +499,7 @@ describe("the failure-class table", () => {
     const { runtime, summaries } = await driveRuntime(dir, { config, headSha });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     const summary = summaries.join("");
     expect(summary).toContain("base_tip_moved");
     expect(summary.toLowerCase()).toContain("relax");
@@ -619,7 +626,7 @@ describe("record selection", () => {
     const { runtime } = await driveRuntime(dir, { config });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     expect(result.recordPath).toBe(relativePath);
   });
 
@@ -672,7 +679,7 @@ describe("cross-worktree verification", () => {
     const { runtime } = await driveRuntime(dir, { config });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
   });
 });
 
@@ -688,7 +695,7 @@ describe("delegated authority", () => {
     const { runtime, summaries } = await driveRuntime(dir, { fixture: "pull-request-delegated.json", config });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     expect(result.mode).toBe("delegated-authority");
     expect(summaries.join("")).toContain("github-actions");
   });
@@ -732,7 +739,7 @@ describe("delegated authority", () => {
     const { runtime } = await driveRuntime(dir, { config });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     expect(result.mode).toBe("verify");
   });
 });
@@ -906,7 +913,7 @@ describe("two records binding one identity are never tie-broken", () => {
     const { runtime } = await driveRuntime(dir, { config });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     expect(result.recordPath).toBe(expectedPath);
   });
 });
@@ -926,7 +933,7 @@ describe("record discovery does not depend on the directory git runs in", () => 
     const { runtime } = await driveRuntime(dir, { config, workspace: path.join(dir, "packages", "app") });
     const result = await runAction(runtime);
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.summary).toBe(true);
     expect(result.recordPath).toBe(deliveryRecordPathFor(config, digest));
   });
 });

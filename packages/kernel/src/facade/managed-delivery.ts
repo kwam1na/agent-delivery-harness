@@ -1,3 +1,6 @@
+import { capturePortableVerificationInputs } from "../portable-inputs.ts";
+import { computePreparationFingerprint } from "../preparation.ts";
+import { capturePortableEvidenceContext, repositoryEvidenceReader } from "../portable-evidence.ts";
 /**
  * The facade module's V-slice: ONE typed operation surface over the walking
  * skeleton's modules — accept an already-scoped contract, bind the
@@ -4248,7 +4251,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         });
         evidenceRecords.push(...discovery.records);
       }
-      const built = buildDeliveryRecord({ config, decision: admission.decision, evidenceRecords });
+      const context = await capturePortableEvidenceContext(config, repositoryEvidenceReader(rootDir, createArtifactsPort()), await computePreparationFingerprint(rootDir, config));
+      const built = buildDeliveryRecord({ config, decision: admission.decision, evidenceRecords, context });
       if (!built.ok) return refuseWith(built.blockers);
       const relativePath = deliveryRecordPathFor(config, admission.decision.candidate.deliverable.digest);
       await mkdir(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
@@ -4366,7 +4370,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         parsed.record,
         { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
         { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
-        { candidateTreePaths },
+        { candidateTreePaths, ...await capturePortableVerificationInputs(rootDir, config, captured, parsed.record, candidateRunner),
+          executionContext: { kind: "agent", signal: "managed-delivery" } },
       );
       if (!check.ok) return refuseWith(check.blockers);
 
@@ -4453,7 +4458,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             parsed.record,
             { deliverableDigest: captured.deliverable.digest, identityToken: captured.deliverable.identity },
             { ref: captured.base.ref, tipSha: captured.base.tipSha, mergeBaseSha: captured.base.mergeBaseSha },
-            { candidateTreePaths },
+            { candidateTreePaths, ...await capturePortableVerificationInputs(rootDir, config, captured, parsed.record, candidateRunner),
+          executionContext: { kind: "agent", signal: "managed-delivery" } },
           );
           externalVerification = check.ok ? "passed" : "failed";
         }

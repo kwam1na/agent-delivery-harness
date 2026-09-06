@@ -16,8 +16,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  PERSONA_MANIFEST_ENTRY,
-  PERSONA_MANIFEST_SPEC,
+  resolveReviewCharters,
+  validateReviewedContext, parseReviewOutcome, deriveTelemetry, reviewerLists,
+  capturePortableEvidenceContext, repositoryEvidenceReader, createArtifactsPort,
+  ReviewInputError as OutcomeError,
   BlockedError,
   digestCanonical,
   evaluatePreparationReceipt,
@@ -55,125 +57,10 @@ export const OUTCOME_SPEC = "review-outcome/1";
 /** This emitter's own version, carried in the manifest's provider triple. */
 export const EMITTER_VERSION = "1.0.0";
 
-/** Read one JSON document, or refuse with the role it plays rather than a raw path. */
-async function readJsonFile(filePath: string, role: string): Promise<unknown> {
-  let text: string;
-  try {
-    text = await readFile(filePath, "utf8");
-  } catch (error) {
-    throw new OutcomeError(`${role} is unreadable: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new OutcomeError(`${role} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
+export type { ResolvedCharter } from "@agent-delivery-harness/kernel";
+export async function resolveActivatedCharters(rootDir: string, config?: Pick<HarnessConfig, "additionalReviewLenses">) {
+  return resolveReviewCharters(repositoryEvidenceReader(rootDir, createArtifactsPort()), config);
 }
-
-/** One activated lens, resolved to the charter bytes the installation carries. */
-export interface ResolvedCharter {
-  readonly lensId: string;
-  /** The reviewer id the evidence carries: the charter path's basename. */
-  readonly reviewerId: string;
-  readonly personaId: string;
-  /** The archive-relative path the charter's bytes were read from. */
-  readonly entryPath: string;
-  /** The digest of those bytes, equal to the one the compiled policy resolved. */
-  readonly digest: string;
-}
-
-/**
- * The reviewers a review in `rootDir` must cover: the compiled policy's
- * activated review lenses, each resolved to the charter the installed
- * generation ships for it.
- *
- * Two resolutions rather than a list held here, because a list held here is
- * exactly how an activated lens goes unrepresented in the evidence while
- * everything stays green. The compiled snapshot decides WHICH lenses reviewed —
- * the whole shipped set is seventeen charters and this repository activates two
- * of them, so the archive alone would name fifteen reviewers that never ran.
- * The archive decides WHAT each lens was told, and the snapshot's digest is
- * checked against the bytes actually read, so a charter the installation does
- * not carry, or one whose bytes have drifted from the policy the repository is
- * judged under, refuses the emission instead of quietly reviewing under
- * something else.
- */
-export async function resolveActivatedCharters(rootDir: string): Promise<ResolvedCharter[]> {
-  const snapshotPath = path.join(rootDir, COMPILED_SNAPSHOT_FILE);
-  const snapshot = await readJsonFile(snapshotPath, `the compiled policy snapshot at ${COMPILED_SNAPSHOT_FILE}`);
-  const compiled = isRecord(snapshot) ? snapshot["compiled"] : undefined;
-  const inner = isRecord(compiled) ? compiled["snapshot"] : undefined;
-  const lenses = isRecord(inner) ? inner["reviewLenses"] : undefined;
-  if (!Array.isArray(lenses)) {
-    throw new OutcomeError(`${COMPILED_SNAPSHOT_FILE} records no compiled review lenses to review under`);
-  }
-
-  const manifestPath = path.join(rootDir, INSTALLED_ARCHIVE_DIR, PERSONA_MANIFEST_ENTRY);
-  const manifest = await readJsonFile(
-    manifestPath,
-    `the charter manifest at ${INSTALLED_ARCHIVE_DIR}/${PERSONA_MANIFEST_ENTRY}`,
-  );
-  if (!isRecord(manifest) || manifest["schemaVersion"] !== PERSONA_MANIFEST_SPEC || !Array.isArray(manifest["personas"])) {
-    throw new OutcomeError(
-      `${INSTALLED_ARCHIVE_DIR}/${PERSONA_MANIFEST_ENTRY} is not a ${PERSONA_MANIFEST_SPEC} document declaring a charter list`,
-    );
-  }
-  const charterPaths = new Map<string, string>();
-  for (const entry of manifest["personas"]) {
-    if (isRecord(entry) && typeof entry["personaId"] === "string" && typeof entry["path"] === "string") {
-      charterPaths.set(entry["personaId"], entry["path"]);
-    }
-  }
-
-  const archiveRoot = path.resolve(path.join(rootDir, INSTALLED_ARCHIVE_DIR));
-  const resolved: ResolvedCharter[] = [];
-  const seen = new Set<string>();
-  for (const lens of lenses) {
-    if (!isRecord(lens) || typeof lens["lensId"] !== "string" || typeof lens["personaId"] !== "string" || typeof lens["personaDigest"] !== "string") {
-      throw new OutcomeError("a compiled review lens names no reviewer charter and digest");
-    }
-    const personaId = lens["personaId"];
-    const digest = lens["personaDigest"];
-    const entryPath = charterPaths.get(personaId);
-    if (entryPath === undefined) {
-      throw new OutcomeError(
-        `the compiled policy activates a lens referencing charter ${personaId}, which the installed generation's manifest does not declare`,
-      );
-    }
-    // The path comes from a document inside the installation, so it is held
-    // inside it before it is opened.
-    const charterPath = path.resolve(archiveRoot, entryPath);
-    if (!charterPath.startsWith(`${archiveRoot}${path.sep}`)) {
-      throw new OutcomeError(`charter ${personaId} is declared at ${entryPath}, which leaves ${INSTALLED_ARCHIVE_DIR}`);
-    }
-    let bytes: Buffer;
-    try {
-      bytes = await readFile(charterPath);
-    } catch (error) {
-      throw new OutcomeError(
-        `charter ${personaId} is declared at ${entryPath}, and the installed generation carries no such file: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    const actual = sha256Hex(bytes);
-    if (actual !== digest) {
-      throw new OutcomeError(
-        `charter ${personaId} at ${entryPath} hashes to ${actual}, and the compiled policy was resolved against ${digest}`,
-      );
-    }
-    const base = path.basename(entryPath);
-    const reviewerId = base.endsWith(CHARTER_EXTENSION) ? base.slice(0, -CHARTER_EXTENSION.length) : base;
-    if (seen.has(reviewerId)) {
-      throw new OutcomeError(`two activated lenses resolve to reviewer ${reviewerId}; a reviewer reviews once`);
-    }
-    seen.add(reviewerId);
-    resolved.push({ lensId: lens["lensId"], reviewerId, personaId, entryPath, digest });
-  }
-  return resolved;
-}
-
-/** The reviewer ids of `resolveActivatedCharters`, sorted, as the evidence lists them. */
 export async function resolveReviewerCharters(rootDir: string): Promise<string[]> {
   return (await resolveActivatedCharters(rootDir)).map((charter) => charter.reviewerId).sort();
 }
@@ -198,23 +85,17 @@ export async function buildReviewContext(
   candidate: CapturedCandidate,
   receipt: PreparationReceipt,
 ) {
-  const charters = await resolveActivatedCharters(rootDir);
-  if (charters.length === 0) throw new OutcomeError("the compiled policy activates no review lens");
-  const active = await readJsonFile(path.join(rootDir, ".agent-skills/active.json"), "the installed workflow receipt");
-  const release = isRecord(active) ? active["release"] : undefined;
-  if (!isRecord(release) || typeof release["releaseId"] !== "string" || !release["releaseId"] ||
-      typeof release["profile"] !== "string" || !release["profile"] ||
-      !["archiveSha256", "metadataSha256"].every((key) => typeof release[key] === "string" && /^[a-f0-9]{64}$/.test(release[key] as string))) {
-    throw new OutcomeError("the installed workflow receipt has no exact release identity");
-  }
+  const inputs = await capturePortableEvidenceContext(config, repositoryEvidenceReader(rootDir, createArtifactsPort()), receipt.preparationFingerprint);
+  const charters = inputs.reviewerCharters;
+  if (charters.length === 0 || inputs.release === null) throw new OutcomeError("the compiled policy activates no review lens or installed release");
   const binding = {
     gate: resolveGateBinding(config),
     candidate: manifestCandidate(candidate),
-    preparationFingerprint: receipt.preparationFingerprint,
-    configurationDigest: digestCanonical(config),
-    policyDigest: sha256Hex(await readFile(path.join(rootDir, COMPILED_SNAPSHOT_FILE))),
-    release,
-    workflowGraphSha256: sha256Hex(await readFile(path.join(rootDir, INSTALLED_ARCHIVE_DIR, "workflows/delivery-v1.json"))),
+    preparationFingerprint: inputs.preparationFingerprint,
+    configurationDigest: inputs.configurationDigest,
+    policyDigest: inputs.policyDigest,
+    release: inputs.release,
+    workflowGraphSha256: inputs.workflowGraphSha256,
     charters,
   };
   return { spec: REVIEW_CONTEXT_SPEC, digest: digestCanonical(binding), binding };
@@ -222,185 +103,9 @@ export async function buildReviewContext(
 
 export type ReviewContextDocument = Awaited<ReturnType<typeof buildReviewContext>>;
 
-/** Reuse only the existing deliverable identity, with base, policy and wiring fixed. */
-export function validateReviewedContext(original: unknown, current: ReviewContextDocument, outcome: unknown): void {
-  if (!isRecord(original) || original["spec"] !== REVIEW_CONTEXT_SPEC ||
-      Object.keys(original).sort().join(",") !== "binding,digest,spec" || !isRecord(original["binding"]) ||
-      original["digest"] !== digestCanonical(original["binding"])) {
-    throw new OutcomeError("the original review context is missing, malformed, or has a mismatched digest");
-  }
-  if (!isRecord(outcome) || outcome["contextDigest"] !== original["digest"]) {
-    throw new OutcomeError("the outcome does not name the original review context digest");
-  }
-  const binding = original["binding"];
-  const candidate = binding["candidate"];
-  if (!isRecord(candidate) || !["treeSha", "headSha"].every((key) =>
-    typeof candidate[key] === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(candidate[key] as string))) {
-    throw new OutcomeError("the original review context names no valid candidate");
-  }
-  // Raw tree and head may move when only review-neutral paths changed. Keep
-  // the original coordinates in the retained context, while the manifest binds
-  // the current prepared candidate, exactly as submission requires.
-  const comparable = {
-    ...binding,
-    candidate: { ...candidate, treeSha: current.binding.candidate.treeSha, headSha: current.binding.candidate.headSha },
-  };
-  if (digestCanonical(comparable) !== digestCanonical(current.binding)) {
-    throw new OutcomeError("the reviewed context differs from the current candidate, base, policy, wiring, release, or charters; acquire review for the current context");
-  }
-}
-
-// ── The review outcome ───────────────────────────────────────────────────────
-
-/** What one reviewer did. `approved` is the only result that stamps an approval. */
-export const REVIEWER_RESULTS = ["approved", "rejected", "failed", "timed-out"] as const;
-export type ReviewerResult = (typeof REVIEWER_RESULTS)[number];
-
-export interface ReviewerOutcome {
-  readonly id: string;
-  readonly result: ReviewerResult;
-}
-
-export interface ReviewOutcome {
-  readonly verdict: string;
-  readonly reviewers: readonly ReviewerOutcome[];
-  /** Findings, as the `review.green/1` payload defines them. Passed through. */
-  readonly findings: readonly Record<string, unknown>[];
-  readonly runHistory?: readonly Record<string, unknown>[];
-  readonly finalPassId?: string;
-  readonly cost?: Readonly<Record<string, unknown>>;
-}
-
-/** A refusal this emitter makes about its own inputs, before any manifest exists. */
-export class OutcomeError extends Error {}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-/**
- * Read the outcome document, and hold it to the charter set. Nothing here
- * re-implements the `review.green/1` rules: findings travel through untouched
- * so the recorder — not this script — remains the judge of what green means.
- */
-export function parseReviewOutcome(document: unknown, charters: readonly string[]): ReviewOutcome {
-  if (!isRecord(document)) throw new OutcomeError("the review outcome is not a JSON object");
-  if (document["spec"] !== OUTCOME_SPEC) {
-    throw new OutcomeError(`the review outcome declares spec ${JSON.stringify(document["spec"])}, not ${OUTCOME_SPEC}`);
-  }
-  const verdict = document["verdict"];
-  if (typeof verdict !== "string" || verdict === "") {
-    throw new OutcomeError("the review outcome states no verdict");
-  }
-  const findings = document["findings"];
-  if (!Array.isArray(findings) || !findings.every(isRecord)) {
-    throw new OutcomeError("the review outcome's findings are not an array of objects");
-  }
-
-  const reviewers = document["reviewers"];
-  if (!Array.isArray(reviewers)) throw new OutcomeError("the review outcome's reviewers are not an array");
-  const named: ReviewerOutcome[] = [];
-  const unnamed: ReviewerResult[] = [];
-  const seen = new Set<string>();
-  for (const entry of reviewers) {
-    if (!isRecord(entry)) throw new OutcomeError("a reviewer outcome is not an object");
-    const id = entry["id"];
-    const result = entry["result"];
-    // An absent id is the unnamed form, resolved below. A present one that is
-    // not a usable id is still a document naming a reviewer it cannot name.
-    const carriesId = id !== undefined;
-    if (carriesId && (typeof id !== "string" || id === "")) {
-      throw new OutcomeError("a reviewer outcome names no reviewer");
-    }
-    const subject = carriesId ? `reviewer ${id as string}` : "an unnamed reviewer outcome";
-    if (typeof result !== "string" || !(REVIEWER_RESULTS as readonly string[]).includes(result)) {
-      throw new OutcomeError(
-        `${subject} reports result ${JSON.stringify(result)}, which is not one of ${REVIEWER_RESULTS.join(", ")}`,
-      );
-    }
-    if (!carriesId) {
-      unnamed.push(result as ReviewerResult);
-      continue;
-    }
-    const reviewerId = id as string;
-    if (seen.has(reviewerId)) throw new OutcomeError(`reviewer ${reviewerId} appears twice in the review outcome`);
-    seen.add(reviewerId);
-    named.push({ id: reviewerId, result: result as ReviewerResult });
-  }
-
-  // ── The unnamed form ───────────────────────────────────────────────────────
-  //
-  // The ids are this emitter's to resolve, not the caller's to restate: they
-  // are charter-path basenames inside an installed archive that the compiled
-  // policy selects from, and a caller who restates them is performing the same
-  // resolution a second time with no way to check the answer. So an outcome
-  // may carry results alone and take `charters` as its ids.
-  //
-  // It may not, however, DISTINGUISH its reviewers without naming them.
-  // Nothing in the document says which result belongs to which lens, so the
-  // assignment can only be positional — and a positional assignment that
-  // matters is one where the wrong reviewer is silently stamped approved while
-  // the one that failed is reported clean. Refusing every disagreeing unnamed
-  // document keeps position load-bearing for nothing: the results are
-  // interchangeable exactly when the order cannot matter.
-  if (unnamed.length > 0) {
-    if (named.length > 0) {
-      throw new OutcomeError(
-        `the review outcome names ${named.length} of its ${reviewers.length} reviewers and leaves the rest unnamed; a document that distinguishes its reviewers names every one of them`,
-      );
-    }
-    if (unnamed.length !== charters.length) {
-      throw new OutcomeError(
-        `the review outcome carries ${unnamed.length} result(s) under no reviewer id, and the policy selects ${charters.length} reviewer(s): ${charters.join(", ")}`,
-      );
-    }
-    const distinct = [...new Set(unnamed)];
-    if (distinct.length > 1) {
-      throw new OutcomeError(
-        `the review outcome's unnamed results disagree (${distinct.join(", ")}), so which reviewer reported which would be decided by their order; name the reviewers instead`,
-      );
-    }
-    for (const [index, result] of unnamed.entries()) {
-      const reviewerId = charters[index]!;
-      seen.add(reviewerId);
-      named.push({ id: reviewerId, result });
-    }
-  }
-  const parsed = named;
-
-  // The charter set is the authority in both directions: a charter with no
-  // outcome is a lens that did not review, and an outcome with no charter is a
-  // reviewer this repository does not have.
-  const charterSet = new Set(charters);
-  const missing = charters.filter((id) => !seen.has(id));
-  if (missing.length > 0) {
-    throw new OutcomeError(
-      `the review outcome leaves ${missing.length} charter(s) unrepresented: ${missing.join(", ")}`,
-    );
-  }
-  const unknown = parsed.map((entry) => entry.id).filter((id) => !charterSet.has(id));
-  if (unknown.length > 0) {
-    throw new OutcomeError(
-      `the review outcome names ${unknown.length} reviewer(s) no activated review lens defines: ${unknown.join(", ")}`,
-    );
-  }
-
-  const runHistory = document["runHistory"];
-  const finalPassId = document["finalPassId"];
-  if (runHistory !== undefined && (!Array.isArray(runHistory) || runHistory.length === 0 || !runHistory.every(isRecord) ||
-      typeof finalPassId !== "string" || finalPassId === "")) {
-    throw new OutcomeError("review runHistory requires a nonempty history and its actual finalPassId");
-  }
-  const cost = document["cost"];
-  if (cost !== undefined && (!isRecord(cost) || typeof document["costCoverage"] !== "string" || !document["costCoverage"].trim())) {
-    throw new OutcomeError("reported review cost requires an explicit costCoverage description");
-  }
-  return {
-    verdict, reviewers: parsed, findings: findings as Record<string, unknown>[],
-    ...(runHistory === undefined ? {} : { runHistory: runHistory as Record<string, unknown>[], finalPassId: finalPassId as string }),
-    ...(cost === undefined ? {} : { cost: cost as Record<string, unknown> }),
-  };
-}
-
+export { validateReviewedContext, parseReviewOutcome, deriveTelemetry, reviewerLists, REVIEWER_RESULTS } from "@agent-delivery-harness/kernel";
+export type { ReviewOutcome, ReviewerOutcome, ReviewerResult } from "@agent-delivery-harness/kernel";
+export { OutcomeError };
 // ── The gate this provider serves ────────────────────────────────────────────
 
 export interface GateBinding {
@@ -433,56 +138,6 @@ export function resolveGateBinding(config: HarnessConfig): GateBinding {
 }
 
 // ── The manifest ─────────────────────────────────────────────────────────────
-
-const SEVERITIES = ["P0", "P1", "P2", "P3"] as const;
-
-/**
- * Telemetry, derived from the findings exactly the way RG-8 re-derives it:
- * counts per severity, deferrals, and the sorted unique tracker ids they name.
- */
-export function deriveTelemetry(
-  findings: readonly Record<string, unknown>[],
-  iterationCount: number,
-): Record<string, unknown> {
-  const findingCounts: Record<string, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
-  for (const finding of findings) {
-    const severity = finding["severity"];
-    if (typeof severity === "string" && (SEVERITIES as readonly string[]).includes(severity)) {
-      findingCounts[severity] = (findingCounts[severity] ?? 0) + 1;
-    }
-  }
-  const deferred = findings.filter((finding) => finding["disposition"] === "deferred");
-  const deferredIssueIds = [
-    ...new Set(
-      deferred
-        .map((finding) => finding["deferredIssueId"])
-        .filter((id): id is string => typeof id === "string" && id !== ""),
-    ),
-  ].sort();
-  return {
-    iterationCount,
-    findingCounts,
-    deferredExpansionCount: deferred.length,
-    deferredIssueIds,
-  };
-}
-
-/** The reviewer lists RG-2/RG-3 read, from what each reviewer actually did. */
-export function reviewerLists(
-  charters: readonly string[],
-  outcome: ReviewOutcome,
-): { selected: string[]; completed: string[]; failed: string[]; timedOut: string[]; approved: string[] } {
-  const byId = new Map(outcome.reviewers.map((reviewer) => [reviewer.id, reviewer.result]));
-  const withResult = (...results: readonly ReviewerResult[]): string[] =>
-    charters.filter((id) => results.includes(byId.get(id)!));
-  return {
-    selected: [...charters],
-    completed: withResult("approved", "rejected"),
-    failed: withResult("failed"),
-    timedOut: withResult("timed-out"),
-    approved: withResult("approved"),
-  };
-}
 
 export interface EmitResult {
   readonly manifestPath: string;
