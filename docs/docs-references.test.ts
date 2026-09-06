@@ -113,6 +113,7 @@ describe("the documentation's references", () => {
       "README.md",
       "docs/agent-guide.md",
       "docs/conformance.md",
+      "docs/declared-checks.md",
       "docs/delivery-record.md",
       "docs/getting-started.md",
       "docs/managed-delivery.md",

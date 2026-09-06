@@ -1,3 +1,4 @@
+import { validateChecksPassed } from "./checks-passed.ts";
 /**
  * The normative `delivery-evidence/1` envelope validator (spec §8).
  *
@@ -134,6 +135,7 @@ export interface DeliveryEvidenceManifest {
 // ── The caller's observations ──────────────────────────────────────────────
 
 export interface ManifestValidationContext {
+  readonly checkBindings?: Readonly<Record<string, import("../records.types.ts").CheckBinding>>;
   /** Repository gate configuration: accepted specs, identity versions, obligations, providers. */
   readonly config: HarnessConfig;
   /**
@@ -595,6 +597,9 @@ function checkClaims(root: Record<string, unknown>, input: ClaimCheckInput): voi
       return;
     }
 
+    if (payloadSpecUsable && payloadSpec === "checks.passed/1" && isRecord(payload)) {
+      validateChecksPassed(payload, pointer(at, "payload"), input.providerIdentity, input.artifacts, context, collector);
+    }
     if (payloadSpecUsable && payloadSpec === REVIEW_GREEN_1 && isRecord(payload)) {
       validateReviewGreenClaim(
         {

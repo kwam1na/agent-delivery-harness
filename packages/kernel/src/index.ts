@@ -998,3 +998,7 @@ export {
   type RetrySafety,
   type WorkspaceDisposition,
 } from "./facade/status.ts";
+
+export { captureCheckBindings, captureCheckOutputs, captureCheckOutputSnapshots, computeCheckWiringFingerprint, type CheckBindingOptions } from "./checks.ts";
+export type { CheckBinding } from "./records.types.ts";
+export { retainedCheckOutput } from "./validator/checks-passed.ts";

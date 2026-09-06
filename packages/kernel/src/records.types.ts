@@ -56,6 +56,14 @@ export interface RecordCandidateBinding {
  * the record *says*, and two records that disagree about it on one identity are
  * the conflict SUB-4 exists to reject.
  */
+export interface CheckBinding {
+  readonly definitionDigest: string;
+  readonly validationDigest: string;
+  readonly policyDigest: string;
+  readonly wiringFingerprint: string;
+  readonly outputsDigest: string;
+}
+
 export interface EvidenceResolution {
   readonly kind: "evidence";
   readonly providerId: string;
@@ -63,6 +71,7 @@ export interface EvidenceResolution {
   readonly finalPassId: string;
   /** Stamped from the accepted manifest (SUB-4). */
   readonly manifestDigest: string;
+  readonly checkBinding?: CheckBinding;
 }
 
 /**

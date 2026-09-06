@@ -38,7 +38,8 @@ describe("envelope and payload spec tokens", () => {
     expect(DELIVERY_EVIDENCE_1).toBe("delivery-evidence/1");
     expect(REVIEW_GREEN_1).toBe("review.green/1");
     expect([...SUPPORTED_ENVELOPE_SPECS]).toEqual(["delivery-evidence/1"]);
-    expect([...SUPPORTED_PAYLOAD_SPECS]).toEqual(["review.green/1"]);
+    // V26-1846 adds declared check evidence; historical review tokens retain their meaning.
+    expect([...SUPPORTED_PAYLOAD_SPECS]).toEqual(["review.green/1", "checks.passed/1"]);
     expect(DELIVERY_RECORD_VERSION).toBe("delivery-record/1");
   });
 });

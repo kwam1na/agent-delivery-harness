@@ -423,7 +423,14 @@ function parseResolution(value: unknown): EvidenceRecord["resolution"] {
   if (!isRecordObject(value)) throw new RecordShapeError("malformed_shape", "resolution must be an object");
   const kind = value["kind"];
   if (kind === "evidence") {
-    requireExactMembers(value, EVIDENCE_MEMBERS, "resolution");
+    requireExactMembers(value, value["checkBinding"] === undefined ? EVIDENCE_MEMBERS : [...EVIDENCE_MEMBERS, "checkBinding"], "resolution");
+    if (value["checkBinding"] !== undefined) {
+      const binding = value["checkBinding"];
+      const members = ["definitionDigest", "validationDigest", "policyDigest", "wiringFingerprint", "outputsDigest"];
+      if (!isRecordObject(binding)) throw new RecordShapeError("malformed_shape", "checkBinding must be an object");
+      requireExactMembers(binding, members, "checkBinding");
+      if (members.some(key => typeof binding[key] !== "string" || !/^[a-f0-9]{64}$/.test(binding[key] as string))) throw new RecordShapeError("malformed_shape", "checkBinding requires sha256 digests");
+    }
     for (const member of ["providerId", "runId", "finalPassId", "manifestDigest"] as const) {
       if (!isNonEmptyString(value[member])) {
         throw new RecordShapeError("malformed_shape", `resolution.${member} must be a non-empty string`);

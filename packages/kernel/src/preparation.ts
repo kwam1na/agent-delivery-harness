@@ -157,6 +157,8 @@ export interface PreparationReceipt {
 }
 
 export interface PreparationOptions extends RecordStorageOptions {
+  /** Portable verification reads declared wiring from the verified candidate tree. */
+  readonly readWiring?: (repoPath: string) => Promise<Uint8Array>;
   /** Overrides the declared harness version. Tests use it; callers do not. */
   readonly harnessVersion?: string;
 }
@@ -351,9 +353,12 @@ export async function computePreparationFingerprint(
     const target = path.resolve(rootDir, repoPath);
     let contents: Buffer;
     try {
-      const info = await stat(target);
-      if (!info.isFile()) throw wiringUnresolvable(repoPath, `${target} is not a regular file`);
-      contents = await readFile(target);
+      if (options.readWiring !== undefined) contents = Buffer.from(await options.readWiring(repoPath));
+      else {
+        const info = await stat(target);
+        if (!info.isFile()) throw wiringUnresolvable(repoPath, `${target} is not a regular file`);
+        contents = await readFile(target);
+      }
     } catch (error) {
       if (error instanceof BlockedError) throw error;
       throw wiringUnresolvable(repoPath, errorCode(error) === "ENOENT" ? `${target} does not exist` : describe(error));

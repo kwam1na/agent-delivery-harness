@@ -209,6 +209,7 @@ export type ObligationResolution =
   | BlockedResolution;
 
 export interface EvaluateGateInput {
+  readonly checkBindings?: Readonly<Record<string, import("./records.types.ts").CheckBinding>>;
   readonly config: HarnessConfig;
   readonly candidate: CandidateBinding;
   readonly projection: ReviewActivationProjection;
@@ -317,7 +318,7 @@ function blockedWith(
 ): BlockedResolution {
   const source = findings.length > 0 ? findings : [fallback];
   const [first, ...rest] = source.map((entry) => entry.blocker);
-  const commandProviders = new Set(config.providers.filter((provider) => provider.command !== undefined).map((provider) => provider.id));
+  const commandProviders = new Set(config.providers.filter((provider) => provider.command !== undefined || provider.check !== undefined).map((provider) => provider.id));
   const providerFindings = source.filter(
     (entry): entry is ObligationFinding & { readonly providerId: string } =>
       entry.providerId !== undefined && commandProviders.has(entry.providerId),
@@ -563,6 +564,11 @@ function scanEvidence(input: EvaluateGateInput, obligation: ObligationPolicy): E
         }),
       );
       continue;
+    }
+    if (input.config.providers.find(provider => provider.id === providerId)?.check !== undefined) {
+      const expected = input.checkBindings?.[providerId];
+      if (expected === undefined || record.resolution.checkBinding === undefined ||
+          Object.keys(expected).some(key => expected[key as keyof typeof expected] !== record.resolution.checkBinding?.[key as keyof typeof expected])) continue;
     }
     fresh.push(record);
   }

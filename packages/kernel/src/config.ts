@@ -200,6 +200,8 @@ export interface ProviderRegistration {
   readonly findingCodes: readonly string[];
   /** Optional stdio provider-rail executable, expressed as argv and never a shell string. */
   readonly command?: NonEmptyTuple<string>;
+  /** Deterministic bounded check executed by the product, not a provider protocol. */
+  readonly check?: { readonly command: NonEmptyTuple<string>; readonly timeoutMs: number; readonly outputs?: readonly string[] };
 }
 
 export interface PreparationCommand {
@@ -937,7 +939,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
           sound = false;
           return;
         }
-        checkClosed(findings, at, entry, ["id", "findingCodes", "command"]);
+        checkClosed(findings, at, entry, ["id", "findingCodes", "command", "check"]);
         const id = readString(findings, `${at}.id`, entry["id"], { pattern: ID_PATTERN, describe: "a provider id" });
         const findingCodes = readStringArray(findings, `${at}.findingCodes`, entry["findingCodes"], {
           pattern: FINDING_CODE_PATTERN,
@@ -953,8 +955,23 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
             command = values as NonEmptyTuple<string>;
           }
         }
+        let check: ProviderRegistration["check"];
+        if (entry["check"] !== undefined) {
+          const value = entry["check"];
+          if (!isRecord(value)) { findings.add("config_invalid_member", `${at}.check`, "must be an object"); sound = false; }
+          else {
+            checkClosed(findings, `${at}.check`, value, ["command", "timeoutMs", "outputs"]);
+            const argv = value["command"], timeout = value["timeoutMs"], outputs = value["outputs"];
+            if (!Array.isArray(argv) || argv.length === 0 || typeof argv[0] !== "string" || argv[0].trim().length === 0 || argv.some(v => typeof v !== "string" || v.includes("\0")) ||
+                typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 3600000 ||
+                (outputs !== undefined && (!Array.isArray(outputs) || outputs.length > 64 || new Set(outputs).size !== outputs.length || outputs.some(v => typeof v !== "string" || v.length === 0 || v.startsWith("/") || v.includes("\\") || v.split("/").some((part: string) => part === ".." || part === "." || part === ""))))) {
+              findings.add("config_invalid_member", `${at}.check`, "requires non-empty argv, timeoutMs from 1 to 3600000 and at most 64 unique safe relative output paths"); sound = false;
+            } else check = { command: argv as unknown as NonEmptyTuple<string>, timeoutMs: timeout, ...(outputs === undefined ? {} : { outputs: outputs as string[] }) };
+            if (command !== undefined) { findings.add("config_invalid_member", at, "command and check are mutually exclusive"); sound = false; }
+          }
+        }
         if (id === undefined || findingCodes === undefined) sound = false;
-        else registrations.push({ id, findingCodes, ...(command === undefined ? {} : { command }) });
+        else registrations.push({ id, findingCodes, ...(command === undefined ? {} : { command }), ...(check === undefined ? {} : { check }) });
       });
       if (sound) providers = registrations;
     }
@@ -1288,6 +1305,10 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
       if (!providerIds.has(providerId)) {
         findings.add("config_dangling_provider", `${at}.providers`, `names ${JSON.stringify(providerId)}, which no provider registration declares`);
       }
+    }
+    if (obligation.providers.some(id => config.providers.find(provider => provider.id === id)?.check !== undefined) &&
+        (obligation.freshness !== "exact_candidate" || obligation.acceptedPayloadSpecs.length !== 1 || obligation.acceptedPayloadSpecs[0] !== "checks.passed/1")) {
+      findings.add("config_invalid_member", at, "declared checks require exact_candidate freshness and only checks.passed/1 payloads");
     }
     for (const groupId of obligation.activation.sensitiveGroupIds ?? []) {
       if (!sensitiveGroupIds.has(groupId)) {

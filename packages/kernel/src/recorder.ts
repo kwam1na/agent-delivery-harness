@@ -1,3 +1,4 @@
+import { captureCheckBindings } from "./checks.ts";
 /**
  * The submission flow: spec §8.3, from a manifest on disk to published records.
  *
@@ -607,6 +608,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
     currentCandidate: captured === null ? undefined : projectCapturedCandidate(captured, readMember(manifest, "candidate")),
     prepared: captured !== null,
     artifactContents,
+    checkBindings: captured === null ? {} : await captureCheckBindings(input.rootDir, input.config, captured, options),
   });
   if (!validation.ok) rejections.push(...validation.rejections);
 
@@ -774,6 +776,7 @@ async function publishClaims(
       runId: manifest.provider.runId,
       finalPassId: manifest.provider.finalPassId,
       manifestDigest: digest,
+      ...(claim.payloadSpec === "checks.passed/1" ? { checkBinding: claim.payload["binding"] as unknown as import("./records.types.ts").CheckBinding } : {}),
     },
   }));
 

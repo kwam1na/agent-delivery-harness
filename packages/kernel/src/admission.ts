@@ -1,3 +1,4 @@
+import { captureCheckBindings } from "./checks.ts";
 /**
  * The admission adapter: the effectful seam between the store, the classified
  * execution context, the caller-supplied live results, and the *pure* gate
@@ -210,6 +211,7 @@ function blocked(partial: Omit<AdmissionResult, "admitted" | "blockers"> & { rea
 // ── Record mapping ───────────────────────────────────────────────────────────
 
 interface MappedStore {
+  readonly checkBindings: Readonly<Record<string, import("./records.types.ts").CheckBinding>>;
   readonly records: readonly EvidenceRecord[];
   readonly unreadable: readonly UnreadableRecordInput[];
 }
@@ -250,7 +252,7 @@ async function mapStore(input: AdmissionInput, options: AdmissionOptions, candid
     }
   }
 
-  return { records, unreadable };
+  return { records, unreadable, checkBindings: await captureCheckBindings(input.rootDir, input.config, candidate, options) };
 }
 
 // ── Evaluation ───────────────────────────────────────────────────────────────
@@ -270,6 +272,7 @@ function gateInput(
     projection,
     context: input.context,
     records,
+    checkBindings: store.checkBindings,
     unreadable: store.unreadable,
     ...(input.liveResults === undefined ? {} : { liveResults: input.liveResults }),
     invocationWaiverRecordIds,
