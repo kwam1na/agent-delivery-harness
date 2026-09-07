@@ -419,10 +419,13 @@ export async function runCliBoundary(
     return runConfigFreeCommand(descriptor, args, runtime);
   }
 
+  // Prepare's help branch is discovery, not an executed preparation. Keep
+  // the exact help-only predicate aligned with the command's usage branch.
+  const prepareHelp = descriptor.name === "prepare" && args.length === 1 && ["--help", "-h"].includes(args[0]!);
   const startedAt = Date.now();
   let digest: string | undefined;
   const code = await runConfiguredCommand(descriptor, args, runtime, value => { digest = value; });
-  if (COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)) {
+  if (!prepareHelp && COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)) {
     await recordCommandCompletion({
       cwd: runtime.cwd,
       command: descriptor.name,
