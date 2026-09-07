@@ -93,7 +93,9 @@ export function projectRunView(
     {
       id: "work",
       title: "Current work",
-      empty: "No activity observations; execution status unknown.",
+      empty: attempts.length === 0
+        ? "No activity observations; execution status unknown."
+        : "No active work in the latest observations. Retained attempts appear in history.",
       items: current
         .filter(
           (a) => !["completed", "failed", "interrupted"].includes(a.state),
@@ -243,7 +245,41 @@ export function projectRunView(
           Accounting:
             "Run totals can include review and attempt costs. These totals are shown separately and are not added together.",
         }),
+        ...attempts.filter((a) => a.cost !== undefined).map((a) => {
+          const cost = a.cost as Record<string, unknown>;
+          return item(`attempt-cost-${a.attemptId}`, `Attempt cost · ${a.activityId}`, {
+            Attempt: a.attemptId,
+            Owner: a.owner,
+            Phase: a.phase,
+            State: `${a.state} (reported)`,
+            History: a.superseded ? "Superseded attempt" : "Latest observed attempt",
+            Candidate: a.candidateTreeSha,
+            Coverage: cost["coverage"],
+            Measurement: costLabel(a.cost),
+            "Reported by": cost["reportedBy"],
+            Accounting: "Reported attempt measurement; not added to run or review totals, which may overlap.",
+          });
+        }),
       ],
+    },
+    {
+      id: "activity-history",
+      title: "Activity history",
+      empty: "No completed, failed, interrupted or superseded activity observations.",
+      items: attempts
+        .filter((a) => a.superseded || ["completed", "failed", "interrupted"].includes(a.state))
+        .map((a) => item(a.attemptId, a.activityId, {
+          Attempt: a.attemptId,
+          Owner: a.owner,
+          Phase: a.phase,
+          State: `${a.state} (reported)`,
+          History: a.superseded ? "Superseded attempt" : "Latest observed attempt",
+          Freshness: historical ? "Historical observation" : a.freshness,
+          "Last observed": a.lastObservedAt,
+          Candidate: a.candidateTreeSha,
+          "Lifecycle history": a.lifecycleIncomplete ? "Incomplete" : "Observed",
+          Cost: costLabel(a.cost),
+        })),
     },
     {
       id: "finding-history",
