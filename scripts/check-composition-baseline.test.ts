@@ -29,7 +29,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { sha256Hex } from "@agent-delivery-harness/kernel";
+import { sha256Hex, parseDeliveryRecord, DELIVERY_RECORD_VERSION } from "@agent-delivery-harness/kernel";
 import { COMMANDS } from "../packages/cli/src/index.ts";
 import harnessConfig from "../harness.config.ts";
 
@@ -166,7 +166,17 @@ describe("locally executable assertions", () => {
     expect(records.length).toBeGreaterThan(0);
     for (const name of records) {
       const record = readJson(`delivery/records/${name}`);
-      expect(record.version).toBe("delivery-record/1");
+      // The frozen baseline still describes historical v1 records. Current
+      // portable records must satisfy the product parser, not a version bypass.
+      if (record.version === baseline.contractTokens.trackedRecordSpec) {
+        expect(record.version).toBe("delivery-record/1");
+      } else {
+        expect(record.version).toBe(DELIVERY_RECORD_VERSION);
+        const parsed = parseDeliveryRecord(JSON.stringify(record));
+        expect(parsed.ok, `current delivery record ${name} must parse`).toBe(true);
+        if (!parsed.ok) continue;
+        expect(parsed.record.candidateBinding.identityToken).toBe(record.identityToken);
+      }
       expect(record.gateId).toBe(harnessConfig.gateId);
       expect(record.identityToken).toBe(baseline.contractTokens.trackedRecordIdentityToken);
       expect(record.attestation.level).toBe("self");

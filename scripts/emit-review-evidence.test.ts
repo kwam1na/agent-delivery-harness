@@ -816,13 +816,24 @@ describe("emitting a manifest", () => {
       expect(packed.code, packed.stderr).toBe(0);
       archives[name] = path.join(packedDir, JSON.parse(packed.stdout)[0].filename);
     }
+    // Build all runtime dependencies from the already installed, lockfile-owned
+    // bytes. Each consumer install below starts with a different empty cache;
+    // neither a registry connection nor the producer's module tree is available.
+    const nativePackage = `@esbuild/${process.platform}-${process.arch}`;
+    for (const name of ["tsx", "esbuild", nativePackage]) {
+      const packed = await runCommand("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", packedDir], {
+        cwd: path.join(CHECKOUT_ROOT, "node_modules", name), env: fixture.env,
+      });
+      expect(packed.code, packed.stderr).toBe(0);
+      archives[name] = path.join(packedDir, JSON.parse(packed.stdout)[0].filename);
+    }
     await rm(path.join(fixture.dir, "node_modules"), { recursive: true, force: true });
     await writeFile(path.join(fixture.dir, "package.json"), JSON.stringify({
       name: "installed-review-consumer", private: true, type: "module",
-      dependencies: { "@agent-delivery-harness/cli": `file:${archives["cli"]}`, "@agent-delivery-harness/action": `file:${archives["action"]}`, tsx: "4.23.12" },
-      overrides: { "@agent-delivery-harness/kernel": `file:${archives["kernel"]}` },
+      dependencies: { "@agent-delivery-harness/cli": `file:${archives["cli"]}`, "@agent-delivery-harness/action": `file:${archives["action"]}`, tsx: `file:${archives["tsx"]}`, esbuild: `file:${archives["esbuild"]}`, [nativePackage]: `file:${archives[nativePackage]}` },
+      overrides: { "@agent-delivery-harness/kernel": `file:${archives["kernel"]}`, esbuild: "$esbuild", [nativePackage]: `$${nativePackage}` },
     }));
-    const installed = await runCommand("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", path.join(os.homedir(), ".npm")], { cwd: fixture.dir, env: fixture.env });
+    const installed = await runCommand("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", await scratchDir("dh-empty-npm-cache-")], { cwd: fixture.dir, env: fixture.env });
     expect(installed.code, installed.stderr).toBe(0);
     await git(fixture.dir, fixture.env, "add", "package.json", "package-lock.json");
     await git(fixture.dir, fixture.env, "commit", "--quiet", "-m", "install product artifacts");
@@ -844,7 +855,7 @@ describe("emitting a manifest", () => {
     await git(freshDir, fixture.env, "update-ref", "refs/remotes/origin/main", base.stdout.trim());
     await rm(path.dirname(emitted.stdout.trim()), { recursive: true, force: true });
     await rm(fixture.dir, { recursive: true, force: true });
-    const freshInstall = await runCommand("npm", ["ci", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", path.join(os.homedir(), ".npm")], { cwd: freshDir, env: fixture.env });
+    const freshInstall = await runCommand("npm", ["ci", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", await scratchDir("dh-empty-npm-cache-")], { cwd: freshDir, env: fixture.env });
     expect(freshInstall.code, freshInstall.stderr).toBe(0);
     const fresh = { ...consumer, dir: freshDir, installedCli: path.join(freshDir, "node_modules/@agent-delivery-harness/cli/src/main.ts") };
     const verified = await harness(fresh, "verify");
