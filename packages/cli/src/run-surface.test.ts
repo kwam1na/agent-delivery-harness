@@ -1039,6 +1039,33 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(gates.every(event => event.payload["digest"] === undefined)).toBe(true);
   }, 30_000);
 
+  it.each(["--help", "-h"])("keeps prepare %s out of the journal while recording actual preparation", async (flag) => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const config = defineHarnessConfig({
+      ...makeConfig(),
+      preparationCommands: [{
+        id: "actual-mechanics",
+        command: [process.execPath, "-e", "require('node:fs').appendFileSync('.git/preparation-count', 'ran\\n')"],
+        timeoutMs: 10_000,
+      }],
+    });
+    const runtime = { loadConfig: async () => config };
+    const before = await journalOf(dir, runId);
+    const help = await cli(dir, ["prepare", flag], runtime);
+    expect(help.code, help.err).toBe(EXIT_OK);
+    expect(help.out).toContain("Usage: delivery-harness prepare [--refresh-record-neutral]");
+    expect(await journalOf(dir, runId)).toEqual(before);
+    await expect(readFile(path.join(dir, ".git/preparation-count"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    const prepared = await cli(dir, ["prepare"], runtime);
+    expect(prepared.code, prepared.err).toBe(EXIT_OK);
+    expect(await readFile(path.join(dir, ".git/preparation-count"), "utf8")).toBe("ran\n");
+    const after = await journalOf(dir, runId);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.at(-1)).toMatchObject({ kind: "command.completed", actor: { role: "cli" }, payload: { command: "prepare", outcome: "ok" } });
+  });
+
   it("wraps only the commands on the completion allowlist", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
