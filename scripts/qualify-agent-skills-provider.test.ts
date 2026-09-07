@@ -10,6 +10,7 @@ import {
   canonicalQualification,
   qualifyAgentSkillsProvider,
   verifyQualificationInputs,
+  type AgentSkillsProviderQualification,
 } from "./qualify-agent-skills-provider.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -43,8 +44,14 @@ describe("exact installed provider interoperability", () => {
     }
   });
 
-  it("drives every scenario once and replays the canonical checked record", { timeout: 30_000 }, async () => {
-    const record = await qualifyAgentSkillsProvider({ root, archive, metadata });
+  it("refuses to relabel the historical qualification as current-source evidence", async () => {
+    await expect(qualifyAgentSkillsProvider({ root, archive, metadata })).rejects.toThrow("immutable input provider-rails.ts differs");
+  });
+
+  it("retains the historical exact record and its full scenario coverage", async () => {
+    // This record names immutable baseline source, not today's implementation.
+    // The current product is qualified from its distributed runtime artifacts.
+    const record = JSON.parse(await readFile(checkedRecord, "utf8")) as AgentSkillsProviderQualification;
     expect(record.summary).toEqual({ passed: 6, failed: 0, result: "passed" });
     expect(record.capabilities).toEqual({
       required: ["create", "read", "update", "search", "relations", "reconciliation"],

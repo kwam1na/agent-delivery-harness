@@ -502,8 +502,8 @@ which candidate, what the gate and the recorder did, and what it cost. The run
 surface moves that out of the transcript and into a small append-only journal
 per run.
 
-**Two writers, one journal.** The seven candidate-facing commands — `prepare`,
-`review-context`, `submit-evidence`, `gate`, `record`, `verify`, and the
+**Two writers, one journal.** The eight candidate-facing commands — `prepare`,
+`review-context`, `emit-review-evidence`, `submit-evidence`, `gate`, `record`, `verify`, and the
 `check` preflight — append their own `command.completed` automatically whenever
 a run is current for the invoking worktree. The executor writes everything else
 through `emit`: the run's start and end, the ticket it read, the posture it

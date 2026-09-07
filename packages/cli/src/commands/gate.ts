@@ -1,3 +1,4 @@
+import { runDeclaredCheck } from "../declared-checks.ts";
 /**
  * `gate` — evaluate the delivery gate and, under a TTY, offer a scoped waiver.
  *
@@ -9,7 +10,7 @@
  * only ever offers a waiver to a `human` context, all-or-nothing over waivable
  * findings; the CLI adds no waiver logic of its own.
  */
-import { runAdmission, type AdmissionResult, type Blocker, type LiveProviderResult } from "@agent-delivery-harness/kernel";
+import { computeDeliverableIdentity, runAdmission, type AdmissionResult, type Blocker, type LiveProviderResult } from "@agent-delivery-harness/kernel";
 import { CliInterruption, type CommandContext, type CommandDescriptor, type CommandResult } from "../boundary.ts";
 
 /**
@@ -21,7 +22,7 @@ import { CliInterruption, type CommandContext, type CommandDescriptor, type Comm
 export async function runProviderBackedAdmission(
   context: CommandContext,
   options: { readonly allowPrompt: boolean; readonly includeInjectedLiveResults: boolean },
-): Promise<AdmissionResult> {
+): Promise<AdmissionResult & { readonly observedLiveResults?: readonly LiveProviderResult[] }> {
   const wiring = await context.wire();
   const admissionOptions = {
     captureCandidate: wiring.captureCandidate,
@@ -39,7 +40,7 @@ export async function runProviderBackedAdmission(
     ...(options.allowPrompt && context.promptForWaiver !== undefined ? { promptForWaiver: context.promptForWaiver } : {}),
   };
 
-  if (!context.config.providers.some((provider) => provider.command !== undefined)) {
+  if (!context.config.providers.some((provider) => provider.command !== undefined || provider.check !== undefined)) {
     return runAdmission(input, finalAdmissionOptions);
   }
 
@@ -58,7 +59,8 @@ export async function runProviderBackedAdmission(
       for (const finding of resolution.providerFindings ?? []) {
         if (finding.code !== missingCode || finding.providerId === undefined || attempted.has(finding.providerId)) continue;
         const registration = context.config.providers.find((provider) => provider.id === finding.providerId);
-        if (registration?.command === undefined || !obligation.providers.includes(registration.id)) continue;
+        if (registration === undefined || (registration.command === undefined && registration.check === undefined) || !obligation.providers.includes(registration.id)) continue;
+        if (registration.check !== undefined && (obligation.freshness !== "exact_candidate" || !obligation.acceptedPayloadSpecs.includes("checks.passed/1") || admission.decision.resolutions.some(resolution => resolution.kind !== "satisfied_evidence" && resolution.kind !== "not_applicable" && resolution.kind !== "waived" && context.config.obligations.find(entry => entry.id === resolution.obligationId)?.acceptedPayloadSpecs.includes("review.green/1")))) continue;
         const entry = requested.get(registration.id) ?? { obligationIds: [], requiresEvidence: false, needsLiveResult: false };
         entry.obligationIds.push(obligation.id);
         entry.requiresEvidence ||= obligation.freshness === "exact_candidate";
@@ -73,6 +75,12 @@ export async function runProviderBackedAdmission(
     if (next === undefined) break;
     const [providerId, request] = next;
     attempted.add(providerId);
+    const registration = context.config.providers.find(provider => provider.id === providerId)!;
+    if (registration.check !== undefined) {
+      attemptBlockers.push(...await runDeclaredCheck(context, registration, request.obligationIds, admission.candidate));
+      admission = await runAdmission({ ...input, ...(liveResults.length === 0 ? {} : { liveResults }) }, admissionOptions);
+      continue;
+    }
     const result = await context.invokeProvider?.({
       providerId,
       requiresEvidence: request.requiresEvidence,
@@ -100,14 +108,14 @@ export async function runProviderBackedAdmission(
     );
   }
 
-  if (admission.admitted) return admission;
+  if (admission.admitted) return { ...admission, observedLiveResults: liveResults };
   const final = await runAdmission(
     { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
     finalAdmissionOptions,
   );
   return attemptBlockers.length === 0 || final.admitted
-    ? final
-    : { ...final, blockers: [...attemptBlockers, ...final.blockers] };
+    ? { ...final, observedLiveResults: liveResults }
+    : { ...final, observedLiveResults: liveResults, blockers: [...attemptBlockers, ...final.blockers] };
 }
 
 export const gateCommand: CommandDescriptor = {
@@ -123,7 +131,16 @@ export const gateCommand: CommandDescriptor = {
           ? ` (waived: ${result.waivedObligationIds.join(", ")})`
           : "";
       const kinds = (result.decision?.resolutions ?? []).map((resolution) => `${resolution.obligationId}=${resolution.kind}`);
-      return { kind: "ok", summary: `admitted${waiverNote}: ${kinds.join(", ")}` };
+      // This observation describes the admitted immutable tree. Failure to
+      // observe it cannot change admission; the run journal is not evidence.
+      let digest: string | undefined;
+      if (result.candidate !== undefined) {
+        try {
+          digest = await computeDeliverableIdentity({ rootDir: context.rootDir, treeSha: result.candidate.treeSha,
+            config: { ...context.config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: context.config.recordNeutral } });
+        } catch { /* Best-effort observability, like the completion append. */ }
+      }
+      return { kind: "ok", summary: `admitted${waiverNote}: ${kinds.join(", ")}`, ...(digest === undefined ? {} : { digest }) };
     }
     return { kind: "blocked", blockers: [...result.blockers] };
   },

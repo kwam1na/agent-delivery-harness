@@ -1,5 +1,5 @@
 /**
- * Delivery harness CLI: the eleven-command operator surface.
+ * Delivery harness CLI: the fourteen-command operator surface.
  *
  * THE COMMAND REGISTRY. `COMMANDS` is the single source of truth for which
  * commands exist. Every command module under `commands/` must appear here, and
@@ -19,12 +19,16 @@ import { managedCommand } from "./commands/managed.ts";
 import { prepareCommand } from "./commands/prepare.ts";
 import { recordCommand } from "./commands/record.ts";
 import { reviewContextCommand } from "./commands/review-context.ts";
+import { emitReviewEvidenceCommand } from "./commands/emit-review-evidence.ts";
 import { runsCommand } from "./commands/runs.ts";
 import { submitEvidenceCommand } from "./commands/submit-evidence.ts";
 import { verifyCommand } from "./commands/verify.ts";
+import { saveContextCommand } from "./commands/save-context.ts";
+import { resumeCommand } from "./commands/resume.ts";
 import { runCliBoundary, type AnyCommandDescriptor, type CliRuntime } from "./boundary.ts";
 
 export const PACKAGE_NAME = "@agent-delivery-harness/cli";
+export { buildRunExport, parseRunExport, type DeliveryRunExport, type RunExportParseResult } from "./run-export.ts";
 
 /**
  * The command registry. The order here is the order `--help` lists them, and it
@@ -40,6 +44,7 @@ export const PACKAGE_NAME = "@agent-delivery-harness/cli";
 export const COMMANDS: readonly AnyCommandDescriptor[] = [
   prepareCommand,
   reviewContextCommand,
+  emitReviewEvidenceCommand,
   submitEvidenceCommand,
   gateCommand,
   recordCommand,
@@ -49,6 +54,8 @@ export const COMMANDS: readonly AnyCommandDescriptor[] = [
   maintainCommand,
   emitCommand,
   runsCommand,
+  saveContextCommand,
+  resumeCommand,
 ];
 
 export {
@@ -75,6 +82,7 @@ export {
 
 export { prepareCommand } from "./commands/prepare.ts";
 export { reviewContextCommand } from "./commands/review-context.ts";
+export { emitReviewEvidenceCommand } from "./commands/emit-review-evidence.ts";
 export { submitEvidenceCommand } from "./commands/submit-evidence.ts";
 export { gateCommand } from "./commands/gate.ts";
 export { recordCommand } from "./commands/record.ts";
@@ -84,6 +92,8 @@ export { managedCommand } from "./commands/managed.ts";
 export { maintainCommand } from "./commands/maintain.ts";
 export { emitCommand } from "./commands/emit.ts";
 export { runsCommand } from "./commands/runs.ts";
+export { saveContextCommand } from "./commands/save-context.ts";
+export { resumeCommand } from "./commands/resume.ts";
 
 /** Runs the CLI against a runtime and returns the process exit code. */
 export function runCli(argv: readonly string[], runtime: CliRuntime): Promise<number> {

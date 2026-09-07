@@ -1,3 +1,4 @@
+import { MAX_PORTABLE_ARTIFACT_BYTES } from "./portable-limits.ts";
 /**
  * The kernel's filesystem port: run roots, containment, artifact observation,
  * and one atomic write.
@@ -361,7 +362,20 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
 
       let bytes: Buffer;
       try {
-        bytes = await readFile(resolved);
+        const handle = await open(resolved, "r");
+        try {
+          const info = await handle.stat();
+          if (!info.isFile() || info.size > MAX_PORTABLE_ARTIFACT_BYTES) throw new Error("artifact is not a bounded regular file");
+          const buffer = Buffer.alloc(Math.min(info.size + 1, MAX_PORTABLE_ARTIFACT_BYTES + 1));
+          let offset = 0;
+          while (offset < buffer.length) {
+            const result = await handle.read(buffer, offset, buffer.length - offset, offset);
+            if (result.bytesRead === 0) break;
+            offset += result.bytesRead;
+          }
+          if (offset > info.size || offset > MAX_PORTABLE_ARTIFACT_BYTES) throw new Error("artifact changed size or exceeds its limit");
+          bytes = buffer.subarray(0, offset);
+        } finally { await handle.close(); }
       } catch (error) {
         return observation({
           status: "unreadable",
@@ -380,6 +394,7 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
         // the provider never wrote.
         sha256: createHash("sha256").update(bytes).digest("hex"),
         contents: bytes.toString("utf8"),
+        base64: bytes.toString("base64"),
         detail: null,
       });
     },

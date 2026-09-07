@@ -769,6 +769,15 @@ describe("the activation projection", () => {
     return { path: repoPath, additions: total, deletions: 0, binary: false };
   }
 
+  it("keeps record and review-neutral narration from activating their own record", () => {
+    for (const repoPath of ["delivery/records/proof.json", "docs/narration/report.md"]) {
+      const projection = projectReviewActivation([counted(repoPath, ACTIVATION_THRESHOLD + 1)], config);
+      expect(isObligationActive(RELEVANT_CHANGE, projection, config.activationThreshold)).toBe(false);
+    }
+    const moved = projectReviewActivation([{ ...counted("docs/narration/moved.ts", ACTIVATION_THRESHOLD + 1), oldPath: "src/app.ts" }], config);
+    expect(isObligationActive(RELEVANT_CHANGE, moved, config.activationThreshold)).toBe(true);
+  });
+
   it("is inactive one line below the threshold", () => {
     const projection = projectReviewActivation([counted("src/app.ts", ACTIVATION_THRESHOLD - 1)], config);
     expect(projection.relevantLineCount).toBe(ACTIVATION_THRESHOLD - 1);
@@ -1087,4 +1096,12 @@ describe("drift classification", () => {
     expect(classifyCandidateDrift(binding, { ...binding, base: { ...binding.base, ref: "origin/release" } })).toEqual([]);
     expect(classifyCandidateDrift(binding, { ...binding, deliverable: { ...binding.deliverable, identity: "other-tree/v1" } })).toEqual([]);
   });
+});
+
+it("retains explicitly sensitive path activation inside review-neutral narration", () => {
+  const config = testConfig({ sensitivePaths: [{ id: "published-policy", patterns: [{ kind: "prefix", value: "docs/narration/" }] }] });
+  const projection = projectReviewActivation([{ path: "docs/narration/access-policy.md", additions: 1, deletions: 0, binary: false }], config);
+  expect(projection.sensitivePathIds).toEqual(["published-policy"]);
+  expect(projection.relevantLineCount).toBe(0);
+  expect(isObligationActive({ kind: "relevant_change", sensitiveGroupIds: ["published-policy"] }, projection, 100)).toBe(true);
 });

@@ -68,7 +68,7 @@ cannot drift from the tool.
 | [Agent guide](docs/agent-guide.md) | Module boundaries, which sensor owns which rule, what bites on a documentation-only change, and where a review lens that plants mutations runs them. |
 | [Provider guide](docs/provider-guide.md) | Taking a review context to an accepted manifest: run roots, the final-pass discipline, reviewer approvals, deferral rules, resubmission semantics. |
 | [Provider rails contract](docs/contracts/delivery-provider-rails-v1.md) | The vendored neutral negotiation, lifecycle, cancellation, and terminal-state contract used by opt-in command providers. |
-| [The delivery record](docs/delivery-record.md) | The `delivery-record/1` note: extra-spec status, the both-neutral-sets requirement, what L0 attestation honestly claims, the `baseMovement` policy. |
+| [The delivery record](docs/delivery-record.md) | The `delivery-record/2` note: extra-spec status, the both-neutral-sets requirement, what L0 attestation honestly claims, the `baseMovement` policy. |
 | [Conformance](docs/conformance.md) | Running the 89-vector kit (unit and integration modes), byte-identical regeneration, the drift guard. |
 | [The spec](docs/spec/delivery-evidence-1.md) | `delivery-evidence/1` — the vendored normative contract. |
 | [Spec errata](docs/spec-errata.md) | Three recorded divergences between the spec's text and the shipped kit/kernel reading. |
@@ -81,7 +81,7 @@ cannot drift from the tool.
   capture, `deliverable-tree/v1` identity, content-addressed evidence records,
   preparation receipts, gate evaluator with six resolution kinds,
   execution-context trust asymmetry (agents can never waive), and the
-  `delivery-record/1` verify core. The managed half: the frozen contract spine
+  `delivery-record/2` verify core. The managed half: the frozen contract spine
   (closed grammars, 20 delivery states, and pure reducers with no I/O or clock),
   the three-layer policy compiler and its reviewer lenses, the managed-delivery
   facade and its 38-operation inventory, the append-only checkpoint journal,
@@ -91,9 +91,9 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the eleven-command operator surface and
+- **`@agent-delivery-harness/cli`** — the fourteen-command operator surface and
   opt-in `delivery-provider-rails/1` stdio adapter:
-  `prepare`, `review-context`, `submit-evidence`, `gate`, `record`, `verify`,
+  `prepare`, `review-context`, `emit-review-evidence`, `submit-evidence`, `gate`, `record`, `verify`,
   `check`, `managed` (the managed-delivery facade's host-facing checkpoint and
   status surface), `maintain` (the installation-scoped maintenance lane:
   update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark), and
@@ -101,7 +101,7 @@ cannot drift from the tool.
   `run-event/1` event to the current delivery run's journal, `runs list` and
   `runs show` render that journal back, and `runs serve` puts the same
   projection on a script-free loopback page over one or more `--repo` paths,
-  refreshing itself only while a run is live. The seven candidate-facing commands
+  refreshing itself only while a run is live. The eight candidate-facing commands
   append their own `command.completed` automatically whenever a run is current
   for the invoking worktree, unless `DELIVERY_HARNESS_RUN_STORE` points the
   store somewhere other than the repository's git common directory. The run
@@ -156,7 +156,8 @@ This repository's review evidence is emitted by a committed provider rather
 than by whatever script a delivery session happened to write:
 
 ```
-npm run review:evidence   # a review outcome on stdin -> a delivery-evidence/1 manifest
+npm run review:evidence -- --context /tmp/original-review-context.json
+# a concluded outcome naming the original context digest on stdin -> a manifest
 ```
 
 It is a provider, not a sensor: it transcribes the review outcome it is given
@@ -253,3 +254,6 @@ next one on.
 [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) sit at the repository root, and the
 release sensor above verifies that both files are present in every package
 tarball rather than assuming npm will include them.
+
+For interrupted host-native work, see [ordinary delivery recovery](docs/ordinary-resume.md).
+[Portable delivery evidence](docs/portable-evidence.md) explains the record format, original review bindings and fresh-checkout verification.

@@ -113,9 +113,13 @@ describe("the documentation's references", () => {
       "README.md",
       "docs/agent-guide.md",
       "docs/conformance.md",
+      "docs/declared-checks.md",
       "docs/delivery-record.md",
       "docs/getting-started.md",
       "docs/managed-delivery.md",
+      "docs/ordinary-resume.md",
+      "docs/portable-evidence.md",
+      "docs/product-artifacts.md",
       "docs/provider-guide.md",
       "docs/spec-errata.md",
     ]);
@@ -168,6 +172,9 @@ const NUMBER_WORDS: Readonly<Record<number, string>> = Object.freeze({
   9: "nine",
   10: "ten",
   11: "eleven",
+  12: "twelve",
+  13: "thirteen",
+  14: "fourteen",
 });
 
 /**

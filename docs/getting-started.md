@@ -117,7 +117,7 @@ export default defineHarnessConfig({
   // Add `command: ["review-provider", "--stdio"]` only when this provider
   // implements the vendored delivery-provider-rails/1 contract. Without it,
   // the manual review-context / submit-evidence workflow below is unchanged.
-  providers: [{ id: "claude-code.ce-code-review", findingCodes: [] }],
+  providers: [{ id: "delivery-harness.independent-review", findingCodes: [] }],
   obligations: [
     {
       id: "review.green",
@@ -131,7 +131,7 @@ export default defineHarnessConfig({
       // (both default true) opt out of the other two signals independently.
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
-      providers: ["claude-code.ce-code-review"],
+      providers: ["delivery-harness.independent-review"],
       // Optional quantifier over `providers`: "all" (also the default when
       // absent) requires every provider; "existential" is satisfied by any one.
       providerPolicy: "all",
@@ -207,6 +207,12 @@ review. Every field it writes is load-bearing; the
 In a real adoption the review happens between the capture and the manifest —
 this stand-in is how the contract looks, not how a review works.
 
+`delivery-harness.independent-review` identifies the evidence issuer accepted by
+this gate. A provider label does not authenticate the execution or review host.
+Codex and Claude use their native execution and review capabilities; either can
+submit evidence under the configured issuer. Historical manifests keep the
+provider label they were issued with.
+
 ```ts
 // scripts/submit-review.ts
 import { mkdir, writeFile } from "node:fs/promises";
@@ -222,7 +228,7 @@ import config from "../harness.config.ts";
 
 const rootDir = process.cwd();
 const provider = {
-  id: "claude-code.ce-code-review",
+  id: "delivery-harness.independent-review",
   version: "1.0.0",
   runId: `r-${Date.now().toString(36)}`,
   finalPassId: "pass-1",
@@ -332,6 +338,44 @@ the loop's ordering mechanism: no receipt, no review context, no admission. It
 goes stale the moment the candidate moves, the base advances, or a wiring file
 (here, `harness.config.ts` itself) changes.
 
+To require mechanical checks before review, configure `preparationCommands` as
+an ordered list of objects with `id`, `command` (an argv array), and a positive
+`timeoutMs`. For example, a typecheck entry has id `typecheck`, command
+`["npm", "run", "typecheck"]`, and timeout `300000`. Each command runs directly
+from the repository root without shell interpolation; include its scripts and
+configuration in `preparationWiringPaths`. Omission or an empty list keeps the
+capture-only preparation available to repositories without mechanical checks.
+
+Ordinary preparation and refreshes that fall back to checks first invalidate
+any earlier receipt. Checks then run in order,
+stopping at the first failed exit, timeout, spawn error, or output overflow
+(one MiB per stream). Failure reports a typed blocker and bounded output from
+stderr and stdout. Only successful checks followed by an unchanged candidate, base, and
+wiring fingerprint publish a receipt. Changing command arguments, order, or
+timeouts also changes the preparation fingerprint. Repairing a failed check
+requires a new successful preparation; an earlier success cannot authorize it.
+Each ordinary or fallback attempt replaces a worktree-local token next to the
+receipt. Publication
+and evaluation check the token, so an older overlapping attempt cannot restore
+a usable receipt after a newer attempt starts, including when the newer one
+fails. The next preparation supersedes interrupted attempts without a lock or
+manual cleanup.
+
+Ordinary `prepare` always runs the configured mechanical checks, including on
+an unchanged candidate. After staging or committing record-neutral delivery
+artifacts, `delivery-harness prepare --refresh-record-neutral` can refresh the
+receipt without rerunning those checks. Reuse requires an earlier successful
+receipt with the same strict `validation-tree/v1` projection (excluding only
+`recordNeutral` paths), policy, preparation wiring, workspace and base. A
+missing or legacy receipt, or any mismatch, falls back to full mechanical
+checks. Review-neutral reports or solution notes still require checks unless
+they are also explicitly record-neutral. The refresh publishes current exact
+candidate coordinates under the original successful attempt's token; ordinary
+admission continues to require those exact coordinates. A concurrent attempt
+can revoke that success before refresh publication. Failed or interrupted
+preparation revokes only its own attempt, preserving any newer successful
+attempt.
+
 ```sh
 delivery-harness prepare
 delivery-harness review-context
@@ -375,8 +419,14 @@ delivery-harness verify
   evidence, satisfied by a live fact, waived, delegated, not applicable,
   blocked). Freshness is judged by deliverable identity — narration-only
   changes do not stale a review — and under a TTY a fully-waivable block offers
-  a human one explicit, all-or-nothing waiver prompt. Non-interactive runs
-  never prompt.
+  a human one explicit, all-or-nothing waiver prompt. Approval requires an
+  author and reason. Exact-candidate approvals cover only the shown finding
+  codes under the current policy and raw candidate; live approvals last for
+  one invocation. Non-interactive runs and recognized Codex/Claude hosts
+  never prompt. Repositories may add host signals, but cannot remove the
+  supported-host denial floor. These are host conventions, not authenticated
+  human identity. Stale, malformed, ambiguous, unknown-provider, or disallowed
+  evidence remains blocking even if repository policy calls it waivable.
 - `record` re-runs the gate, refuses unless it admitted, re-captures the
   candidate adjacent to the write, and writes the tracked
   [delivery record](delivery-record.md) — the one artifact that crosses from

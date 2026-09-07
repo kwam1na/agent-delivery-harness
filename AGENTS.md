@@ -61,13 +61,13 @@ and `.agent-skills/active.json` records both. Both are committed, so a fresh
 clone gets a working installation from git alone: the generation, the `current`
 pointer, and every exposure link.
 
-A release is installed here by one command:
-`AGENT_SKILLS_CHECKOUT=/path/to/agent-skills npm run skills:install --
---release-id <id>`. It builds and verifies the release from that checkout,
-drives the lifecycle `update` against this repository, re-records the compiled
-policy snapshot, and then fails unless the lifecycle reports `lifecycle:
-current`, no blockers, and the generation it just built active. Rollback is the
-previous release id through the same command.
+A distributed product is installed here with
+`npm run skills:install -- --archive <product.zip> --metadata <release.json>`.
+The executable archive owns the existing lifecycle update, the bundled runtime,
+and policy reconciliation. No producer checkout is needed. Product readiness
+requires a current lifecycle, verified runtime/workflow bytes, and a current
+compiled policy; a lifecycle switch alone is not product readiness. See
+[artifact installation](docs/product-artifacts.md) for rollback and recovery.
 
 When the installed generation or `.agents/policy/` moves outside that command,
 re-record the compiled snapshot with `npm run policy:recompile` — it recompiles

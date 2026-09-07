@@ -40,6 +40,7 @@ import {
 } from "@agent-delivery-harness/kernel";
 import {
   READOUT_LABELS,
+  costLabel,
   detailOf,
   payloadOf,
   readoutOf,
@@ -308,7 +309,7 @@ function roundsOf(events: readonly RunEvent[]): readonly ServedRound[] {
       lenses: roundLenses(entry),
       outcome: closed === undefined ? "open" : oneLineOf(closed["outcome"], 64),
       findings: closed === undefined ? "" : oneLineOf(closed["findings"]),
-      cost: closed === undefined ? "" : oneLineOf((closed["cost"] as { total?: unknown } | undefined)?.total, 64),
+      cost: closed === undefined ? "" : costLabel(closed["cost"]),
     };
   });
 }

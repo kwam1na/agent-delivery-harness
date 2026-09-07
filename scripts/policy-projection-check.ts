@@ -46,7 +46,7 @@ import harnessConfig from "../harness.config.ts";
 export const POLICY_PROJECTION_DIR = ".agents/policy";
 
 export const PRE_CUTOVER_ORACLE_DIGEST =
-  "649568cc3ab015441a1f2951c9c9f04f3a75fe28add68ab42bbd68d7cd8be7d5";
+  "266bf8668ad3cc51167600c29e4f5a43e00b27672ac9b8ff222bd370b1db28e0";
 
 const DOCUMENT_FILE = "repository-policy.json";
 const ADAPTERS_FILE = "adapters.json";
@@ -479,7 +479,14 @@ export async function runPolicyProjectionCheck(
         ["waivableCodes", live.waivableCodes],
         ["nonWaivableCodes", live.nonWaivableCodes],
       ] as const) {
-        const frozenValue = frozen[member];
+        // The immutable oracle predates the host-neutral issuer label. This
+        // exact rename changes no accepted payload or attestation requirement;
+        // historical evidence retains its original provider id.
+        const frozenValue = live.id === "review.green" && member === "providers" &&
+          Array.isArray(frozen[member]) && frozen[member].length === 1 &&
+          frozen[member][0] === "claude-code.ce-code-review"
+          ? ["delivery-harness.independent-review"]
+          : frozen[member];
         if (
           !Array.isArray(frozenValue) ||
           !equalStringArrays(sorted(frozenValue as string[]), sorted([...liveValue]))

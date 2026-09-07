@@ -1,4 +1,4 @@
-# The delivery record — `delivery-record/1`
+# The delivery record — `delivery-record/2`
 
 The tracked delivery record is how an admitted gate becomes visible outside the
 workspace that ran it: to a reviewer reading the pull request, and to the
@@ -12,9 +12,9 @@ The record is **not** part of
 [`delivery-evidence/1`](spec/delivery-evidence-1.md). The spec governs
 manifests and the per-claim evidence records the recorder derives from them;
 those live git-private, under the config's `storageNamespace` inside `.git/`,
-scoped to one worktree by construction. The delivery record is a projection of
-an admitted gate *decision* over that evidence — a product-layer artifact with
-its own version token, `delivery-record/1`, versioned and evolved
+scoped to one worktree by construction. The delivery record retains the accepted evidence behind
+an admitted gate *decision* — a product-layer artifact with
+its own version token, `delivery-record/2`, versioned and evolved
 independently of the evidence spec. Nothing in it is gate-time evidence: the
 gate evaluator reads only the git-private store, never the tracked record, so
 committing a record grants nothing at the next gate run.
@@ -26,18 +26,40 @@ the same candidate is byte-identical — a no-op diff, not churn:
 
 | Member | What it carries |
 |---|---|
-| `version` | The literal `"delivery-record/1"`. Any other value is a malformed record. |
+| `version` | The literal `"delivery-record/2"`. Older version 1 records remain readable but cannot authorize current verification. |
 | `gateId` | The gate that admitted. Verification rejects a record for a different gate. |
 | `identityToken` | The identity function the digest below was computed under. |
 | `candidateBinding` | `treeSha`, `deliverableDigest`, `identityToken`, `baseRef`, `baseTipSha`, `mergeBaseSha`, `workspaceId` — the exact candidate the gate admitted. |
 | `claims` | One entry per obligation: its resolution outcome (never `blocked`) plus the provider/run/record coordinates that resolved it. |
 | `manifestDigest` | The single manifest digest backing the evidence claims, or `null` when there is not exactly one. |
-| `workspaceId` | Recorded for audit — and deliberately **excluded** from verification: CI verifies from a different workspace by construction, so binding on it would fail every real PR. |
+| `workspaceId` | The original workspace, retained inside evidence. CI has a different workspace; it validates this original binding without rewriting it. |
+| `context` | Exact policy, preparation wiring, installed release and reviewer inputs; see [portable evidence](portable-evidence.md). |
+| `integrityDigest` | Canonical transport checksum, with no signature or provenance claim. |
 | `attestation.level` | `"self"` — the only level v1 produces or verifies. |
 
 A claim outcome must be one of the evaluator's six resolution kinds. The
 parser rejects anything else: a committed file is editable, and an invented
 outcome (`rubber_stamped`) must read as a malformed record, not verify clean.
+
+A `waived` claim carries its `scope` and a `waiver` object with `kind`,
+`scope`, `author`, `reason`, `findingCodes`, `policyDigest`, and the original
+`candidateBinding`. The verifier requires those fields, the same candidate and
+policy, and only findings that policy permits a human to waive. Integrity
+failures remain blocking. Attribution is self-reported through the interactive
+human boundary; it does not increase the record's attestation level.
+
+Older unattributed waiver records, both git-private schema version 1 records
+and tracked legacy `delivery-record/1` claims, are deliberately rejected. Re-obtain
+human approval for the current candidate; do not invent attribution for an old
+approval. Version 2 retains accepted manifests and their required artifact bytes. Older summary-only evidence requires resubmission. Exact-candidate
+waivers can be consumed by a subsequent human `record` command on that same
+candidate and policy; agent invocations cannot grant or reuse an unattested
+human waiver. Live waivers remain invocation-scoped.
+Each distinct attributed approval has its own content-addressed record; a later
+live approval can name a different author or reason without overwriting history.
+Admission rechecks the evidence store after the prompt and rejects changed
+findings before publishing approval. Portable verification applies the same
+live versus durable scope rule as local admission.
 
 ## The both-neutral-sets requirement
 

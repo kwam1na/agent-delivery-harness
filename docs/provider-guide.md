@@ -78,23 +78,27 @@ required. The tracked delivery record is still produced by the ordinary
 `record` command; the rail creates neither a second evidence store nor a second
 telemetry stream.
 
-## This repository's own provider
+## Emit concluded host reviews
 
-The gate in [`harness.config.ts`](../harness.config.ts) carries one obligation,
-and [`scripts/emit-review-evidence.ts`](../scripts/emit-review-evidence.ts) is
-what emits its evidence — the manual flow above, committed rather than
-re-derived per delivery. It is not a reviewer: it transcribes a concluded
-review outcome into a manifest bound to the candidate the recorder will
-re-capture, and prints the manifest path.
+The installed CLI ships `emit-review-evidence`. Its
+[implementation](../packages/cli/src/review-evidence.ts) transcribes concluded
+host reviews and prints a manifest path. This repository's `review:evidence`
+script is a thin alias for that same command. It does not run reviewers.
 
-The outcome arrives on standard input, so emitting needs no file outside the
-tree — which matters, because the harness refuses to capture a candidate while
-untracked files are present:
+Before review, save `review-context --json` outside the candidate worktree and
+give its binding to every selected reviewer. The document includes the candidate,
+base, preparation fingerprint, configuration, compiled policy, installed release,
+workflow graph and resolved charter digests. Copy its `digest` into the concluded
+outcome's `contextDigest`; retain that original value across the review.
 
 ```sh
-MANIFEST="$(npm run --silent review:evidence <<'JSON'
+delivery-harness prepare
+delivery-harness review-context --json > /tmp/original-review-context.json
+# Obtain the host-native reviews against this saved context first.
+MANIFEST="$(delivery-harness emit-review-evidence --context /tmp/original-review-context.json <<'JSON'
 {
   "spec": "review-outcome/1",
+  "contextDigest": "<digest from the original review context>",
   "verdict": "green",
   "reviewers": [
     { "result": "approved" },
@@ -106,6 +110,30 @@ JSON
 )"
 delivery-harness submit-evidence --manifest "$MANIFEST"
 ```
+
+Emission requires a current preparation receipt and rejects mismatched context
+or outcomes. After changes confined to configured review-neutral paths, prepare
+again and supply the original review context: its deliverable identity must still
+match, with base, policy, wiring, release and charters unchanged. Other changes
+require review against a new context. Submission rechecks the candidate, so a
+change after emission cannot silently acquire the earlier approval.
+
+For neutral reuse, `review-context-projection.json` names the original reviewed
+candidate and the current prepared candidate, preserves the original run
+history, and states `reviewRoundAdded: false`. The manifest's final history tree
+and approval stamps use current preparation coordinates to satisfy submission;
+they do not assert that reviewers inspected the new raw tree. The original
+context and outcome remain unchanged so another verifier can inspect this
+distinction. History length and review cost do not increase for that projection.
+
+The manifest retains both the original context and the complete outcome as
+digest-checked artifacts. Attestation remains `self`; transcription does not
+verify host independence. A multi-round outcome may supply its actual
+`runHistory` and `finalPassId`; otherwise it describes one concluded pass.
+Optional `cost` uses the payload's `unit`, `total`, `reportedBy` and optional
+`byReviewer` fields and requires `costCoverage` in the outcome. For example,
+`subagent-tokens` with coverage stating that executor usage is unavailable is a
+partial measurement. The emitter never estimates missing usage.
 
 One entry per reviewer the policy selects, and no ids: the ids are basenames of
 charter paths inside the installed archive, and a caller that restates them is

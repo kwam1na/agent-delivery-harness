@@ -380,6 +380,26 @@ describe("phase parity against the live CLI registry", () => {
 });
 
 describe("obligation and blocker vocabulary parity", () => {
+  it("accepts the current issuer label while retaining the immutable historical oracle", async () => {
+    const oracle = JSON.parse(await readFile(path.join(POLICY_DIR, "pre-cutover-oracle.json"), "utf8"));
+    expect(oracle.activationVector.obligations["review.green"].providers).toEqual(["claude-code.ce-code-review"]);
+    const result = await check({});
+    expect(codes(result)).not.toContain("oracle_digest_mismatch");
+    expect(codes(result)).not.toContain("obligation_drift");
+  });
+
+  it.each([
+    { providers: ["unrelated-review"] },
+    { providers: ["claude-code.ce-code-review", "unrelated-review"] },
+  ])("rejects an unrelated or widened frozen issuer set $providers", async ({ providers }) => {
+    const result = await check({
+      edit: (artifacts) => {
+        artifacts["pre-cutover-oracle.json"].activationVector.obligations["review.green"].providers = providers;
+      },
+    });
+    expect(codes(result)).toContain("obligation_drift");
+  });
+
   it("reports drift when the frozen activation kind is wrong", async () => {
     const result = await check({
       edit: (artifacts) => {

@@ -28,7 +28,7 @@ import type { GateDecision } from "@agent-delivery-harness/kernel";
 const ETX = String.fromCharCode(3);
 
 
-const DECISION = { gateId: "test.gate", admitted: false, resolutions: [], diagnostics: [], blockers: [] } as unknown as GateDecision;
+const DECISION = { gateId: "test.gate", candidate: { treeSha: "candidate-tree" }, admitted: false, resolutions: [], diagnostics: [], blockers: [] } as unknown as GateDecision;
 
 function streams(): { input: PassThrough; output: PassThrough } {
   const input = new PassThrough();
@@ -38,6 +38,13 @@ function streams(): { input: PassThrough; output: PassThrough } {
 }
 
 describe("createWaiverPrompt", () => {
+  it.each(["y\n", "y\nTest Operator\n"])("declines EOF before attribution is complete: %j", async (partial) => {
+    const { input, output } = streams();
+    const answered = createWaiverPrompt(input, output)(DECISION, ["review.green"]);
+    input.end(partial);
+    await expect(answered).resolves.toBe(false);
+  });
+
   it("resolves false on stdin EOF rather than never settling", async () => {
     const { input, output } = streams();
     const prompt = createWaiverPrompt(input, output);
@@ -47,12 +54,12 @@ describe("createWaiverPrompt", () => {
     await expect(answered).resolves.toBe(false);
   });
 
-  it("resolves true on an explicit yes", async () => {
+  it("records attribution after an explicit yes", async () => {
     const { input, output } = streams();
     const prompt = createWaiverPrompt(input, output);
     const answered = prompt(DECISION, ["review.green"]);
-    input.write("y\n");
-    await expect(answered).resolves.toBe(true);
+    input.write("y\nTest Operator\nExplicit exception\n");
+    await expect(answered).resolves.toEqual({ author: "Test Operator", reason: "Explicit exception" });
   });
 
   it("resolves false on an empty line (the [y/N] default declines)", async () => {
@@ -77,7 +84,7 @@ describe("createWaiverPrompt", () => {
     output.on("data", (chunk: Buffer) => seen.push(chunk.toString("utf8")));
     const prompt = createWaiverPrompt(input, output);
     const answered = prompt(DECISION, ["review.green", "second.check"]);
-    input.write("y\n");
+    input.write("y\nTest Operator\nExplicit exception\n");
     await answered;
     const text = seen.join("");
     expect(text).toContain("review.green");
@@ -109,9 +116,9 @@ describe("createWaiverPrompt", () => {
     const { input, output } = streams();
     const prompt = createWaiverPrompt(input, output);
     const answered = prompt(DECISION, ["review.green"]);
-    input.write("y\n");
+    input.write("y\nTest Operator\nExplicit exception\n");
     input.end();
-    await expect(answered).resolves.toBe(true);
+    await expect(answered).resolves.toEqual({ author: "Test Operator", reason: "Explicit exception" });
   });
 });
 

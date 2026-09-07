@@ -129,8 +129,11 @@ tokens (§10).
 ### 5.2 `provider`
 
 **`provider.id`** · required
-Lowercase slug identifying the provider, e.g. `claude-code.ce-code-review`. Must
+Lowercase slug identifying the provider, e.g. `delivery-harness.independent-review`. Must
 be registered in repository configuration for every obligation claimed.
+The label identifies a gate-accepted evidence issuer; it does not authenticate
+the execution or review host. Codex and Claude may each use native host
+capabilities to produce evidence under the configured issuer.
 
 **`provider.version`**
 Provider software version. Informational.
@@ -703,7 +706,7 @@ Draft 2020-12. Shape only; conformance is §8.
 {
   "spec": "delivery-evidence/1",
   "provider": {
-    "id": "claude-code.ce-code-review",
+    "id": "delivery-harness.independent-review",
     "version": "2.4.0",
     "runId": "r-01J9XQK3M8",
     "finalPassId": "pass-3"

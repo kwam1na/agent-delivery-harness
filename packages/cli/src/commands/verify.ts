@@ -37,6 +37,8 @@ import {
   parseDeliveryRecord,
   runGitCommand,
   verifyDeliveryRecord,
+  capturePortableVerificationInputs,
+  collectLiveProviderResults,
   type CandidateTreeEntry,
   type RunJournalRow,
 } from "@agent-delivery-harness/kernel";
@@ -205,9 +207,12 @@ export const verifyCommand: CommandDescriptor = {
       ...(parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }),
     });
 
-    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths, runJournal });
+    const inputs = await capturePortableVerificationInputs(context.rootDir, context.config, capture.candidate, parsed.record);
+    const live = await collectLiveProviderResults({rootDir:context.rootDir,config:context.config,candidate:capture.candidate,
+      projection:inputs.projection,evidenceContext:inputs.evidenceContext,env:context.env,...(context.signal===undefined?{}:{signal:context.signal})});
+    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths, runJournal, ...inputs, liveResults:live.liveResults, executionContext: context.classifyContext() });
     if (!check.ok) {
-      return { kind: "blocked", blockers: [...check.blockers] };
+      return { kind: "blocked", blockers: [...live.blockers, ...check.blockers] };
     }
 
     // The opt-in is judged AFTER the record's own verification, so a delivery

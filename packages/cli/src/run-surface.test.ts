@@ -17,6 +17,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  computeDeliverableIdentity,
   createRunStore,
   defineHarnessConfig,
   gitNamespaceClearedEnvironment,
@@ -29,6 +30,7 @@ import {
 import { COMPLETION_WRAPPED_COMMANDS } from "./boundary.ts";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { READOUT_LABELS } from "./run-projection.ts";
+import { parseRunExport } from "./run-export.ts";
 import { DEFAULT_POLL_SECONDS, RUN_SERVER_CSP, escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
 import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface, resolveWorktreeRoot } from "./run-surface.ts";
 
@@ -992,6 +994,51 @@ describe("emit, the boundary wrap, and runs", () => {
     expect((await cli(dir, ["check"], { loadConfig: undefined })).code).not.toBe(EXIT_OK);
   });
 
+  it("publishes the admitted strict validation projection and excludes only record-neutral paths", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const config = defineHarnessConfig({ ...makeConfig(), activationThreshold: 1000 });
+    const overrides = { loadConfig: async () => config };
+    const gateDigest = async (): Promise<unknown> => {
+      expect((await cli(dir, ["prepare"], overrides)).code).toBe(EXIT_OK);
+      const gated = await cli(dir, ["gate"], overrides);
+      expect(gated.code, gated.err).toBe(EXIT_OK);
+      const event = (await journalOf(dir, runId)).filter(event => event.kind === "command.completed" && event.payload["command"] === "gate").at(-1)!;
+      expect(event.actor.role).toBe("cli");
+      expect(event.payload["outcome"]).toBe("ok");
+      const expected = await computeDeliverableIdentity({ rootDir: dir, treeSha: await git(dir, "write-tree"),
+        config: { ...config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: config.recordNeutral } });
+      expect(event.payload["digest"]).toBe(expected);
+      return expected;
+    };
+    const initial = await gateDigest();
+    await mkdir(path.join(dir, "telemetry/delivery-runs"), { recursive: true });
+    await writeFile(path.join(dir, "telemetry/delivery-runs/record.json"), "{}\n");
+    await git(dir, "add", ".");
+    expect(await gateDigest()).toBe(initial);
+    await mkdir(path.join(dir, "docs/reports"), { recursive: true });
+    await writeFile(path.join(dir, "docs/reports/report.html"), "report");
+    await git(dir, "add", ".");
+    const report = await gateDigest();
+    expect(report).not.toBe(initial);
+    await writeFile(path.join(dir, "src.txt"), "changed source");
+    await git(dir, "add", ".");
+    expect(await gateDigest()).not.toBe(report);
+  }, 30_000);
+
+  it("omits success digests for failed and interrupted actual gates", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    expect((await cli(dir, ["gate"])).code).toBe(EXIT_POLICY);
+    expect((await cli(dir, ["prepare"])).code).toBe(EXIT_OK);
+    const controller = new AbortController();
+    controller.abort();
+    expect((await cli(dir, ["gate"], { signal: controller.signal })).code).toBe(130);
+    const gates = (await journalOf(dir, runId)).filter(event => event.kind === "command.completed" && event.payload["command"] === "gate");
+    expect(gates.map(event => event.payload["outcome"])).toEqual(["policy", "interrupted"]);
+    expect(gates.every(event => event.payload["digest"] === undefined)).toBe(true);
+  }, 30_000);
+
   it("wraps only the commands on the completion allowlist", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
@@ -1008,7 +1055,7 @@ describe("emit, the boundary wrap, and runs", () => {
     // being wrapped — and `command.completed:record` is a required journal
     // entry, so every journal in the repository would become permanently
     // incomplete with nothing red.
-    const WRAPPED = ["check", "prepare", "review-context", "submit-evidence", "gate", "record", "verify"];
+    const WRAPPED = ["check", "prepare", "review-context", "emit-review-evidence", "submit-evidence", "gate", "record", "verify"];
     expect([...COMPLETION_WRAPPED_COMMANDS].sort()).toEqual([...WRAPPED].sort());
 
     // Every member driven, not four of seven. The wrap runs whatever the
@@ -1183,6 +1230,68 @@ describe("emit, the boundary wrap, and runs", () => {
   });
 
   // ── Neutralization ─────────────────────────────────────────────────────────
+
+  it("exports actual journal history and product accounting without turning missing cost into zero", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    for (const [round, cost] of [
+      [1, { unit: "tokens", total: 12, reportedBy: "codex" }],
+      [2, { coverage: "unreported", reportedBy: "codex" }],
+      [3, { unit: "usd", total: 0.5, reportedBy: "claude", coverage: "partial" }],
+    ] as const) {
+      expect((await emit(dir, ["review.round.opened"], { round, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code).toBe(EXIT_OK);
+      expect((await emit(dir, ["review.round.closed"], {
+        round, candidateTreeSha: TREE_SHA, outcome: "aligned",
+        findings: { P0: 0, P1: 1, P2: 0, P3: 0 }, cost,
+      })).code).toBe(EXIT_OK);
+    }
+    expect((await emit(dir, ["run.ended"], {
+      result: "partial", cost: { unit: "tokens", total: 100, reportedBy: "codex" },
+    })).code).toBe(EXIT_OK);
+    const before = await journalOf(dir, runId);
+    const shown = await cli(dir, ["runs", "show", runId, "--json"]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    const exported = JSON.parse(shown.out);
+    expect(exported.spec).toBe("delivery-run-export/1");
+    expect(exported.labels).toBe(READOUT_LABELS);
+    expect(exported.events).toEqual(before);
+    expect(exported.summary.roundsClosed).toBe(3);
+    expect(exported.summary.findings.P1).toBe(3);
+    expect(exported.costs.review).toEqual({
+      coverage: "partial", unreportedEntries: 1,
+      totals: [{ unit: "tokens", total: 12, reportedBy: "codex" }, { unit: "usd", total: 0.5, reportedBy: "claude" }],
+    });
+    // Run-wide counters and review counters can overlap. Never add them.
+    expect(exported.costs.run).toEqual({ unit: "tokens", total: 100, reportedBy: "codex" });
+    expect(parseRunExport(shown.out).ok).toBe(true);
+    for (const mutate of [
+      (value: typeof exported) => { value.summary.findings.P1 = 0; },
+      (value: typeof exported) => { value.costs.review.totals[0].total = 0; },
+      (value: typeof exported) => { value.events[0].runId = "another-run"; },
+      (value: typeof exported) => { value.events[1].payload.round = "invalid"; },
+      (value: typeof exported) => { value.readout.missing = []; },
+      (value: typeof exported) => { value.labels = "independently verified evidence"; },
+    ]) {
+      const changed = structuredClone(exported);
+      mutate(changed);
+      expect(parseRunExport(JSON.stringify(changed)).ok).toBe(false);
+    }
+    expect(parseRunExport("{broken").ok).toBe(false);
+    expect(await journalOf(dir, runId)).toEqual(before);
+  });
+
+  it("exports unreported cost for an open run and rejects ignored export arguments", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const shown = await cli(dir, ["runs", "show", runId, "--json"]);
+    expect(shown.code, shown.err).toBe(EXIT_OK);
+    expect(JSON.parse(shown.out).costs).toEqual({
+      review: { coverage: "unreported", unreportedEntries: 0, totals: [] },
+      run: { coverage: "unreported" },
+    });
+    expect((await cli(dir, ["runs", "show", runId, "--jsno"])).code).toBe(EXIT_USAGE);
+    expect((await cli(dir, ["runs", "show", runId, "--json", "extra"])).code).toBe(EXIT_USAGE);
+  });
 
   it("renders executor free text inert and on one line", async () => {
     const dir = await initRepo();

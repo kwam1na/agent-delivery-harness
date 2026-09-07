@@ -121,6 +121,11 @@ export const RESOLUTION_KINDS = [
 ] as const;
 export type ResolutionKind = (typeof RESOLUTION_KINDS)[number];
 
+/** Integrity failures are never discharged by policy exceptions. */
+export const NON_WAIVABLE_INTEGRITY_CODES: readonly string[] = Object.freeze([
+  "ambiguous_records", "malformed_record", "unknown_provider", "stale_evidence", "resolution_not_allowed",
+]);
+
 /** When an obligation applies to a candidate. */
 export const ACTIVATION_KINDS = ["always", "relevant_change"] as const;
 export type ActivationKind = (typeof ACTIVATION_KINDS)[number];
@@ -195,6 +200,15 @@ export interface ProviderRegistration {
   readonly findingCodes: readonly string[];
   /** Optional stdio provider-rail executable, expressed as argv and never a shell string. */
   readonly command?: NonEmptyTuple<string>;
+  /** Deterministic bounded check executed by the product, not a provider protocol. */
+  readonly check?: { readonly command: NonEmptyTuple<string>; readonly timeoutMs: number; readonly outputs?: readonly string[] };
+}
+
+export interface PreparationCommand {
+  readonly id: string;
+  /** Executed directly from the repository root, in declaration order. */
+  readonly command: NonEmptyTuple<string>;
+  readonly timeoutMs: number;
 }
 
 export interface EnvironmentRequirement {
@@ -273,6 +287,13 @@ export interface DeliveryRecordVerification {
   readonly baseMovement: BaseMovementPolicy;
 }
 
+/** Repository-selected review policy, added to the installed default charters. */
+export interface AdditionalReviewLens {
+  readonly lensId: string;
+  readonly reviewerId: string;
+  readonly charterPath: string;
+}
+
 export interface HarnessConfig {
   readonly gateId: string;
   readonly baseRef: string;
@@ -290,6 +311,8 @@ export interface HarnessConfig {
   readonly ciPolicies: readonly CiPolicy[];
   readonly ciPolicyEnvKey: string;
   readonly preparationWiringPaths: readonly string[];
+  readonly preparationCommands?: readonly PreparationCommand[];
+  readonly additionalReviewLenses?: readonly AdditionalReviewLens[];
   readonly obligations: readonly ObligationPolicy[];
   readonly deliveryRecordPath: string;
   readonly deliveryRecordVerification: DeliveryRecordVerification;
@@ -795,13 +818,37 @@ const CONFIG_MEMBERS = [
   "ciPolicies",
   "ciPolicyEnvKey",
   "preparationWiringPaths",
+  "preparationCommands",
+  "additionalReviewLenses",
   "obligations",
   "deliveryRecordPath",
   "deliveryRecordVerification",
 ] as const;
 
-/** The members `defineHarnessConfig` fills in when the author omits them. */
-const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification"] as const;
+/** Members the author may omit. Optional extensions stay absent when unused. */
+const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification", "preparationCommands", "additionalReviewLenses"] as const;
+
+function readAdditionalReviewLenses(findings: FindingList, value: unknown): readonly AdditionalReviewLens[] | undefined {
+  const entries = readArray(findings, "additionalReviewLenses", value);
+  if (entries === undefined) return undefined;
+  const lenses: AdditionalReviewLens[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const member = `additionalReviewLenses[${index}]`;
+    if (!isRecord(entry)) {
+      findings.add("config_invalid_member", member, "must name a lens, reviewer, and repository charter path");
+      continue;
+    }
+    checkClosed(findings, member, entry, ["lensId", "reviewerId", "charterPath"]);
+    const lensId = readString(findings, `${member}.lensId`, entry["lensId"], { pattern: ID_PATTERN, describe: "a lens id" });
+    const reviewerId = readString(findings, `${member}.reviewerId`, entry["reviewerId"], { pattern: ID_PATTERN, describe: "a reviewer id" });
+    const charterPath = readString(findings, `${member}.charterPath`, entry["charterPath"], { path: true, describe: "a repo-relative charter file" });
+    if (charterPath?.endsWith("/")) findings.add("config_invalid_member", `${member}.charterPath`, "must name a file, not a directory prefix");
+    if (lensId !== undefined && reviewerId !== undefined && charterPath !== undefined) lenses.push({ lensId, reviewerId, charterPath });
+  }
+  checkDuplicateIds(findings, "additionalReviewLenses.lensId", lenses.map((lens) => lens.lensId));
+  checkDuplicateIds(findings, "additionalReviewLenses.reviewerId", lenses.map((lens) => lens.reviewerId));
+  return lenses;
+}
 
 function readShape(findings: FindingList, input: unknown): HarnessConfig | undefined {
   if (!isRecord(input)) {
@@ -810,7 +857,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
   }
   checkClosed(findings, "<config>", input, CONFIG_MEMBERS);
   for (const name of CONFIG_MEMBERS) {
-    if (input[name] === undefined && !(DEFAULTED_MEMBERS as readonly string[]).includes(name)) {
+    if (input[name] === undefined && name !== "preparationCommands" && !(DEFAULTED_MEMBERS as readonly string[]).includes(name)) {
       findings.add("config_missing_member", name, "is required");
     }
   }
@@ -892,7 +939,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
           sound = false;
           return;
         }
-        checkClosed(findings, at, entry, ["id", "findingCodes", "command"]);
+        checkClosed(findings, at, entry, ["id", "findingCodes", "command", "check"]);
         const id = readString(findings, `${at}.id`, entry["id"], { pattern: ID_PATTERN, describe: "a provider id" });
         const findingCodes = readStringArray(findings, `${at}.findingCodes`, entry["findingCodes"], {
           pattern: FINDING_CODE_PATTERN,
@@ -908,8 +955,23 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
             command = values as NonEmptyTuple<string>;
           }
         }
+        let check: ProviderRegistration["check"];
+        if (entry["check"] !== undefined) {
+          const value = entry["check"];
+          if (!isRecord(value)) { findings.add("config_invalid_member", `${at}.check`, "must be an object"); sound = false; }
+          else {
+            checkClosed(findings, `${at}.check`, value, ["command", "timeoutMs", "outputs"]);
+            const argv = value["command"], timeout = value["timeoutMs"], outputs = value["outputs"];
+            if (!Array.isArray(argv) || argv.length === 0 || typeof argv[0] !== "string" || argv[0].trim().length === 0 || argv.some(v => typeof v !== "string" || v.includes("\0")) ||
+                typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 3600000 ||
+                (outputs !== undefined && (!Array.isArray(outputs) || outputs.length > 64 || new Set(outputs).size !== outputs.length || outputs.some(v => typeof v !== "string" || v.length === 0 || v.startsWith("/") || v.includes("\\") || v.split("/").some((part: string) => part === ".." || part === "." || part === ""))))) {
+              findings.add("config_invalid_member", `${at}.check`, "requires non-empty argv, timeoutMs from 1 to 3600000 and at most 64 unique safe relative output paths"); sound = false;
+            } else check = { command: argv as unknown as NonEmptyTuple<string>, timeoutMs: timeout, ...(outputs === undefined ? {} : { outputs: outputs as string[] }) };
+            if (command !== undefined) { findings.add("config_invalid_member", at, "command and check are mutually exclusive"); sound = false; }
+          }
+        }
         if (id === undefined || findingCodes === undefined) sound = false;
-        else registrations.push({ id, findingCodes, ...(command === undefined ? {} : { command }) });
+        else registrations.push({ id, findingCodes, ...(command === undefined ? {} : { command }), ...(check === undefined ? {} : { check }) });
       });
       if (sound) providers = registrations;
     }
@@ -969,6 +1031,42 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     input["preparationWiringPaths"] === undefined
       ? undefined
       : readStringArray(findings, "preparationWiringPaths", input["preparationWiringPaths"], { path: true, describe: "a repo-relative path" });
+  const additionalReviewLenses = input["additionalReviewLenses"] === undefined ? undefined : readAdditionalReviewLenses(findings, input["additionalReviewLenses"]);
+
+  let preparationCommands: PreparationCommand[] | undefined;
+  if (input["preparationCommands"] !== undefined) {
+    const entries = readArray(findings, "preparationCommands", input["preparationCommands"]);
+    preparationCommands = [];
+    const ids = new Set<string>();
+    entries?.forEach((entry, index) => {
+      const at = `preparationCommands[${index}]`;
+      if (!isRecord(entry)) {
+        findings.add("config_invalid_member", at, "must be a command object");
+        return;
+      }
+      checkClosed(findings, at, entry, ["id", "command", "timeoutMs"]);
+      const id = readString(findings, `${at}.id`, entry["id"], { pattern: REMEDIATION_ID_PATTERN, describe: "a kebab-case check id" });
+      const command = entry["command"];
+      const timeoutMs = entry["timeoutMs"];
+      if (!Array.isArray(command) || command.length === 0 ||
+          command.some((arg) => typeof arg !== "string" || arg.includes("\0")) ||
+          typeof command[0] !== "string" || command[0].trim().length === 0) {
+        findings.add("config_invalid_member", `${at}.command`, "must be a non-empty argv array with a nonblank executable and no NUL bytes");
+        return;
+      }
+      if (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) {
+        findings.add("config_invalid_member", `${at}.timeoutMs`, "must be a positive integer no greater than 2147483647");
+        return;
+      }
+      if (id === undefined) return;
+      if (ids.has(id)) {
+        findings.add("config_invalid_member", `${at}.id`, "must be unique among preparation commands");
+        return;
+      }
+      ids.add(id);
+      preparationCommands!.push({ id, command: command as [string, ...string[]], timeoutMs });
+    });
+  }
 
   let obligations: readonly ObligationPolicy[] | undefined;
   if (input["obligations"] !== undefined) {
@@ -1041,7 +1139,10 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     agentEnvSignals,
     ciPolicies,
     ciPolicyEnvKey,
-    preparationWiringPaths,
+    preparationWiringPaths: additionalReviewLenses === undefined ? preparationWiringPaths :
+      [...new Set([...preparationWiringPaths, ...additionalReviewLenses.map((lens) => lens.charterPath)])],
+    ...(additionalReviewLenses === undefined ? {} : { additionalReviewLenses }),
+    ...(preparationCommands === undefined ? {} : { preparationCommands }),
     obligations,
     deliveryRecordPath,
     deliveryRecordVerification,
@@ -1204,6 +1305,10 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
       if (!providerIds.has(providerId)) {
         findings.add("config_dangling_provider", `${at}.providers`, `names ${JSON.stringify(providerId)}, which no provider registration declares`);
       }
+    }
+    if (obligation.providers.some(id => config.providers.find(provider => provider.id === id)?.check !== undefined) &&
+        (obligation.freshness !== "exact_candidate" || obligation.acceptedPayloadSpecs.length !== 1 || obligation.acceptedPayloadSpecs[0] !== "checks.passed/1")) {
+      findings.add("config_invalid_member", at, "declared checks require exact_candidate freshness and only checks.passed/1 payloads");
     }
     for (const groupId of obligation.activation.sensitiveGroupIds ?? []) {
       if (!sensitiveGroupIds.has(groupId)) {

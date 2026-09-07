@@ -8,14 +8,15 @@
  * plus self-neutrality) lives in the CLI suite.
  */
 import { describe, expect, it } from "vitest";
+import { digestCanonical, manifestDigest as digestManifest, sha256Hex } from "./digest.ts";
 import { defineHarnessConfig, type HarnessConfig, type HarnessConfigInput } from "./config.ts";
-import { RESOLUTION_OUTCOMES, type GateDecision, type ObligationResolution } from "./evaluator.ts";
+import { evaluateGate, RESOLUTION_OUTCOMES, type GateDecision, type ObligationResolution } from "./evaluator.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
 import type { EvidenceRecord, RecordCandidateBinding } from "./records.types.ts";
 import {
   DELIVERY_RECORD_VERSION,
   bindingOf,
-  buildDeliveryRecord,
+  buildDeliveryRecord as buildRecord,
   deliveryRecordBytes,
   deliveryRecordPathFor,
   parseDeliveryRecord,
@@ -25,9 +26,10 @@ import {
   parseCandidateTreeListing,
   needsCommittedSymlinkTarget,
   RECEIPTED_SKILLS_ROOT,
-  verifyDeliveryRecord,
+  verifyDeliveryRecord as verifyRecord,
   type DeliveryRecord,
 } from "./delivery-record.ts";
+import { computeRecordId } from "./record-identity.ts";
 import { PORTABLE_STAGE_GRANT } from "./policy/compile.ts";
 import { RUN_JOURNAL_REQUIRED_ENTRIES, RUN_JOURNAL_VIOLATIONS } from "./checkpoint/run-journal-completeness.ts";
 
@@ -98,9 +100,9 @@ function makeConfig(overrides: Partial<HarnessConfigInput> = {}): HarnessConfig 
 }
 
 const CANDIDATE: CandidateBinding = {
-  treeSha: "t".repeat(40),
+  treeSha: "1".repeat(40),
   deliverable: { digest: DIGEST, identity: TOKEN },
-  base: { ref: "origin/main", tipSha: "b".repeat(40), mergeBaseSha: "m".repeat(40) },
+  base: { ref: "origin/main", tipSha: "b".repeat(40), mergeBaseSha: "2".repeat(40) },
   workspaceId: "w-source",
 };
 
@@ -110,7 +112,7 @@ const RECORD_BINDING: RecordCandidateBinding = {
   identityToken: TOKEN,
   baseRef: "origin/main",
   baseTipSha: "b".repeat(40),
-  mergeBaseSha: "m".repeat(40),
+  mergeBaseSha: "2".repeat(40),
   workspaceId: "w-source",
 };
 
@@ -127,16 +129,38 @@ function evidenceResolution(obligationId: string, recordId: string): ObligationR
   };
 }
 
-function evidenceRecord(obligationId: string, recordId: string, manifestDigest: string): EvidenceRecord {
-  return {
-    schemaVersion: 1,
-    recordId,
-    workspaceId: "w-source",
-    gateId: "test.gate",
-    obligationId,
-    candidateBinding: RECORD_BINDING,
-    resolution: { kind: "evidence", providerId: "p.reviewer", runId: "run-1", finalPassId: "pass-2", manifestDigest },
-  };
+function evidenceRecord(obligationId: string, _recordId: string, _manifestDigest: string, config = makeConfig(), providerId = "p.reviewer"): EvidenceRecord {
+  const provider = { id: providerId, runId: "run-1", finalPassId: "pass-2", version: "1" };
+  const candidate = { vcs: "git", ...CANDIDATE };
+  const bytes = JSON.stringify({ schemaVersion: 1, reviewerId: "correctness", result: "approved", provider: { id: provider.id, runId: provider.runId, finalPassId: provider.finalPassId }, workspaceId: candidate.workspaceId, candidate });
+  const manifest = { spec: "delivery-evidence/1", provider, candidate, repository: null, recordedAt: "2026-09-06T00:00:00Z",
+    runHistory: [{ preparedTreeSha: candidate.treeSha, evaluatedInPassId: provider.finalPassId }], attestation: { level: "self", signatures: [] },
+    artifacts: [{ path: "reviewers/correctness.json", sha256: sha256Hex(bytes), role: "reviewer-approval" }],
+    claims: [{ obligation: obligationId, payloadSpec: "review.green/1", payload: { verdict: "green", finalized: true, editedAfterFinalPass: false,
+      reviewers: { selected: ["correctness"], completed: ["correctness"], failed: [], timedOut: [] }, findings: [],
+      telemetry: { iterationCount: 1, findingCounts: { P0: 0, P1: 0, P2: 0, P3: 0 }, deferredExpansionCount: 0, deferredIssueIds: [] } } }] };
+  const input = { workspaceId: "w-source", gateId: "test.gate", obligationId, candidateBinding: RECORD_BINDING,
+    resolution: { kind: "evidence" as const, providerId: provider.id, runId: provider.runId, finalPassId: provider.finalPassId, manifestDigest: digestManifest(manifest),
+      portable: { version: "portable-evidence/1" as const, manifest, artifacts: { "reviewers/correctness.json": Buffer.from(bytes).toString("base64") }, context: contextFor(config) } } };
+  return { ...input, schemaVersion: 1, recordId: computeRecordId(input.workspaceId, input) };
+}
+function contextFor(config: HarnessConfig) {
+  return { configurationDigest: digestCanonical(config), preparationFingerprint: "f".repeat(64), policyDigest: null, release: null, workflowGraphSha256: null, reviewerCharters: [] };
+}
+/** Drift tests supply current observations explicitly; integration tests exercise their capture. */
+function verifyDeliveryRecord(...args: Parameters<typeof verifyRecord>) {
+  const [config, record, identity, base, options = {}] = args;
+  return verifyRecord(config, record, identity, base, { evidenceContext: contextFor(config),
+    projection: { relevantLineCount: 1, relevantPaths: ["src.ts"], excludedPaths: [], binaryPaths: [], sensitivePathIds: [], hasRelevantBinaryChange: false, hasRelevantZeroLineChange: false, changedEntryCount: 1 },
+    executionContext: { kind: "agent", signal: "CLAUDE_CODE" }, ...options });
+}
+function buildDeliveryRecord(input: Parameters<typeof buildRecord>[0]) {
+  const evidenceRecords = input.evidenceRecords;
+  const resolutions = input.decision.resolutions.map(resolution => {
+    const evidence = evidenceRecords.find(record => record.obligationId === resolution.obligationId);
+    return resolution.kind === "satisfied_evidence" && evidence !== undefined ? { ...resolution, recordId: evidence.recordId } : resolution;
+  });
+  return buildRecord({ ...input, context: contextFor(input.config), decision: { ...input.decision, resolutions } });
 }
 
 function admittedDecision(resolutions: readonly ObligationResolution[]): GateDecision {
@@ -144,13 +168,13 @@ function admittedDecision(resolutions: readonly ObligationResolution[]): GateDec
 }
 
 const RECOMPUTED = { deliverableDigest: DIGEST, identityToken: TOKEN };
-const FRESH_BASE = { ref: "origin/main", tipSha: "b".repeat(40), mergeBaseSha: "m".repeat(40) };
+const FRESH_BASE = { ref: "origin/main", tipSha: "b".repeat(40), mergeBaseSha: "2".repeat(40) };
 
-function buildFreshRecord(): DeliveryRecord {
+function buildFreshRecord(config = makeConfig()): DeliveryRecord {
   const built = buildDeliveryRecord({
-    config: makeConfig(),
+    config,
     decision: admittedDecision([evidenceResolution("review.green", "rec-1")]),
-    evidenceRecords: [evidenceRecord("review.green", "rec-1", "d".repeat(64))],
+    evidenceRecords: [evidenceRecord("review.green", "rec-1", "d".repeat(64), config)],
   });
   if (!built.ok) throw new Error("expected build to succeed");
   return built.record;
@@ -183,6 +207,25 @@ describe("deliveryRecordPathFor", () => {
 // ── build ────────────────────────────────────────────────────────────────────
 
 describe("buildDeliveryRecord", () => {
+  it("retains every provider selected by the existing all-provider evaluator", () => {
+    const config = makeConfig({ providers: [{ id: "p.reviewer", findingCodes: [] }, { id: "p.security", findingCodes: [] }],
+      obligations: [{ ...obligation("review.green"), providers: ["p.reviewer", "p.security"] }] });
+    const evidenceRecords = [evidenceRecord("review.green", "", "", config), evidenceRecord("review.green", "", "", config, "p.security")];
+    const projection = { relevantLineCount: 1, relevantPaths: ["src.ts"], excludedPaths: [], binaryPaths: [], sensitivePathIds: [], hasRelevantBinaryChange: false, hasRelevantZeroLineChange: false, changedEntryCount: 1 };
+    const decision = evaluateGate({ config, candidate: CANDIDATE, projection, context: { kind: "agent", signal: "fixture" }, records: evidenceRecords });
+    expect(decision.admitted).toBe(true);
+    const built = buildDeliveryRecord({ config, decision, evidenceRecords });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.record.claims[0]?.supportingEvidence).toHaveLength(1);
+    expect(built.record.manifestDigest).toBeNull();
+    expect(verifyDeliveryRecord(config, built.record, RECOMPUTED, FRESH_BASE).ok).toBe(true);
+    const { integrityDigest: _, ...changed } = { ...built.record, claims: [{ ...built.record.claims[0]!, supportingEvidence: [] }], manifestDigest: built.record.claims[0]!.manifestDigest! };
+    const result = verifyDeliveryRecord(config, { ...changed, integrityDigest: digestCanonical(changed) }, RECOMPUTED, FRESH_BASE);
+    expect(result.ok).toBe(false);
+    expect(result.blockers.map(blocker => blocker.code)).toContain("review_evidence_missing");
+  });
+
   it("promotes an admitted decision, stamping evidence claims with their manifest digest", () => {
     const built = buildDeliveryRecord({
       config: makeConfig(),
@@ -198,10 +241,10 @@ describe("buildDeliveryRecord", () => {
     expect(built.record.claims[0]).toMatchObject({
       obligationId: "review.green",
       outcome: "satisfied_evidence",
-      recordId: "rec-1",
-      manifestDigest: "d".repeat(64),
+      recordId: evidenceRecord("review.green", "rec-1", "").recordId,
+      manifestDigest: built.record.claims[0]!.evidence!.resolution.kind === "evidence" ? built.record.claims[0]!.evidence!.resolution.manifestDigest : "",
     });
-    expect(built.record.manifestDigest).toBe("d".repeat(64));
+    expect(built.record.manifestDigest).toBe(built.record.claims[0]!.manifestDigest);
     expect(built.record.candidateBinding).toEqual(RECORD_BINDING);
   });
 
@@ -299,10 +342,66 @@ describe("parseDeliveryRecord", () => {
   it("accepts every outcome the evaluator can actually produce", () => {
     const record = buildFreshRecord();
     for (const outcome of RESOLUTION_OUTCOMES.filter((kind) => kind !== "blocked")) {
-      const rewritten = { ...record, claims: [{ ...record.claims[0], outcome }] };
+      const rewritten = { ...record, claims: [{ ...record.claims[0], outcome, ...(outcome === "waived" ? {
+        scope: "durable", waiver: { kind: "waiver", scope: "durable", author: "Release owner", reason: "Accepted missing review",
+          findingCodes: ["review_evidence_missing"], policyDigest: digestCanonical(makeConfig()), candidateBinding: RECORD_BINDING },
+      } : {}) }] };
       const parsed = parseDeliveryRecord(`${JSON.stringify(rewritten)}\n`);
       expect(parsed.ok, `expected ${outcome} to parse`).toBe(true);
     }
+  });
+});
+
+describe("portable human exceptions", () => {
+  const approval = { kind: "waiver" as const, scope: "durable" as const, author: "Release owner", reason: "Accepted missing review",
+    findingCodes: ["review_evidence_missing"], policyDigest: digestCanonical(makeConfig()) };
+  function record(): DeliveryRecord {
+    const built = buildDeliveryRecord({ config: makeConfig(), evidenceRecords: [], decision: admittedDecision([{
+      kind: "waived", gateId: "test.gate", obligationId: "review.green", waiverRecordId: "waiver-1",
+      scope: "durable", candidateBinding: RECORD_BINDING, waiver: approval,
+    }]) });
+    if (!built.ok) throw new Error("expected admitted waiver");
+    return built.record;
+  }
+  it("retains attribution, finding scope, policy, and approved candidate through serialization", () => {
+    const parsed = parseDeliveryRecord(deliveryRecordBytes(record()));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.claims[0]?.waiver).toEqual({ ...approval, candidateBinding: RECORD_BINDING });
+    expect(verifyDeliveryRecord(makeConfig(), parsed.record, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true }).ok).toBe(true);
+  });
+  it("rejects a waiver without a matching current target observation", () => {
+    for (const options of [{}, { waiverCandidateMatches: false }]) {
+      const result = verifyDeliveryRecord(makeConfig(), record(), RECOMPUTED, FRESH_BASE, options);
+      expect(result.ok).toBe(false);
+      expect(result.blockers.map(blocker => blocker.code)).toContain("record_waiver_invalid");
+    }
+  });
+  it("rejects a legacy unattributed waiver claim", () => {
+    const value = record();
+    expect(parseDeliveryRecord(JSON.stringify({ ...value, claims: [{ obligationId: "review.green", outcome: "waived", scope: "durable" }] })).ok).toBe(false);
+  });
+  it("rejects changing both scope fields to durable for a live obligation", () => {
+    const liveObligation = { ...obligation("review.green"), freshness: "live" as const,
+      waivableCodes: [...STRUCTURAL_WAIVABLE, "live_provider_missing"],
+      nonWaivableCodes: STRUCTURAL_NONWAIVABLE.filter((code) => code !== "live_provider_missing") };
+    const config = makeConfig({ obligations: [liveObligation] });
+    const value = record();
+    const waiver = { ...approval, findingCodes: ["live_provider_missing"], scope: "invocation" as const, policyDigest: digestCanonical(config), candidateBinding: RECORD_BINDING };
+    const claim = { ...value.claims[0]!, scope: "invocation", waiver };
+    expect(verifyDeliveryRecord(config, { ...value, claims: [claim] }, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true }).ok).toBe(false); // Invocation-only approval cannot travel to another verification.
+    expect(verifyDeliveryRecord(config, { ...value, claims: [{ ...claim, scope: "durable", waiver: { ...waiver, scope: "durable" } }] }, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true }).ok).toBe(false);
+  });
+  it.each(["policy", "candidate", "integrity"])("rejects an exception with mismatched %s in the verifier", (mutation) => {
+    const value = record();
+    const waiver = { ...approval, candidateBinding: RECORD_BINDING,
+      ...(mutation === "policy" ? { policyDigest: "f".repeat(64) } : {}),
+      ...(mutation === "candidate" ? { candidateBinding: { ...RECORD_BINDING, treeSha: "other-tree" } } : {}),
+      ...(mutation === "integrity" ? { findingCodes: ["stale_evidence"] } : {}),
+    };
+    const result = verifyDeliveryRecord(makeConfig(), { ...value, claims: [{ ...value.claims[0]!, waiver }] }, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true });
+    expect(result.ok).toBe(false);
+    expect(result.blockers.map((b) => b.code)).toContain("record_waiver_invalid");
   });
 });
 
@@ -550,7 +649,7 @@ describe("verifyDeliveryRecord", () => {
 
   it("relaxes base movement under the allow policy and names the relaxation", () => {
     const config = makeConfig({ deliveryRecordVerification: { baseMovement: "allow" } });
-    const check = verifyDeliveryRecord(config, buildFreshRecord(), RECOMPUTED, { ...FRESH_BASE, tipSha: "z".repeat(40) });
+    const check = verifyDeliveryRecord(config, buildFreshRecord(config), RECOMPUTED, { ...FRESH_BASE, tipSha: "z".repeat(40) });
     expect(check.ok).toBe(true);
     expect(check.baseMovementRelaxed).toBe(true);
     expect(check.relaxedDriftClasses).toContain("base_tip_moved");
@@ -558,7 +657,7 @@ describe("verifyDeliveryRecord", () => {
 
   it("keeps identity mismatch fatal even under the allow policy", () => {
     const config = makeConfig({ deliveryRecordVerification: { baseMovement: "allow" } });
-    const check = verifyDeliveryRecord(config, buildFreshRecord(), { deliverableDigest: "c".repeat(64), identityToken: TOKEN }, FRESH_BASE);
+    const check = verifyDeliveryRecord(config, buildFreshRecord(config), { deliverableDigest: "c".repeat(64), identityToken: TOKEN }, FRESH_BASE);
     expect(check.ok).toBe(false);
   });
 
@@ -628,14 +727,14 @@ describe("verifyDeliveryRecord", () => {
     expect(drifted.blockers.map((b) => b.code)).toContain("deliverable_identity_changed");
   });
 
-  it("excludes workspaceId from verification (CI is a different workspace)", () => {
+  it("rejects rewriting the original workspace binding in portable evidence", () => {
     const record = {
       ...buildFreshRecord(),
       workspaceId: "w-ci-checkout",
       candidateBinding: { ...RECORD_BINDING, workspaceId: "w-ci-checkout" },
     };
     const check = verifyDeliveryRecord(makeConfig(), record, RECOMPUTED, FRESH_BASE);
-    expect(check.ok).toBe(true);
+    expect(check.ok).toBe(false);
   });
 });
 

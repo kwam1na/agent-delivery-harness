@@ -56,6 +56,14 @@ export interface RecordCandidateBinding {
  * the record *says*, and two records that disagree about it on one identity are
  * the conflict SUB-4 exists to reject.
  */
+export interface CheckBinding {
+  readonly definitionDigest: string;
+  readonly validationDigest: string;
+  readonly policyDigest: string;
+  readonly wiringFingerprint: string;
+  readonly outputsDigest: string;
+}
+
 export interface EvidenceResolution {
   readonly kind: "evidence";
   readonly providerId: string;
@@ -63,20 +71,48 @@ export interface EvidenceResolution {
   readonly finalPassId: string;
   /** Stamped from the accepted manifest (SUB-4). */
   readonly manifestDigest: string;
+  readonly checkBinding?: CheckBinding;
+  /** Accepted original evidence retained before its temporary run root disappears. */
+  readonly portable?: PortableEvidence;
+}
+
+export interface PortableEvidenceContext {
+  readonly configurationDigest: string;
+  readonly preparationFingerprint: string;
+  readonly policyDigest: string | null;
+  readonly release: Readonly<Record<string, unknown>> | null;
+  readonly workflowGraphSha256: string | null;
+  readonly reviewerCharters: readonly {
+    readonly origin: "composition" | "repository";
+    readonly sourcePath: string;
+    readonly lensId: string;
+    readonly reviewerId: string;
+    readonly personaId: string;
+    readonly entryPath: string;
+    readonly digest: string;
+  }[];
+}
+
+export interface PortableEvidence {
+  readonly version: "portable-evidence/1";
+  readonly manifest: unknown;
+  /** Safe manifest-relative path to canonical base64 of the original file bytes. */
+  readonly artifacts: Readonly<Record<string, string>>;
+  readonly context: PortableEvidenceContext;
 }
 
 /**
- * A waiver, which has no provider and no run: nobody produced evidence, someone
- * decided to proceed without it. Dropping the provider triple from the identity
- * is what makes a waiver idempotent per candidate — a second waiver for the
- * same obligation on the same candidate is the same record, not another one.
- *
- * `scope` rides on the record but stays out of the identity, so re-waiving one
- * candidate at a different scope is a conflict rather than a silent upgrade.
+ * A waiver has no provider run: a human accepted a scoped exception. Its full
+ * attribution participates in identity, so another approval can coexist while
+ * a byte-identical approval remains idempotent. Nothing overwrites prior approval.
  */
 export interface WaiverResolution {
   readonly kind: "waiver";
   readonly scope: WaiverScope;
+  readonly author: string;
+  readonly reason: string;
+  readonly findingCodes: readonly string[];
+  readonly policyDigest: string;
 }
 
 export type RecordResolution = EvidenceResolution | WaiverResolution;
@@ -116,13 +152,14 @@ export interface EvidenceRecordIdentity {
   readonly finalPassId: string;
 }
 
-/** The same tuple in its waiver spelling: the discriminant replaces the triple. */
+/** The waiver spelling binds the attributed approval instead of a provider run. */
 export interface WaiverRecordIdentity {
   readonly workspaceId: string;
   readonly gateId: string;
   readonly obligationId: string;
   readonly candidateBinding: RecordCandidateBinding;
   readonly kind: "waiver";
+  readonly approval: WaiverResolution;
 }
 
 export type RecordIdentity = EvidenceRecordIdentity | WaiverRecordIdentity;

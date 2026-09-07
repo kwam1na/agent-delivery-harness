@@ -8,7 +8,7 @@
  *      member — every one of the seven members moves `recordId`, and a change
  *      confined to the payload does not. The waiver variant is pinned the same
  *      way from the other side: it carries no provider triple, so two waivers
- *      for one obligation on one candidate collide by construction.
+ *      with identical attribution for one candidate are idempotent.
  *   2. PUBLICATION is atomic under REAL concurrency. Two processes inside one
  *      interpreter prove nothing about `link()`; these tests spawn actual node
  *      child processes through `node:child_process`, released against a shared
@@ -84,12 +84,12 @@ const REPAID: PublishRecordInput = {
   resolution: { ...RESOLUTION, manifestDigest: "0".repeat(64) },
 };
 
-const WAIVER: PublishRecordInput = {
+const WAIVER = {
   gateId: "delivery",
   obligationId: "review.green",
   candidateBinding: BINDING,
-  resolution: { kind: "waiver", scope: "invocation" },
-};
+  resolution: { kind: "waiver", scope: "invocation", author: "Test Operator", reason: "Explicit exception", findingCodes: ["review_evidence_missing"], policyDigest: "a".repeat(64) },
+} satisfies PublishRecordInput;
 
 const WORKSPACE = "9".repeat(64);
 
@@ -333,14 +333,14 @@ describe("record identity — evidence variant", () => {
 });
 
 describe("record identity — waiver variant", () => {
-  it("carries no provider triple, so it is idempotent per candidate by construction", () => {
+  it("binds full approval so distinct scopes coexist without overwriting", () => {
     const invocation = computeRecordId(WORKSPACE, WAIVER);
     const durable = computeRecordId(WORKSPACE, {
       ...WAIVER,
-      resolution: { kind: "waiver", scope: "durable" },
+      resolution: { ...WAIVER.resolution, kind: "waiver", scope: "durable" },
     });
 
-    expect(invocation).toBe(durable);
+    expect(invocation).not.toBe(durable);
     expect(invocation).toBe(
       sha256Hex(
         canonicalize({
@@ -349,6 +349,7 @@ describe("record identity — waiver variant", () => {
           obligationId: WAIVER.obligationId,
           candidateBinding: BINDING,
           kind: "waiver",
+          approval: WAIVER.resolution,
         }),
       ),
     );
@@ -424,14 +425,15 @@ describe("publication", () => {
     expect(jsonFilesIn(path.dirname(first.path))).toHaveLength(1);
   });
 
-  it("rejects a second waiver whose scope disagrees with the stored one", async () => {
+  it("retains both approvals when a human grants a different scope", async () => {
     const storageRoot = tempStorageRoot();
-    await publishRecord(storageRoot, WAIVER, { storageRoot });
-
-    const code = await captureBlocker(() =>
-      publishRecord(storageRoot, { ...WAIVER, resolution: { kind: "waiver", scope: "durable" } }, { storageRoot }),
-    );
-    expect(code).toBe("record_conflict");
+    const first = await publishRecord(storageRoot, WAIVER, { storageRoot });
+    const original = readFileSync(first.path, "utf8");
+    const second = await publishRecord(storageRoot, { ...WAIVER, resolution: { ...WAIVER.resolution, kind: "waiver", scope: "durable" } }, { storageRoot });
+    expect(second.status).toBe("published");
+    expect(second.record.recordId).not.toBe(first.record.recordId);
+    expect(readFileSync(first.path, "utf8")).toBe(original);
+    expect(jsonFilesIn(path.dirname(first.path))).toHaveLength(2);
   });
 
   it("rejects an existing file at the slot that cannot be parsed at all", async () => {

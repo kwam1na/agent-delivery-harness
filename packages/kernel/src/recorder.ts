@@ -1,3 +1,4 @@
+import { captureCheckBindings } from "./checks.ts";
 /**
  * The submission flow: spec §8.3, from a manifest on disk to published records.
  *
@@ -51,6 +52,7 @@
 import { BlockedError, createBlocker, sanitizedDetail, type Blocker, type NonEmptyTuple, type Remediation } from "./blockers.ts";
 import { createArtifactsPort } from "./artifacts.ts";
 import type { ArtifactObservation, ArtifactsPort, RunRoot, RunRootRefusalReason, RunRootResolution } from "./artifacts.types.ts";
+import { capturePortableEvidenceContext, repositoryEvidenceReader, retainPortableEvidence, verifyPortableEvidence } from "./portable-evidence.ts";
 import {
   classifyCandidateDrift,
   type CandidateBinding,
@@ -62,8 +64,9 @@ import type { HarnessConfig } from "./config.ts";
 import { digestCanonical, manifestDigest as computeManifestDigest } from "./digest.ts";
 import { evaluatePreparationReceipt } from "./preparation.ts";
 import { computeRecordId, discoverRecords, publishRecord, recordFileName, resolveRecordStorage, type RecordStorageOptions } from "./records.ts";
-import type { EvidenceRecord, PublishRecordInput, PublishedRecord, RecordCandidateBinding } from "./records.types.ts";
+import type { EvidenceRecord, PortableEvidence, PublishRecordInput, PublishedRecord, RecordCandidateBinding } from "./records.types.ts";
 import type { ManifestRejection } from "./validator/codes.ts";
+import { declaredArtifacts, judgeArtifact } from "./validator/artifacts.ts";
 import { validateManifest, type DeliveryEvidenceManifest } from "./validator/envelope.ts";
 
 // ── The submission's inputs ────────────────────────────────────────────────
@@ -434,79 +437,6 @@ const RECORDER_MESSAGES = {
   artifact_digest_mismatch: "the artifact's bytes at submission do not have the declared digest",
 } as const;
 
-/** One declared artifact entry, read defensively from an unvalidated manifest. */
-interface DeclaredArtifactEntry {
-  readonly index: number;
-  readonly path: string;
-  readonly sha256: string | undefined;
-}
-
-function declaredArtifacts(manifest: unknown): readonly DeclaredArtifactEntry[] {
-  const artifacts = readMember(manifest, "artifacts");
-  if (!Array.isArray(artifacts)) return [];
-  const entries: DeclaredArtifactEntry[] = [];
-  artifacts.forEach((entry, index) => {
-    const declaredPath = readMember(entry, "path");
-    if (typeof declaredPath !== "string") return;
-    const sha256 = readMember(entry, "sha256");
-    entries.push({ index, path: declaredPath, sha256: typeof sha256 === "string" ? sha256 : undefined });
-  });
-  return entries;
-}
-
-/**
- * ENV-10's realpath clause and ENV-11, decided from what the port found.
- *
- * The two mappings that matter are here rather than in the port, because they
- * are spec readings rather than filesystem facts:
- *
- *   A file that is not there is `artifact_digest_mismatch`, not
- *   `artifact_outside_run_root`. ENV-11 requires the declared digest to equal
- *   the digest of the referenced file's bytes at submission; with no bytes
- *   there is no equality, and the run root is not where the failure is. A
- *   directory and an unreadable file land in the same place for the same
- *   reason.
- *
- *   `artifact_outside_run_root` is reserved for a path that *does* resolve and
- *   resolves outside — the only case where the run root is the thing that was
- *   violated.
- *
- * A path the port refused produces nothing here: it is a shape failure, the
- * validator owns `artifact_path_invalid`, and emitting a second code for it
- * would report a filesystem check that never ran.
- */
-function judgeArtifact(entry: DeclaredArtifactEntry, observation: ArtifactObservation): ManifestRejection | null {
-  const pointer = `/artifacts/${entry.index}`;
-  switch (observation.status) {
-    case "path_refused":
-      return null;
-    case "outside_run_root":
-      return {
-        code: "artifact_outside_run_root",
-        rule: "ENV-10",
-        pointer: `${pointer}/path`,
-        message: RECORDER_MESSAGES.artifact_outside_run_root,
-      };
-    case "missing":
-      return { code: "artifact_digest_mismatch", rule: "ENV-11", pointer, message: RECORDER_MESSAGES.artifact_missing };
-    case "not_a_file":
-      return { code: "artifact_digest_mismatch", rule: "ENV-11", pointer, message: RECORDER_MESSAGES.artifact_not_a_file };
-    case "unreadable":
-      return { code: "artifact_digest_mismatch", rule: "ENV-11", pointer, message: RECORDER_MESSAGES.artifact_unreadable };
-    case "readable":
-      // A declared digest that is not a digest is the validator's
-      // `malformed_field`; comparing against it here would report the same
-      // defect twice under a code that says something else.
-      if (entry.sha256 === undefined || entry.sha256 === observation.sha256) return null;
-      return {
-        code: "artifact_digest_mismatch",
-        rule: "ENV-11",
-        pointer: `${pointer}/sha256`,
-        message: RECORDER_MESSAGES.artifact_digest_mismatch,
-      };
-  }
-}
-
 // ── The submission ─────────────────────────────────────────────────────────
 
 /**
@@ -557,6 +487,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
   const captured = capture.ok ? capture.candidate : null;
 
   // ── The receipt gate ──
+  let preparationFingerprint: string | undefined;
   if (captured !== null) {
     const preparation = await evaluatePreparationReceipt(
       input.rootDir,
@@ -564,6 +495,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
       { ...storageOptions(options), ...(options.harnessVersion === undefined ? {} : { harnessVersion: options.harnessVersion }) },
     );
     if (!preparation.prepared) return blockedOutcome(preparation.blockers);
+    preparationFingerprint = preparation.receipt.preparationFingerprint;
   }
 
   const rejections: ManifestRejection[] = [];
@@ -573,6 +505,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
   if (!allocation.ok && allocation.blocker !== null) return blockedOutcome([allocation.blocker]);
   const runRoot = allocation.ok ? allocation.runRoot : null;
   const artifactContents = new Map<string, string>();
+  const observations = new Map<string, ArtifactObservation>();
 
   if (runRoot !== null) {
     // SUB-3. Run roots are recorder-allocated, so "inside the run root" is a
@@ -589,6 +522,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
 
     for (const entry of declaredArtifacts(manifest)) {
       const observation = await artifacts.observeArtifact(runRoot.path, entry.path);
+      observations.set(entry.path, observation);
       if (observation.status === "readable" && observation.contents !== null) {
         artifactContents.set(entry.path, observation.contents);
       }
@@ -598,6 +532,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
   }
 
   // ── The manifest's own rules ──
+  const checkBindings = captured === null ? {} : await captureCheckBindings(input.rootDir, input.config, captured, options);
   const validation = validateManifest(manifest, {
     config: input.config,
     // A candidate that could not be captured matches nothing: SUB-1 requires
@@ -607,6 +542,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
     currentCandidate: captured === null ? undefined : projectCapturedCandidate(captured, readMember(manifest, "candidate")),
     prepared: captured !== null,
     artifactContents,
+    checkBindings,
   });
   if (!validation.ok) rejections.push(...validation.rejections);
 
@@ -617,7 +553,16 @@ export async function submitManifest(input: SubmissionInput, options: Submission
   }
 
   // ── SUB-4 ──
-  return publishClaims(input, options, validation.manifest);
+  try {
+    const context = await capturePortableEvidenceContext(input.config, repositoryEvidenceReader(input.rootDir, artifacts), preparationFingerprint!);
+    const portable = retainPortableEvidence(validation.manifest, observations, context);
+    const blockers = verifyPortableEvidence(input.config, portable, recordBinding(validation.manifest), context, checkBindings);
+    if (blockers.length > 0) return blockedOutcome(blockers);
+    return publishClaims(input, options, validation.manifest, portable);
+  } catch (error) {
+    if (error instanceof BlockedError) return blockedOutcome(error.blockers);
+    return blockedOutcome([submissionBlocker("portable_context_invalid", "The accepted evidence inputs could not be retained.", error instanceof Error ? error.message : String(error), RESUBMIT)]);
+  }
 }
 
 function storageOptions(options: SubmissionOptions): RecordStorageOptions {
@@ -758,6 +703,7 @@ async function publishClaims(
   input: SubmissionInput,
   options: SubmissionOptions,
   manifest: DeliveryEvidenceManifest,
+  portable: PortableEvidence,
 ): Promise<SubmissionOutcome> {
   const storage = storageOptions(options);
   const artifacts = options.artifacts ?? createArtifactsPort();
@@ -774,6 +720,8 @@ async function publishClaims(
       runId: manifest.provider.runId,
       finalPassId: manifest.provider.finalPassId,
       manifestDigest: digest,
+      ...(claim.payloadSpec === "checks.passed/1" ? { checkBinding: claim.payload["binding"] as unknown as import("./records.types.ts").CheckBinding } : {}),
+      portable,
     },
   }));
 

@@ -129,6 +129,46 @@ const validInput = () => ({
 
 type MutableInput = ReturnType<typeof validInput>;
 
+describe("preparation commands", () => {
+  it("accepts an ordered argv list and preserves empty arguments", () => {
+    const preparationCommands = [{ id: "typecheck", command: ["npm", "run", "typecheck", ""], timeoutMs: 120000 }];
+    expect(define({ ...validInput(), preparationCommands }).preparationCommands).toEqual(preparationCommands);
+    expect(define({ ...validInput(), preparationCommands: [] }).preparationCommands).toEqual([]);
+  });
+
+  it.each([
+    null, {}, [null], [{ id: "check", command: [], timeoutMs: 1 }],
+    [{ id: "check", command: "npm run check", timeoutMs: 1 }],
+    [{ id: "check", command: [" "], timeoutMs: 1 }],
+    [{ id: "check", command: ["node", "bad\0argument"], timeoutMs: 1 }],
+    [{ id: "check", command: ["node"], timeoutMs: 0 }],
+    [{ id: "check", command: ["node"], timeoutMs: 1.5 }],
+    [{ id: "check", command: ["node"], timeoutMs: 2147483648 }],
+    [{ id: "check", command: ["node"] }],
+    [{ id: "check", command: ["node"], timeoutMs: 1, shell: true }],
+    [{ id: "check", command: ["node"], timeoutMs: 1 }, { id: "check", command: ["node"], timeoutMs: 1 }],
+  ])("rejects malformed preparation commands %#", (preparationCommands) => {
+    expect(validateHarnessConfig({ ...validInput(), preparationCommands }).ok).toBe(false);
+  });
+});
+
+describe("repository review charters", () => {
+  const lens = { lensId: "repo.security", reviewerId: "security-reviewer", charterPath: ".agents/agents/security.md" };
+  it("includes declared charter bytes in preparation wiring without changing omitted configuration", () => {
+    expect(define(validInput())).not.toHaveProperty("additionalReviewLenses");
+    const config = define({ ...validInput(), additionalReviewLenses: [lens] });
+    expect(config.additionalReviewLenses).toEqual([lens]);
+    expect(config.preparationWiringPaths).toContain(lens.charterPath);
+  });
+  it.each(["lensId", "reviewerId"])("rejects duplicate %s instead of silently dropping a required reviewer", (field) => {
+    const other = { lensId: "repo.other", reviewerId: "other-reviewer", charterPath: ".agents/agents/other.md", [field]: lens[field as keyof typeof lens] };
+    expect(codesFor({ ...validInput(), additionalReviewLenses: [lens, other] })).toContain("config_duplicate_id");
+  });
+  it.each(["../outside.md", "/outside.md", "docs/", "bad\\path.md", ""])("rejects invalid charter path %j", (charterPath) => {
+    expect(codesFor({ ...validInput(), additionalReviewLenses: [{ ...lens, charterPath }] })).toContain("config_invalid_member");
+  });
+});
+
 /**
  * Deep-clones the fixture and hands it to a mutation. The mutation sees an
  * untyped draft on purpose: most rows corrupt the fixture into a shape the

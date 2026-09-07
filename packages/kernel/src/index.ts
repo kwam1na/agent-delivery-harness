@@ -198,6 +198,8 @@ export {
   PREPARATION_RECEIPT_SCHEMA_VERSION,
   computePreparationFingerprint,
   evaluatePreparationReceipt,
+  invalidatePreparationReceipt,
+  revokePreparationAttempt,
   publishPreparationReceipt,
   receiptFileName,
   resolveReceiptStorage,
@@ -296,6 +298,7 @@ export {
   type AdmissionOptions,
   type AdmissionResult,
   type WaiverPrompt,
+  type WaiverApproval,
   type WaiverPromptOutcome,
 } from "./admission.ts";
 
@@ -996,3 +999,18 @@ export {
   type RetrySafety,
   type WorkspaceDisposition,
 } from "./facade/status.ts";
+
+export { captureCheckBindings, captureCheckOutputs, captureCheckOutputSnapshots, computeCheckWiringFingerprint, type CheckBindingOptions } from "./checks.ts";
+export type { CheckBinding } from "./records.types.ts";
+export { retainedCheckOutput } from "./validator/checks-passed.ts";
+export { resolveReviewCharters, readWorkflowRelease, ReviewInputError, type ResolvedCharter, type ReviewInputReader } from "./review-inputs.ts";
+
+export { validateReviewedContext, parseReviewOutcome, deriveTelemetry, reviewerLists, REVIEWER_RESULTS } from "./review-outcome.ts";
+export type { ReviewOutcome, ReviewerOutcome, ReviewerResult } from "./review-outcome.ts";
+export { capturePortableEvidenceContext, repositoryEvidenceReader, verifyPortableEvidence, portableArtifactContents, MAX_PORTABLE_RECORD_BYTES } from "./portable-evidence.ts";
+export type { PortableEvidence, PortableEvidenceContext } from "./records.types.ts";
+
+export { candidateTreeEvidenceReader, capturePortableVerificationInputs } from "./portable-inputs.ts";
+
+export * from "./provider-rails.ts";
+export * from "./live-providers.ts";

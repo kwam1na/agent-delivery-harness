@@ -38,8 +38,8 @@ import type { WaiverPrompt } from "@agent-delivery-harness/kernel";
  * second settlement is exactly how this class of bug hides.
  */
 export function createWaiverPrompt(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): WaiverPrompt {
-  return (_decision, obligationIds) =>
-    new Promise<boolean>((resolve, reject) => {
+  return (decision, obligationIds) =>
+    new Promise<Awaited<ReturnType<WaiverPrompt>>>((resolve, reject) => {
       const rl = createInterface({ input, output });
       let settled = false;
       const settle = (action: () => void): void => {
@@ -60,10 +60,24 @@ export function createWaiverPrompt(input: NodeJS.ReadableStream, output: NodeJS.
       });
 
       output.write(`Waiving covers ${obligationIds.length} obligation(s): ${obligationIds.join(", ")}.\n`);
+      output.write(`Candidate: ${decision.candidate.treeSha}. Approval covers only these findings under the current policy; live obligations require new approval each invocation.\n`);
+      for (const resolution of decision.resolutions) {
+        if (resolution.kind === "blocked" && obligationIds.includes(resolution.obligationId)) {
+          for (const blocker of resolution.blockers) output.write(`${resolution.obligationId}: [${blocker.code}] ${blocker.summary}\n`);
+        }
+      }
+      const finish = (value: Awaited<ReturnType<WaiverPrompt>>) => settle(() => {
+        rl.close();
+        resolve(value);
+      });
       rl.question("Waive all of them? [y/N] ", (answer) => {
-        settle(() => {
-          rl.close();
-          resolve(/^\s*y(es)?\s*$/i.test(answer));
+        if (!/^\s*y(es)?\s*$/i.test(answer)) return finish(false);
+        rl.question("Author: ", (author) => {
+          if (!author.trim() || author.length > 256) return finish(false);
+          rl.question("Reason: ", (reason) => {
+            if (!reason.trim() || reason.length > 4096) return finish(false);
+            finish({ author: author.trim(), reason: reason.trim() });
+          });
         });
       });
     });

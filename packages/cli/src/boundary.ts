@@ -88,7 +88,7 @@ export class CliInterruption extends Error {
  * the typed blockers to render; `usage` is an argument or invocation error.
  */
 export type CommandResult =
-  | { readonly kind: "ok"; readonly summary?: string }
+  | { readonly kind: "ok"; readonly summary?: string; readonly digest?: string }
   | { readonly kind: "blocked"; readonly blockers: readonly Blocker[] }
   | { readonly kind: "usage"; readonly message: string };
 
@@ -113,6 +113,8 @@ export interface CommandContext {
   readonly stdoutIsTTY: boolean;
   /** Positional and flag arguments after the command name. */
   readonly args: readonly string[];
+  readonly readStdin?: () => Promise<string>;
+  readonly signal?: AbortSignal;
   /**
    * Wires capture and the store from this repo, memoized. Lazy so `--help`
    * wires nothing and so a command owns how it renders a store that will not
@@ -328,6 +330,7 @@ export const COMPLETION_WRAPPED_COMMANDS: readonly string[] = [
   "check",
   "prepare",
   "review-context",
+  "emit-review-evidence",
   "submit-evidence",
   "gate",
   "record",
@@ -361,6 +364,7 @@ async function recordCommandCompletion(input: {
   readonly command: string;
   readonly exitCode: number;
   readonly durationMs: number;
+  readonly digest?: string;
 }): Promise<void> {
   try {
     const resolved = await resolveRunSurface(input.cwd);
@@ -375,7 +379,8 @@ async function recordCommandCompletion(input: {
         commonDir,
         kind: "command.completed",
         role: "cli",
-        payload: { command: input.command, outcome: outcomeOfExit(input.exitCode), durationMs: input.durationMs },
+        payload: { command: input.command, outcome: outcomeOfExit(input.exitCode), durationMs: input.durationMs,
+          ...(input.exitCode === EXIT_OK && input.digest !== undefined ? { digest: input.digest } : {}) },
       }),
     );
   } catch {
@@ -415,13 +420,15 @@ export async function runCliBoundary(
   }
 
   const startedAt = Date.now();
-  const code = await runConfiguredCommand(descriptor, args, runtime);
+  let digest: string | undefined;
+  const code = await runConfiguredCommand(descriptor, args, runtime, value => { digest = value; });
   if (COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)) {
     await recordCommandCompletion({
       cwd: runtime.cwd,
       command: descriptor.name,
       exitCode: code,
       durationMs: Date.now() - startedAt,
+      ...(digest === undefined ? {} : { digest }),
     });
   }
   return code;
@@ -475,6 +482,7 @@ async function runConfiguredCommand(
   descriptor: CommandDescriptor,
   args: readonly string[],
   runtime: CliRuntime,
+  observeDigest: (digest: string | undefined) => void,
 ): Promise<number> {
   const loadConfig = runtime.loadConfig ?? importHarnessConfig;
   const artifacts = runtime.artifacts ?? createArtifactsPort();
@@ -497,7 +505,9 @@ async function runConfiguredCommand(
       stdoutIsTTY: runtime.stdoutIsTTY,
       args,
       wire,
+      readStdin: runtime.readStdin ?? (async () => ""),
       artifacts,
+      ...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
       // The waiver prompt is offered only under a real TTY. A non-interactive
       // invocation never prompts — it blocks — no matter what the run wired.
       ...(runtime.stdinIsTTY && runtime.stdoutIsTTY && runtime.promptForWaiver !== undefined
@@ -574,7 +584,9 @@ async function runConfiguredCommand(
     };
 
     const result = await descriptor.run(context);
+    if (runtime.signal?.aborted) throw new CliInterruption();
     if (result.kind === "ok") {
+      observeDigest(result.digest);
       if (result.summary !== undefined && result.summary !== "") runtime.stdout(`${result.summary}\n`);
       return EXIT_OK;
     }

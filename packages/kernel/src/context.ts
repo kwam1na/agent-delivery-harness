@@ -35,17 +35,24 @@
  * runs strictly after the agent check, so no arrangement of streams turns a
  * recognized agent into a person.
  *
- * NOTHING HERE IS A LITERAL. Athena's classifier hardcoded one workflow, one
+ * CI POLICY IS CONFIGURED. Athena's classifier hardcoded one workflow, one
  * job, one event name and one policy id. Every one of those is config data
  * here, and the returned CI context carries the matched policy's own values, so
  * a caller reads what authorized this run rather than what this module was
- * written believing.
+ * written believing. Supported coding-host signals form a non-configurable
+ * denial floor for interactive human classification.
  */
 import type { EnvironmentRequirement, HarnessConfig } from "./config.ts";
 
 /** The four rungs. Ordered as the ladder is ordered. */
 export const EXECUTION_CONTEXT_KINDS = ["ci", "agent", "human", "unknown"] as const;
 export type ExecutionContextKind = (typeof EXECUTION_CONTEXT_KINDS)[number];
+
+/** Host-convention signals are a denial floor, not authenticated identity.
+ * Repositories may add signals, but cannot turn a supported coding host into
+ * an interactive human by omitting its signal from configuration.
+ */
+const SUPPORTED_AGENT_SIGNALS = ["CODEX_THREAD_ID", "CODEX_CI", "CODEX_SANDBOX", "CLAUDE_CODE", "CLAUDECODE"] as const;
 
 /**
  * Why a run is anonymous. The two are kept apart because they mean opposite
@@ -167,7 +174,7 @@ export function classifyExecutionContext({ config, env, stdinIsTTY, stdoutIsTTY 
     return { kind: "unknown", reason: "unauthorized_automation" };
   }
 
-  for (const signal of config.agentEnvSignals) {
+  for (const signal of [...config.agentEnvSignals, ...SUPPORTED_AGENT_SIGNALS]) {
     if (isEnvSignalPresent(env[signal])) return { kind: "agent", signal };
   }
 

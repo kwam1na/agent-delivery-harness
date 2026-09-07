@@ -318,7 +318,7 @@ describe("this repository's own gate", () => {
     // while the gate waited for its real declaration. That declaration is in
     // force now, so a placeholder anywhere in it is a regression, not a stage.
     expect(harnessConfig.obligations.map((obligation) => obligation.id)).toEqual(["review.green"]);
-    expect(harnessConfig.providers.map((provider) => provider.id)).toEqual(["claude-code.ce-code-review"]);
+    expect(harnessConfig.providers.map((provider) => provider.id)).toEqual(["delivery-harness.independent-review"]);
     expect(harnessConfig.deliveryRecordPath).toBe("delivery/records/record.json");
     expect(JSON.stringify(harnessConfig)).not.toContain("placeholder");
   });

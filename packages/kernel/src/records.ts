@@ -1,3 +1,4 @@
+import { recordIdentity, computeRecordId } from "./record-identity.ts";
 /**
  * The git-private, content-addressed evidence record store.
  *
@@ -298,31 +299,10 @@ export async function resolveRecordStorage(
  *
  * The evidence spelling names the run that produced the evidence, so re-running
  * a provider yields a new record rather than overwriting the old one. The
- * waiver spelling has no run to name: it collapses to the discriminant, which
- * is exactly why waiving one obligation on one candidate twice is one record.
+ * waiver spelling binds the attributed approval. Repeating identical approval
+ * is idempotent; a different human, reason or scope yields a distinct record.
  */
-export function recordIdentity(workspaceId: string, input: PublishRecordInput): RecordIdentity {
-  const common = {
-    workspaceId,
-    gateId: input.gateId,
-    obligationId: input.obligationId,
-    candidateBinding: input.candidateBinding,
-  };
-  return input.resolution.kind === "waiver"
-    ? { ...common, kind: "waiver" }
-    : {
-        ...common,
-        providerId: input.resolution.providerId,
-        runId: input.resolution.runId,
-        finalPassId: input.resolution.finalPassId,
-      };
-}
-
-/** `recordId` = lowercase-hex sha256 over the canonical identity tuple. */
-export function computeRecordId(workspaceId: string, input: PublishRecordInput): string {
-  return digestCanonical(recordIdentity(workspaceId, input));
-}
-
+export { recordIdentity, computeRecordId } from "./record-identity.ts";
 /**
  * Slot characters are restricted rather than trusted. Gate and obligation ids
  * are already pattern-validated by the config loader, so this changes nothing
@@ -406,7 +386,7 @@ const RECORD_MEMBERS = [
 
 const EVIDENCE_MEMBERS = ["kind", "providerId", "runId", "finalPassId", "manifestDigest"] as const;
 
-const WAIVER_MEMBERS = ["kind", "scope"] as const;
+const WAIVER_MEMBERS = ["kind", "scope", "author", "reason", "findingCodes", "policyDigest"] as const;
 
 function parseBinding(value: unknown): RecordCandidateBinding {
   if (!isRecordObject(value)) throw new RecordShapeError("malformed_shape", "candidateBinding must be an object");
@@ -423,7 +403,17 @@ function parseResolution(value: unknown): EvidenceRecord["resolution"] {
   if (!isRecordObject(value)) throw new RecordShapeError("malformed_shape", "resolution must be an object");
   const kind = value["kind"];
   if (kind === "evidence") {
-    requireExactMembers(value, EVIDENCE_MEMBERS, "resolution");
+    requireExactMembers(value, [...EVIDENCE_MEMBERS, ...(value["checkBinding"] === undefined ? [] : ["checkBinding"]), ...(value["portable"] === undefined ? [] : ["portable"])], "resolution");
+    if (value["checkBinding"] !== undefined) {
+      const binding = value["checkBinding"];
+      const members = ["definitionDigest", "validationDigest", "policyDigest", "wiringFingerprint", "outputsDigest"];
+      if (!isRecordObject(binding)) throw new RecordShapeError("malformed_shape", "checkBinding must be an object");
+      requireExactMembers(binding, members, "checkBinding");
+      if (members.some(key => typeof binding[key] !== "string" || !/^[a-f0-9]{64}$/.test(binding[key] as string))) throw new RecordShapeError("malformed_shape", "checkBinding requires sha256 digests");
+    }
+    if (value["portable"] !== undefined && (!isRecordObject(value["portable"]) || value["portable"]["version"] !== "portable-evidence/1")) {
+      throw new RecordShapeError("malformed_shape", "resolution.portable must carry a supported portable evidence payload");
+    }
     for (const member of ["providerId", "runId", "finalPassId", "manifestDigest"] as const) {
       if (!isNonEmptyString(value[member])) {
         throw new RecordShapeError("malformed_shape", `resolution.${member} must be a non-empty string`);
@@ -433,6 +423,19 @@ function parseResolution(value: unknown): EvidenceRecord["resolution"] {
     requireExactMembers(value, WAIVER_MEMBERS, "resolution");
     if (!WAIVER_SCOPES.includes(value["scope"] as never)) {
       throw new RecordShapeError("malformed_shape", `resolution.scope must be one of ${WAIVER_SCOPES.join(", ")}`);
+    }
+    for (const [member, limit] of [["author", 256], ["reason", 4096]] as const) {
+      if (typeof value[member] !== "string" || value[member].trim().length === 0 || value[member].length > limit) {
+        throw new RecordShapeError("malformed_shape", `resolution.${member} must be bounded non-empty text`);
+      }
+    }
+    const codes = value["findingCodes"];
+    if (!Array.isArray(codes) || codes.length === 0 || new Set(codes).size !== codes.length ||
+        codes.some((code) => typeof code !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(code))) {
+      throw new RecordShapeError("malformed_shape", "resolution.findingCodes must name unique bounded finding codes");
+    }
+    if (typeof value["policyDigest"] !== "string" || !/^[0-9a-f]{64}$/.test(value["policyDigest"])) {
+      throw new RecordShapeError("malformed_shape", "resolution.policyDigest must be a sha256 digest");
     }
   } else {
     throw new RecordShapeError("malformed_shape", `resolution.kind must be "evidence" or "waiver"`);

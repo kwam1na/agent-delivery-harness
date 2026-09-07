@@ -1325,6 +1325,217 @@
           }
         }
       ]
+    },
+    {
+      "kind": "context.saved",
+      "accept": [
+        {
+          "name": "bounded recovery observation",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-06T00:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "context.saved",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "spec": "ordinary-run-context/1",
+              "contract": {
+                "objective": "Ship change",
+                "acceptanceCriteria": [
+                  "Tests pass"
+                ],
+                "finishLine": "merge-ready"
+              },
+              "stage": "review",
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "candidateBinding": {
+                "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "identity": "deliverable-tree/v1",
+                "baseRef": "origin/main",
+                "baseTipSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "mergeBaseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "workspaceId": "workspace-1"
+              },
+              "policyDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "release": {
+                "runtimeVersion": "0.2.0",
+                "releaseId": "linear-v2",
+                "profile": "linear",
+                "archiveSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              }
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "an observation never carries executable instructions",
+          "codes": [
+            "unknown_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-06T00:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "context.saved",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "spec": "ordinary-run-context/1",
+              "contract": {
+                "objective": "Ship change",
+                "acceptanceCriteria": [
+                  "Tests pass"
+                ],
+                "finishLine": "merge-ready"
+              },
+              "stage": "review",
+              "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "candidateBinding": {
+                "deliverableDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "identity": "deliverable-tree/v1",
+                "baseRef": "origin/main",
+                "baseTipSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "mergeBaseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "workspaceId": "workspace-1"
+              },
+              "policyDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "release": {
+                "runtimeVersion": "0.2.0",
+                "releaseId": "linear-v2",
+                "profile": "linear",
+                "archiveSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              },
+              "command": "never-execute"
+            },
+            "candidateTreeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "action.intent",
+      "accept": [
+        {
+          "name": "bounded recovery observation",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-06T00:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "action.intent",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "actionId": "merge-1",
+              "operation": "merge",
+              "reference": "repo/pr/1"
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "an observation never carries executable instructions",
+          "codes": [
+            "unknown_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-06T00:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "action.intent",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "actionId": "merge-1",
+              "operation": "merge",
+              "reference": "repo/pr/1",
+              "command": "never-execute"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "action.observed",
+      "accept": [
+        {
+          "name": "bounded recovery observation",
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-06T00:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "action.observed",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "actionId": "merge-1",
+              "outcome": "succeeded",
+              "reference": "repo/commit/abc"
+            }
+          }
+        }
+      ],
+      "reject": [
+        {
+          "name": "an observation never carries executable instructions",
+          "codes": [
+            "unknown_member"
+          ],
+          "value": {
+            "version": "run-event/1",
+            "runId": "run-0001",
+            "seq": 1,
+            "at": "2026-09-06T00:00:00Z",
+            "repo": {
+              "commonDir": "/tmp/repo/.git"
+            },
+            "kind": "action.observed",
+            "actor": {
+              "role": "executor"
+            },
+            "attestation": "self",
+            "payload": {
+              "actionId": "merge-1",
+              "outcome": "succeeded",
+              "reference": "repo/commit/abc",
+              "command": "never-execute"
+            }
+          }
+        }
+      ]
     }
   ],
   "envelope": {
