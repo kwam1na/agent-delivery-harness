@@ -22,6 +22,7 @@ import {
   RUN_JOURNAL_REQUIRED_ENTRIES,
   runJournalCarries,
   runPrimaryTicket,
+  projectRunActivities,
   type RunEvent,
   type RunJournalEvaluation,
   type RunJournalRequiredEntry,
@@ -30,6 +31,21 @@ import { harnessConfigPresentAt, oneLine, oneLineOf } from "./run-surface.ts";
 
 /** The three labels every readout carries, so no reader mistakes this for evidence. */
 export const READOUT_LABELS = "self-attested; observability, not evidence; unbound to a record";
+
+/** A single progress view shared by renderers; callers supply their observation clock. */
+export function projectRunProgress(events: readonly RunEvent[], now: string, freshnessWindowMs?: number) {
+  const projection = projectRunActivities(events, { now, ...(freshnessWindowMs === undefined ? {} : { freshnessWindowMs }) });
+  const latestFindings = new Map<string, (typeof projection.findings)[number]>();
+  for (const finding of projection.findings) {
+    if (finding.current) latestFindings.set(String(finding.payload["findingId"]), finding);
+  }
+  return {
+    asOf: now,
+    ...projection,
+    currentFindings: [...latestFindings.values()],
+    findingsCoverage: events.some(e => e.kind === "finding.observed") ? "reported" as const : "unreported" as const,
+  };
+}
 
 export function costLabel(value: unknown): string {
   const cost = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
@@ -40,10 +56,23 @@ export function costLabel(value: unknown): string {
 
 /** Aggregate only comparable review counters; the run-wide counter overlaps them. */
 export function projectCosts(events: readonly RunEvent[]) {
-  const closed = events.filter((event) => event.kind === "review.round.closed");
+  const allClosed = events.filter((event) => event.kind === "review.round.closed");
+  // v2 round costs are reported cumulative snapshots. Repeated/reopened round
+  // snapshots cannot be summed as independent consumption. Keep the latest
+  // comparable value and mark coverage partial when supersession occurred.
+  const snapshots = new Map<string, RunEvent>();
+  for (const event of allClosed) {
+    const payload = payloadOf(event);
+    const cost = payload["cost"] as Record<string, unknown>;
+    const key = event.version === "run-event/2"
+      ? JSON.stringify([payload["roundId"], cost["reportedBy"], cost["unit"] ?? "unreported"])
+      : `legacy-${event.seq}`;
+    snapshots.set(key, event);
+  }
+  const closed = [...snapshots.values()];
   const totals = new Map<string, { unit: string; reportedBy: string; total: number | null }>();
   let unreportedEntries = 0;
-  let partial = events.filter((event) => event.kind === "review.round.opened").length !== closed.length;
+  let partial = allClosed.length !== closed.length || events.filter((event) => event.kind === "review.round.opened").length !== closed.length;
   for (const event of closed) {
     const cost = payloadOf(event)["cost"] as Record<string, unknown>;
     if (cost["coverage"] === "unreported") {

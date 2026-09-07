@@ -372,6 +372,9 @@ async function recordCommandCompletion(input: {
     const { store, commonDir, worktreeKey } = resolved.surface;
     const current = await store.current(worktreeKey);
     if (!current.ok || current.runId === undefined) return;
+    const history = await store.read(current.runId);
+    if (!history.ok) return;
+    const version = history.events[0]?.version ?? "run-event/1";
     await store.append(
       current.runId,
       buildRunEvent({
@@ -379,6 +382,8 @@ async function recordCommandCompletion(input: {
         commonDir,
         kind: "command.completed",
         role: "cli",
+        version,
+        ...(version === "run-event/2" ? { eventId: randomUUID() } : {}),
         payload: { command: input.command, outcome: outcomeOfExit(input.exitCode), durationMs: input.durationMs,
           ...(input.exitCode === EXIT_OK && input.digest !== undefined ? { digest: input.digest } : {}) },
       }),

@@ -47,6 +47,8 @@ import {
 
 /** The family's spec string; `version` is the envelope member that carries it. */
 export const RUN_EVENT_SPEC = "run-event/1";
+export const RUN_EVENT_SPEC_V2 = "run-event/2";
+export type RunEventVersion = typeof RUN_EVENT_SPEC | typeof RUN_EVENT_SPEC_V2;
 
 /**
  * Run ids name FILES in the store, so their charset is deliberately narrower
@@ -80,7 +82,7 @@ export const MAX_RUN_LENSES = 32;
  * rejected, exactly as the spine's `summary` and `reason` are. Every OTHER
  * member of this family is structural and rejects on a secret.
  */
-export const RUN_FREE_TEXT_MEMBERS: ReadonlySet<string> = new Set(["rationale", "summary", "choice", "cited", "fork"]);
+export const RUN_FREE_TEXT_MEMBERS: ReadonlySet<string> = new Set(["rationale", "summary", "choice", "cited", "fork", "nextStep", "reason", "nextAction", "scope", "resolution"]);
 
 /** Who wrote the event. The store, not `emit`, decides which role is legal per kind. */
 export const RUN_ACTOR_ROLES = Object.freeze(["cli", "executor"] as const);
@@ -101,7 +103,7 @@ export const RUN_GATE_REPORTED_OUTCOMES = Object.freeze(["pass", "fail", "blocke
 export const RUN_ENDED_RESULTS = Object.freeze(["complete", "partial", "blocked"] as const);
 
 /** The v1 kind vocabulary, in the order the plan's payload table states it. */
-export const RUN_EVENT_KINDS = Object.freeze([
+export const RUN_EVENT_KINDS_V1 = Object.freeze([
   "run.started",
   "run.ended",
   "ticket.read",
@@ -118,6 +120,10 @@ export const RUN_EVENT_KINDS = Object.freeze([
   "context.saved",
   "action.intent",
   "action.observed",
+] as const);
+export const RUN_EVENT_KINDS = Object.freeze([...RUN_EVENT_KINDS_V1,
+  "activity.observed", "wait.started", "wait.resolved", "finding.observed",
+  "report.referenced", "artifact.referenced", "finish.step.observed",
 ] as const);
 export type RunEventKind = (typeof RUN_EVENT_KINDS)[number];
 
@@ -279,7 +285,7 @@ const workflow: MemberCheck = (value, at, collector) => {
 
 // ── Payload tables ─────────────────────────────────────────────────────────
 
-const PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> = Object.freeze({
+const PAYLOAD_MEMBERS: Readonly<Record<(typeof RUN_EVENT_KINDS_V1)[number], readonly MemberRule[]>> = Object.freeze({
   "context.saved": [
     { name: "spec", check: oneOf(["ordinary-run-context/1"]) },
     { name: "contract", check: contract },
@@ -382,6 +388,62 @@ const PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> = O
   ],
 });
 
+/** v2 is opt-in; no new member is admitted under a v1 envelope. */
+export const RUN_ACTIVITY_STATES = ["queued", "running", "waiting", "completed", "failed", "interrupted"] as const;
+export type RunActivityState = (typeof RUN_ACTIVITY_STATES)[number];
+const binding: readonly MemberRule[] = [
+  { name: "activityId", check: runStoreId }, { name: "attemptId", check: runStoreId },
+  { name: "candidateTreeSha", check: treeSha },
+];
+const roundBinding: readonly MemberRule[] = [
+  { name: "roundId", check: runStoreId, required: false },
+  { name: "round", check: positiveInt, required: false },
+  { name: "lensId", check: providerId, required: false },
+];
+const V2_PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> = {
+  ...PAYLOAD_MEMBERS,
+  "run.started": [...PAYLOAD_MEMBERS["run.started"], { name: "predecessorRunId", check: runStoreId, required: false }],
+  "review.round.opened": [...PAYLOAD_MEMBERS["review.round.opened"],
+    { name: "roundId", check: runStoreId }, { name: "bound", check: positiveInt, required: false },
+    { name: "grace", check: (v,a,c) => { if(typeof v !== "boolean") malformed(c,a,"expected a boolean"); }, required: false },
+    { name: "reopensRoundId", check: runStoreId, required: false }],
+  "review.round.closed": [...PAYLOAD_MEMBERS["review.round.closed"], { name: "roundId", check: runStoreId }],
+  "activity.observed": [...binding, ...roundBinding,
+    { name: "state", check: oneOf(RUN_ACTIVITY_STATES) },
+    { name: "owner", check: label }, { name: "phase", check: label },
+    { name: "supersedesAttemptId", check: runStoreId, required: false },
+    { name: "nextStep", check: freeText, required: false },
+    { name: "verdict", check: oneOf(["approved", "changes-requested", "unknown"]), required: false },
+    { name: "cost", check: cost, required: false }],
+  "wait.started": [...binding,
+    { name: "waitId", check: runStoreId }, { name: "owner", check: label },
+    { name: "waitingOn", check: oneOf(["human", "agent", "external", "unknown"]) },
+    { name: "reason", check: freeText }, { name: "nextAction", check: freeText },
+    { name: "scope", check: freeText }, { name: "reference", check: httpUrl, required: false }],
+  "wait.resolved": [...binding, { name: "waitId", check: runStoreId },
+    { name: "resolution", check: freeText }, { name: "scope", check: freeText }],
+  "finding.observed": [...binding, ...roundBinding,
+    { name: "findingId", check: runStoreId }, { name: "reportId", check: runStoreId },
+    { name: "state", check: oneOf(["unresolved", "resolved", "deferred"]) },
+    { name: "severity", check: oneOf(["P0", "P1", "P2", "P3"]) },
+    { name: "deferredIssueId", check: ticketId, required: false }],
+  "report.referenced": [...binding, ...roundBinding,
+    { name: "reportId", check: runStoreId }, { name: "role", check: oneOf(["review", "reduction", "clarification", "partial-output"]) },
+    { name: "artifactId", check: runStoreId, required: false },
+    { name: "originatingReportId", check: runStoreId, required: false },
+    { name: "findingId", check: runStoreId, required: false },
+    { name: "availability", check: oneOf(["referenced", "unavailable"]) },
+    { name: "reason", check: freeText, required: false }],
+  "artifact.referenced": [...binding, ...roundBinding,
+    { name: "artifactId", check: runStoreId }, { name: "digest", check: digest },
+    { name: "sizeBytes", check: nonNegativeInt }, { name: "mediaType", check: label },
+    { name: "producer", check: providerId }],
+  "finish.step.observed": [ { name: "stepId", check: runStoreId },
+    { name: "candidateTreeSha", check: treeSha }, { name: "name", check: label },
+    { name: "state", check: oneOf(["pending", "running", "completed", "deferred", "unknown"]) },
+    { name: "owner", check: label }, { name: "reason", check: freeText, required: false }],
+};
+
 /** The kinds whose payload owns each envelope-mirrored member. */
 const MIRRORED_MEMBERS = Object.freeze(["ticket", "candidateTreeSha"] as const);
 
@@ -397,9 +459,10 @@ const ACTOR_MEMBERS: readonly MemberRule[] = [
   { name: "id", check: providerId, required: false },
 ];
 
-function envelopeMembers(withSeq: boolean): readonly MemberRule[] {
+function envelopeMembers(withSeq: boolean, v2: boolean): readonly MemberRule[] {
   return [
-    { name: "version", check: oneOf([RUN_EVENT_SPEC]) },
+    { name: "version", check: oneOf([RUN_EVENT_SPEC, RUN_EVENT_SPEC_V2]) },
+    ...(v2 ? [{ name: "eventId", check: runStoreId }] : []),
     { name: "runId", check: runStoreId },
     ...(withSeq ? [{ name: "seq", check: positiveInt }] : []),
     { name: "at", check: instant },
@@ -425,7 +488,8 @@ export interface RunEventActor {
 
 /** The envelope as it reaches the store: `seq` is the store's to assign. */
 export interface RunEventInput {
-  readonly version: typeof RUN_EVENT_SPEC;
+  readonly version: RunEventVersion;
+  readonly eventId?: string;
   readonly runId: string;
   readonly at: string;
   readonly repo: RunEventRepo;
@@ -458,19 +522,31 @@ export function validateRunEvent(value: unknown, options: { readonly seqAssigned
     collector.emit("not_an_object", "", "expected a JSON object");
     return collector.verdict();
   }
-  if (value["version"] !== RUN_EVENT_SPEC) {
+  const v2 = value["version"] === RUN_EVENT_SPEC_V2;
+  if (value["version"] !== RUN_EVENT_SPEC && !v2) {
     collector.emit("unsupported_spec", "/version", `expected exactly ${JSON.stringify(RUN_EVENT_SPEC)}`);
     return collector.verdict();
   }
   const kind = value["kind"];
-  if (!isRunEventKind(kind)) {
+  if (!isRunEventKind(kind) || (!v2 && !(RUN_EVENT_KINDS_V1 as readonly string[]).includes(kind))) {
     collector.emit("unknown_kind", "/kind", "kind is not defined by the run-event/1 vocabulary");
     return collector.verdict();
   }
 
-  checkClosed(value, "", envelopeMembers(withSeq), collector);
+  checkClosed(value, "", envelopeMembers(withSeq, v2), collector);
   const payload = value["payload"];
-  checkClosed(payload, "/payload", PAYLOAD_MEMBERS[kind], collector);
+  checkClosed(payload, "/payload", v2 ? V2_PAYLOAD_MEMBERS[kind] : PAYLOAD_MEMBERS[kind as (typeof RUN_EVENT_KINDS_V1)[number]], collector);
+  if (v2 && isSpineRecord(payload)) {
+    if (payload["lensId"] !== undefined && (payload["roundId"] === undefined || payload["round"] === undefined)) {
+      collector.emit("unsupported_combination", "/payload/lensId", "a review lens requires roundId and round");
+    }
+    if (kind === "finding.observed" && payload["state"] === "deferred" && payload["deferredIssueId"] === undefined) {
+      collector.emit("unsupported_combination", "/payload/deferredIssueId", "a deferred finding requires its follow-up issue");
+    }
+    if (kind === "report.referenced" && (payload["availability"] === "referenced" ? payload["artifactId"] === undefined : payload["reason"] === undefined)) {
+      collector.emit("unsupported_combination", "/payload/availability", "a referenced report requires artifactId; unavailable output requires reason");
+    }
+  }
 
   // The envelope is what every reader reads; the payload is what the emitter
   // wrote. They agree exactly, on every kind, or the event is not admissible.

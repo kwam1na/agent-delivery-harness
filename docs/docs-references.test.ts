@@ -121,6 +121,7 @@ describe("the documentation's references", () => {
       "docs/portable-evidence.md",
       "docs/product-artifacts.md",
       "docs/provider-guide.md",
+      "docs/run-progress.md",
       "docs/spec-errata.md",
     ]);
   });

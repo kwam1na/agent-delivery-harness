@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { RUN_EVENT_KINDS, validateRunEvent } from "./run-event.ts";
+import { RUN_EVENT_KINDS_V1 as RUN_EVENT_KINDS, validateRunEvent } from "./run-event.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 

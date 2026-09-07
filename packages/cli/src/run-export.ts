@@ -1,6 +1,6 @@
 /** Retained observability, projected and checked by the same product code. */
 import { canonicalize, evaluateRunJournal, RUN_STORE_ID, validateRunEvent, type RunEvent } from "@agent-delivery-harness/kernel";
-import { READOUT_LABELS, projectCosts, readoutOf, summarize } from "./run-projection.ts";
+import { READOUT_LABELS, projectCosts, projectRunProgress, readoutOf, summarize } from "./run-projection.ts";
 
 export function buildRunExport(input: {
   readonly runId: string;
@@ -8,8 +8,9 @@ export function buildRunExport(input: {
   readonly rootDir?: string;
   readonly refusedAppends?: readonly unknown[];
 }) {
+  const v2 = input.events[0]?.version === "run-event/2";
   return {
-    spec: "delivery-run-export/1" as const,
+    spec: v2 ? "delivery-run-export/2" as const : "delivery-run-export/1" as const,
     labels: READOUT_LABELS,
     runId: input.runId,
     events: input.events,
@@ -17,6 +18,9 @@ export function buildRunExport(input: {
     costs: projectCosts(input.events),
     readout: readoutOf(input.events, evaluateRunJournal(input.events), input.rootDir),
     refusedAppends: input.refusedAppends ?? [],
+    // Exported progress is a historical projection at the last observation,
+    // never a claim about whether the producer is executing now.
+    ...(v2 ? { progress: projectRunProgress(input.events, input.events.at(-1)?.at ?? "") } : {}),
   };
 }
 
@@ -32,14 +36,17 @@ export function parseRunExport(text: string): RunExportParseResult {
   const invalid = { ok: false, code: "run_export_invalid" } as const;
   try {
     const value: unknown = JSON.parse(text);
-    if (!isRecord(value) || value["spec"] !== "delivery-run-export/1" || value["labels"] !== READOUT_LABELS ||
+    if (!isRecord(value) || !["delivery-run-export/1", "delivery-run-export/2"].includes(String(value["spec"])) || value["labels"] !== READOUT_LABELS ||
         typeof value["runId"] !== "string" || value["runId"].length > 128 || !RUN_STORE_ID.test(value["runId"]) ||
         !Array.isArray(value["events"]) || !Array.isArray(value["refusedAppends"]) || !isRecord(value["readout"])) return invalid;
-    if (Object.keys(value).sort().join(",") !== "costs,events,labels,readout,refusedAppends,runId,spec,summary") return invalid;
-    for (const event of value["events"]) {
-      if (!validateRunEvent(event).ok || !isRecord(event) || event["runId"] !== value["runId"]) return invalid;
+    const v2 = value["spec"] === "delivery-run-export/2";
+    if (Object.keys(value).sort().join(",") !== (v2 ? "costs,events,labels,progress,readout,refusedAppends,runId,spec,summary" : "costs,events,labels,readout,refusedAppends,runId,spec,summary")) return invalid;
+    for (const [index, event] of value["events"].entries()) {
+      if (!validateRunEvent(event).ok || !isRecord(event) || event["runId"] !== value["runId"] ||
+          event["seq"] !== index + 1 || event["version"] !== (v2 ? "run-event/2" : "run-event/1")) return invalid;
     }
     const expected = buildRunExport({ runId: value["runId"], events: value["events"] as RunEvent[] });
+    if (expected.spec !== value["spec"] || canonicalize(value["progress"] ?? null) !== canonicalize(expected.progress ?? null)) return invalid;
     if (canonicalize(value["summary"]) !== canonicalize(expected.summary) ||
         canonicalize(value["costs"]) !== canonicalize(expected.costs)) return invalid;
     // The optional note describes config presence in the exporting workspace;

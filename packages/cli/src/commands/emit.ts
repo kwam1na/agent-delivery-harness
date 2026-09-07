@@ -41,13 +41,15 @@ import {
 } from "../run-surface.ts";
 import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescriptor } from "../boundary.ts";
 
-const USAGE = "Usage: delivery-harness emit <kind> [--run <id>] [--json <payload>] [--force]";
+const USAGE = "Usage: delivery-harness emit <kind> [--run <id>] [--json <payload>] [--force] [--version 1|2] [--event-id <id>]";
 
 interface ParsedArgs {
   readonly kind: string;
   readonly run?: string;
   readonly json?: string;
   readonly force: boolean;
+  readonly version?: "run-event/1" | "run-event/2";
+  readonly eventId?: string;
 }
 
 type ArgParse = { readonly ok: true; readonly args: ParsedArgs } | { readonly ok: false; readonly message: string };
@@ -57,6 +59,8 @@ function parseArgs(args: readonly string[]): ArgParse {
   let run: string | undefined;
   let json: string | undefined;
   let force = false;
+  let version: "run-event/1" | "run-event/2" | undefined;
+  let eventId: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index]!;
@@ -64,11 +68,16 @@ function parseArgs(args: readonly string[]): ArgParse {
       force = true;
       continue;
     }
-    if (token === "--run" || token === "--json") {
+    if (token === "--run" || token === "--json" || token === "--version" || token === "--event-id") {
       const value = args[index + 1];
       if (value === undefined) return { ok: false, message: `${token} needs a value.\n${USAGE}` };
       if (token === "--run") run = value;
-      else json = value;
+      else if (token === "--json") json = value;
+      else if (token === "--event-id") eventId = value;
+      else {
+        if (value !== "1" && value !== "2") return { ok: false, message: `--version must be 1 or 2.\n${USAGE}` };
+        version = value === "1" ? "run-event/1" : "run-event/2";
+      }
       index += 1;
       continue;
     }
@@ -78,7 +87,8 @@ function parseArgs(args: readonly string[]): ArgParse {
   }
 
   if (kind === undefined) return { ok: false, message: `emit needs a kind.\n${USAGE}` };
-  return { ok: true, args: { kind, force, ...(run === undefined ? {} : { run }), ...(json === undefined ? {} : { json }) } };
+  return { ok: true, args: { kind, force, ...(run === undefined ? {} : { run }), ...(json === undefined ? {} : { json }),
+    ...(version === undefined ? {} : { version }), ...(eventId === undefined ? {} : { eventId }) } };
 }
 
 /**
@@ -154,7 +164,11 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
     const store = surface.store;
 
     if (kind === "run.started") {
-      return startRun(surface, force, parsePayload(parsed.args.json ?? (await context.readStdin())));
+      const version = parsed.args.version ?? "run-event/1";
+      if ((version === "run-event/2") !== (parsed.args.eventId !== undefined)) {
+        return { kind: "usage", message: `Version 2 requires --event-id; version 1 does not accept it.\n${USAGE}` };
+      }
+      return startRun(surface, force, parsePayload(parsed.args.json ?? (await context.readStdin())), version, parsed.args.eventId);
     }
 
     const runId = await resolveRun(store, surface, named);
@@ -171,8 +185,18 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
       };
     }
 
+    const history = await store.read(runId);
+    if (!history.ok) return { kind: "blocked", blockers: [noRun("the selected run is unreadable")] };
+    const version = history.events[0]?.version ?? "run-event/1";
+    if (parsed.args.version !== undefined && parsed.args.version !== version) {
+      return { kind: "usage", message: "A run's writer version cannot change. End it and start an explicitly linked successor run." };
+    }
+    if ((version === "run-event/2") !== (parsed.args.eventId !== undefined)) {
+      return { kind: "usage", message: `Version 2 requires --event-id; version 1 does not accept it.\n${USAGE}` };
+    }
     const payload = parsePayload(parsed.args.json ?? (await context.readStdin()));
-    const event = buildRunEvent({ runId, commonDir: surface.commonDir, kind, role: "executor", payload });
+    const event = buildRunEvent({ runId, commonDir: surface.commonDir, kind, role: "executor", payload, version,
+      ...(parsed.args.eventId === undefined ? {} : { eventId: parsed.args.eventId }) });
 
     // `command.completed` is the CLI's to write. The refusal is recorded in the
     // run's note through the store's one bounded note writer, so an attempt
@@ -199,7 +223,9 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
       };
     }
 
-    const appended = await store.append(runId, event);
+    // Resolve generated timestamps inside the append lock so concurrent retries
+    // retain the first observation instant while changed content still refuses.
+    const appended = await store.append(runId, event, { reuseExistingTimestamp: true });
     if (!appended.ok) {
       const first = appended.rejections[0];
       return {
@@ -243,7 +269,8 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
  * abandoned delivery. The removal is best-effort by construction: this command
  * has already decided to refuse, and a store failure may not change that.
  */
-async function startRun(surface: RunSurface, force: boolean, supplied: unknown): Promise<CommandResult> {
+async function startRun(surface: RunSurface, force: boolean, supplied: unknown,
+  version: "run-event/1" | "run-event/2", eventId?: string): Promise<CommandResult> {
   const store = surface.store;
   const existing = await store.current(surface.worktreeKey);
   const displaced = existing.ok ? existing.runId : undefined;
@@ -287,7 +314,8 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown):
 
   const appended = await store.append(
     runId,
-    buildRunEvent({ runId, commonDir: surface.commonDir, kind: "run.started", role: "executor", payload }),
+    buildRunEvent({ runId, commonDir: surface.commonDir, kind: "run.started", role: "executor", payload, version,
+      ...(eventId === undefined ? {} : { eventId }) }),
   );
   if (!appended.ok) {
     const first = appended.rejections[0];
