@@ -199,6 +199,7 @@ export {
   computePreparationFingerprint,
   evaluatePreparationReceipt,
   invalidatePreparationReceipt,
+  revokePreparationAttempt,
   publishPreparationReceipt,
   receiptFileName,
   resolveReceiptStorage,

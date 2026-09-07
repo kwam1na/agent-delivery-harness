@@ -51,6 +51,7 @@ import { BlockedError, createBlocker, sanitizedDetail, type Blocker, type NonEmp
 import { CANDIDATE_MODES, classifyCandidateDrift, type CandidateBinding, type CandidateMode } from "./candidate.types.ts";
 import type { HarnessConfig } from "./config.ts";
 import { digestCanonical } from "./digest.ts";
+import { computeDeliverableIdentity } from "./identity.ts";
 import { resolveRecordStorage, type RecordStorageOptions } from "./records.ts";
 import type { WorkspaceStorage } from "./records.types.ts";
 
@@ -154,9 +155,14 @@ export interface PreparationReceipt {
   readonly preparationFingerprint: string;
   /** Present on command-driven receipts; identifies the latest preparation attempt. */
   readonly attemptId?: string;
+  /** CLI mechanical success binding; absent on legacy receipts. */
+  readonly validationDigest?: string;
+  readonly policyDigest?: string;
 }
 
 export interface PreparationOptions extends RecordStorageOptions {
+  /** Only prepare may refresh a receipt after strict validation-equivalent movement. */
+  readonly allowValidationEquivalent?: boolean;
   /** Portable verification reads declared wiring from the verified candidate tree. */
   readonly readWiring?: (repoPath: string) => Promise<Uint8Array>;
   /** Overrides the declared harness version. Tests use it; callers do not. */
@@ -164,6 +170,8 @@ export interface PreparationOptions extends RecordStorageOptions {
 }
 
 export interface PreparationInput {
+  /** Supplied by CLI prepare after successful mechanics or proven receipt reuse. */
+  readonly validationDigest?: string;
   readonly config: HarnessConfig;
   readonly candidate: PreparationCandidate;
   readonly attemptId?: string;
@@ -397,6 +405,30 @@ export async function invalidatePreparationReceipt(
   }
 }
 
+/**
+ * Revoke unsuccessful preparation without replacing a newer attempt. Open the existing
+ * token before checking its value, then mutate that same inode: if ordinary
+ * preparation replaces the pathname meanwhile, its new token is untouched.
+ * The receipt remains on disk but cannot authorize against a revoked token.
+ */
+export async function revokePreparationAttempt(
+  rootDir: string, config: HarnessConfig, attemptId: string, options: PreparationOptions = {},
+): Promise<void> {
+  const { storageDir } = await resolveReceiptStorage(rootDir, options);
+  const receiptPath = path.join(storageDir, receiptFileName(config.gateId));
+  let handle;
+  try {
+    handle = await open(`${receiptPath}.attempt`, "r+");
+    if (await handle.readFile("utf8") !== attemptId) return;
+    await handle.write(randomUUID(), 0, "utf8");
+    await handle.sync();
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw storeUnwritable(receiptPath, error);
+  } finally {
+    await handle?.close();
+  }
+}
+
 async function currentAttempt(receiptPath: string): Promise<string | undefined> {
   try {
     return await readFile(`${receiptPath}.attempt`, "utf8");
@@ -458,6 +490,7 @@ export async function publishPreparationReceipt(
   const receipt = {
     ...buildReceipt(workspaceId, input.config.gateId, input.candidate, fingerprint),
     ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+    ...(input.validationDigest === undefined ? {} : { validationDigest: input.validationDigest, policyDigest: digestCanonical(input.config) }),
   };
   const destination = path.join(storageDir, receiptFileName(input.config.gateId));
   await requireCurrentAttempt(destination, input.attemptId);
@@ -535,10 +568,15 @@ function parseReceipt(value: unknown): PreparationReceipt | string {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return "the receipt is not a JSON object";
   const record = value as Record<string, unknown>;
 
-  const extra = Object.keys(record).filter((key) => key !== "attemptId" && !(RECEIPT_MEMBERS as readonly string[]).includes(key));
+  const extra = Object.keys(record).filter((key) => !["attemptId", "validationDigest", "policyDigest"].includes(key) && !(RECEIPT_MEMBERS as readonly string[]).includes(key));
   if (extra.length > 0) return `the receipt carries unknown members: ${extra.sort().join(", ")}`;
   if (record["attemptId"] !== undefined && (typeof record["attemptId"] !== "string" || record["attemptId"] === "")) {
     return "the receipt attemptId is not a non-empty string";
+  }
+
+  if ((record["validationDigest"] === undefined) !== (record["policyDigest"] === undefined) ||
+      ["validationDigest", "policyDigest"].some(key => record[key] !== undefined && (typeof record[key] !== "string" || !/^[a-f0-9]{64}$/.test(record[key] as string)))) {
+    return "the receipt validation and policy digests must be a pair of SHA-256 digests";
   }
 
   if (record["schemaVersion"] !== PREPARATION_RECEIPT_SCHEMA_VERSION) {
@@ -571,6 +609,7 @@ function parseReceipt(value: unknown): PreparationReceipt | string {
     candidateWorkspaceId: record["candidateWorkspaceId"] as string,
     preparationFingerprint: record["preparationFingerprint"] as string,
     ...(record["attemptId"] === undefined ? {} : { attemptId: record["attemptId"] as string }),
+    ...(record["validationDigest"] === undefined ? {} : { validationDigest: record["validationDigest"] as string, policyDigest: record["policyDigest"] as string }),
   };
 }
 
@@ -722,6 +761,17 @@ export async function evaluatePreparationReceipt(
     return failed("base_changed", `${receipt.baseRef} moved after the candidate was prepared`, receiptPath, workspaceId);
   }
 
+  // Only preparation refresh may reuse mechanical success. Admission still
+  // requires the exact receipt coordinates. The narrower projection keeps
+  // report/solution changes significant even when review identity excludes them.
+  if (options.allowValidationEquivalent && receipt.validationDigest !== undefined &&
+      receipt.policyDigest === digestCanonical(input.config) && !drift.has("workspace_changed") &&
+      receipt.identityToken === input.candidate.deliverable.identity &&
+      receipt.validationDigest === await computeDeliverableIdentity({ rootDir, treeSha: input.candidate.treeSha,
+        config: { ...input.config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: input.config.recordNeutral } })) {
+    return { prepared: true, receipt, receiptPath, workspaceId };
+  }
+
   // ── stale ──
   if (drift.has("raw_tree_changed") || drift.has("deliverable_identity_changed") || drift.has("workspace_changed")) {
     return failed("stale", `the candidate changed after preparation: ${[...drift].sort().join(", ")}`, receiptPath, workspaceId);
@@ -746,5 +796,8 @@ export async function evaluatePreparationReceipt(
     );
   }
 
+  if (options.allowValidationEquivalent) {
+    return failed("stale", "Mechanical success has no matching strict validation and policy binding", receiptPath, workspaceId);
+  }
   return { prepared: true, receipt, receiptPath, workspaceId };
 }

@@ -340,18 +340,35 @@ from the repository root without shell interpolation; include its scripts and
 configuration in `preparationWiringPaths`. Omission or an empty list keeps the
 capture-only preparation available to repositories without mechanical checks.
 
-A new attempt first invalidates any earlier receipt. Checks then run in order,
+Ordinary preparation and refreshes that fall back to checks first invalidate
+any earlier receipt. Checks then run in order,
 stopping at the first failed exit, timeout, spawn error, or output overflow
 (one MiB per stream). Failure reports a typed blocker and bounded output from
 stderr and stdout. Only successful checks followed by an unchanged candidate, base, and
 wiring fingerprint publish a receipt. Changing command arguments, order, or
 timeouts also changes the preparation fingerprint. Repairing a failed check
 requires a new successful preparation; an earlier success cannot authorize it.
-Each attempt replaces a worktree-local token next to the receipt. Publication
+Each ordinary or fallback attempt replaces a worktree-local token next to the
+receipt. Publication
 and evaluation check the token, so an older overlapping attempt cannot restore
 a usable receipt after a newer attempt starts, including when the newer one
 fails. The next preparation supersedes interrupted attempts without a lock or
 manual cleanup.
+
+Ordinary `prepare` always runs the configured mechanical checks, including on
+an unchanged candidate. After staging or committing record-neutral delivery
+artifacts, `delivery-harness prepare --refresh-record-neutral` can refresh the
+receipt without rerunning those checks. Reuse requires an earlier successful
+receipt with the same strict `validation-tree/v1` projection (excluding only
+`recordNeutral` paths), policy, preparation wiring, workspace and base. A
+missing or legacy receipt, or any mismatch, falls back to full mechanical
+checks. Review-neutral reports or solution notes still require checks unless
+they are also explicitly record-neutral. The refresh publishes current exact
+candidate coordinates under the original successful attempt's token; ordinary
+admission continues to require those exact coordinates. A concurrent attempt
+can revoke that success before refresh publication. Failed or interrupted
+preparation revokes only its own attempt, preserving any newer successful
+attempt.
 
 ```sh
 delivery-harness prepare

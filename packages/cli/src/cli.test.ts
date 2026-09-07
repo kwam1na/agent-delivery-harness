@@ -120,6 +120,17 @@ function makeConfig(overrides: Partial<HarnessConfigInput> = {}): HarnessConfig 
 // ── Repo fixtures ────────────────────────────────────────────────────────────
 
 describe("mechanical preparation", () => {
+  it("documents the opt-in receipt refresh and rejects unknown preparation arguments", async () => {
+    const dir = await initRepo();
+    const { runtime, out } = makeRuntime(dir, makeConfig(), await makeArtifacts());
+    expect(await runCli(["prepare", "--help"], runtime)).toBe(EXIT_OK);
+    expect(out.join("")).toContain("--refresh-record-neutral");
+    expect(out.join("")).toContain("Ordinary prepare always runs mechanical checks");
+    expect(await runCli(["prepare", "--unknown"], runtime)).toBe(EXIT_USAGE);
+    expect(await runCli(["prepare", "--refresh-record-neutral", "extra"], runtime)).toBe(EXIT_USAGE);
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_POLICY);
+  });
+
   it("revokes an earlier receipt before replacement commands execute", async () => {
     const dir = await initRepo();
     const { storageDir } = await resolveReceiptStorage(dir);

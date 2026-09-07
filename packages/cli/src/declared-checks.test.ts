@@ -4,10 +4,42 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
-import { createArtifactsPort, defineHarnessConfig, type HarnessConfigInput } from "@agent-delivery-harness/kernel";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createArtifactsPort, defineHarnessConfig, receiptFileName, resolveReceiptStorage, type HarnessConfigInput } from "@agent-delivery-harness/kernel";
 import adopterConfig from "../../../harness.config.ts";
 import { runCli, type CliRuntime } from "./index.ts";
+
+// Scheduling barrier after the real evaluation: no receipt or result is mocked.
+const refreshPause = vi.hoisted(() => ({
+  enabled: false,
+  reached: undefined as undefined | (() => void),
+  resume: undefined as undefined | Promise<void>,
+}));
+const publicationPause = vi.hoisted(() => ({
+  enabled: false,
+  reached: undefined as undefined | (() => void),
+  resume: undefined as undefined | Promise<void>,
+}));
+vi.mock("@agent-delivery-harness/kernel", async importOriginal => {
+  const actual = await importOriginal<typeof import("@agent-delivery-harness/kernel")>();
+  return { ...actual, evaluatePreparationReceipt: async (...args: Parameters<typeof actual.evaluatePreparationReceipt>) => {
+    const result = await actual.evaluatePreparationReceipt(...args);
+    if (refreshPause.enabled && args[2]?.allowValidationEquivalent && result.prepared) {
+      refreshPause.enabled = false;
+      refreshPause.reached!();
+      await refreshPause.resume;
+    }
+    return result;
+  }, publishPreparationReceipt: async (...args: Parameters<typeof actual.publishPreparationReceipt>) => {
+    const result = await actual.publishPreparationReceipt(...args);
+    if (publicationPause.enabled) {
+      publicationPause.enabled = false;
+      publicationPause.reached!();
+      await publicationPause.resume;
+    }
+    return result;
+  } };
+});
 
 const exec = promisify(execFile);
 const dirs: string[] = [];
@@ -35,6 +67,139 @@ async function fixture(command: readonly string[], outputs: string[] = [], timeo
 }
 
 describe("declared deterministic check providers", () => {
+  it.each([false, true])("does not republish success after an overlapping ordinary prepare (failed: %s)", async failed => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    f.setConfig({ ...f.config, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "const fs=require('fs');fs.appendFileSync('.git/mechanical','x');if(fs.existsSync('.git/fail'))process.exit(3)"], timeoutMs: 5000 }] });
+    expect(await f.run("prepare")).toBe(0);
+    let reached!: () => void, resume!: () => void;
+    const paused = new Promise<void>(resolve => { reached = resolve; });
+    refreshPause.resume = new Promise<void>(resolve => { resume = resolve; });
+    refreshPause.reached = reached;
+    refreshPause.enabled = true;
+    const refresh = runCli(["prepare", "--refresh-record-neutral"], f.runtime);
+    try {
+      await paused;
+      if (failed) await writeFile(path.join(f.dir, ".git/fail"), "fail");
+      expect(await runCli(["prepare"], f.runtime)).toBe(failed ? 1 : 0);
+    } finally {
+      refreshPause.enabled = false;
+      resume();
+    }
+    expect(await refresh).toBe(1);
+    expect(await runCli(["review-context"], f.runtime)).toBe(failed ? 1 : 0);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("xx");
+  }, 30_000);
+
+
+  it("an interrupted overlapping refresh revokes the shared prior success", async () => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    f.setConfig({ ...f.config, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "require('fs').appendFileSync('.git/mechanical','x')"], timeoutMs: 5000 }] });
+    expect(await f.run("prepare")).toBe(0);
+    let reached!: () => void, resume!: () => void;
+    const paused = new Promise<void>(resolve => { reached = resolve; });
+    refreshPause.resume = new Promise<void>(resolve => { resume = resolve; });
+    refreshPause.reached = reached;
+    refreshPause.enabled = true;
+    const refresh = runCli(["prepare", "--refresh-record-neutral"], f.runtime);
+    try {
+      await paused;
+      const controller = new AbortController(); controller.abort();
+      expect(await runCli(["prepare", "--refresh-record-neutral"], { ...f.runtime, signal: controller.signal })).toBe(130);
+    } finally {
+      refreshPause.enabled = false;
+      resume();
+    }
+    expect(await refresh).toBe(1);
+    expect(await f.run("review-context")).toBe(1);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("x");
+  }, 30_000);
+
+  it.each([false, true])("revokes ordinary preparation interrupted after publication without revoking a newer success (%s)", async newerSuccess => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    f.setConfig({ ...f.config, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "require('fs').appendFileSync('.git/mechanical','x')"], timeoutMs: 5000 }] });
+    let reached!: () => void, resume!: () => void;
+    const paused = new Promise<void>(resolve => { reached = resolve; });
+    publicationPause.resume = new Promise<void>(resolve => { resume = resolve; });
+    publicationPause.reached = reached;
+    publicationPause.enabled = true;
+    const controller = new AbortController();
+    const preparing = runCli(["prepare"], { ...f.runtime, signal: controller.signal });
+    try {
+      await paused;
+      if (newerSuccess) expect(await f.run("prepare")).toBe(0);
+      controller.abort();
+    } finally {
+      publicationPause.enabled = false;
+      resume();
+    }
+    expect(await preparing).toBe(130);
+    expect(await f.run("review-context")).toBe(newerSuccess ? 0 : 1);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe(newerSuccess ? "xx" : "x");
+  }, 30_000);
+
+  it("legacy receipts rerun mechanics before first explicit refresh", async () => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    f.setConfig({ ...f.config, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "require('fs').appendFileSync('.git/mechanical','x')"], timeoutMs: 5000 }] });
+    expect(await f.run("prepare")).toBe(0);
+    const { storageDir } = await resolveReceiptStorage(f.dir);
+    const file = path.join(storageDir, receiptFileName(f.config.gateId));
+    const receipt = JSON.parse(await readFile(file, "utf8"));
+    delete receipt.validationDigest; delete receipt.policyDigest;
+    await writeFile(file, JSON.stringify(receipt));
+    expect(await f.run("prepare", "--refresh-record-neutral")).toBe(0);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("xx");
+    expect(await f.run("prepare", "--refresh-record-neutral")).toBe(0);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("xx");
+  });
+  it("refreshes preparation only for unchanged strict validation, policy, wiring and base", async () => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    f.setConfig({ ...f.config, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "require('fs').appendFileSync('.git/mechanical','x')"], timeoutMs: 5000 }] });
+    const prepare = async () => { expect(await f.run("prepare", "--refresh-record-neutral"), f.err.join("\n")).toBe(0); };
+    const calls = () => readFile(path.join(f.dir, ".git/mechanical"), "utf8");
+    await prepare(); await prepare(); expect(await calls()).toBe("x");
+    await mkdir(path.join(f.dir, "delivery/records"), { recursive: true });
+    await writeFile(path.join(f.dir, "delivery/records/new.json"), "{}"); await f.git("add", ".");
+    expect(await f.run("gate")).toBe(1); // Refresh never relaxes admission itself.
+    await prepare(); expect(await calls()).toBe("x");
+    await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "neutral artifact");
+    await prepare(); expect(await calls()).toBe("x");
+    await mkdir(path.join(f.dir, "docs/reports"), { recursive: true });
+    await writeFile(path.join(f.dir, "docs/reports/new.html"), "report"); await f.git("add", ".");
+    await prepare(); expect(await calls()).toBe("xx");
+    await writeFile(path.join(f.dir, "source.ts"), "changed"); await f.git("add", ".");
+    await prepare(); expect(await calls()).toBe("xxx");
+    await writeFile(path.join(f.dir, "harness.config.ts"), "changed wiring"); await f.git("add", ".");
+    await prepare(); expect(await calls()).toBe("xxxx");
+    f.setConfig({ ...f.config, activationThreshold: 2, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "require('fs').appendFileSync('.git/mechanical','x')"], timeoutMs: 5000 }] });
+    await prepare(); expect(await calls()).toBe("xxxxx");
+    await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "source changes"); await f.git("branch", "-f", "origin/main", "HEAD");
+    await prepare(); expect(await calls()).toBe("xxxxxx");
+  }, 30_000);
+
+  it("invalidates preparation authority when a receipt refresh is interrupted", async () => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    f.setConfig({ ...f.config, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "require('fs').appendFileSync('.git/mechanical','x')"], timeoutMs: 5000 }] });
+    expect(await f.run("prepare")).toBe(0);
+    const controller = new AbortController(); controller.abort();
+    expect(await runCli(["prepare", "--refresh-record-neutral"], { ...f.runtime, signal: controller.signal })).toBe(130);
+    expect(await f.run("gate")).toBe(1);
+    expect(await f.run("prepare")).toBe(0);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("xx");
+  }, 30_000);
+
+  it("does not reuse mechanics after a failed preparation attempt", async () => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    f.setConfig({ ...f.config, preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "const fs=require('fs');fs.appendFileSync('.git/mechanical','x');if(fs.existsSync('.git/fail'))process.exit(3)"], timeoutMs: 5000 }] });
+    expect(await f.run("prepare")).toBe(0);
+    await writeFile(path.join(f.dir, "source.ts"), "changed"); await f.git("add", ".");
+    await writeFile(path.join(f.dir, ".git/fail"), "fail");
+    expect(await f.run("prepare")).toBe(1);
+    await f.git("restore", "--staged", "--worktree", "source.ts");
+    await rm(path.join(f.dir, ".git/fail"));
+    expect(await f.run("prepare", "--refresh-record-neutral")).toBe(0);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("xxx");
+  }, 30_000);
+
   it("verifies retained check outputs after the original ignored output disappears", async () => {
     const f = await fixture([process.execPath, "-e", "require('fs').writeFileSync('.git/result',Buffer.from([0,255,128,1]))"], [".git/result"]);
     f.setConfig({ ...f.config,

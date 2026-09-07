@@ -17,6 +17,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  computeDeliverableIdentity,
   createRunStore,
   defineHarnessConfig,
   gitNamespaceClearedEnvironment,
@@ -992,6 +993,51 @@ describe("emit, the boundary wrap, and runs", () => {
     // which is what makes the two exits above mean anything.
     expect((await cli(dir, ["check"], { loadConfig: undefined })).code).not.toBe(EXIT_OK);
   });
+
+  it("publishes the admitted strict validation projection and excludes only record-neutral paths", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const config = defineHarnessConfig({ ...makeConfig(), activationThreshold: 1000 });
+    const overrides = { loadConfig: async () => config };
+    const gateDigest = async (): Promise<unknown> => {
+      expect((await cli(dir, ["prepare"], overrides)).code).toBe(EXIT_OK);
+      const gated = await cli(dir, ["gate"], overrides);
+      expect(gated.code, gated.err).toBe(EXIT_OK);
+      const event = (await journalOf(dir, runId)).filter(event => event.kind === "command.completed" && event.payload["command"] === "gate").at(-1)!;
+      expect(event.actor.role).toBe("cli");
+      expect(event.payload["outcome"]).toBe("ok");
+      const expected = await computeDeliverableIdentity({ rootDir: dir, treeSha: await git(dir, "write-tree"),
+        config: { ...config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: config.recordNeutral } });
+      expect(event.payload["digest"]).toBe(expected);
+      return expected;
+    };
+    const initial = await gateDigest();
+    await mkdir(path.join(dir, "telemetry/delivery-runs"), { recursive: true });
+    await writeFile(path.join(dir, "telemetry/delivery-runs/record.json"), "{}\n");
+    await git(dir, "add", ".");
+    expect(await gateDigest()).toBe(initial);
+    await mkdir(path.join(dir, "docs/reports"), { recursive: true });
+    await writeFile(path.join(dir, "docs/reports/report.html"), "report");
+    await git(dir, "add", ".");
+    const report = await gateDigest();
+    expect(report).not.toBe(initial);
+    await writeFile(path.join(dir, "src.txt"), "changed source");
+    await git(dir, "add", ".");
+    expect(await gateDigest()).not.toBe(report);
+  }, 30_000);
+
+  it("omits success digests for failed and interrupted actual gates", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    expect((await cli(dir, ["gate"])).code).toBe(EXIT_POLICY);
+    expect((await cli(dir, ["prepare"])).code).toBe(EXIT_OK);
+    const controller = new AbortController();
+    controller.abort();
+    expect((await cli(dir, ["gate"], { signal: controller.signal })).code).toBe(130);
+    const gates = (await journalOf(dir, runId)).filter(event => event.kind === "command.completed" && event.payload["command"] === "gate");
+    expect(gates.map(event => event.payload["outcome"])).toEqual(["policy", "interrupted"]);
+    expect(gates.every(event => event.payload["digest"] === undefined)).toBe(true);
+  }, 30_000);
 
   it("wraps only the commands on the completion allowlist", async () => {
     const dir = await initRepo();

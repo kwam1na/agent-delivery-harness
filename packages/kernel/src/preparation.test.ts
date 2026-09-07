@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BlockedError, MAX_BLOCKER_DETAIL_LENGTH, renderBlockers } from "./blockers.ts";
 import { CANDIDATE_MODES, type CandidateMode } from "./candidate.types.ts";
 import { GATE_STRUCTURAL_FINDING_CODES } from "./blockers.ts";
@@ -45,6 +45,7 @@ import {
   computePreparationFingerprint,
   evaluatePreparationReceipt,
   invalidatePreparationReceipt,
+  revokePreparationAttempt,
   publishPreparationReceipt,
   receiptFileName,
   resolveReceiptStorage,
@@ -52,6 +53,27 @@ import {
   type PreparationEvaluation,
   type PreparationFailureClass,
 } from "./preparation.ts";
+
+// Pause only after reading the actual token through its actual open handle.
+// The interleaved writer uses normal preparation APIs and real filesystem IO.
+const revocationInterleave = vi.hoisted(() => ({ next: undefined as undefined | (() => Promise<void>) }));
+vi.mock("node:fs/promises", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args);
+    if (String(args[0]).endsWith(".attempt") && args[1] === "r+") {
+      const read = handle.readFile.bind(handle);
+      handle.readFile = (async (...readArgs: Parameters<typeof handle.readFile>) => {
+        const value = await read(...readArgs);
+        const next = revocationInterleave.next;
+        revocationInterleave.next = undefined;
+        if (next) await next();
+        return value;
+      }) as typeof handle.readFile;
+    }
+    return handle;
+  } };
+});
 
 const run = promisify(execFile);
 
@@ -172,6 +194,25 @@ async function tempRepo(label = "repo"): Promise<string> {
 // ── Fingerprint ────────────────────────────────────────────────────────────
 
 describe("the preparation fingerprint", () => {
+  it("preserves newer success when token pathname is replaced during revocation", async () => {
+    const tree = await tempTree();
+    const options = { storageRoot: tree.storageRoot };
+    const old = await invalidatePreparationReceipt(tree.rootDir, CONFIG, options);
+    await publishPreparationReceipt(tree.rootDir, { config: CONFIG, candidate: candidate(), attemptId: old }, options);
+    let newer = "";
+    revocationInterleave.next = async () => {
+      newer = await invalidatePreparationReceipt(tree.rootDir, CONFIG, options);
+      await publishPreparationReceipt(tree.rootDir, { config: CONFIG, candidate: candidate(), attemptId: newer }, options);
+    };
+    try {
+      await revokePreparationAttempt(tree.rootDir, CONFIG, old, options);
+    } finally {
+      revocationInterleave.next = undefined;
+    }
+    const evaluated = await evaluatePreparationReceipt(tree.rootDir, { config: CONFIG, candidate: candidate() }, options);
+    expect(evaluated.prepared).toBe(true);
+    if (evaluated.prepared) expect(evaluated.receipt.attemptId).toBe(newer);
+  });
   it("refuses an older receipt even if a racing writer restores its bytes after invalidation", async () => {
     const tree = await tempTree();
     const options = { storageRoot: tree.storageRoot };
