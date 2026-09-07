@@ -75,13 +75,15 @@ export default defineHarnessConfig({
     { id: "typecheck", command: ["npm", "run", "typecheck"], timeoutMs: 300000 },
   ],
 
-  providers: [{ id: "claude-code.ce-code-review", findingCodes: [] }],
+  // Gate-accepted evidence issuer; this label does not authenticate the host.
+  // Codex and Claude can each run the review through their native capabilities.
+  providers: [{ id: "delivery-harness.independent-review", findingCodes: [] }],
   obligations: [
     {
       id: "review.green",
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
-      providers: ["claude-code.ce-code-review"],
+      providers: ["delivery-harness.independent-review"],
       acceptedPayloadSpecs: ["review.green/1"],
       allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
       humanWaiverAllowed: true,

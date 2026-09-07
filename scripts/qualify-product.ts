@@ -699,13 +699,13 @@ function gateConfigInput(spec: DisposableSpec): Record<string, unknown> {
     ],
     ciPolicyEnvKey: "DELIVERY_HARNESS_CI_POLICY",
     preparationWiringPaths: ["harness.config.ts"],
-    providers: [{ id: "claude-code.ce-code-review", findingCodes: [] }],
+    providers: [{ id: "delivery-harness.independent-review", findingCodes: [] }],
     obligations: [
       {
         id: "review.green",
         activation: { kind: "relevant_change" },
         freshness: "exact_candidate",
-        providers: ["claude-code.ce-code-review"],
+        providers: ["delivery-harness.independent-review"],
         acceptedPayloadSpecs: ["review.green/1"],
         allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
         humanWaiverAllowed: true,

@@ -117,7 +117,7 @@ export default defineHarnessConfig({
   // Add `command: ["review-provider", "--stdio"]` only when this provider
   // implements the vendored delivery-provider-rails/1 contract. Without it,
   // the manual review-context / submit-evidence workflow below is unchanged.
-  providers: [{ id: "claude-code.ce-code-review", findingCodes: [] }],
+  providers: [{ id: "delivery-harness.independent-review", findingCodes: [] }],
   obligations: [
     {
       id: "review.green",
@@ -131,7 +131,7 @@ export default defineHarnessConfig({
       // (both default true) opt out of the other two signals independently.
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
-      providers: ["claude-code.ce-code-review"],
+      providers: ["delivery-harness.independent-review"],
       // Optional quantifier over `providers`: "all" (also the default when
       // absent) requires every provider; "existential" is satisfied by any one.
       providerPolicy: "all",
@@ -207,6 +207,12 @@ review. Every field it writes is load-bearing; the
 In a real adoption the review happens between the capture and the manifest —
 this stand-in is how the contract looks, not how a review works.
 
+`delivery-harness.independent-review` identifies the evidence issuer accepted by
+this gate. A provider label does not authenticate the execution or review host.
+Codex and Claude use their native execution and review capabilities; either can
+submit evidence under the configured issuer. Historical manifests keep the
+provider label they were issued with.
+
 ```ts
 // scripts/submit-review.ts
 import { mkdir, writeFile } from "node:fs/promises";
@@ -222,7 +228,7 @@ import config from "../harness.config.ts";
 
 const rootDir = process.cwd();
 const provider = {
-  id: "claude-code.ce-code-review",
+  id: "delivery-harness.independent-review",
   version: "1.0.0",
   runId: `r-${Date.now().toString(36)}`,
   finalPassId: "pass-1",

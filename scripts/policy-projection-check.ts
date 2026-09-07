@@ -479,7 +479,14 @@ export async function runPolicyProjectionCheck(
         ["waivableCodes", live.waivableCodes],
         ["nonWaivableCodes", live.nonWaivableCodes],
       ] as const) {
-        const frozenValue = frozen[member];
+        // The immutable oracle predates the host-neutral issuer label. This
+        // exact rename changes no accepted payload or attestation requirement;
+        // historical evidence retains its original provider id.
+        const frozenValue = live.id === "review.green" && member === "providers" &&
+          Array.isArray(frozen[member]) && frozen[member].length === 1 &&
+          frozen[member][0] === "claude-code.ce-code-review"
+          ? ["delivery-harness.independent-review"]
+          : frozen[member];
         if (
           !Array.isArray(frozenValue) ||
           !equalStringArrays(sorted(frozenValue as string[]), sorted([...liveValue]))

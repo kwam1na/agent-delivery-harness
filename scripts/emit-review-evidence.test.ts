@@ -835,6 +835,23 @@ describe("emitting a manifest", () => {
     }));
     const installed = await runCommand("npm", ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--cache", await scratchDir("dh-empty-npm-cache-")], { cwd: fixture.dir, env: fixture.env });
     expect(installed.code, installed.stderr).toBe(0);
+    // Offline install can omit optional packages unavailable in its empty cache.
+    // Newer npm ci still validates those lock entries before skipping them.
+    // Retain their exact versions and platform constraints from the source lock;
+    // runtime packages continue to resolve to the local tarballs above.
+    const sourceLock = JSON.parse(await readFile(path.join(CHECKOUT_ROOT, "package-lock.json"), "utf8"));
+    const consumerLockPath = path.join(fixture.dir, "package-lock.json");
+    const consumerLock = JSON.parse(await readFile(consumerLockPath, "utf8"));
+    for (const name of ["tsx", "esbuild"]) {
+      const manifest = JSON.parse(await readFile(path.join(CHECKOUT_ROOT, "node_modules", name, "package.json"), "utf8"));
+      for (const optionalName of Object.keys(manifest.optionalDependencies)) {
+        const key = `node_modules/${optionalName}`;
+        const entry = sourceLock.packages[key];
+        expect(entry?.version, `locked optional dependency ${optionalName}`).toBeTruthy();
+        consumerLock.packages[key] ??= { ...entry, dev: false };
+      }
+    }
+    await writeFile(consumerLockPath, JSON.stringify(consumerLock, null, 2) + "\n");
     await git(fixture.dir, fixture.env, "add", "package.json", "package-lock.json");
     await git(fixture.dir, fixture.env, "commit", "--quiet", "-m", "install product artifacts");
     const consumer = { ...fixture, installedCli: path.join(fixture.dir, "node_modules/@agent-delivery-harness/cli/src/main.ts") };
