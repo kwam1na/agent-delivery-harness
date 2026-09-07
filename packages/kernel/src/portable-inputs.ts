@@ -8,6 +8,7 @@ import type { HarnessConfig } from "./config.ts";
 import { computePreparationFingerprint } from "./preparation.ts";
 import { parseCandidateTreeListing, type DeliveryRecord } from "./delivery-record.ts";
 import { capturePortableEvidenceContext, portableArtifactContents, portableBlocker, MAX_PORTABLE_ARTIFACT_BYTES } from "./portable-evidence.ts";
+import { computeDeliverableIdentity } from "./identity.ts";
 import { captureCheckBindings } from "./checks.ts";
 import { retainedCheckOutput } from "./validator/checks-passed.ts";
 import type { ReviewInputReader } from "./review-inputs.ts";
@@ -77,5 +78,14 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
     },
   });
   const projection = await evaluateCandidateActivation({ rootDir, config, candidate, run });
-  return { evidenceContext, checkBindings, projection };
+  // Human approval binds the stricter candidate, allowing only its record transport.
+  // Read Git trees directly; portable verification needs no old provider folders.
+  let waiverCandidateMatches: boolean | undefined;
+  if (record.claims.some(claim => claim.outcome === "waived")) {
+    const validationConfig = { ...config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: config.recordNeutral };
+    const [approved, target] = await Promise.all([record.candidateBinding.treeSha, candidate.treeSha].map(treeSha =>
+      computeDeliverableIdentity({ rootDir, treeSha, config: validationConfig }, { run })));
+    waiverCandidateMatches = approved === target;
+  }
+  return { evidenceContext, checkBindings, projection, ...(waiverCandidateMatches === undefined ? {} : { waiverCandidateMatches }) };
 }

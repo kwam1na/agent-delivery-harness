@@ -368,7 +368,14 @@ describe("portable human exceptions", () => {
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.record.claims[0]?.waiver).toEqual({ ...approval, candidateBinding: RECORD_BINDING });
-    expect(verifyDeliveryRecord(makeConfig(), parsed.record, RECOMPUTED, FRESH_BASE).ok).toBe(true);
+    expect(verifyDeliveryRecord(makeConfig(), parsed.record, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true }).ok).toBe(true);
+  });
+  it("rejects a waiver without a matching current target observation", () => {
+    for (const options of [{}, { waiverCandidateMatches: false }]) {
+      const result = verifyDeliveryRecord(makeConfig(), record(), RECOMPUTED, FRESH_BASE, options);
+      expect(result.ok).toBe(false);
+      expect(result.blockers.map(blocker => blocker.code)).toContain("record_waiver_invalid");
+    }
   });
   it("rejects a legacy unattributed waiver claim", () => {
     const value = record();
@@ -382,8 +389,8 @@ describe("portable human exceptions", () => {
     const value = record();
     const waiver = { ...approval, findingCodes: ["live_provider_missing"], scope: "invocation" as const, policyDigest: digestCanonical(config), candidateBinding: RECORD_BINDING };
     const claim = { ...value.claims[0]!, scope: "invocation", waiver };
-    expect(verifyDeliveryRecord(config, { ...value, claims: [claim] }, RECOMPUTED, FRESH_BASE).ok).toBe(false); // Invocation-only approval cannot travel to another verification.
-    expect(verifyDeliveryRecord(config, { ...value, claims: [{ ...claim, scope: "durable", waiver: { ...waiver, scope: "durable" } }] }, RECOMPUTED, FRESH_BASE).ok).toBe(false);
+    expect(verifyDeliveryRecord(config, { ...value, claims: [claim] }, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true }).ok).toBe(false); // Invocation-only approval cannot travel to another verification.
+    expect(verifyDeliveryRecord(config, { ...value, claims: [{ ...claim, scope: "durable", waiver: { ...waiver, scope: "durable" } }] }, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true }).ok).toBe(false);
   });
   it.each(["policy", "candidate", "integrity"])("rejects an exception with mismatched %s in the verifier", (mutation) => {
     const value = record();
@@ -392,7 +399,7 @@ describe("portable human exceptions", () => {
       ...(mutation === "candidate" ? { candidateBinding: { ...RECORD_BINDING, treeSha: "other-tree" } } : {}),
       ...(mutation === "integrity" ? { findingCodes: ["stale_evidence"] } : {}),
     };
-    const result = verifyDeliveryRecord(makeConfig(), { ...value, claims: [{ ...value.claims[0]!, waiver }] }, RECOMPUTED, FRESH_BASE);
+    const result = verifyDeliveryRecord(makeConfig(), { ...value, claims: [{ ...value.claims[0]!, waiver }] }, RECOMPUTED, FRESH_BASE, { waiverCandidateMatches: true });
     expect(result.ok).toBe(false);
     expect(result.blockers.map((b) => b.code)).toContain("record_waiver_invalid");
   });

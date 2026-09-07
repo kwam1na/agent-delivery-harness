@@ -82,4 +82,3 @@ export async function captureCheckBindings(rootDir: string, config: HarnessConfi
   }
   return bindings;
 }
-

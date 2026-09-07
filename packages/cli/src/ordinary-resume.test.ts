@@ -104,3 +104,15 @@ describe("ordinary save and resume", () => {
     expect(await f.run("resume")).toBe(1); expect(f.errors.join("\n")).toContain("resume_context_invalid");
   });
 });
+
+
+it("refuses contradictory observed outcomes", async () => {
+  const f = await fixture();
+  expect(await f.run("prepare")).toBe(0);
+  expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "merge" }))).toBe(0);
+  expect(await f.run("emit", "action.intent", "--json", JSON.stringify({ actionId: "a1", operation: "merge", reference: "pr1" }))).toBe(0);
+  expect(await f.run("emit", "action.observed", "--json", JSON.stringify({ actionId: "a1", outcome: "failed", reference: "pr1" }))).toBe(0);
+  expect(await f.run("emit", "action.observed", "--json", JSON.stringify({ actionId: "a1", outcome: "succeeded", reference: "pr1" }))).toBe(0);
+  expect(await f.run("resume")).toBe(1);
+  expect(f.errors.join("\n")).toContain("resume_action_unreconciled");
+});

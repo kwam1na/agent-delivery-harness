@@ -82,4 +82,3 @@ export function judgeArtifact(entry: DeclaredArtifactEntry, observation: Artifac
       };
   }
 }
-

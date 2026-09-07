@@ -509,6 +509,8 @@ export interface DeliveryRecordCheck {
  * state. `workspaceId` is never consulted.
  */
 export interface VerifyDeliveryRecordOptions {
+  /** Fresh equality of approved and target trees under only recordNeutral exclusions. */
+  readonly waiverCandidateMatches?: boolean;
   readonly evidenceContext?: PortableEvidenceContext;
   readonly projection?: EvaluateGateInput["projection"];
   readonly executionContext?: EvaluateGateInput["context"];
@@ -748,7 +750,7 @@ export function verifyDeliveryRecord(
     if (claim.outcome === "waived") {
       const waiver = claim.waiver;
       const obligation = config.obligations.find((entry) => entry.id === claim.obligationId);
-      if (!isAttributedWaiver(waiver) || claim.scope !== waiver.scope ||
+      if (options.waiverCandidateMatches !== true || !isAttributedWaiver(waiver) || claim.scope !== waiver.scope ||
           !obligation?.humanWaiverAllowed || !obligation.allowedResolutionKinds.includes("waived") ||
           (obligation.freshness === "live" && waiver.scope !== "invocation") ||
           waiver.policyDigest !== digestCanonical(config) ||

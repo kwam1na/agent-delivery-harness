@@ -368,12 +368,12 @@ export function projectReviewActivation(entries: readonly CandidateDiffEntry[], 
 
   for (const entry of entries) {
     const paths = entryPaths(entry);
+    for (const repoPath of paths) {
+      for (const id of sensitiveGroupsFor(config.sensitivePaths, repoPath)) sensitivePathIds.add(id);
+    }
     if (paths.every(repoPath => matchesNeutralSet(config.reviewNeutral, repoPath))) {
       for (const repoPath of paths) excludedPaths.add(repoPath);
       continue;
-    }
-    for (const repoPath of paths) {
-      for (const id of sensitiveGroupsFor(config.sensitivePaths, repoPath)) sensitivePathIds.add(id);
     }
 
     const relevant = paths.some((repoPath) => classifyCandidatePath(config.pathClassification, repoPath) === "relevant");

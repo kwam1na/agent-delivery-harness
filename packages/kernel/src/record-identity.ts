@@ -21,4 +21,3 @@ export function recordIdentity(workspaceId: string, input: PublishRecordInput): 
 export function computeRecordId(workspaceId: string, input: PublishRecordInput): string {
   return digestCanonical(recordIdentity(workspaceId, input));
 }
-
