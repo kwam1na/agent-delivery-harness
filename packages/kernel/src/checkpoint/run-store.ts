@@ -51,6 +51,8 @@ import {
   type RunEvent,
   type RunEventInput,
 } from "./run-event.ts";
+import { isDeepStrictEqual } from "node:util";
+import { runActivityTransitionError } from "./run-activity.ts";
 import { MANAGED_DELIVERY_NAMESPACE, RUN_STORE_DIRECTORY } from "./run-namespace.ts";
 
 /**
@@ -116,7 +118,10 @@ export interface RunStore {
    * neither clause provable on its own.
    */
   discard(runId: string): Promise<RunDiscardResult>;
-  append(runId: string, event: RunEventInput): Promise<RunAppendResult>;
+  append(runId: string, event: RunEventInput, options?: {
+    /** CLI-generated observation times retain the original instant on an otherwise identical retry. */
+    readonly reuseExistingTimestamp?: boolean;
+  }): Promise<RunAppendResult>;
   /**
    * Records one bounded line for an append a CALLER refused before it reached
    * `append` — today, exactly `emit`'s refusal of `command.completed`, which is
@@ -270,7 +275,9 @@ export function createRunStore(commonDir: string): RunStore {
           rejections: verdict.rejections.map((rejection) => ({ ...rejection, pointer: `/${index}${rejection.pointer}` })),
         };
       }
-      events.push(entry as RunEvent);
+      const event = entry as RunEvent;
+      if (events[0] && events[0].version !== event.version) return { ok: false, rejections: reject("unsupported_spec", `/${index}/version`, "a run cannot mix writer versions") };
+      events.push(event);
     }
     return { ok: true, events };
   };
@@ -337,7 +344,7 @@ export function createRunStore(commonDir: string): RunStore {
       return { ok: true };
     },
 
-    async append(runId, event) {
+    async append(runId, event, options) {
       const journalPath = journalPathFor(runId);
       if (journalPath === undefined) {
         return { ok: false, rejections: reject("malformed_member", "/runId", "the run id is not admissible to this store") };
@@ -349,6 +356,7 @@ export function createRunStore(commonDir: string): RunStore {
         outcome = await appendDecided<RunEvent, readonly RunStoreRejection[]>({
           journalPath,
           discipline: NOFOLLOW,
+          crossProcess: true,
           async decide(read) {
             // Secret discipline runs FIRST, before shape validation, so a live
             // credential is reported as a credential rather than as whatever
@@ -390,13 +398,32 @@ export function createRunStore(commonDir: string): RunStore {
             const kind = candidate["kind"];
             const role = (candidate["actor"] as { role?: unknown } | undefined)?.role;
 
+            const admitted = validateRunEventInput(candidate);
+            if (!admitted.ok) return { ok: false, rejected: admitted.rejections };
+            for (const entry of parsed.entries) {
+              const existingVerdict = validateRunEvent(entry);
+              if (!existingVerdict.ok) return { ok: false, rejected: existingVerdict.rejections };
+              if ((entry as RunEvent).version !== candidate["version"]) return { ok: false, rejected: reject("unsupported_spec", "/version", "a run retains its original writer version; start a linked successor to upgrade") };
+            }
+            if (candidate["eventId"] !== undefined) {
+              const existing = (parsed.entries as RunEvent[]).find(e => e.eventId === candidate["eventId"]);
+              if (existing) {
+                const { seq: _seq, ...input } = existing;
+                const retry = options?.reuseExistingTimestamp === true ? { ...candidate, at: existing.at } : candidate;
+                if (isDeepStrictEqual(input, retry)) return { ok: true, accepted: existing };
+                return { ok: false, rejected: reject("invalid_transition", "/eventId", "this event ID already identifies different content") };
+              }
+            }
+            const transition = runActivityTransitionError(parsed.entries as RunEvent[], candidate as unknown as RunEventInput);
+            if (transition) return { ok: false, rejected: reject("invalid_transition", "/payload", transition) };
+
             if (kinds.includes("run.ended")) {
               return { ok: false, rejected: reject("journal_terminal", "/kind", "this run has ended; nothing may be appended after run.ended") };
             }
             if (kind === "run.started" && kinds.includes("run.started")) {
               return { ok: false, rejected: reject("invalid_transition", "/kind", "this run has already started; a run starts exactly once") };
             }
-            if (role === "cli" && kind !== "command.completed") {
+            if (role === "cli" && kind !== "command.completed" && !(candidate["version"] === "run-event/2" && ["activity.observed", "wait.started", "wait.resolved"].includes(String(kind)))) {
               return {
                 ok: false,
                 rejected: reject(
@@ -416,9 +443,6 @@ export function createRunStore(commonDir: string): RunStore {
             // `seq` appearing later in the input would overwrite the count the
             // store just took, and the after-the-fact validation cannot tell
             // the two apart — both are positive integers.
-            const admitted = validateRunEventInput(candidate);
-            if (!admitted.ok) return { ok: false, rejected: admitted.rejections };
-
             // `seq` is the store's to assign, and only here: it is the
             // journal's own count, taken inside the critical section.
             const durable: Record<string, unknown> = {};

@@ -1570,7 +1570,7 @@
           "unsupported_spec"
         ],
         "value": {
-          "version": "run-event/2",
+          "version": "run-event/99",
           "runId": "run-0001",
           "seq": 1,
           "at": "2026-09-02T10:00:00Z",

@@ -182,6 +182,8 @@ export function buildRunEvent(input: {
   readonly kind: string;
   readonly role: "cli" | "executor";
   readonly payload: unknown;
+  readonly version?: "run-event/1" | "run-event/2";
+  readonly eventId?: string;
 }): RunEventInput {
   const payload = typeof input.payload === "object" && input.payload !== null ? (input.payload as Record<string, unknown>) : undefined;
   const mirrored: Record<string, unknown> = {};
@@ -193,7 +195,8 @@ export function buildRunEvent(input: {
     }
   }
   return {
-    version: "run-event/1",
+    version: input.version ?? "run-event/1",
+    ...(input.eventId === undefined ? {} : { eventId: input.eventId }),
     runId: input.runId,
     at: runInstant(),
     repo: { commonDir: input.commonDir },

@@ -23,8 +23,10 @@
  * Directory components are not defended: node has no `openat`.
  */
 import { constants as fsConstants, type Stats } from "node:fs";
-import { chmod, mkdir, open, truncate } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 export const OWNER_DIR = 0o700;
 export const OWNER_FILE = 0o600;
@@ -160,16 +162,20 @@ export function serializedOnPath<T>(key: string, operation: () => Promise<T>): P
 export type JournalEntriesReader = () => Promise<ParsedJournal>;
 
 export type JournalDecision<Accepted, Rejected> =
-  | { readonly ok: true; readonly entry: unknown; readonly accepted: Accepted }
+  | { readonly ok: true; readonly entry?: unknown; readonly accepted: Accepted }
   | { readonly ok: false; readonly rejected: Rejected };
 
 export interface AppendDecidedOptions<Accepted, Rejected> {
   readonly journalPath: string;
   readonly discipline?: JournalOpenDiscipline;
+  /** Serialize independent processes too; opt-in preserves the spine contract. */
+  readonly crossProcess?: boolean;
+  /** Acquisition only; a live owner's critical section is never expired. Default 5000ms. */
+  readonly crossProcessTimeoutMs?: number;
   /**
    * The one slot that differs between stores. It is handed a reader rather
    * than the entries themselves so a decision that refuses before reading —
-   * secret discipline, say — still touches no file, exactly as it did when
+   * secret discipline, say — still touches no journal, exactly as it did when
    * each store owned this body.
    */
   readonly decide: (read: JournalEntriesReader) => Promise<JournalDecision<Accepted, Rejected>>;
@@ -183,7 +189,7 @@ export function appendDecided<Accepted, Rejected>(
   options: AppendDecidedOptions<Accepted, Rejected>,
 ): Promise<{ ok: true; accepted: Accepted } | { ok: false; rejected: Rejected }> {
   const { journalPath, discipline } = options;
-  return serializedOnPath(journalPath, async () => {
+  const operation = async () => {
     let raw: RawJournal | undefined;
     const read: JournalEntriesReader = async () => {
       raw = await readRawJournal(journalPath, discipline);
@@ -192,25 +198,125 @@ export function appendDecided<Accepted, Rejected>(
 
     const decision = await options.decide(read);
     if (!decision.ok) return { ok: false as const, rejected: decision.rejected };
+    if (decision.entry === undefined) return { ok: true as const, accepted: decision.accepted };
 
     await mkdir(path.dirname(journalPath), { recursive: true, mode: OWNER_DIR });
-    if (raw?.interruptedTail === true) {
-      // The torn tail never committed — its writer never saw success — so
-      // truncating it removes no durable entry; accepted bytes are intact.
-      await truncate(journalPath, raw.terminatedByteLength);
-    }
     const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | (discipline?.extraFlags ?? 0);
     const handle = await open(journalPath, flags, OWNER_FILE);
     try {
       const refusal = discipline?.verify?.(await handle.stat());
       if (refusal !== undefined) throw new JournalAccessRefused(journalPath, refusal);
+      // Repair through the verified descriptor, never a second path lookup.
+      if (raw?.interruptedTail === true) await handle.truncate(raw.terminatedByteLength);
       await handle.writeFile(`${JSON.stringify(decision.entry)}\n`, "utf8");
+      await handle.chmod(OWNER_FILE);
     } finally {
       await handle.close().catch(() => undefined);
     }
-    await chmod(journalPath, OWNER_FILE);
     return { ok: true as const, accepted: decision.accepted };
-  });
+  };
+  return serializedOnPath(path.resolve(journalPath), () => options.crossProcess === true
+    ? withProcessAppendLock(journalPath, options.crossProcessTimeoutMs ?? 5000, operation)
+    : operation());
+}
+
+/**
+ * Lamport's bakery protocol over local filesystem entries. Each contender
+ * creates its own unique choosing marker, atomically publishes a ticket, then
+ * waits for every earlier ticket. No shared lock file is stolen or unlinked:
+ * stale-owner reclamation of such a file races with another reclaimer and can
+ * admit two owners. Here only a positively dead PID can be disregarded. PID
+ * reuse is conservative (it can cause a timeout, never concurrent ownership).
+ *
+ * A live but paused owner never loses its ticket. The timeout bounds acquisition,
+ * not ownership. Atomic local-filesystem rename/readdir semantics and one host
+ * PID namespace are required; this is not a distributed/network-filesystem lock.
+ */
+async function withProcessAppendLock<T>(journalPath: string, timeoutMs: number, operation: () => Promise<T>): Promise<T> {
+  const refuse = (reason: string) => new JournalAccessRefused(journalPath, reason);
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 60_000) throw refuse("invalid cross-process append lock timeout");
+  const deadline = performance.now() + timeoutMs;
+  const checkDeadline = () => {
+    if (performance.now() >= deadline) throw refuse("cross-process append lock timed out");
+  };
+  const directory = `${journalPath}.append-lock`;
+  const id = `${process.pid}-${randomUUID()}`;
+  const marker = path.join(directory, `${id}.ticket`);
+  const pending = path.join(directory, `${id}.pending`);
+  const flags = fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+  const alive = (pid: number) => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+  };
+  const members = async () => {
+    checkDeadline();
+    return (await readdir(directory)).filter((name) => /^\d+-[a-f0-9-]{36}\.ticket$/.test(name));
+  };
+  const ticket = async (name: string): Promise<number | undefined> => {
+    checkDeadline();
+    const pid = Number(name.slice(0, name.indexOf("-")));
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw refuse("invalid append lock owner");
+    if (!alive(pid)) {
+      // Names are never reused. Removing this dead process's immutable name
+      // cannot remove a successor's ticket, even with several reclaimers.
+      await unlink(path.join(directory, name)).catch((error: unknown) => { if (!isMissing(error)) throw error; });
+      await unlink(path.join(directory, name.replace(/\.ticket$/, ".pending"))).catch((error: unknown) => { if (!isMissing(error)) throw error; });
+      return undefined;
+    }
+    let handle;
+    try { handle = await open(path.join(directory, name), fsConstants.O_RDONLY | flags); }
+    catch (error) { if (isMissing(error)) return undefined; throw error; }
+    try {
+      const stats = await handle.stat();
+      const refusal = ownerOnlyRegularFile(stats);
+      if (refusal !== undefined) throw refuse(`append lock ${refusal}`);
+      if (stats.size > 32) throw refuse("invalid append lock ticket");
+      const contents = await handle.readFile("utf8");
+      if (contents === "") return 0; // choosing, including a paused creator
+      if (!/^[1-9][0-9]*\n$/.test(contents)) throw refuse("invalid append lock ticket");
+      const value = Number(contents.trim());
+      if (!Number.isSafeInteger(value)) throw refuse("invalid append lock ticket");
+      return value;
+    } finally { await handle.close(); }
+  };
+  let registered = false;
+  let acquired = false;
+  try {
+    await mkdir(directory, { recursive: true, mode: OWNER_DIR });
+    const directoryStats = await lstat(directory);
+    if (!directoryStats.isDirectory() || (directoryStats.mode & 0o077) !== 0 ||
+      (process.getuid !== undefined && directoryStats.uid !== process.getuid())) throw refuse("append lock directory is not owner-only");
+    const choosing = await open(marker, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | flags, OWNER_FILE);
+    registered = true;
+    await choosing.close();
+    let maximum = 0;
+    for (const name of await members()) maximum = Math.max(maximum, await ticket(name) ?? 0);
+    const ownTicket = maximum + 1;
+    if (!Number.isSafeInteger(ownTicket)) throw refuse("append lock ticket exhausted");
+    const publication = await open(pending, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | flags, OWNER_FILE);
+    try { await publication.writeFile(`${ownTicket}\n`, "utf8"); }
+    finally { await publication.close(); }
+    await rename(pending, marker);
+    for (const name of await members()) {
+      if (name === `${id}.ticket`) continue;
+      for (;;) {
+        const other = await ticket(name);
+        if (other === undefined || (other > 0 && (other > ownTicket || (other === ownTicket && name > `${id}.ticket`)))) break;
+        await delay(Math.min(10, Math.max(1, deadline - performance.now())));
+      }
+    }
+    checkDeadline();
+    acquired = true;
+    return await operation();
+  } catch (error) {
+    if (acquired || error instanceof JournalAccessRefused) throw error;
+    throw refuse(describe(error));
+  } finally {
+    if (registered) {
+      await unlink(marker).catch(() => undefined);
+      await unlink(pending).catch(() => undefined);
+    }
+  }
 }
 
 /**
