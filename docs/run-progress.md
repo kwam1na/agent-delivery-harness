@@ -57,6 +57,30 @@ The latest comparable snapshot replaces an earlier one; supersession marks
 coverage partial. Unreported measurements are never zero. Attempt and run totals
 must not be added to their encompassing round totals.
 
+## Automatic command observations
+
+The candidate-facing command boundary reports `check`, `prepare`,
+`review-context`, `emit-review-evidence`, `submit-evidence`, `gate`, `record` and
+`verify`. On a v2 run, an invocation records a running activity against the
+candidate captured before execution and a matching completed, failed or
+interrupted observation when the boundary returns. Concurrent invocations have
+separate IDs; a changed current-run pointer cannot move their completion to a
+different run. The existing `command.completed` retains the exact exit outcome,
+duration and successful digest. Preparation execution/reuse detail is separate.
+
+The native waiver prompt supplies an actual human wait and its scoped
+resolution. It does not change who may approve, and no approval is reusable
+from these events. Intermediate provider or host progress is unavailable unless
+explicitly reported; there is no heartbeat supervisor or transcript inspection.
+An abruptly terminated process can leave a running attempt that becomes stale;
+absence of completion never means success. No raw arguments or environment
+values are captured.
+
+The boundary checks the selected journal version before emission. Legacy runs
+retain completion-only v1 events. Missing candidate capture leaves activity
+unreported; it never invents a candidate. Failed observation writes do not change
+command outcomes or gate decisions. Viewing runs does not journal the viewer.
+
 ## Storage and export
 
 Run writes use bounded cross-process serialization around validation,

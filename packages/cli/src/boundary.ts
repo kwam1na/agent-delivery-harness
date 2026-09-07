@@ -60,7 +60,7 @@ import {
   type ProviderRailInvocationResult,
   type ProviderRailSession,
 } from "./provider-rails.ts";
-import { buildRunEvent, resolveRunSurface } from "./run-surface.ts";
+import { beginCommandObservation, type CommandObservation } from "./command-activity.ts";
 
 // ── Exit codes ───────────────────────────────────────────────────────────────
 
@@ -337,62 +337,6 @@ export const COMPLETION_WRAPPED_COMMANDS: readonly string[] = [
   "verify",
 ];
 
-/** The four exit codes, as the closed outcome enum `command.completed` carries. */
-function outcomeOfExit(code: number): "ok" | "policy" | "usage" | "interrupted" {
-  if (code === EXIT_OK) return "ok";
-  if (code === EXIT_USAGE) return "usage";
-  if (code === EXIT_INTERRUPTED) return "interrupted";
-  return "policy";
-}
-
-/**
- * Appends this invocation's `command.completed`, when — and only when — a run
- * is current for the invoking worktree.
- *
- * BEST-EFFORT, TOTAL, AND SILENT. Every failure is swallowed: an unresolvable
- * repository, a refused pointer, a store that will not accept the append. The
- * caller has already decided the exit code, and a run journal that could
- * change a gate's verdict would be evidence. It is not evidence, so it is not
- * allowed to matter. A refused append still lands one bounded line in the
- * run's note, which the store writes — every refusal but the two that name no
- * run it can address: an id its charset refuses, and `unresolvable_run`.
- * Neither is noted, rather than open a notes entry for a run that never
- * existed.
- */
-async function recordCommandCompletion(input: {
-  readonly cwd: string;
-  readonly command: string;
-  readonly exitCode: number;
-  readonly durationMs: number;
-  readonly digest?: string;
-}): Promise<void> {
-  try {
-    const resolved = await resolveRunSurface(input.cwd);
-    if (!resolved.ok) return;
-    const { store, commonDir, worktreeKey } = resolved.surface;
-    const current = await store.current(worktreeKey);
-    if (!current.ok || current.runId === undefined) return;
-    const history = await store.read(current.runId);
-    if (!history.ok) return;
-    const version = history.events[0]?.version ?? "run-event/1";
-    await store.append(
-      current.runId,
-      buildRunEvent({
-        runId: current.runId,
-        commonDir,
-        kind: "command.completed",
-        role: "cli",
-        version,
-        ...(version === "run-event/2" ? { eventId: randomUUID() } : {}),
-        payload: { command: input.command, outcome: outcomeOfExit(input.exitCode), durationMs: input.durationMs,
-          ...(input.exitCode === EXIT_OK && input.digest !== undefined ? { digest: input.digest } : {}) },
-      }),
-    );
-  } catch {
-    // Deliberately silent. See the paragraph above.
-  }
-}
-
 /**
  * Runs one CLI invocation to an exit code. Total: it maps every command result
  * and every throw to one of the four codes, and renders every failure through
@@ -428,17 +372,11 @@ export async function runCliBoundary(
   // the exact help-only predicate aligned with the command's usage branch.
   const prepareHelp = descriptor.name === "prepare" && args.length === 1 && ["--help", "-h"].includes(args[0]!);
   const startedAt = Date.now();
+  const observation = !prepareHelp && COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)
+    ? await beginCommandObservation(runtime.cwd, descriptor.name) : undefined;
   let digest: string | undefined;
-  const code = await runConfiguredCommand(descriptor, args, runtime, value => { digest = value; });
-  if (!prepareHelp && COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)) {
-    await recordCommandCompletion({
-      cwd: runtime.cwd,
-      command: descriptor.name,
-      exitCode: code,
-      durationMs: Date.now() - startedAt,
-      ...(digest === undefined ? {} : { digest }),
-    });
-  }
+  const code = await runConfiguredCommand(descriptor, args, runtime, value => { digest = value; }, observation);
+  await observation?.finish(code, Date.now() - startedAt, digest);
   return code;
 }
 
@@ -491,6 +429,7 @@ async function runConfiguredCommand(
   args: readonly string[],
   runtime: CliRuntime,
   observeDigest: (digest: string | undefined) => void,
+  observation?: CommandObservation,
 ): Promise<number> {
   const loadConfig = runtime.loadConfig ?? importHarnessConfig;
   const artifacts = runtime.artifacts ?? createArtifactsPort();
@@ -504,6 +443,12 @@ async function runConfiguredCommand(
       return wiringPromise;
     };
 
+    if (observation?.needsCandidate) {
+      try {
+        const capture = await (await wire()).captureCandidate();
+        if (capture.ok) await observation.start(capture.candidate.treeSha);
+      } catch { /* Missing candidate observations never block execution. */ }
+    }
     const context: CommandContext = {
       rootDir: runtime.cwd,
       config,
@@ -519,7 +464,7 @@ async function runConfiguredCommand(
       // The waiver prompt is offered only under a real TTY. A non-interactive
       // invocation never prompts — it blocks — no matter what the run wired.
       ...(runtime.stdinIsTTY && runtime.stdoutIsTTY && runtime.promptForWaiver !== undefined
-        ? { promptForWaiver: runtime.promptForWaiver }
+        ? { promptForWaiver: observation?.prompt(runtime.promptForWaiver) ?? runtime.promptForWaiver }
         : {}),
       ...(runtime.liveResults === undefined ? {} : { liveResults: runtime.liveResults }),
       invokeProvider: async ({ providerId, payload, requiresEvidence }) => {
