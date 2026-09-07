@@ -1017,3 +1017,5 @@ export * from "./live-providers.ts";
 
 export { RUN_EVENT_SPEC_V2, RUN_EVENT_KINDS_V1, RUN_ACTIVITY_STATES, type RunEventVersion, type RunActivityState } from "./checkpoint/run-event.ts";
 export { projectRunActivities, runActivityTransitionError, DEFAULT_RUN_FRESHNESS_WINDOW_MS, type RunActivityProjection, type RunActivityObservation, type RunAttemptObservation, type RunWaitObservation, type RunReferencedObservation } from "./checkpoint/run-activity.ts";
+
+export { captureRunArtifact, readRunArtifact, type RunArtifactMetadata, type RunArtifactResult } from "./checkpoint/run-artifacts.ts";

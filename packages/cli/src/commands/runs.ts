@@ -1,3 +1,4 @@
+import { runArtifactCommand } from "../run-artifact-commands.ts";
 /**
  * `runs` — read the run store back: `runs list`, `runs show <id>`, and
  * `runs serve`, the local page over the same files.
@@ -38,8 +39,11 @@ import {
 import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescriptor } from "../boundary.ts";
 
 const USAGE = [
+  "Usage: delivery-harness runs capabilities --json",
   "Usage: delivery-harness runs list",
   "       delivery-harness runs show <run-id> [--json]",
+  "       delivery-harness runs capture <run-id> --json <request>",
+  "       delivery-harness runs artifact <run-id> <artifact-id> [--json]",
   "       delivery-harness runs serve [--repo <path>]... [--port <n>]",
 ].join("\n");
 
@@ -65,6 +69,12 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
   configFree: true,
   async run(context: ConfigFreeCommandContext): Promise<CommandResult> {
     const [subcommand, ...rest] = context.args;
+    if (subcommand === "capabilities") {
+      if (rest.length !== 1 || rest[0] !== "--json") return { kind: "usage", message: "Usage: runs capabilities --json" };
+      context.write(`${JSON.stringify({ spec: "run-capabilities/1", writerVersions: ["run-event/1", "run-event/2"], artifactCapture: true })}\n`);
+      return { kind: "ok" };
+    }
+    if (subcommand === "capture" || subcommand === "artifact") return runArtifactCommand(context, subcommand, rest);
     if (subcommand === undefined) return { kind: "usage", message: `runs needs a subcommand.\n${USAGE}` };
     if (subcommand !== "list" && subcommand !== "show" && subcommand !== "serve") {
       return { kind: "usage", message: `Unknown runs subcommand ${oneLine(subcommand, 64)}.\n${USAGE}` };

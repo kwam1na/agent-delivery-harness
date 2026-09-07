@@ -71,3 +71,5 @@ Readers recompute the projection and reject inconsistent derived values. V1
 exports remain supported. Artifact metadata in this contract does not itself
 retain a file; acquisition capture and portable attachment transport use the
 separate retention capability when installed.
+
+Selected acquisition reports can be retained through [run artifact capture](run-artifacts.md).
