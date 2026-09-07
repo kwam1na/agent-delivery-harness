@@ -207,3 +207,66 @@ it("renders reported cost by compatible reporter and unit without adding overlap
     value: "Unavailable — reported sum exceeds numeric range",
   });
 });
+
+it("retains failed and interrupted nonreview attempts before any retry", () => {
+  for (const state of ["failed", "interrupted"] as const) {
+    const binding = { activityId: "qualification", attemptId: `qualification-${state}`, candidateTreeSha: candidate, owner: "codex", phase: "qualification" };
+    const view = projectRunView([
+      event("activity.observed", { ...binding, state: "running" }, 1),
+      event("activity.observed", { ...binding, state }, 2),
+    ], { now: "2026-09-07T13:00:00Z" });
+    expect(view.sections.find(s => s.id === "work")!.items).toEqual([]);
+    const history = view.sections.find(s => s.id === "activity-history")!.items;
+    expect(history).toHaveLength(1);
+    expect(history[0]!.id).toBe(binding.attemptId);
+    expect(history[0]!.fields).toEqual(expect.arrayContaining([
+      { label: "State", value: `${state} (reported)` },
+      { label: "History", value: "Latest observed attempt" },
+      { label: "Candidate", value: candidate },
+      { label: "Owner", value: "codex" },
+    ]));
+  }
+});
+
+it("retains terminal nonreview attempts and partial cost without adding overlapping totals", () => {
+  const first = { activityId: "native-claude", attemptId: "native-claude-1", candidateTreeSha: candidate, owner: "claude-code", phase: "qualification" };
+  const second = { ...first, attemptId: "native-claude-2", supersedesAttemptId: first.attemptId };
+  const cost = { coverage: "partial", total: 0.5786060000000001, unit: "USD", reportedBy: "claude-code" };
+  const events = [
+    event("activity.observed", { ...first, state: "running" }, 1),
+    event("activity.observed", { ...first, state: "interrupted", cost }, 2),
+    event("activity.observed", { ...second, state: "running" }, 3),
+    event("activity.observed", { ...second, state: "completed" }, 4),
+    event("run.ended", { cost: { ...cost, total: 1 } }, 5),
+  ];
+  const view = projectRunView(events, { now: "2026-09-07T13:00:00Z" });
+  const work = view.sections.find(s => s.id === "work")!;
+  expect(work.items).toEqual([]);
+  expect(work.empty).toBe("No active work in the latest observations. Retained attempts appear in history.");
+  const history = view.sections.find(s => s.id === "activity-history")!;
+  expect(history.items.map(i => i.id)).toEqual([first.attemptId, second.attemptId]);
+  expect(history.items[0]!.fields).toEqual(expect.arrayContaining([
+    { label: "Owner", value: "claude-code" },
+    { label: "Phase", value: "qualification" },
+    { label: "Attempt", value: first.attemptId },
+    { label: "Candidate", value: candidate },
+    { label: "State", value: "interrupted (reported)" },
+    { label: "History", value: "Superseded attempt" },
+    { label: "Freshness", value: "stale" },
+    { label: "Cost", value: "0.5786060000000001 USD (partial coverage)" },
+  ]));
+  expect(view.sections.find(s => s.id === "reviews")!.items).toEqual([]);
+  const costs = view.sections.find(s => s.id === "cost")!.items;
+  expect(costs).toHaveLength(3);
+  expect(costs[1]!.fields).toContainEqual({ label: "Measurement", value: "1 USD (partial coverage)" });
+  expect(costs[2]!.fields).toEqual(expect.arrayContaining([
+    { label: "Attempt", value: first.attemptId },
+    { label: "Coverage", value: "partial" },
+    { label: "Reported by", value: "claude-code" },
+    { label: "Measurement", value: "0.5786060000000001 USD (partial coverage)" },
+  ]));
+  expect(JSON.stringify(view)).not.toContain("1.578606");
+  const archived = projectRunView(events, { now: "2026-09-07T13:00:00Z", historical: true });
+  expect(archived.sections.find(s => s.id === "activity-history")!.items[0]!.fields).toContainEqual({ label: "Freshness", value: "Historical observation" });
+  expect(projectRunView([], { now: "2026-09-07T13:00:00Z" }).sections.find(s => s.id === "work")!.empty).toBe("No activity observations; execution status unknown.");
+});

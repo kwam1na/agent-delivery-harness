@@ -64,3 +64,14 @@ Delivery records store no original verification timestamp, so that field is
 unavailable. Retained provider manifests may carry a digest-bound `recordedAt`;
 it is labeled **provider-reported recording time**, never verification time.
 Filesystem modification times are not used.
+
+Completed, failed, interrupted and superseded attempts remain in **Activity
+history**, including activities outside formal review. Each retains its owner,
+phase, attempt and candidate binding, last observation, freshness and reported
+cost. An empty Current work section distinguishes absent observations from a run
+whose observed attempts are all terminal; neither is proof of delivery completion.
+
+**Reported cost** shows each supplied attempt measurement with its coverage and
+reporter, including superseded attempts. Unreported costs stay unreported. Attempt
+measurements are not added to run or review totals, which may cover the same work;
+there is no inferred cumulative total across attempts or incompatible units.

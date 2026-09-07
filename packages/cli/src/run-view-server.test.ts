@@ -216,3 +216,52 @@ it("shares operational values across CLI JSON and HTML and serves inert stable r
   expect(archivePage).toContain("Historical archive");
   expect(archivePage).not.toContain('http-equiv="refresh"');
 });
+
+it("keeps completed nonreview activity and partial attempt cost in CLI, JSON and HTML without journal writes", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "run-terminal-history-"));
+  roots.push(root);
+  execFileSync("git", ["init", "-q", root]);
+  const output: string[] = [];
+  const context = { rootDir: root, env: {}, write: (s: string) => output.push(s), readStdin: async () => "" };
+  const emit = async (kind: string, payload: unknown, eventId: string) => {
+    expect((await emitCommand.run({ ...context, args: [kind, "--version", "2", "--event-id", eventId, "--json", JSON.stringify(payload)] })).kind).toBe("ok");
+  };
+  await emit("run.started", { host: "codex", workflow: { releaseId: "fixture", profile: "core" } }, "start");
+  const resolved = await resolveRunSurface(root);
+  if (!resolved.ok) throw Error("surface");
+  const { store, worktreeKey } = resolved.surface;
+  const current = await store.current(worktreeKey);
+  if (!current.ok || !current.runId) throw Error("run");
+  const runId = current.runId;
+  const first = { activityId: "native-claude", attemptId: "native-claude-1", candidateTreeSha: "a".repeat(40), owner: "claude-code", phase: "qualification" };
+  const second = { ...first, attemptId: "native-claude-2", supersedesAttemptId: first.attemptId };
+  await emit("activity.observed", { ...first, state: "running" }, "first-start");
+  await emit("activity.observed", { ...first, state: "interrupted", cost: { coverage: "partial", total: 0.5786060000000001, unit: "USD", reportedBy: "claude-code" } }, "first-stop");
+  await emit("activity.observed", { ...second, state: "running" }, "second-start");
+  await emit("activity.observed", { ...second, state: "completed" }, "second-stop");
+  const before = await store.read(runId);
+  const started = await startRunServer({ repos: [root] });
+  if (!started.ok) throw Error(started.reason);
+  servers.push(started.server);
+  const { runs } = await (await fetch(started.server.url + "/api/runs")).json() as { runs: { view: RunView; href: string }[] };
+  const run = runs[0]!;
+  expect((await runsCommand.run({ ...context, args: ["view", runId, "--json"] })).kind).toBe("ok");
+  const cli = JSON.parse(output.at(-1)!) as RunView;
+  expect(cli.sections).toEqual(run.view.sections);
+  expect(cli.sections.find(s => s.id === "work")!.items).toEqual([]);
+  expect(cli.sections.find(s => s.id === "reviews")!.items).toEqual([]);
+  expect(cli.sections.find(s => s.id === "activity-history")!.items).toHaveLength(2);
+  const cost = cli.sections.find(s => s.id === "cost")!.items;
+  expect(cost).toHaveLength(3);
+  expect(cost[1]!.fields).toContainEqual({ label: "Measurement", value: "unreported" });
+  const terminalStart = output.length;
+  expect((await runsCommand.run({ ...context, args: ["view", runId] })).kind).toBe("ok");
+  const terminal = output.slice(terminalStart).join("\n");
+  const page = await (await fetch(started.server.url + run.href)).text();
+  for (const text of [terminal, page]) {
+    for (const fact of ["Activity history", "native-claude-1", "native-claude-2", "qualification", "interrupted (reported)", "completed (reported)", "Superseded attempt", "0.5786060000000001 USD (partial coverage)", "No active work in the latest observations", first.candidateTreeSha]) expect(text).toContain(fact);
+    expect(text).not.toContain("No activity observations");
+  }
+  expect(page.indexOf('id="work"')).toBeLessThan(page.indexOf('id="activity-history"'));
+  expect(await store.read(runId)).toEqual(before);
+});
