@@ -50,3 +50,5 @@ existing validators. Portable run archive transport is separate from capture.
 
 See [run progress](run-progress.md) for observation semantics and
 [portable evidence](portable-evidence.md) for the separate accepted evidence contract.
+
+Use [portable run archives](run-archives.md) to retain history away from the original repository.

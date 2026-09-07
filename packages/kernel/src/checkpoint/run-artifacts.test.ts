@@ -429,3 +429,39 @@ it("counts metadata when payload bytes alone fit the serialized attachment budge
     ).toBe(texts[i]);
   }
 });
+
+it("classifies missing, corrupt and inaccessible retained attachments for archival", async () => {
+  const f = await fixture();
+  expect(await readRunArtifact(f.store, f.runId, "absent")).toMatchObject({
+    ok: false,
+    code: "missing",
+  });
+  expect(
+    (
+      await captureRunArtifact({
+        ...f,
+        sourceRoot: f.scratch,
+        sourcePath: "report.json",
+      })
+    ).ok,
+  ).toBe(true);
+  const blob = path.join(
+    f.store.runsDir,
+    "artifacts",
+    f.runId,
+    `${f.metadata.digest}.blob`,
+  );
+  await chmod(blob, 0o644);
+  expect(
+    await readRunArtifact(f.store, f.runId, f.metadata.artifactId),
+  ).toMatchObject({ ok: false, code: "access_refused" });
+  await chmod(blob, 0o600);
+  await writeFile(blob, "bad");
+  expect(
+    await readRunArtifact(f.store, f.runId, f.metadata.artifactId),
+  ).toMatchObject({ ok: false, code: "corrupt" });
+  await rm(blob);
+  expect(
+    await readRunArtifact(f.store, f.runId, f.metadata.artifactId),
+  ).toMatchObject({ ok: false, code: "missing" });
+});

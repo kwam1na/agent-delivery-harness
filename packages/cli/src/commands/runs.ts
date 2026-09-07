@@ -1,3 +1,4 @@
+import { runArchiveCommand } from "../run-archive-commands.ts";
 import { runArtifactCommand } from "../run-artifact-commands.ts";
 /**
  * `runs` — read the run store back: `runs list`, `runs show <id>`, and
@@ -42,6 +43,8 @@ const USAGE = [
   "Usage: delivery-harness runs capabilities --json",
   "Usage: delivery-harness runs list",
   "       delivery-harness runs show <run-id> [--json]",
+  "       delivery-harness runs export <run-id> --output <file>",
+  "       delivery-harness runs archive <file> [--artifact <id>]",
   "       delivery-harness runs capture <run-id> --json <request>",
   "       delivery-harness runs artifact <run-id> <artifact-id> [--json]",
   "       delivery-harness runs serve [--repo <path>]... [--port <n>]",
@@ -74,6 +77,7 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
       context.write(`${JSON.stringify({ spec: "run-capabilities/1", writerVersions: ["run-event/1", "run-event/2"], artifactCapture: true })}\n`);
       return { kind: "ok" };
     }
+    if (subcommand === "export" || subcommand === "archive") return runArchiveCommand(context, subcommand, rest);
     if (subcommand === "capture" || subcommand === "artifact") return runArtifactCommand(context, subcommand, rest);
     if (subcommand === undefined) return { kind: "usage", message: `runs needs a subcommand.\n${USAGE}` };
     if (subcommand !== "list" && subcommand !== "show" && subcommand !== "serve") {
