@@ -48,11 +48,23 @@ already does.
 
 One run is current per worktree: `emit run.started` allocates the run and
 writes the pointer under the repository's git common directory
-(`managed-delivery/runs/current/<worktree key>`), every later `emit` and every
-candidate-facing command's own `command.completed` resolves that pointer, and
-`emit run.ended` clears it. A run outlives the worktree it ran in, so end the
+(`managed-delivery/runs/current/<worktree key>`). Later `emit` calls resolve
+that pointer unless `--run <id>` selects a run explicitly. Supported candidate
+commands pin the selected run at invocation entry so their completion cannot
+move to a replacement run. `emit run.ended` clears the matching pointer. A run outlives the worktree it ran in, so end the
 run rather than deleting the worktree out from under it. What is emitted is
 observability, not evidence: no admission, gate, or record decision reads it.
+
+Before version-2 reporting, query `runs capabilities --json` through the same
+CLI entry point and inspect the selected run with `runs show <id> --json`.
+Unsupported capabilities or a legacy run do not authorize a version upgrade.
+Use the installed workflow's shared observation contract for actual candidate,
+round, lens, activity and attempt identifiers; keep stable event IDs on retries.
+Capture selected structured reports through `runs capture <id> --json <request>`
+before removing their scratch files. See [run progress](docs/run-progress.md)
+and [artifact capture](docs/run-artifacts.md) for command lifecycle, missing
+signals, limits and failures. Export with `runs export <id> --output <file>` when
+retention must survive loss of the repository's common directory.
 
 ## Both exposures are tracked
 

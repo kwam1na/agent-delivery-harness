@@ -8,6 +8,27 @@ Commit the record at the path the command reports. `delivery-harness verify` and
 
 The transport remains **self-attested**. Its digest detects accidental or inconsistent rewriting; it is not a signature or proof of independent review. Original reviewer context, raw outcomes, approval artifacts, findings, filed deferrals, reported cost and raw round history remain inspectable. An omitted host cost stays omitted.
 
+## Run reports and accepted evidence
+
+[Run report capture](run-artifacts.md) retains acquisition output, including
+unsuccessful reviews and available partial output, without accepting it as
+evidence. A [portable run archive](run-archives.md) carries observations and
+available attachments; it does not satisfy `delivery-record/2` verification,
+resume a run, or create a current pointer. Submission and recording still own
+the exact accepted artifact set described above.
+
+Local report retention survives scratch cleanup and worktree removal while the
+repository's git common directory remains available. Failed runs are retained
+without automatic expiry. Export is required for durability beyond that store.
+Missing or refused run attachments are reported explicitly; corrupt or unsafe
+content can refuse export. Required evidence submission remains fail-closed
+when its bytes are missing. Consult the capture/archive guides for their
+separate bounds and exact failure behavior.
+
+The run surface reports observations with their original candidate and time.
+Silence is unknown or stale, never proof of failure. Unreported cost is not zero,
+and historical review completion cannot supply current candidate approval.
+
 ## Review context and neutral edits
 
 Review-neutral report, solution and telemetry changes may preserve the existing deliverable identity. A record retains the original accepted candidate binding. A review-context projection identifies the original reviewed tree and the later prepared tree separately, preserves the original history, and adds no review round. Source comments and generated changes remain subject to the repository's existing identity rules.

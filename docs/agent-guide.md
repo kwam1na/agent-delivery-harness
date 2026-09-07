@@ -59,6 +59,16 @@ plausible change breaks:
   source of it.** Adding a rule to the config that the policy does not compile
   creates two authorities with one name.
 
+## Run observability surfaces
+
+The kernel's run journal and shared projection retain producer observations;
+CLI command lifecycle reporting and the terminal/browser readouts consume that
+contract. See [run progress](run-progress.md) for versioning, attempt history
+and freshness, [artifact capture](run-artifacts.md) for retained bytes and
+failure handling, [portable archives](run-archives.md) for offline transport,
+and [the run view](run-view.md) for the shared operational labels. These
+surfaces do not replace evidence submission or the repository's delivery gate.
+
 ## Rules the repository will not let you break
 
 Every rule below is enforced by a sensor and falsified by a test.

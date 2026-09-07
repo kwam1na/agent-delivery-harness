@@ -97,3 +97,5 @@ retain a file; acquisition capture and portable attachment transport use the
 separate retention capability when installed.
 
 Selected acquisition reports can be retained through [run artifact capture](run-artifacts.md).
+
+See [the operational run view](run-view.md) for browser, terminal and JSON access.

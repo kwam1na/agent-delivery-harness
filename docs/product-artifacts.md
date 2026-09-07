@@ -60,6 +60,26 @@ the CLI API exports `buildRunExport` and `parseRunExport` for the product's
 observational run summaries. Consumers do not need an independently installed
 npm package to supply these implementations or types.
 
+## Following an installed delivery
+
+The same installed runtime supplies the observational commands:
+
+```sh
+python3 -B /repo/.agent-skills/current --root /repo harness runs capabilities --json
+python3 -B /repo/.agent-skills/current --root /repo harness runs list
+python3 -B /repo/.agent-skills/current --root /repo harness runs view <run-id> --json
+python3 -B /repo/.agent-skills/current --root /repo harness runs serve --repo /repo
+```
+
+See [run progress](run-progress.md), [capture](run-artifacts.md),
+[archives](run-archives.md) and [the run view](run-view.md) for the contracts.
+Both host workflows check the runtime's reporting capability and the selected
+run's writer version. Legacy runs keep their original version. Rollback switches
+workflow and runtime together; an older runtime may refuse newer run data rather
+than interpret it. Retained bytes are not an instruction to migrate the journal
+or an assertion that every retained runtime can read it. Keep an archive and a
+compatible reader when history must remain independently inspectable.
+
 ## Producer commands
 
 Build only after the compatible source batch has settled. First build and verify

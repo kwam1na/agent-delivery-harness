@@ -1,3 +1,5 @@
+import { runViewCommand } from "../run-view-command.ts";
+import { readArchiveFile } from "../run-archive-commands.ts";
 import { runArchiveCommand } from "../run-archive-commands.ts";
 import { runArtifactCommand } from "../run-artifact-commands.ts";
 /**
@@ -43,11 +45,12 @@ const USAGE = [
   "Usage: delivery-harness runs capabilities --json",
   "Usage: delivery-harness runs list",
   "       delivery-harness runs show <run-id> [--json]",
+  "       delivery-harness runs view <run-id> [--json] [--record <repository-relative-path>]",
   "       delivery-harness runs export <run-id> --output <file>",
   "       delivery-harness runs archive <file> [--artifact <id>]",
   "       delivery-harness runs capture <run-id> --json <request>",
   "       delivery-harness runs artifact <run-id> <artifact-id> [--json]",
-  "       delivery-harness runs serve [--repo <path>]... [--port <n>]",
+  "       delivery-harness runs serve [--repo <path>]... [--archive <file>]... [--port <n>] [--freshness-seconds <n>] [--record <repository-relative-path>]",
 ].join("\n");
 
 const unresolvable = (reason: string): CommandResult => ({
@@ -77,6 +80,7 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
       context.write(`${JSON.stringify({ spec: "run-capabilities/1", writerVersions: ["run-event/1", "run-event/2"], artifactCapture: true })}\n`);
       return { kind: "ok" };
     }
+    if (subcommand === "view") return runViewCommand(context, rest);
     if (subcommand === "export" || subcommand === "archive") return runArchiveCommand(context, subcommand, rest);
     if (subcommand === "capture" || subcommand === "artifact") return runArtifactCommand(context, subcommand, rest);
     if (subcommand === undefined) return { kind: "usage", message: `runs needs a subcommand.\n${USAGE}` };
@@ -227,6 +231,9 @@ async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, r
 // ── serve ────────────────────────────────────────────────────────────────────
 
 interface ServeArgs {
+ readonly archives:readonly string[];
+ readonly recordPath?:string;
+ readonly freshnessWindowMs?:number;
   readonly repos: readonly string[];
   readonly port?: number;
 }
@@ -264,14 +271,20 @@ const BROWSER_ELIDED_PORTS: readonly number[] = [80, 443];
  */
 function parseServeArgs(args: readonly string[], rootDir: string): ServeParse {
   const repos: string[] = [];
+  const archives:string[]=[];
+  let recordPath:string|undefined;
+  let freshnessWindowMs:number|undefined;
   let port: number | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index]!;
-    if (token === "--repo" || token === "--port") {
+    if (token === "--repo" || token === "--port" || token === "--archive" || token === "--freshness-seconds" || token === "--record") {
       const value = args[index + 1];
       if (value === undefined) return { ok: false, message: `${token} needs a value.\n${USAGE}` };
       index += 1;
+      if(token==="--record"){if(recordPath!==undefined)return {ok:false,message:"Use one explicit record path"};recordPath=value;continue;}
+      if(token==="--archive"){archives.push(path.resolve(rootDir,value));continue;}
+      if(token==="--freshness-seconds"){if(!/^\d+$/.test(value)||!Number.isSafeInteger(Number(value))||Number(value)>86400)return {ok:false,message:"freshness seconds must be between 0 and 86400"};freshnessWindowMs=Number(value)*1000;continue;}
       if (token === "--repo") {
         repos.push(path.resolve(rootDir, value));
         continue;
@@ -296,7 +309,7 @@ function parseServeArgs(args: readonly string[], rootDir: string): ServeParse {
 
   // No `--repo` means the worktree the operator is standing in, which is the
   // only repository they can have meant.
-  return { ok: true, args: { repos: repos.length === 0 ? [rootDir] : repos, ...(port === undefined ? {} : { port }) } };
+  return { ok: true, args: { repos: repos.length === 0 && archives.length===0 ? [rootDir] : repos, archives,...(recordPath===undefined?{}:{recordPath}),...(freshnessWindowMs===undefined?{}:{freshnessWindowMs}), ...(port === undefined ? {} : { port }) } };
 }
 
 /**
@@ -311,7 +324,8 @@ async function serveRuns(context: ConfigFreeCommandContext, args: readonly strin
   const parsed = parseServeArgs(args, context.rootDir);
   if (!parsed.ok) return { kind: "usage", message: parsed.message };
 
-  const started = await startRunServer({ repos: parsed.args.repos, ...(parsed.args.port === undefined ? {} : { port: parsed.args.port }) });
+  let archives:{label:string;text:string}[];try{archives=await Promise.all(parsed.args.archives.map(async file=>({label:path.basename(file),text:await readArchiveFile(file)})));}catch{return unresolvable("An explicitly selected archive could not be read within its size limit.");}
+  const started = await startRunServer({ repos: parsed.args.repos,archives,...(parsed.args.recordPath===undefined?{}:{recordPath:parsed.args.recordPath}),...(parsed.args.freshnessWindowMs===undefined?{}:{freshnessWindowMs:parsed.args.freshnessWindowMs}), ...(parsed.args.port === undefined ? {} : { port: parsed.args.port }) });
   if (!started.ok) return unresolvable(started.reason);
 
   const server: RunServerHandle = started.server;
