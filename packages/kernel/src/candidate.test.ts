@@ -1097,3 +1097,11 @@ describe("drift classification", () => {
     expect(classifyCandidateDrift(binding, { ...binding, deliverable: { ...binding.deliverable, identity: "other-tree/v1" } })).toEqual([]);
   });
 });
+
+it("retains explicitly sensitive path activation inside review-neutral narration", () => {
+  const config = testConfig({ sensitivePaths: [{ id: "published-policy", patterns: [{ kind: "prefix", value: "docs/narration/" }] }] });
+  const projection = projectReviewActivation([{ path: "docs/narration/access-policy.md", additions: 1, deletions: 0, binary: false }], config);
+  expect(projection.sensitivePathIds).toEqual(["published-policy"]);
+  expect(projection.relevantLineCount).toBe(0);
+  expect(isObligationActive({ kind: "relevant_change", sensitiveGroupIds: ["published-policy"] }, projection, 100)).toBe(true);
+});
