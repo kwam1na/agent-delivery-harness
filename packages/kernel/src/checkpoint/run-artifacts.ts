@@ -35,13 +35,19 @@ export interface RunArtifactMetadata {
   readonly round?: number;
   readonly lensId?: string;
 }
+export type RunArtifactFailureCode =
+  "missing" | "corrupt" | "access_refused" | "unsafe" | "invalid";
 export type RunArtifactResult =
   | {
       readonly ok: true;
       readonly metadata: RunArtifactMetadata;
       readonly base64: string;
     }
-  | { readonly ok: false; readonly reason: string };
+  | {
+      readonly ok: false;
+      readonly code: RunArtifactFailureCode;
+      readonly reason: string;
+    };
 const discipline = {
   extraFlags: constants.O_NOFOLLOW,
   verify: ownerOnlyRegularFile,
@@ -60,7 +66,17 @@ function containsSecret(
   return !applySecretDiscipline({ contents, structured, metadata }, new Set())
     .ok;
 }
-const refused = (reason: string): RunArtifactResult => ({ ok: false, reason });
+const refused = (
+  reason: string,
+  code: RunArtifactFailureCode = "invalid",
+): RunArtifactResult => ({ ok: false, code, reason });
+class AttachmentReadFailure extends Error {
+  readonly failureCode: RunArtifactFailureCode;
+  constructor(failureCode: RunArtifactFailureCode, message: string) {
+    super(message);
+    this.failureCode = failureCode;
+  }
+}
 const safeId = (id: string) =>
   typeof id === "string" && id.length <= 128 && RUN_STORE_ID.test(id);
 function validMetadata(
@@ -93,8 +109,16 @@ async function boundedRead(file: string, limit: number): Promise<Buffer> {
   try {
     const stat = await h.stat();
     const reason = ownerOnlyRegularFile(stat);
-    if (reason !== undefined || stat.size > limit)
-      throw Error("attachment access refused");
+    if (reason !== undefined)
+      throw new AttachmentReadFailure(
+        "access_refused",
+        "attachment access refused",
+      );
+    if (stat.size > limit)
+      throw new AttachmentReadFailure(
+        "corrupt",
+        "retained attachment exceeds size limit",
+      );
     const bytes = Buffer.alloc(Math.min(stat.size + 1, limit + 1));
     let offset = 0;
     while (offset < bytes.length) {
@@ -103,7 +127,7 @@ async function boundedRead(file: string, limit: number): Promise<Buffer> {
       offset += r.bytesRead;
     }
     if (offset !== stat.size || offset > limit)
-      throw Error("attachment size changed");
+      throw new AttachmentReadFailure("corrupt", "attachment size changed");
     return bytes.subarray(0, offset);
   } finally {
     await h.close();
@@ -122,10 +146,16 @@ async function checkDirectory(store: RunStore, runId: string): Promise<void> {
       (info.mode & 0o077) !== 0 ||
       (process.getuid !== undefined && info.uid !== process.getuid())
     )
-      throw Error("attachment directory access refused");
+      throw new AttachmentReadFailure(
+        "access_refused",
+        "attachment directory access refused",
+      );
     const resolved = await realpath(dir);
     if (!resolved.startsWith(base + path.sep))
-      throw Error("attachment directory outside run store");
+      throw new AttachmentReadFailure(
+        "access_refused",
+        "attachment directory outside run store",
+      );
   }
 }
 async function index(
@@ -142,15 +172,17 @@ async function index(
     discipline,
   );
   const parsed = parseJournalLines(raw.lines);
-  if (!parsed.ok) throw Error("attachment index corrupt");
+  if (!parsed.ok)
+    throw new AttachmentReadFailure("corrupt", "attachment index corrupt");
   const entries = parsed.entries;
   if (
     entries.length > MAX_PORTABLE_ARTIFACTS ||
     !entries.every((e) => validMetadata(e, runId))
   )
-    throw Error("attachment index corrupt");
+    throw new AttachmentReadFailure("corrupt", "attachment index corrupt");
   const ids = new Set(entries.map((e) => e.artifactId));
-  if (ids.size !== entries.length) throw Error("attachment index duplicate");
+  if (ids.size !== entries.length)
+    throw new AttachmentReadFailure("corrupt", "attachment index duplicate");
   return entries;
 }
 async function atomicBlob(file: string, bytes: Buffer): Promise<void> {
@@ -237,7 +269,10 @@ export async function captureRunArtifact(input: {
         (info.mode & 0o077) !== 0 ||
         (process.getuid !== undefined && info.uid !== process.getuid())
       )
-        throw Error("attachment directory access refused");
+        throw new AttachmentReadFailure(
+          "access_refused",
+          "attachment directory access refused",
+        );
     }
     await checkDirectory(store, runId);
     const outcome = await appendDecided<RunArtifactResult, string>({
@@ -321,7 +356,7 @@ export async function readRunArtifact(
     const entries = await index(store, runId);
     const metadata = entries.find((e) => e.artifactId === artifactId);
     if (metadata === undefined)
-      return refused("attachment unavailable in this run");
+      return refused("attachment unavailable in this run", "missing");
     const bytes = await boundedRead(
       path.join(directory(store, runId), `${metadata.digest}.blob`),
       MAX_PORTABLE_ARTIFACT_BYTES,
@@ -330,11 +365,18 @@ export async function readRunArtifact(
       bytes.length !== metadata.sizeBytes ||
       sha256Hex(bytes) !== metadata.digest
     )
-      return refused("retained attachment digest or size mismatch");
+      return refused("retained attachment digest or size mismatch", "corrupt");
     if (containsSecret(bytes.toString("utf8"), metadata))
-      return refused("retained attachment contains a secret-like value");
+      return refused(
+        "retained attachment contains a secret-like value",
+        "unsafe",
+      );
     return { ok: true, metadata, base64: bytes.toString("base64") };
-  } catch {
-    return refused("attachment missing, corrupt, or access refused");
+  } catch (error) {
+    if (error instanceof AttachmentReadFailure)
+      return refused(error.message, error.failureCode);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return refused("attachment missing", "missing");
+    return refused("attachment access refused", "access_refused");
   }
 }

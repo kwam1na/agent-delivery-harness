@@ -1019,3 +1019,5 @@ export { RUN_EVENT_SPEC_V2, RUN_EVENT_KINDS_V1, RUN_ACTIVITY_STATES, type RunEve
 export { projectRunActivities, runActivityTransitionError, DEFAULT_RUN_FRESHNESS_WINDOW_MS, type RunActivityProjection, type RunActivityObservation, type RunAttemptObservation, type RunWaitObservation, type RunReferencedObservation } from "./checkpoint/run-activity.ts";
 
 export { captureRunArtifact, readRunArtifact, type RunArtifactMetadata, type RunArtifactResult } from "./checkpoint/run-artifacts.ts";
+
+export { MAX_PORTABLE_ARTIFACT_BYTES, MAX_PORTABLE_ARTIFACTS, MAX_PORTABLE_EVIDENCE_BYTES } from "./portable-limits.ts";
