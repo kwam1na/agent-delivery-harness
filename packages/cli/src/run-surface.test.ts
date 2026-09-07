@@ -1527,6 +1527,7 @@ interface ServedState {
   readonly repositories: readonly { readonly root: string; readonly commonDir: string; readonly runsDir: string; readonly worktreeKeys: readonly string[] }[];
   readonly runs: readonly {
     readonly runId: string;
+    readonly href?: string;
     readonly repository: string;
     readonly ticket: string;
     readonly open: boolean;
@@ -1687,7 +1688,7 @@ describe("runs serve", () => {
     // The CELL, not the word. The stylesheet names all three states, so
     // `toContain("ended")` holds on every page ever rendered; only the cell
     // distinguishes a run the operator is watching from one that has stopped.
-    expect(live.page).toContain('<td class="live">live</td>');
+    expect(live.page).toContain('<td class="live">selected / open</td>');
     expect(live.page).not.toContain('<td class="ended">ended</td>');
     // A live run is what makes the page refresh itself; the interval is the
     // page's own declaration, so an operator can see how stale a row may be.
@@ -1711,7 +1712,7 @@ describe("runs serve", () => {
     expect(runOf(after.state, runId).live).toBe(false);
     expect(runOf(after.state, runId).open).toBe(false);
     expect(after.page).toContain('<td class="ended">ended</td>');
-    expect(after.page).not.toContain('<td class="live">live</td>');
+    expect(after.page).not.toContain('<td class="live">selected / open</td>');
     // Nothing is live, so nothing is polled. The refresh is what an operator
     // pays for in requests; a store with only finished runs must cost nothing.
     expect(after.page).not.toContain('http-equiv="refresh"');
@@ -1731,7 +1732,7 @@ describe("runs serve", () => {
     // Both places the interval reaches the operator: the refresh the browser
     // obeys, and the prose that tells a reader how stale a row may be.
     expect(page).toContain(`<meta http-equiv="refresh" content="${DEFAULT_POLL_SECONDS}">`);
-    expect(page).toContain(`<p class="meta">refreshing every ${DEFAULT_POLL_SECONDS}s while a run is live</p>`);
+    expect(page).toContain(`<p class="meta">refreshing every ${DEFAULT_POLL_SECONDS}s while a run is selected and open; execution is not inferred</p>`);
   });
 
   it("gives each repository its own pointer key, store root, and root path under a planted git environment", async () => {
@@ -1802,7 +1803,7 @@ describe("runs serve", () => {
     expect(runOf(state, runId).live).toBe(false);
     expect(page).toContain(runId);
     expect(page).toContain('<td class="open">open</td>');
-    expect(page).not.toContain('<td class="live">live</td>');
+    expect(page).not.toContain('<td class="live">selected / open</td>');
   });
 
   it("groups both named worktrees of one repository, listing the run once and reading every pointer", async () => {
@@ -1840,7 +1841,7 @@ describe("runs serve", () => {
 
     // And it is live, which only the second worktree's pointer can say.
     expect(runOf(state, runId).live).toBe(true);
-    expect(page).toContain('<td class="live">live</td>');
+    expect(page).toContain('<td class="live">selected / open</td>');
   });
 
   it("binds loopback on an ephemeral port and refuses a foreign Host", async () => {
@@ -2209,10 +2210,19 @@ describe("runs serve", () => {
     const { runsDir } = await storeOf(dir);
     await chmod(path.join(runsDir, `${runId}.jsonl`), 0o644);
 
-    const { page, state } = await pageAndState(await serve([dir]));
+    const server = await serve([dir]);
+    const { page, state } = await pageAndState(server);
     expect(runOf(state, runId).readable).toBe(false);
     expect(page).toContain('<td class="open">unreadable</td>');
     expect(page).toContain("no readable events");
+    const href = runOf(state, runId).href;
+    expect(href).toMatch(/^\/runs\//);
+    const selected = await (await fetch(server.url + href)).text();
+    expect(selected).toContain("Run journal unreadable");
+    expect(selected).toContain(runId);
+    expect(selected).toContain('href="/">All runs</a>');
+    expect(selected).not.toContain("no readable events");
+    expect(selected).not.toContain("completeness absent");
   });
 
   it("carries the labels banner and the empty-store cell over a store holding no runs", async () => {

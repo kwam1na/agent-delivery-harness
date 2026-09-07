@@ -485,6 +485,15 @@ In v1 the supported form is self-hosted (`uses: ./packages/action` from a
 checkout of this repository); the published-action form ships with the release
 mechanics.
 
+## Following the work
+
+The [run view](run-view.md) shows recorded activity, waiting ownership, reviewer
+attempts and declared finish steps through the terminal and local browser.
+[Capture reports](run-artifacts.md) before removing disposable output, and
+[export a portable archive](run-archives.md) for retention outside the original
+repository. Unreported activity remains unknown; a completed review does not
+establish that the declared delivery finish line has been reached.
+
 ## Where to next
 
 - [The managed delivery product](managed-delivery.md) — the product this gate is

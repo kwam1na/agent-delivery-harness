@@ -1,3 +1,12 @@
+import { withRetainedRecord } from "./run-view-record.ts";
+import { projectRunView, type RunView } from "./run-view.ts";
+import {
+  renderOperationalView,
+  renderArtifactDetail,
+  OPERATIONAL_STYLE,
+} from "./run-view-html.ts";
+import { parseRunExport, type DeliveryRunExport } from "./run-export.ts";
+import { readArchiveArtifact } from "./run-archive.ts";
 /**
  * `runs serve` — the operator's bird's-eye view of the run store.
  *
@@ -32,10 +41,19 @@
  * config-presence note names — run in the path itself with the `GIT_`
  * namespace dropped.
  */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import {
   evaluateRunJournal,
+  sha256Hex,
+  readRunArtifact,
+  RUN_STORE_ID,
   type RunEvent,
+  type RunArtifactMetadata,
   type RunStore,
 } from "@agent-delivery-harness/kernel";
 import {
@@ -50,7 +68,12 @@ import {
   type Readout,
   type RunSummary,
 } from "./run-projection.ts";
-import { oneLine, oneLineOf, resolveRunSurface, resolveWorktreeRoot } from "./run-surface.ts";
+import {
+  oneLine,
+  oneLineOf,
+  resolveRunSurface,
+  resolveWorktreeRoot,
+} from "./run-surface.ts";
 
 /** Loopback, always. The page is the operator's, and only the operator's. */
 export const RUN_SERVER_HOST = "127.0.0.1";
@@ -126,12 +149,18 @@ export interface RunServerHandle {
 export interface RunServerInput {
   /** One or more paths, each a worktree of a repository whose runs to serve. */
   readonly repos: readonly string[];
+  readonly archives?: readonly { label: string; text: string }[];
+  readonly now?: () => string;
+  readonly freshnessWindowMs?: number;
+  readonly recordPath?: string;
   /** Zero, the default, asks the operating system for an ephemeral port. */
   readonly port?: number;
   readonly pollSeconds?: number;
 }
 
-async function resolveRepo(repoPath: string): Promise<ResolvedRepo | { readonly reason: string }> {
+async function resolveRepo(
+  repoPath: string,
+): Promise<ResolvedRepo | { readonly reason: string }> {
   const surface = await resolveRunSurface(repoPath);
   if (!surface.ok) return { reason: `${repoPath}: ${surface.reason}` };
   const root = await resolveWorktreeRoot(repoPath);
@@ -147,7 +176,16 @@ async function resolveRepo(repoPath: string): Promise<ResolvedRepo | { readonly 
 
 /** Groups resolved paths by store, preserving the order the operator gave. */
 function groupByStore(resolved: readonly ResolvedRepo[]): readonly RepoGroup[] {
-  const groups = new Map<string, { root: string; commonDir: string; runsDir: string; worktreeKeys: string[]; store: RunStore }>();
+  const groups = new Map<
+    string,
+    {
+      root: string;
+      commonDir: string;
+      runsDir: string;
+      worktreeKeys: string[];
+      store: RunStore;
+    }
+  >();
   for (const repo of resolved) {
     const existing = groups.get(repo.commonDir);
     if (existing === undefined) {
@@ -164,7 +202,8 @@ function groupByStore(resolved: readonly ResolvedRepo[]): readonly RepoGroup[] {
       });
       continue;
     }
-    if (!existing.worktreeKeys.includes(repo.worktreeKey)) existing.worktreeKeys.push(repo.worktreeKey);
+    if (!existing.worktreeKeys.includes(repo.worktreeKey))
+      existing.worktreeKeys.push(repo.worktreeKey);
   }
   return [...groups.values()];
 }
@@ -204,6 +243,8 @@ interface ServedNote {
 }
 
 interface ServedRun {
+  readonly view?: RunView;
+  readonly href?: string;
   readonly runId: string;
   readonly repository: string;
   /** False when the journal refused the read discipline; every other field is then empty. */
@@ -241,10 +282,14 @@ function servedRun(input: {
   readonly roundDetail: readonly ServedRound[];
   readonly notes: readonly ServedNote[];
   readonly readable: boolean;
+  readonly view?: RunView;
+  readonly href?: string;
 }): ServedRun {
   const { summary } = input;
   return {
     runId: input.runId,
+    ...(input.view === undefined ? {} : { view: input.view }),
+    ...(input.href === undefined ? {} : { href: input.href }),
     repository: input.repository,
     readable: input.readable,
     live: input.live,
@@ -266,6 +311,7 @@ function servedRun(input: {
 }
 
 interface ServedState {
+  readonly selected?: boolean;
   readonly labels: string;
   readonly pollSeconds: number;
   readonly repositories: readonly {
@@ -289,7 +335,9 @@ const EMPTY_SUMMARY: RunSummary = {
   findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
 };
 
-function timelineOf(events: readonly RunEvent[]): readonly ServedTimelineEntry[] {
+function timelineOf(
+  events: readonly RunEvent[],
+): readonly ServedTimelineEntry[] {
   return events.map((event) => ({
     seq: event.seq,
     at: event.at,
@@ -301,7 +349,8 @@ function timelineOf(events: readonly RunEvent[]): readonly ServedTimelineEntry[]
 
 function roundsOf(events: readonly RunEvent[]): readonly ServedRound[] {
   return roundEntries(events).map((entry) => {
-    const closed = entry.closed === undefined ? undefined : payloadOf(entry.closed);
+    const closed =
+      entry.closed === undefined ? undefined : payloadOf(entry.closed);
     return {
       round: entry.round,
       candidateTreeSha: entry.candidateTreeSha,
@@ -316,7 +365,9 @@ function roundsOf(events: readonly RunEvent[]): readonly ServedRound[] {
 
 function notesOf(entries: readonly unknown[]): readonly ServedNote[] {
   return entries.map((entry) => {
-    const note = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+    const note = (
+      typeof entry === "object" && entry !== null ? entry : {}
+    ) as Record<string, unknown>;
     return {
       at: oneLineOf(note["at"], 32),
       kind: oneLineOf(note["kind"], 128),
@@ -335,7 +386,13 @@ function notesOf(entries: readonly unknown[]): readonly ServedNote[] {
  * torn-tail repair, and a viewer that 500s on that would be unusable exactly
  * while a run is most interesting.
  */
-async function readState(groups: readonly RepoGroup[], pollSeconds: number): Promise<ServedState> {
+async function readState(
+  groups: readonly RepoGroup[],
+  pollSeconds: number,
+  now: string,
+  freshnessWindowMs?: number,
+  recordPath?: string,
+): Promise<ServedState> {
   const runs: ServedRun[] = [];
   for (const group of groups) {
     const live = new Set<string>();
@@ -352,9 +409,15 @@ async function readState(groups: readonly RepoGroup[], pollSeconds: number): Pro
             runId,
             repository: group.root,
             readable: false,
+            href: `/runs/${sha256Hex(group.commonDir)}/${runId}`,
             live: false,
             summary: EMPTY_SUMMARY,
-            readout: { status: "absent", present: [], missing: [], violations: [] },
+            readout: {
+              status: "absent",
+              present: [],
+              missing: [],
+              violations: [],
+            },
             timeline: [],
             roundDetail: [],
             notes,
@@ -368,6 +431,15 @@ async function readState(groups: readonly RepoGroup[], pollSeconds: number): Pro
         servedRun({
           runId,
           repository: group.root,
+          view: await withRetainedRecord(
+            projectRunView(events, {
+              now,
+              ...(freshnessWindowMs === undefined ? {} : { freshnessWindowMs }),
+            }),
+            group.root,
+            recordPath,
+          ),
+          href: `/runs/${sha256Hex(group.commonDir)}/${runId}`,
           readable: true,
           // Liveness is the pointer AND the absence of an end, never one alone:
           // a pointer left behind by a run that ended without clearing it must
@@ -418,37 +490,42 @@ export function escapeHtml(value: string): string {
 }
 
 /** Neutralized to one line, then escaped as markup: the terminal's rule, plus the browser's. */
-const cell = (value: string, maximum = 240): string => escapeHtml(oneLine(value, maximum));
+const cell = (value: string, maximum = 240): string =>
+  escapeHtml(oneLine(value, maximum));
 
-const STYLE = [
-  "body{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;margin:1.5rem;color:#1a1a1a;background:#fbfbfa}",
-  "h1{font-size:1.1rem;margin:0 0 .25rem}h2{font-size:.95rem;margin:1.5rem 0 .4rem}h3{font-size:.85rem;margin:.9rem 0 .3rem;color:#555}",
-  ".labels{color:#7a6a00;background:#fffbe6;border:1px solid #e8dca0;padding:.35rem .5rem;margin:.5rem 0 1rem}",
-  "table{border-collapse:collapse;width:100%;margin:.3rem 0 .6rem}",
-  "th,td{border:1px solid #ddd;padding:.22rem .45rem;text-align:left;vertical-align:top;word-break:break-word}",
-  "th{background:#f0f0ee;font-weight:600}",
-  ".live{color:#0a6b2e;font-weight:700}.ended{color:#666}.open{color:#7a4b00}",
-  ".meta{color:#666;margin:.2rem 0}",
-  "@media(prefers-color-scheme:dark){body{background:#16181a;color:#e6e6e6}th{background:#24272a}th,td{border-color:#3a3f44}",
-  ".labels{color:#e8d98a;background:#2a2718;border-color:#4d4526}.meta,.ended{color:#9aa0a6}h3{color:#9aa0a6}}",
-].join("");
-
-const RUNS_HEADER = ["run", "ticket", "repository", "duration", "rounds", "findings", "gate", "record", "result", "state"];
+const RUNS_HEADER = [
+  "run",
+  "ticket",
+  "repository",
+  "duration",
+  "rounds",
+  "historical findings",
+  "gate",
+  "record",
+  "result",
+  "state",
+];
 
 function stateCell(run: ServedRun): string {
   if (!run.readable) return `<td class="open">unreadable</td>`;
-  if (run.live) return `<td class="live">live</td>`;
-  return run.open ? `<td class="open">open</td>` : `<td class="ended">ended</td>`;
+  if (run.live) return `<td class="live">selected / open</td>`;
+  return run.open
+    ? `<td class="open">open</td>`
+    : `<td class="ended">ended</td>`;
 }
 
-const written = (outcome: { readonly outcome: string; readonly writer: string } | undefined): string =>
-  outcome === undefined ? "—" : `${cell(outcome.outcome, 64)} <span class="meta">(${cell(outcome.writer, 16)}-written)</span>`;
+const written = (
+  outcome: { readonly outcome: string; readonly writer: string } | undefined,
+): string =>
+  outcome === undefined
+    ? "—"
+    : `${cell(outcome.outcome, 64)} <span class="meta">(${cell(outcome.writer, 16)}-written)</span>`;
 
 function runsTable(state: ServedState): string {
   const rows = state.runs.map((run) =>
     [
       "<tr>",
-      `<td>${cell(run.runId, 128)}</td>`,
+      `<td><a href="${escapeHtml(run.href ?? "#")}">${cell(run.runId, 128)}</a></td>`,
       `<td>${cell(run.ticket, 128) || "—"}</td>`,
       `<td>${cell(run.repository, 400)}</td>`,
       `<td>${run.durationSeconds}s</td>`,
@@ -464,7 +541,9 @@ function runsTable(state: ServedState): string {
   return [
     "<table>",
     `<tr>${RUNS_HEADER.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr>`,
-    rows.length === 0 ? `<tr><td colspan="${RUNS_HEADER.length}">no runs in this store</td></tr>` : rows.join(""),
+    rows.length === 0
+      ? `<tr><td colspan="${RUNS_HEADER.length}">no runs in this store</td></tr>`
+      : rows.join(""),
     "</table>",
   ].join("");
 }
@@ -483,7 +562,9 @@ function timelineTable(run: ServedRun): string {
   );
   return [
     "<h3>timeline</h3><table><tr><th>seq</th><th>at</th><th>kind</th><th>writer</th><th>detail</th></tr>",
-    rows.length === 0 ? '<tr><td colspan="5">no readable events</td></tr>' : rows.join(""),
+    rows.length === 0
+      ? '<tr><td colspan="5">no readable events</td></tr>'
+      : rows.join(""),
     "</table>",
   ].join("");
 }
@@ -511,8 +592,9 @@ function roundsTable(run: ServedRun): string {
 
 function notesTable(run: ServedRun): string {
   if (run.notes.length === 0) return "";
-  const rows = run.notes.map((note) =>
-    `<tr><td>${cell(note.at, 32)}</td><td>${cell(note.kind, 128)}</td><td>${cell(note.code, 64)}</td><td>${cell(note.pattern, 64)}</td></tr>`,
+  const rows = run.notes.map(
+    (note) =>
+      `<tr><td>${cell(note.at, 32)}</td><td>${cell(note.kind, 128)}</td><td>${cell(note.code, 64)}</td><td>${cell(note.pattern, 64)}</td></tr>`,
   );
   return [
     "<h3>refused appends</h3><table><tr><th>at</th><th>kind</th><th>code</th><th>pattern</th></tr>",
@@ -522,14 +604,19 @@ function notesTable(run: ServedRun): string {
 }
 
 function readoutBlock(run: ServedRun): string {
-  const list = (entries: readonly string[]): string => (entries.length === 0 ? "(none)" : cell(entries.join(", "), 800));
+  const list = (entries: readonly string[]): string =>
+    entries.length === 0 ? "(none)" : cell(entries.join(", "), 800);
   return [
     "<h3>completeness</h3>",
     `<p class="labels">${cell(run.readout.status, 64)} — ${escapeHtml(READOUT_LABELS)}</p>`,
     `<p class="meta">present: ${list(run.readout.present)}</p>`,
     `<p class="meta">missing: ${list(run.readout.missing)}</p>`,
-    run.readout.violations.length === 0 ? "" : `<p class="meta">violations: ${list(run.readout.violations)}</p>`,
-    run.readout.note === undefined ? "" : `<p class="meta">note: ${cell(run.readout.note, 500)}</p>`,
+    run.readout.violations.length === 0
+      ? ""
+      : `<p class="meta">violations: ${list(run.readout.violations)}</p>`,
+    run.readout.note === undefined
+      ? ""
+      : `<p class="meta">note: ${cell(run.readout.note, 500)}</p>`,
   ].join("");
 }
 
@@ -539,32 +626,50 @@ export function renderPage(state: ServedState): string {
   // after `run.ended` would be claiming the run might still move.
   const anyLive = state.runs.some((run) => run.live);
   return [
-    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1">',
     anyLive ? `<meta http-equiv="refresh" content="${state.pollSeconds}">` : "",
     "<title>delivery runs</title>",
-    `<style>${STYLE}</style></head><body>`,
-    "<h1>delivery runs</h1>",
+    `<style>${OPERATIONAL_STYLE}</style></head><body>`,
+    state.selected
+      ? `<h1>${cell(state.runs[0]?.ticket || "Delivery run", 128)}</h1>`
+      : "<h1>Delivery runs</h1>",
+    '<p class="meta">Reported observations only; not approval evidence.</p>',
+    "<details><summary>Run details and provenance</summary>",
     `<p class="labels">${escapeHtml(READOUT_LABELS)}. Nothing here is read by admission, the gate, or the recorder.</p>`,
+
     ...state.repositories.map(
-      (repository) => `<p class="meta">${cell(repository.root, 400)} — ${cell(repository.runsDir, 400)}</p>`,
+      (repository) =>
+        `<p class="meta">${cell(repository.root, 400)} — ${cell(repository.runsDir, 400)}</p>`,
     ),
     anyLive
-      ? `<p class="meta">refreshing every ${state.pollSeconds}s while a run is live</p>`
-      : '<p class="meta">no live run; this page does not refresh itself</p>',
-    runsTable(state),
+      ? `<p class="meta">refreshing every ${state.pollSeconds}s while a run is selected and open; execution is not inferred</p>`
+      : '<p class="meta">no selected open run; this page does not refresh itself</p>',
+    "</details>",
+    state.selected
+      ? '<p class="back"><a href="/">All runs</a></p>'
+      : runsTable(state),
     ...state.runs.map((run) =>
-      [
-        `<h2>${cell(run.runId, 128)}</h2>`,
-        `<p class="meta">${cell(run.repository, 400)}</p>`,
-        timelineTable(run),
+      state.selected && !run.readable
+        ? `<section aria-label="Run read error"><h2>Run journal unreadable</h2><p>The journal for ${cell(run.runId, 128)} could not be read. Activity, evidence and completeness are unavailable.</p></section>`
+        : [
+        state.selected
+          ? ""
+          : `<h2>${cell(run.runId, 128)}</h2><p class="meta">${cell(run.repository, 400)}</p>`,
+        run.view === undefined || !state.selected
+          ? ""
+          : renderOperationalView(run.view, run.href ?? ""),
         roundsTable(run),
+        timelineTable(run),
         notesTable(run),
         readoutBlock(run),
       ].join(""),
     ),
     "</body></html>",
-  ].join("");
+  ]
+    .join("")
+    .replace(/<table>/g, '<div class="table-scroll"><table>')
+    .replace(/<\/table>/g, "</table></div>");
 }
 
 // ── The server ───────────────────────────────────────────────────────────────
@@ -578,8 +683,16 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "Cache-Control": "no-store",
 };
 
-function send(response: ServerResponse, status: number, contentType: string, body: string): void {
-  response.writeHead(status, { ...SECURITY_HEADERS, "Content-Type": contentType });
+function send(
+  response: ServerResponse,
+  status: number,
+  contentType: string,
+  body: string,
+): void {
+  response.writeHead(status, {
+    ...SECURITY_HEADERS,
+    "Content-Type": contentType,
+  });
   response.end(body);
 }
 
@@ -600,13 +713,30 @@ function send(response: ServerResponse, status: number, contentType: string, bod
  * those ports where the operator types them. Nothing is re-checked here — a
  * second guard would leave neither one answerable.
  */
-export function hostIsBound(header: string | undefined, host: string, port: number): boolean {
+export function hostIsBound(
+  header: string | undefined,
+  host: string,
+  port: number,
+): boolean {
   return header === `${host}:${port}`;
 }
 
-export async function startRunServer(input: RunServerInput): Promise<RunServerStart> {
-  if (input.repos.length === 0) return { ok: false, reason: "no repository path to serve" };
+export async function startRunServer(
+  input: RunServerInput,
+): Promise<RunServerStart> {
+  if (input.repos.length === 0 && (input.archives?.length ?? 0) === 0)
+    return { ok: false, reason: "no repository path to serve" };
   const pollSeconds = input.pollSeconds ?? DEFAULT_POLL_SECONDS;
+  if (
+    !Number.isFinite(pollSeconds) ||
+    pollSeconds <= 0 ||
+    !Number.isFinite(input.freshnessWindowMs ?? 0) ||
+    (input.freshnessWindowMs ?? 0) < 0
+  )
+    return {
+      ok: false,
+      reason: "invalid observation refresh or freshness window",
+    };
 
   const resolved: ResolvedRepo[] = [];
   for (const repoPath of input.repos) {
@@ -615,45 +745,198 @@ export async function startRunServer(input: RunServerInput): Promise<RunServerSt
     resolved.push(outcome);
   }
   const groups = groupByStore(resolved);
+  const archives = new Map<
+    string,
+    { label: string; text: string; archive: DeliveryRunExport }
+  >();
+  for (const supplied of input.archives ?? []) {
+    const parsed = parseRunExport(supplied.text);
+    if (!parsed.ok)
+      return { ok: false, reason: "archive invalid or unsupported" };
+    archives.set(sha256Hex(supplied.text), {
+      ...supplied,
+      archive: parsed.value,
+    });
+  }
+  const now = input.now ?? (() => new Date().toISOString());
+  const archiveRun = (
+    id: string,
+    entry: { label: string; archive: DeliveryRunExport },
+  ): ServedRun =>
+    servedRun({
+      runId: entry.archive.runId,
+      repository: `Archive: ${entry.label}`,
+      readable: true,
+      live: false,
+      summary: summarize(entry.archive.events),
+      readout: entry.archive.readout,
+      timeline: timelineOf(entry.archive.events),
+      roundDetail: roundsOf(entry.archive.events),
+      notes: [],
+      href: `/archives/${id}`,
+      view: projectRunView(entry.archive.events, {
+        now: entry.archive.events.at(-1)?.at ?? "",
+        historical: true,
+      }),
+    });
+  const state = async () => {
+    const live = await readState(
+      groups,
+      pollSeconds,
+      now(),
+      input.freshnessWindowMs,
+      input.recordPath,
+    );
+    return {
+      ...live,
+      runs: [
+        ...live.runs,
+        ...[...archives.entries()].map(([id, entry]) => archiveRun(id, entry)),
+      ],
+    };
+  };
 
   let bound: { readonly host: string; readonly port: number } | undefined;
-  const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    void (async () => {
-      try {
-        if (bound === undefined || !hostIsBound(request.headers.host, bound.host, bound.port)) {
-          send(response, 403, "text/plain; charset=utf-8", "forbidden host\n");
-          return;
+  const server: Server = createServer(
+    (request: IncomingMessage, response: ServerResponse) => {
+      void (async () => {
+        try {
+          if (
+            bound === undefined ||
+            !hostIsBound(request.headers.host, bound.host, bound.port)
+          ) {
+            send(
+              response,
+              403,
+              "text/plain; charset=utf-8",
+              "forbidden host\n",
+            );
+            return;
+          }
+          if (request.method !== "GET" && request.method !== "HEAD") {
+            send(
+              response,
+              405,
+              "text/plain; charset=utf-8",
+              "method not allowed\n",
+            );
+            return;
+          }
+          const route = (request.url ?? "/").split("?")[0];
+          if (route === "/") {
+            send(
+              response,
+              200,
+              "text/html; charset=utf-8",
+              renderPage(await state()),
+            );
+            return;
+          }
+          if (route === "/api/runs") {
+            send(
+              response,
+              200,
+              "application/json; charset=utf-8",
+              `${JSON.stringify(await state(), null, 2)}\n`,
+            );
+            return;
+          }
+          const match = route?.match(
+            /^\/(runs\/([a-f0-9]{64})\/([A-Za-z0-9_-]+)|archives\/([a-f0-9]{64}))(?:\/artifacts\/([A-Za-z0-9_-]+)(\/download)?)?$/,
+          );
+          if (match) {
+            const base = `/${match[1]}`;
+            const archive = match[4] ? archives.get(match[4]) : undefined;
+            const group = match[2]
+              ? groups.find((g) => sha256Hex(g.commonDir) === match[2])
+              : undefined;
+            if (!archive && !group) {
+              send(response, 404, "text/plain; charset=utf-8", "not found\n");
+              return;
+            }
+            const runId = archive?.archive.runId ?? match[3]!;
+            const artifactId = match[5];
+            if (artifactId !== undefined) {
+              if (!RUN_STORE_ID.test(artifactId) || artifactId.length > 128) {
+                send(response, 404, "text/plain; charset=utf-8", "not found\n");
+                return;
+              }
+              const result = archive
+                ? readArchiveArtifact(archive.text, artifactId)
+                : await readRunArtifact(group!.store, runId, artifactId);
+              if (match[6] && result.ok) {
+                response.writeHead(200, {
+                  ...SECURITY_HEADERS,
+                  "Content-Type": "application/octet-stream",
+                  "Content-Disposition": `attachment; filename="${artifactId}.bin"`,
+                });
+                response.end(Buffer.from(result.base64, "base64"));
+                return;
+              }
+              const liveRead =
+                group === undefined ? undefined : await group.store.read(runId);
+              const referenceList =
+                archive?.archive.events ??
+                (liveRead?.ok ? liveRead.events : []);
+              const reference = referenceList.find(
+                (e) =>
+                  e.kind === "artifact.referenced" &&
+                  e.payload["artifactId"] === artifactId,
+              )?.payload as RunArtifactMetadata | undefined;
+              send(
+                response,
+                result.ok ? 200 : 404,
+                "text/html; charset=utf-8",
+                renderArtifactDetail({
+                  runId,
+                  artifactId,
+                  backHref: base,
+                  ...(reference === undefined ? {} : { metadata: reference }),
+                  result,
+                  historical: archive !== undefined,
+                }),
+              );
+              return;
+            }
+            const full = await state();
+            const selected = full.runs.filter((r) => r.href === base);
+            if (!selected.length) {
+              send(response, 404, "text/plain; charset=utf-8", "not found\n");
+              return;
+            }
+            send(
+              response,
+              200,
+              "text/html; charset=utf-8",
+              renderPage({ ...full, runs: selected, selected: true }),
+            );
+            return;
+          }
+          send(response, 404, "text/plain; charset=utf-8", "not found\n");
+        } catch {
+          // The store is on disk and the disk can say no. A viewer that leaked
+          // the reason would be printing a path, and a viewer that crashed would
+          // take the operator's window with it. Guarded on `headersSent` because
+          // a failure after the status line cannot be answered twice.
+          if (!response.headersSent)
+            send(
+              response,
+              500,
+              "text/plain; charset=utf-8",
+              "the run store could not be read\n",
+            );
+          response.end();
         }
-        if (request.method !== "GET" && request.method !== "HEAD") {
-          send(response, 405, "text/plain; charset=utf-8", "method not allowed\n");
-          return;
-        }
-        const route = (request.url ?? "/").split("?")[0];
-        if (route === "/") {
-          send(response, 200, "text/html; charset=utf-8", renderPage(await readState(groups, pollSeconds)));
-          return;
-        }
-        if (route === "/api/runs") {
-          send(response, 200, "application/json; charset=utf-8", `${JSON.stringify(await readState(groups, pollSeconds), null, 2)}\n`);
-          return;
-        }
-        send(response, 404, "text/plain; charset=utf-8", "not found\n");
-      } catch {
-        // The store is on disk and the disk can say no. A viewer that leaked
-        // the reason would be printing a path, and a viewer that crashed would
-        // take the operator's window with it. Guarded on `headersSent` because
-        // a failure after the status line cannot be answered twice.
-        if (!response.headersSent) send(response, 500, "text/plain; charset=utf-8", "the run store could not be read\n");
-        response.end();
-      }
-    })();
-  });
+      })();
+    },
+  );
 
   const listening = await new Promise<string | undefined>((resolve) => {
     server.once("error", (error: Error) => resolve(error.message));
     server.listen(input.port ?? 0, RUN_SERVER_HOST, () => resolve(undefined));
   });
-  if (listening !== undefined) return { ok: false, reason: oneLine(listening, 200) };
+  if (listening !== undefined)
+    return { ok: false, reason: oneLine(listening, 200) };
 
   // THE BOUND ADDRESS IS READ BACK OFF THE SOCKET, never echoed from the
   // constant that was passed to `listen`. Reporting the constant would make

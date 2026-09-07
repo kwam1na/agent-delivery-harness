@@ -124,6 +124,7 @@ describe("the documentation's references", () => {
       "docs/run-archives.md",
       "docs/run-artifacts.md",
       "docs/run-progress.md",
+      "docs/run-view.md",
       "docs/spec-errata.md",
     ]);
   });

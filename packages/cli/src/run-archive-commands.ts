@@ -30,7 +30,7 @@ const blocked = (reason: string): CommandResult => ({
   ],
 });
 /** Explicit file input only, bounded on the opened descriptor; never a server path. */
-async function readArchiveFile(file: string): Promise<string> {
+export async function readArchiveFile(file: string): Promise<string> {
   // Inspect the descriptor before reading; a FIFO must not wait for a writer.
   const h = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {

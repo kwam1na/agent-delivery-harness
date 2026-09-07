@@ -98,14 +98,18 @@ cannot drift from the tool.
   status surface), `maintain` (the installation-scoped maintenance lane:
   update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark), and
   the config-free run-surface pair `emit` and `runs` — `emit` appends one
-  `run-event/1` event to the current delivery run's journal, `runs list` and
-  `runs show` render that journal back, and `runs serve` puts the same
-  projection on a script-free loopback page over one or more `--repo` paths,
-  refreshing itself only while a run is live. The eight candidate-facing commands
-  append their own `command.completed` automatically whenever a run is current
-  for the invoking worktree, unless `DELIVERY_HARNESS_RUN_STORE` points the
-  store somewhere other than the repository's git common directory. The run
-  journal is self-attested observability
+  versioned event to the selected delivery run's journal. `runs list` and
+  `runs show` read the journal; `runs view` gives the operational projection
+  shared with the script-free loopback viewer, `runs serve`. Version 2 records
+  activity attempts, observed waits, report references and finish steps;
+  version 1 remains readable without inventing those observations. Supported
+  candidate commands pin the invoking worktree's selected run at entry and
+  report their lifecycle automatically for version 2; legacy runs retain
+  completion reporting. Observation failures preserve the command's result.
+  [Run progress](docs/run-progress.md) explains freshness and host limits;
+  [report capture](docs/run-artifacts.md), [portable archives](docs/run-archives.md)
+  and [the run view](docs/run-view.md) cover retained output and inspection.
+  The run journal is self-attested observability
   that no admission, gate, or record decision reads; see
   [The managed delivery product](docs/managed-delivery.md#run-surface).
   `managed operations` prints the facade's own operation contract — each
