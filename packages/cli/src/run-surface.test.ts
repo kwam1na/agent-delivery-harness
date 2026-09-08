@@ -758,7 +758,7 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(shown.out).toContain(`harness.config.ts present at ${realpathSync(dir)}`);
     expect(shown.out).not.toContain(`present at ${realpathSync(nested)}`);
 
-    const { page } = await pageAndState(await serve([nested]));
+    const { page } = await pageAndState(await serve([nested]), runId);
     expect(page).toContain(`note: no CLI gate completion in this journal; harness.config.ts present at ${escapedRoot(dir)}`);
   });
 
@@ -778,7 +778,7 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(shown.out).toContain("complete-executor-only");
     expect(shown.out).not.toContain("harness.config.ts present");
 
-    const { page, state } = await pageAndState(await serve([nested]));
+    const { page, state } = await pageAndState(await serve([nested]), runId);
     expect(page).not.toContain("harness.config.ts present");
     expect(runOf(state, runId).readout.note).toBeUndefined();
   });
@@ -1566,13 +1566,16 @@ async function serve(
 }
 
 /** The page and the JSON endpoint for one server, both fetched with the Host it bound. */
-async function pageAndState(server: RunServerHandle): Promise<{ readonly page: string; readonly state: ServedState }> {
+async function pageAndState(server: RunServerHandle, runId?: string): Promise<{ readonly page: string; readonly state: ServedState }> {
   const host = `${server.host}:${server.port}`;
-  const page = await httpGet(`${server.url}/`, { host });
-  expect(page.status).toBe(200);
   const json = await httpGet(`${server.url}/api/runs`, { host });
   expect(json.status).toBe(200);
-  return { page: page.body, state: JSON.parse(json.body) as ServedState };
+  const state = JSON.parse(json.body) as ServedState;
+  const href = runId === undefined ? "/" : runOf(state, runId).href;
+  expect(href).toBeDefined();
+  const page = await httpGet(server.url + href, { host });
+  expect(page.status).toBe(200);
+  return { page: page.body, state };
 }
 
 /** A worktree root as the page spells it: git's own toplevel, HTML-escaped. */
@@ -1585,24 +1588,6 @@ const runOf = (state: ServedState, runId: string): ServedState["runs"][number] =
   if (found === undefined) throw new Error(`${runId} not served: ${state.runs.map((run) => run.runId).join(",")}`);
   return found;
 };
-
-/**
- * One run's own block on the page: everything between its heading and the next
- * run's, or the end of the document.
- *
- * The page renders every run under one `<h2>`, and a block that read another
- * run's projection would still put the right words SOMEWHERE on the page.
- * Slicing to the heading is what makes "this run's completeness" an assertion
- * about this run rather than about the document.
- */
-function sectionFor(page: string, runId: string): string {
-  const heading = `<h2>${runId}</h2>`;
-  const start = page.indexOf(heading);
-  expect(start, `${runId} has no heading on the page`).toBeGreaterThan(-1);
-  const rest = page.slice(start + heading.length);
-  const next = rest.indexOf("<h2>");
-  return next === -1 ? rest : rest.slice(0, next);
-}
 
 /** A journal carrying both writers, a paired round, and an end. */
 async function scriptedRun(dir: string, options: { readonly rationale?: string } = {}): Promise<string> {
@@ -1648,7 +1633,7 @@ describe("runs serve", () => {
     const ended = await emit(dir, ["run.ended"], { result: "complete", cost: { unit: "usd", total: 2, reportedBy: "vitest" } });
     expect(ended.code, ended.err).toBe(EXIT_OK);
 
-    const { page, state } = await pageAndState(await serve([dir]));
+    const { page, state } = await pageAndState(await serve([dir]), runId);
     const run = runOf(state, runId);
 
     expect(run.ticket).toBe("V26-1555");
@@ -1682,18 +1667,19 @@ describe("runs serve", () => {
     const runId = await scriptedRun(dir);
     const server = await serve([dir], { pollSeconds: 1 });
 
-    const live = await pageAndState(server);
+    const live = await pageAndState(server, runId);
     expect(runOf(live.state, runId).live).toBe(true);
     expect(runOf(live.state, runId).open).toBe(true);
     // The CELL, not the word. The stylesheet names all three states, so
     // `toContain("ended")` holds on every page ever rendered; only the cell
     // distinguishes a run the operator is watching from one that has stopped.
-    expect(live.page).toContain('<td class="live">selected / open</td>');
-    expect(live.page).not.toContain('<td class="ended">ended</td>');
+    expect(live.page).toContain('data-live="true"');
+    expect(live.page).not.toContain('<span class="status">Reported complete</span>');
     // A live run is what makes the page refresh itself; the interval is the
     // page's own declaration, so an operator can see how stale a row may be.
-    expect(live.page).toContain('http-equiv="refresh"');
-    expect(live.page).toContain('content="1"');
+    expect(live.page).not.toContain('http-equiv="refresh"');
+    expect(live.page).toContain('<script>');
+    expect(live.page).toContain('data-poll-seconds="1"');
     expect(live.page).not.toContain("branch name");
 
     const decided = await emit(dir, ["decision.recorded"], { fork: "branch name", choice: "ticket branch" });
@@ -1701,18 +1687,18 @@ describe("runs serve", () => {
 
     // One poll later — which for a server that reads the store per request is
     // simply the next request — the page carries the event.
-    const refreshed = await pageAndState(server);
+    const refreshed = await pageAndState(server, runId);
     expect(refreshed.page).toContain("branch name");
     expect(runOf(refreshed.state, runId).timeline.map((entry) => entry.kind)).toContain("decision.recorded");
 
     const ended = await emit(dir, ["run.ended"], { result: "complete", cost: { unit: "usd", total: 2, reportedBy: "vitest" } });
     expect(ended.code, ended.err).toBe(EXIT_OK);
 
-    const after = await pageAndState(server);
+    const after = await pageAndState(server, runId);
     expect(runOf(after.state, runId).live).toBe(false);
     expect(runOf(after.state, runId).open).toBe(false);
-    expect(after.page).toContain('<td class="ended">ended</td>');
-    expect(after.page).not.toContain('<td class="live">selected / open</td>');
+    expect(after.page).toContain('<span class="status">Reported complete</span>');
+    expect(after.page).not.toContain('data-live="true"');
     // Nothing is live, so nothing is polled. The refresh is what an operator
     // pays for in requests; a store with only finished runs must cost nothing.
     expect(after.page).not.toContain('http-equiv="refresh"');
@@ -1731,8 +1717,8 @@ describe("runs serve", () => {
     expect(state.pollSeconds).toBe(DEFAULT_POLL_SECONDS);
     // Both places the interval reaches the operator: the refresh the browser
     // obeys, and the prose that tells a reader how stale a row may be.
-    expect(page).toContain(`<meta http-equiv="refresh" content="${DEFAULT_POLL_SECONDS}">`);
-    expect(page).toContain(`<p class="meta">refreshing every ${DEFAULT_POLL_SECONDS}s while a run is selected and open; execution is not inferred</p>`);
+    expect(page).toContain(`data-poll-seconds="${DEFAULT_POLL_SECONDS}"`);
+    expect(page).toContain(`<p class="meta">Live mode refreshes every ${DEFAULT_POLL_SECONDS}s while a run is selected and open; execution is not inferred.</p>`);
   });
 
   it("gives each repository its own pointer key, store root, and root path under a planted git environment", async () => {
@@ -1802,8 +1788,8 @@ describe("runs serve", () => {
     expect(runOf(state, runId).open).toBe(true);
     expect(runOf(state, runId).live).toBe(false);
     expect(page).toContain(runId);
-    expect(page).toContain('<td class="open">open</td>');
-    expect(page).not.toContain('<td class="live">selected / open</td>');
+    expect(page).toContain('<span class="status">Open</span>');
+    expect(page).not.toContain('data-live="true"');
   });
 
   it("groups both named worktrees of one repository, listing the run once and reading every pointer", async () => {
@@ -1837,11 +1823,11 @@ describe("runs serve", () => {
 
     // Two worktrees, one store: the run is served once, not once per key.
     expect(state.runs.filter((run) => run.runId === runId)).toHaveLength(1);
-    expect(page.split(`<h2>${runId}</h2>`).length - 1).toBe(1);
+    expect(page.split(`>${runId}</a>`).length - 1).toBe(1);
 
     // And it is live, which only the second worktree's pointer can say.
     expect(runOf(state, runId).live).toBe(true);
-    expect(page).toContain('<td class="live">selected / open</td>');
+    expect(page).toContain('data-live="true"');
   });
 
   it("binds loopback on an ephemeral port and refuses a foreign Host", async () => {
@@ -1963,7 +1949,7 @@ describe("runs serve", () => {
       const response = await httpGet(`${server.url}${route}`, { host });
       expect(response.headers["x-content-type-options"], route).toBe("nosniff");
       expect(String(response.headers["content-security-policy"]), route).toContain("default-src 'none'");
-      expect(String(response.headers["content-security-policy"]), route).toContain("script-src 'none'");
+      expect(String(response.headers["content-security-policy"]), route).toContain(route === "/" ? "script-src 'sha256-" : "script-src 'none'");
       expect(response.headers["access-control-allow-origin"], route).toBeUndefined();
     }
 
@@ -1989,7 +1975,7 @@ describe("runs serve", () => {
     await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "root");
 
     const runId = await executorOnlyRun(dir, "<script>alert(1)</script>");
-    const { page, state } = await pageAndState(await serve([dir]));
+    const { page, state } = await pageAndState(await serve([dir]), runId);
 
     // Neither the rationale nor the root path in the note may reach the
     // browser as markup. Both are rendered; neither is a tag.
@@ -2012,8 +1998,8 @@ describe("runs serve", () => {
     // Served SEPARATELY, because the claim under test is that one page does
     // not carry the note. One page over both repositories could only ever be
     // asked whether the note appears somewhere on it.
-    const noted = await pageAndState(await serve([withConfig]));
-    const unnoted = await pageAndState(await serve([withoutConfig]));
+    const noted = await pageAndState(await serve([withConfig]), withConfigRunId);
+    const unnoted = await pageAndState(await serve([withoutConfig]), withoutConfigRunId);
 
     // The readout block's own labelled line, which is the only place the
     // status and the three labels appear together. The page-wide banner also
@@ -2032,8 +2018,8 @@ describe("runs serve", () => {
     expect(notedRun.timeline.find((entry) => entry.kind === "gate.reported")?.writer).toBe("executor");
     expect(notedRun.timeline.find((entry) => entry.kind === "pr.opened")?.writer).toBe("executor");
     // An adopter's gate is the executor's word, and the page says so.
-    expect(noted.page).toContain("(executor-written)");
-    expect(noted.page).not.toContain("(cli-written)");
+    expect(noted.page).toContain("<td>executor-written</td>");
+    expect(noted.page).not.toContain("<td>cli-written</td>");
 
     // The note is the presence check's, not the page's: the repository without
     // a config gets the same status and no note, exactly as `runs show` does.
@@ -2057,14 +2043,15 @@ describe("runs serve", () => {
     const barelyStarted = await initRepo();
     const barelyStartedRunId = await startRun(barelyStarted);
 
-    const { page, state } = await pageAndState(await serve([finished, barelyStarted]));
+    const server = await serve([finished, barelyStarted]);
+    const { page, state } = await pageAndState(server);
     expect([...state.runs].map((run) => run.runId).sort()).toEqual([finishedRunId, barelyStartedRunId].sort());
     expect(runOf(state, finishedRunId).readout.status).toBe("complete-executor-only");
     expect(runOf(state, barelyStartedRunId).readout.status).toBe("incomplete");
 
     // Each heading is followed by ITS run's completeness, not the page's first.
-    const finishedBlock = sectionFor(page, finishedRunId);
-    const barelyStartedBlock = sectionFor(page, barelyStartedRunId);
+    const finishedBlock = (await pageAndState(server, finishedRunId)).page;
+    const barelyStartedBlock = (await pageAndState(server, barelyStartedRunId)).page;
     expect(finishedBlock).toContain(`complete-executor-only — ${READOUT_LABELS}`);
     expect(barelyStartedBlock).toContain(`incomplete — ${READOUT_LABELS}`);
     expect(barelyStartedBlock).not.toContain("complete-executor-only");
@@ -2078,7 +2065,8 @@ describe("runs serve", () => {
     // The note belongs to the status that explains it, on the repository it
     // names — once on the whole page, under the heading of the run it is about.
     const note = "note: no CLI gate completion in this journal";
-    expect(page.split(note).length - 1, "the note is rendered once, for one run").toBe(1);
+    expect(page).not.toContain(note);
+    expect(finishedBlock.split(note).length - 1).toBe(1);
     expect(finishedBlock).toContain(`${note}; harness.config.ts present at ${escapedRoot(finished)}`);
     expect(barelyStartedBlock).not.toContain(note);
     expect(runOf(state, barelyStartedRunId).readout.note).toBeUndefined();
@@ -2104,7 +2092,7 @@ describe("runs serve", () => {
     expect((await emit(dir, ["review.round.closed"], closed(1))).code).toBe(EXIT_OK);
     expect((await emit(dir, ["review.round.closed"], closed(2))).code).toBe(EXIT_OK);
 
-    const { page, state } = await pageAndState(await serve([dir]));
+    const { page, state } = await pageAndState(await serve([dir]), runId);
     const rounds = runOf(state, runId).roundDetail;
     expect(rounds.map((round) => round.round)).toEqual(["1", "2"]);
     expect(rounds[0]).toMatchObject({ opened: true, lenses: '["lens.outcome-correctness"]' });
@@ -2161,12 +2149,12 @@ describe("runs serve", () => {
     );
     expect(appended.ok, JSON.stringify(appended)).toBe(true);
 
-    const { page, state } = await pageAndState(await serve([dir]));
+    const { page, state } = await pageAndState(await serve([dir]), runId);
     expect(runOf(state, runId).gate).toEqual({ outcome: "ok", writer: "cli" });
     // The runs table's gate cell says who wrote the outcome down; without it
     // an adopter's self-reported gate and the product's own completion read
     // identically.
-    expect(page).toContain("(cli-written)");
+    expect(page).toContain("<td>cli-written</td>");
   });
 
   it("reports the last CLI completion of a re-run command, not the first", async () => {
@@ -2213,8 +2201,8 @@ describe("runs serve", () => {
     const server = await serve([dir]);
     const { page, state } = await pageAndState(server);
     expect(runOf(state, runId).readable).toBe(false);
-    expect(page).toContain('<td class="open">unreadable</td>');
-    expect(page).toContain("no readable events");
+    expect(page).toContain('<span class="status">Unable to read</span>');
+    expect(page).toContain("Activity and results are unavailable.");
     const href = runOf(state, runId).href;
     expect(href).toMatch(/^\/runs\//);
     const selected = await (await fetch(server.url + href)).text();
@@ -2234,12 +2222,12 @@ describe("runs serve", () => {
     const { page, state } = await pageAndState(await serve([dir]));
     expect(state.runs).toEqual([]);
     expect(state.labels).toBe(READOUT_LABELS);
-    expect(page).toContain(`<p class="labels">${READOUT_LABELS}. Nothing here is read by admission, the gate, or the recorder.</p>`);
+    expect(page).toContain(`${READOUT_LABELS}. Nothing here is read by admission, the gate, or the recorder.</p>`);
 
     // The runs table still renders, spanning every column it declares, rather
     // than collapsing to nothing an operator could mistake for a failed read.
-    expect(page).toContain('<td colspan="10">no runs in this store</td>');
-    expect(page).not.toContain("<h2>");
+    expect(page).toContain("No deliveries yet");
+    expect(page).not.toContain("<table>");
   });
 });
 
@@ -2301,7 +2289,7 @@ describe("a run carrying more than one ticket", () => {
 
     // The run's own ticket is the first one it read, whatever the later
     // entries bind: an entry that omits the member binds to this one.
-    const { page, state } = await pageAndState(await serve([dir]));
+    const { page, state } = await pageAndState(await serve([dir]), runId);
     const run = runOf(state, runId);
     expect(run.ticket).toBe("V26-1558");
 

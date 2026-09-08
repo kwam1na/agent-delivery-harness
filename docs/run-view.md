@@ -2,8 +2,9 @@
 
 Use `delivery-harness runs serve --repo <path>` to open the existing loopback
 viewer. Select a run from the inventory to get a stable URL. Current waiting
-ownership and work appear first, followed by reviewer attempts, candidate/evidence
-observations, retained reports, declared finish steps, cost, and history.
+ownership and work appear first, followed by current reviews, retained reports
+and declared finish steps. Earlier attempts, evidence, cost and history are
+available in expandable sections.
 
 A selected/open pointer is not execution proof. The latest producer observations
 supply activity status and freshness. Silence becomes stale or unknown, never
@@ -21,10 +22,10 @@ historical clock. No polling request invokes a provider, gate, or verification.
 Evidence events are reported observations; current candidate applicability stays
 unknown because this viewer does not establish identity or evidence admission.
 
-Retained report links open an inert detail page showing run, lens, attempt,
-candidate and digest, with an exact-byte download. Missing/refused/corrupt reports
+Retained report links open an inert reading view with an exact-byte download.
+Run, lens, attempt, candidate and digest remain in supporting details. Missing/refused/corrupt reports
 show their reason and a return link. Report pages never auto-refresh. Keyboard
-links have visible focus; run refresh preserves the selected URL and anchor.
+links have visible focus; live updates preserve the selected URL and reading position.
 Current-work cards stack on narrow screens; wide historical tables scroll locally.
 
 Use `delivery-harness runs serve --archive <file>` to view a saved portable run
@@ -34,7 +35,7 @@ start; URL routes name validated archive/run/artifact identifiers, never arbitra
 filesystem paths. Archives remain historical and do not refresh, resume a run,
 create a pointer, or become approval evidence.
 
-The server preserves loopback-only binding, exact Host validation, no-script CSP,
+The server preserves loopback-only binding, exact Host validation, a restricted CSP,
 no-store headers and inert report rendering. Nothing uploads automatically.
 See [capture](run-artifacts.md), [portable archives](run-archives.md), and
 [run progress semantics](run-progress.md) for the underlying contracts.
@@ -75,3 +76,27 @@ whose observed attempts are all terminal; neither is proof of delivery completio
 reporter, including superseded attempts. Unreported costs stay unreported. Attempt
 measurements are not added to run or review totals, which may cover the same work;
 there is no inferred cumulative total across attempts or incompatible units.
+
+## Operator reading experience
+
+The inventory groups open and recent deliveries, with older runs behind
+expandable lists. A delivery page puts waits, current work, current reviews,
+reports and declared milestones first. Earlier reports, accounting, provenance
+and the raw journal remain available in disclosures. These presentation choices
+do not change the CLI or JSON projection, or turn reported outcomes into approval.
+
+Live mode is the default for selected open runs. A fixed, hash-authorized script
+fetches the same server-rendered page and updates existing elements in place;
+there is no full-page refresh. Open disclosures, focused controls and the reading
+position are retained. Updates wait during interaction or text selection. Pause
+updates stops polling the server; Resume live updates resumes it. Hidden tabs
+skip requests, errors retain the last page with a retry notice, and polling stops
+when the selected run ends. With JavaScript disabled, Refresh remains available.
+Report and archive pages do not poll.
+
+Structured JSON reports have a reading view for results, findings and suggested
+changes. Supporting evidence and the original source are expandable; downloads
+retain the exact bytes. Unknown report shapes fall back to readable fields or
+plain escaped text. Bounded previews always leave the full source available.
+Only the fixed live-update script is authorized on run pages; report pages retain
+`script-src 'none'`. Executor-written content never becomes executable markup.

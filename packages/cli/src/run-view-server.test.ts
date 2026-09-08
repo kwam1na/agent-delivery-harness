@@ -156,7 +156,7 @@ it("shares operational values across CLI JSON and HTML and serves inert stable r
   expect(page).toContain('id="waiting"');
   expect(page).toContain("focus-visible");
   expect(page).toContain("@media(max-width:600px)");
-  expect(page.indexOf("Waiting and required action")).toBeLessThan(
+  expect(page.indexOf("Needs attention")).toBeLessThan(
     page.indexOf("Finding history"),
   );
   const artifactUrl = base + run.href + "/artifacts/dissent";

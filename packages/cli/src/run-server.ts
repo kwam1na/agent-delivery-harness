@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { RUN_LIVE_SCRIPT } from "./run-live.ts";
 import { withRetainedRecord } from "./run-view-record.ts";
 import { projectRunView, type RunView } from "./run-view.ts";
 import {
@@ -10,21 +12,9 @@ import { readArchiveArtifact } from "./run-archive.ts";
 /**
  * `runs serve` — the operator's bird's-eye view of the run store.
  *
- * ONE PAGE, NO SCRIPT. The page carries executor-written free text: rationales,
- * decisions, blocker summaries, a gate label an adopter chose. Every one of
- * those is attacker-controlled the moment a candidate script can run in the
- * repository, which is exactly the threat the store's own design admits it
- * cannot exclude. So the page is served with `script-src 'none'` and contains
- * no script of its own — not an inline one, not a nonce'd one, not a fetch
- * loop. Refresh is a `<meta http-equiv="refresh">`, which is the whole of the
- * polling mechanism. That leaves nothing for an escaped string to escape INTO:
- * even a rendering bug can only produce inert markup on a page where scripts
- * are refused by policy.
- *
- * WHY THE JSON ENDPOINT EXISTS ANYWAY. The plan asks for one, and it is what
- * makes the surface programmable — a test, a script, a future viewer. The page
- * does not consume it; the page is rendered server-side from the same
- * projection, so there is one renderer per surface and never a second answer.
+ * ONE SERVER RENDERER. A fixed hash-authorized enhancement updates live pages
+ * in place. Executor text remains escaped and cannot supply executable code.
+ * Reports keep the no-script policy. The page and JSON share one projection.
  *
  * WHAT "LIVE" MEANS, AND WHAT IT DELIBERATELY DOES NOT. A run is live when the
  * pointer of a worktree the operator NAMED points at it and it carries no
@@ -493,59 +483,18 @@ export function escapeHtml(value: string): string {
 const cell = (value: string, maximum = 240): string =>
   escapeHtml(oneLine(value, maximum));
 
-const RUNS_HEADER = [
-  "run",
-  "ticket",
-  "repository",
-  "duration",
-  "rounds",
-  "historical findings",
-  "gate",
-  "record",
-  "result",
-  "state",
-];
-
-function stateCell(run: ServedRun): string {
-  if (!run.readable) return `<td class="open">unreadable</td>`;
-  if (run.live) return `<td class="live">selected / open</td>`;
-  return run.open
-    ? `<td class="open">open</td>`
-    : `<td class="ended">ended</td>`;
+function runStatus(run: ServedRun): string {
+  if (!run.readable) return "Unable to read";
+  if (run.result !== undefined) return `Reported ${run.result}`;
+  return run.open ? "Open" : "Ended";
 }
-
-const written = (
-  outcome: { readonly outcome: string; readonly writer: string } | undefined,
-): string =>
-  outcome === undefined
-    ? "—"
-    : `${cell(outcome.outcome, 64)} <span class="meta">(${cell(outcome.writer, 16)}-written)</span>`;
-
 function runsTable(state: ServedState): string {
-  const rows = state.runs.map((run) =>
-    [
-      "<tr>",
-      `<td><a href="${escapeHtml(run.href ?? "#")}">${cell(run.runId, 128)}</a></td>`,
-      `<td>${cell(run.ticket, 128) || "—"}</td>`,
-      `<td>${cell(run.repository, 400)}</td>`,
-      `<td>${run.durationSeconds}s</td>`,
-      `<td>${run.rounds.closed}/${run.rounds.opened}</td>`,
-      `<td>P0 ${run.findings.P0} · P1 ${run.findings.P1} · P2 ${run.findings.P2} · P3 ${run.findings.P3}</td>`,
-      `<td>${written(run.gate)}</td>`,
-      `<td>${written(run.record)}</td>`,
-      `<td>${run.result === undefined ? "—" : cell(run.result, 64)}</td>`,
-      stateCell(run),
-      "</tr>",
-    ].join(""),
-  );
-  return [
-    "<table>",
-    `<tr>${RUNS_HEADER.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr>`,
-    rows.length === 0
-      ? `<tr><td colspan="${RUNS_HEADER.length}">no runs in this store</td></tr>`
-      : rows.join(""),
-    "</table>",
-  ].join("");
+  if (!state.runs.length) return '<section class="notice"><h2>No deliveries yet</h2><p>Runs will appear here when a delivery is recorded in a connected repository.</p></section>';
+  const rows = (runs: readonly ServedRun[]) => `<div class="run-list">${runs.map(run => `<article data-key="${escapeHtml(run.href ?? run.runId)}" class="run-row"><div><h3><a href="${escapeHtml(run.href ?? "#")}">${cell(run.ticket || run.runId, 128)}</a></h3><p class="meta">${cell(run.repository.split("/").filter(Boolean).at(-1) ?? run.repository, 128)}</p></div><div><span class="status">${cell(runStatus(run), 128)}</span></div><p class="run-caption">${run.readable ? `${run.rounds.closed} of ${run.rounds.opened} review rounds closed · Last reported ${cell(run.lastAt || "unknown", 32)}` : "Activity and results are unavailable."}</p></article>`).join("")}</div>`;
+  const ordered = [...state.runs].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  const open = ordered.filter(run => run.open);
+  const ended = ordered.filter(run => !run.open);
+  return `${open.length ? `<section id="open-runs"><h2>Open deliveries <span class="count">${open.length}</span></h2>${rows(open.slice(0, 10))}${open.length > 10 ? `<details id="older-open-runs"><summary>Earlier open deliveries <span>${open.length - 10} runs</span></summary>${rows(open.slice(10))}</details>` : ""}</section>` : ""}${ended.length ? `<section id="completed-runs"><h2>Recent deliveries</h2>${rows(ended.slice(0, 6))}${ended.length > 6 ? `<details id="older-ended-runs"><summary>Earlier deliveries <span>${ended.length - 6} runs</span></summary>${rows(ended.slice(6))}</details>` : ""}</section>` : ""}`;
 }
 
 function timelineTable(run: ServedRun): string {
@@ -621,55 +570,37 @@ function readoutBlock(run: ServedRun): string {
 }
 
 export function renderPage(state: ServedState): string {
-  // The refresh is declared ONLY while something is live. A store of finished
-  // runs must cost an open browser tab nothing, and a page that kept polling
-  // after `run.ended` would be claiming the run might still move.
-  const anyLive = state.runs.some((run) => run.live);
-  return [
-    '<!doctype html><html lang="en"><head><meta charset="utf-8">',
-    '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    anyLive ? `<meta http-equiv="refresh" content="${state.pollSeconds}">` : "",
-    "<title>delivery runs</title>",
-    `<style>${OPERATIONAL_STYLE}</style></head><body>`,
-    state.selected
-      ? `<h1>${cell(state.runs[0]?.ticket || "Delivery run", 128)}</h1>`
-      : "<h1>Delivery runs</h1>",
-    '<p class="meta">Reported observations only; not approval evidence.</p>',
-    "<details><summary>Run details and provenance</summary>",
-    `<p class="labels">${escapeHtml(READOUT_LABELS)}. Nothing here is read by admission, the gate, or the recorder.</p>`,
+  const anyLive = state.runs.some(run => run.live);
+  const refresh = anyLive;
+  const selected = state.selected ? state.runs[0] : undefined;
+  const base = selected?.href ?? "/";
+  const html = [
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
 
-    ...state.repositories.map(
-      (repository) =>
-        `<p class="meta">${cell(repository.root, 400)} — ${cell(repository.runsDir, 400)}</p>`,
-    ),
-    anyLive
-      ? `<p class="meta">refreshing every ${state.pollSeconds}s while a run is selected and open; execution is not inferred</p>`
-      : '<p class="meta">no selected open run; this page does not refresh itself</p>',
-    "</details>",
-    state.selected
-      ? '<p class="back"><a href="/">All runs</a></p>'
+    `<title>${selected ? cell(selected.ticket || "Delivery run", 128) : "Delivery runs"}</title><style>${OPERATIONAL_STYLE}</style></head><body><main data-live="${anyLive}" data-poll-seconds="${state.pollSeconds}">`,
+    selected ? '<a class="back" href="/">All runs</a>' : "",
+    `<header class="page-header"><p class="eyebrow">Delivery workspace</p><h1>${selected ? cell(selected.ticket || "Delivery run", 128) : "Delivery runs"}</h1>`,
+    selected ? `<span class="status">${cell(runStatus(selected), 128)}</span>` : '<p class="meta">Follow delivery progress and read the latest reviews.</p>',
+    '</header><div class="toolbar" data-live-controls>',
+    `<span class="meta" data-live-status>${refresh ? "Live" : "Saved observations"}</span>`,
+    `<a href="${escapeHtml(base)}">Refresh</a>`,
+    anyLive ? `<a data-live-toggle href="${escapeHtml(base)}">Pause updates</a>` : "",
+    '</div>',
+    selected
+      ? !selected.readable
+        ? `<section class="notice" aria-label="Run read error"><h2>Run journal unreadable</h2><p>The journal for ${cell(selected.runId, 128)} could not be read. Activity, evidence and completeness are unavailable.</p></section>`
+        : selected.view ? renderOperationalView(selected.view, selected.href ?? "") : ""
       : runsTable(state),
-    ...state.runs.map((run) =>
-      state.selected && !run.readable
-        ? `<section aria-label="Run read error"><h2>Run journal unreadable</h2><p>The journal for ${cell(run.runId, 128)} could not be read. Activity, evidence and completeness are unavailable.</p></section>`
-        : [
-        state.selected
-          ? ""
-          : `<h2>${cell(run.runId, 128)}</h2><p class="meta">${cell(run.repository, 400)}</p>`,
-        run.view === undefined || !state.selected
-          ? ""
-          : renderOperationalView(run.view, run.href ?? ""),
-        roundsTable(run),
-        timelineTable(run),
-        notesTable(run),
-        readoutBlock(run),
-      ].join(""),
-    ),
-    "</body></html>",
-  ]
-    .join("")
-    .replace(/<table>/g, '<div class="table-scroll"><table>')
-    .replace(/<\/table>/g, "</table></div>");
+    selected?.readable ? `<details id="journal-details" class="supporting"><summary>Journal details<span>Recorded events, round accounting and completeness</span></summary>${roundsTable(selected)}${timelineTable(selected)}${notesTable(selected)}${readoutBlock(selected)}</details>` : "",
+    '<details id="view-provenance" class="view-provenance"><summary>About these observations</summary>',
+    `<p class="meta">Reported observations only; not approval evidence. ${escapeHtml(READOUT_LABELS)}. Nothing here is read by admission, the gate, or the recorder.</p>`,
+    ...state.repositories.map(repository => `<p class="meta">${cell(repository.root, 400)} — ${cell(repository.runsDir, 400)}</p>`),
+    selected ? `<p class="meta">Run ${cell(selected.runId, 128)} · Last reported ${cell(selected.lastAt || "unknown", 32)}</p>` : "",
+    anyLive ? `<p class="meta">Live mode refreshes every ${state.pollSeconds}s while a run is selected and open; execution is not inferred.</p>` : '<p class="meta">No selected open run; this page does not refresh itself.</p>',
+    `</details></main>${refresh ? `<script>${RUN_LIVE_SCRIPT}</script>` : ""}</body></html>`,
+  ].join("").replace(/<table>/g, '<div class="table-scroll"><table>').replace(/<\/table>/g, "</table></div>");
+  return html;
+
 }
 
 // ── The server ───────────────────────────────────────────────────────────────
@@ -683,15 +614,19 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "Cache-Control": "no-store",
 };
 
+const LIVE_CSP = RUN_SERVER_CSP.replace("script-src 'none'", `script-src 'sha256-${createHash("sha256").update(RUN_LIVE_SCRIPT).digest("base64")}'`).replace("connect-src 'none'", "connect-src 'self'");
+
 function send(
   response: ServerResponse,
   status: number,
   contentType: string,
   body: string,
+  livePage = false,
 ): void {
   response.writeHead(status, {
     ...SECURITY_HEADERS,
     "Content-Type": contentType,
+    ...(livePage ? { "Content-Security-Policy": LIVE_CSP } : {}),
   });
   response.end(body);
 }
@@ -822,13 +757,15 @@ export async function startRunServer(
             );
             return;
           }
-          const route = (request.url ?? "/").split("?")[0];
+          const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+          const route = requestUrl.pathname;
           if (route === "/") {
             send(
               response,
               200,
               "text/html; charset=utf-8",
               renderPage(await state()),
+              true,
             );
             return;
           }
@@ -909,6 +846,7 @@ export async function startRunServer(
               200,
               "text/html; charset=utf-8",
               renderPage({ ...full, runs: selected, selected: true }),
+              true,
             );
             return;
           }
