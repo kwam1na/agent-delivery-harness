@@ -65,9 +65,10 @@ npm run --silent harness -- runs show <run-id> --json \
 
 A version-1 journal also cannot carry `roundId`, `bound`, `grace` or
 `reopensRoundId` — the frozen grammar refuses them as `unknown_member`. On such
-a run, a reopened round can only be narrated in a `decision.recorded` payload —
-and that payload takes `fork` and `choice` only, so a citation goes inside the
-`choice` prose rather than in a `citation` member, which is refused.
+a run, a reopened round can only be narrated in a `decision.recorded` payload.
+That payload takes `fork`, `choice` and an optional `cited`, so put the round
+you are continuing in `cited` — a member spelled `citation` is what draws
+`unknown_member`.
 
 Recovering the run id of a delivery you are resuming: `runs show` needs an id
 and `runs list` has no worktree attribution, so read it out of the journals by
@@ -89,10 +90,13 @@ npm run --silent harness -- emit lens.selected --event-id lens-1 \
   --json '{"mandated":["lens.outcome-correctness","lens.adversarial-testing"],"selected":["lens.outcome-correctness","lens.adversarial-testing"],"rationale":"the repository-mandated pair only: <why>"}'
 ```
 
-`.agents/policy/repository-policy.json` fixes the mandated pair; the evaluator
-raises `mandated-pair-mismatch` unless `mandated` names exactly those two ids.
+`.agents/policy/repository-policy.json` fixes the mandated pair; when an
+operator passes `--mandated-lens`, the evaluator raises
+`mandated-pair-mismatch` unless `mandated` names exactly those two ids.
+Without that flag the check is arity-and-non-emptiness only, so emit the pair
+the policy names rather than relying on the evaluator to notice.
 
-Other kinds worth emitting: `decision.recorded {"fork","choice"}`,
+Other kinds worth emitting: `decision.recorded {"fork","choice"[,"cited"]}`,
 `blocker.recorded {"code","summary"}`, `gate.reported {"command","outcome",
 "durationMs","ticket"}` for `npm run check` (which is not a product command;
 `outcome` is one of `pass`, `fail`, `blocked`, `interrupted` — `passed` is
@@ -425,9 +429,11 @@ npm run --silent harness -- emit run.ended --event-id end-1 \
   --json '{"result":"complete","cost":{"coverage":"unreported","reportedBy":"claude-code"}}'
 ```
 
-At `merge-ready` without that authority, emit `run.ended` once the pull request
-is open and the hosted checks are green, with `{"result":"complete"}` and a
-`note` saying the finish line reached was `merge-ready`.
+At `merge-ready` without that authority, emit the same `run.ended` payload —
+`result` and `cost` are the only two members the grammar accepts, both required,
+and there is no `note` — once the pull request is open and the hosted checks are
+green. Which finish line was reached is not expressible on this event; record it
+in a preceding `decision.recorded` if it needs to be in the journal.
 
 `run.ended` is terminal and clears the worktree pointer. Green hosted checks are
 not the finish line — a base move landing after `run.ended` forks one delivery

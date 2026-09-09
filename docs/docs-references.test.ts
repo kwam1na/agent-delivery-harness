@@ -56,6 +56,8 @@ import {
   projectShippedPersonas,
   readArchiveEntry,
   validateRunEventInput,
+  RUN_GATE_REPORTED_OUTCOMES,
+  RUN_ENDED_RESULTS,
   RUN_EVENT_KINDS,
   RUN_EVENT_KINDS_V1,
 } from "@agent-delivery-harness/kernel";
@@ -161,6 +163,18 @@ describe("the documentation's references", () => {
     expect(references.some((reference) => reference.document === "README.md" && reference.target === "docs/getting-started.md")).toBe(
       true,
     );
+    // The two references a delivering host arrives by. `AGENTS.md` is the only
+    // entry point a fresh agent is given, so these two links are what make the
+    // agent guide and the delivery runbook reachable at all; without them both
+    // pages are unreferenced prose. Asserted against the same scanned array as
+    // the existence check above, so a link that stops resolving fails there and
+    // a link that is deleted outright fails here.
+    for (const target of ["docs/agent-guide.md", "docs/delivery-runbook.md"]) {
+      expect(
+        references.some((reference) => reference.document === "AGENTS.md" && reference.target === target),
+        `AGENTS.md no longer points a delivering host at ${target}`,
+      ).toBe(true);
+    }
   });
 
   it("links only to paths that exist in this tree", () => {
@@ -527,7 +541,10 @@ describe("the rules the documentation states in prose", () => {
     // exactly the wrong place for a fresh agent to discover it.
     const kinds = new Set<string>([...RUN_EVENT_KINDS, ...RUN_EVENT_KINDS_V1]);
     expect(kinds.size, "the kernel exports no run-event kinds").toBeGreaterThan(0);
-    const emitted = [...runbook.matchAll(/emit ([a-z][a-z.]*[a-z])/g)].map((match) => match[1]!);
+    // Every kind in both grammars is dotted lowercase, so requiring the dot
+    // matches every real `emit <kind>` while leaving prose like "emit the pair
+    // the policy names" alone. A bare word after `emit` is English, not a kind.
+    const emitted = [...runbook.matchAll(/emit ([a-z]+(?:\.[a-z]+)+)/g)].map((match) => match[1]!);
     expect(new Set(emitted).size, "the runbook emits no run event").toBeGreaterThanOrEqual(4);
     expect(emitted, "the runbook opens the run").toContain("run.started");
     expect([...new Set(emitted)].filter((kind) => !kinds.has(kind))).toEqual([]);
@@ -580,6 +597,106 @@ describe("the rules the documentation states in prose", () => {
     }
     runbookStates("adds the optional `bound`, `grace` and `reopensRoundId` to `review.round.opened` **only**");
     runbookStates("no `lateFindings` member");
+
+    // The enumeration the page gives, checked against the set the validator
+    // actually accepts rather than against a list retyped here. Deriving it
+    // both ways — a member whose removal is refused is in; a candidate whose
+    // addition is refused is out — is what makes truncating the sentence, or
+    // padding it with `reopensRoundId`, a failure. A literal `toContain` on
+    // the whole sentence would catch neither once the wording drifts.
+    const baseline = Object.keys(closed.payload);
+    const accepted = baseline.filter((member) => {
+      const without = { ...closed.payload } as Record<string, unknown>;
+      delete without[member];
+      return !validateRunEventInput({ ...closed, payload: without }).ok;
+    });
+    for (const candidate of ["bound", "grace", "reopensRoundId", "lateFindings"]) {
+      if (validateRunEventInput({ ...closed, payload: { ...closed.payload, [candidate]: "x" } }).ok) {
+        accepted.push(candidate);
+      }
+    }
+    expect(accepted.slice().sort(), "the derived member set stopped matching the baseline envelope").toEqual(
+      baseline.slice().sort(),
+    );
+    const sentence = /accepted\s+members\s+of\s+`review\.round\.closed`\s+are\s+exactly([^;]+);/.exec(
+      textOf("docs/delivery-runbook.md").replace(/\s+/g, " "),
+    );
+    expect(sentence, "docs/delivery-runbook.md no longer enumerates review.round.closed's members").not.toBeNull();
+    const enumerated = [...sentence![1]!.matchAll(/`([a-zA-Z]+)`/g)].map((match) => match[1]!);
+    expect(enumerated.slice().sort(), "the runbook's enumeration is not the set the grammar accepts").toEqual(
+      accepted.slice().sort(),
+    );
+
+    // Section 6's carrier claim — the exact sentence a round-1 finding was
+    // filed against. It sits far from the enumeration above, in the section a
+    // reader is in when a base has moved, so it needs its own pin.
+    runbookStates("the next `review.round.opened` carries `reopensRoundId`");
+  });
+
+  // Two payload shapes the runbook writes at points where being wrong is
+  // expensive: `run.ended` is terminal, and `decision.recorded` is the only
+  // place a version-1 journal can carry a citation. Both were stated wrongly
+  // once, from a friction log rather than from the grammar, so pin them
+  // behaviourally: the shape the page tells an agent to emit must validate,
+  // and the misspelling the page warns about must not.
+  it("writes run-event payloads the frozen grammar accepts", () => {
+    const runbook = textOf("docs/delivery-runbook.md").replace(/\s+/g, " ");
+    const envelope = {
+      version: "run-event/2",
+      eventId: "e1",
+      runId: "run-1",
+      at: "2026-09-07T12:00:00Z",
+      repo: { commonDir: "/tmp/repo" },
+      actor: { role: "executor" },
+      attestation: "self",
+    } as const;
+    const cost = { coverage: "unreported", reportedBy: "claude-code" };
+
+    // `run.ended` takes exactly `result` and `cost`, both required. A `note`
+    // member — the thing the merge-ready branch once told an agent to send —
+    // is refused, and so is dropping `cost`.
+    const ended = { ...envelope, kind: "run.ended", payload: { result: "complete", cost } };
+    expect(validateRunEventInput(ended).ok, "the runbook's run.ended payload is refused").toBe(true);
+    expect(
+      validateRunEventInput({ ...ended, payload: { result: "complete" } }).ok,
+      "run.ended no longer requires cost",
+    ).toBe(false);
+    expect(
+      validateRunEventInput({ ...ended, payload: { result: "complete", cost, note: "merge-ready" } }).ok,
+      "run.ended accepts a note after all",
+    ).toBe(false);
+    expect(runbook, "docs/delivery-runbook.md no longer says run.ended has no note member").toContain(
+      "there is no `note`",
+    );
+
+    // `decision.recorded` does have the optional member — spelled `cited`.
+    const decision = {
+      ...envelope,
+      kind: "decision.recorded",
+      payload: { fork: "f", choice: "c", cited: "round-1" },
+    };
+    expect(validateRunEventInput(decision).ok, "decision.recorded rejects `cited`").toBe(true);
+    expect(
+      validateRunEventInput({ ...decision, payload: { fork: "f", choice: "c", citation: "round-1" } }).ok,
+      "decision.recorded accepts `citation` after all",
+    ).toBe(false);
+    expect(runbook, "docs/delivery-runbook.md no longer directs the citation into `cited`").toContain(
+      "put the round you are continuing in `cited`",
+    );
+
+    // Two closed vocabularies the page spells out. Both are frozen exports, so
+    // the page can be held to them by agreement instead of by a retyped list:
+    // re-freezing either one re-stamps the runbook rather than leaving it
+    // confidently wrong about a token an agent copies into a live emit.
+    expect(RUN_GATE_REPORTED_OUTCOMES.length, "the gate-outcome vocabulary is empty").toBeGreaterThan(0);
+    expect(
+      runbook,
+      "docs/delivery-runbook.md no longer lists the gate.reported outcome vocabulary the kernel freezes",
+    ).toContain(RUN_GATE_REPORTED_OUTCOMES.map((outcome) => `\`${outcome}\``).join(", "));
+    expect(RUN_ENDED_RESULTS, "run.ended no longer accepts the result the runbook emits").toContain("complete");
+    expect(runbook, "docs/delivery-runbook.md emits a run.ended result the grammar refuses").toContain(
+      '"result":"complete"',
+    );
   });
 
   it("names only paths that exist in the agent guide's shape block", () => {
@@ -644,5 +761,34 @@ describe("the corrections the delivery runbook carries", () => {
 
   it("says a suite is never stopped with a machine-wide pattern", () => {
     statesInProse("there is no worktree scoping in `pkill`");
+  });
+
+  // The merge step is the one place the page can instruct a host to exceed the
+  // authority this repository grants it, so it is held to the policy document
+  // by agreement rather than by a retyped claim: a grant that moves re-stamps
+  // the sentence instead of leaving the page authorizing what policy forbids.
+  it("states the merge authority the compiled policy actually grants", () => {
+    const policy = JSON.parse(readFileSync(path.join(REPO_ROOT, ".agents/policy/repository-policy.json"), "utf8"));
+    const granted: string[] = policy.grantedAuthority ?? [];
+    const forbidden: string[] = policy.forbiddenAuthority ?? [];
+    const finishLines: string[] = policy.grantedFinishLines ?? [];
+    expect(granted.length + forbidden.length + finishLines.length, "the policy grants nothing to state").toBeGreaterThan(0);
+    expect(forbidden, "policy no longer forbids merge; the runbook's conditioning is now unmotivated").toContain("merge");
+    for (const finishLine of finishLines) statesInProse(`grants the \`${finishLine}\` finish line`);
+    for (const authority of granted) statesInProse(`\`${authority}\` authority`);
+    statesInProse("lists `merge` under `forbiddenAuthority`");
+    // The conditioning itself, not just the recital of the policy. Without
+    // this the page may state the grant and then merge unconditionally.
+    statesInProse("the merge below runs only under authority the user supplied for that delivery");
+  });
+
+  // The three sentences that keep this page from becoming a second copy of the
+  // installed workflow's rules. Each names the skill that owns the rule instead
+  // of restating it; deleting one silently reinstates the duplication the item
+  // exists to remove, and no other assertion in this tree notices.
+  it("defers the rules the installed skills own instead of restating them", () => {
+    statesInProse("the installed workflow's, read from the skills exposed under `.claude/skills`");
+    statesInProse("`execute-work` says when that has to exist, and `obtain-review` says what discharges it.");
+    statesInProse("are `linear-tracker-adapter`'s, as is the rule about writing to the properties file.");
   });
 });
