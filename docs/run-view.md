@@ -40,6 +40,61 @@ no-store headers and inert report rendering. Nothing uploads automatically.
 See [capture](run-artifacts.md), [portable archives](run-archives.md), and
 [run progress semantics](run-progress.md) for the underlying contracts.
 
+## Enumerate the runs a repository holds
+
+`delivery-harness runs list` prints the store's path, one row per run, and the
+store's total. Each row carries the run's completeness status, whether it is
+still open, whether it is the invoking worktree's current run, and the
+journal's size on disk. The status column is a self-attested completeness
+verdict and carries the same labels the rest of this surface does.
+
+Add `--json` for the `run-inventory/1` structure, which carries the same facts
+as the human rows and the same `labels` member `runs show --json` uses:
+
+```json
+{
+  "spec": "run-inventory/1",
+  "labels": "self-attested; observability, not evidence; unbound to a record",
+  "runsDir": "/path/to/.git/managed-delivery/runs",
+  "current": "run-0123456789abcdef",
+  "runs": [{ "runId": "run-0123456789abcdef", "status": "incomplete", "open": true, "current": true, "bytes": 355 }],
+  "total": { "count": 1, "bytes": 355 },
+  "returned": 1,
+  "truncated": false
+}
+```
+
+`current` is the run the invoking worktree points at, or `null` when it points
+at none. `runs` carries the rows this invocation returned; `total` describes the
+set the filters selected **before** the bound, so `returned` below `total.count`
+— which is exactly when `truncated` is true — is how a bounded result is
+identified. The human listing says the same thing with a
+`showing <n> of <m> run(s) (--limit <n>)` line, printed only when rows were cut.
+
+**Ordering is the store's own: run ids ascending.** The same store, bounded the
+same way, returns the same rows, and the row `--limit 1` returns is the row an
+unbounded listing printed first. Nothing in this surface re-orders it.
+
+**Bounds and filters.** `--limit <n>` takes a positive whole number; `0`, a
+negative, a fraction, a non-number and a missing value are usage errors (exit 2)
+that print nothing on stdout. `--status <status>` selects one status, and
+`--open` / `--ended` select on whether the run has a `run.ended` — at most one
+of the two. Filters are applied before the bound, so a bound is a bound on the
+answer rather than on how far the store was read. A filter nothing matches is an
+empty inventory with a zero total, never the unfiltered listing.
+
+`--status` accepts exactly the statuses a row can carry: `complete`,
+`complete-executor-only`, `incomplete`, and `unreadable` — the last being the
+listing's own label for a journal it could not read, for which nothing was
+evaluated and nothing is claimed. The completeness vocabulary's fourth member,
+`absent`, means "no journal bound this candidate" and is refused here rather
+than accepted: an inventory of the journals that exist can never report it, and
+a selector that selects nothing whatever the store holds would read as "no such
+runs" instead of "that question cannot be asked here".
+
+Every flag above applies to the human listing too. With no flags at all the
+human listing is unchanged.
+
 ## Inspect a retained delivery record
 
 When the run has no durable record locator, select one explicitly:

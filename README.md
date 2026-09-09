@@ -99,8 +99,11 @@ cannot drift from the tool.
   update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark), and
   the config-free run-surface pair `emit` and `runs` — `emit` appends one
   versioned event to the selected delivery run's journal. `runs list` and
-  `runs show` read the journal; `runs view` gives the operational projection
-  shared with the script-free loopback viewer, `runs serve`. Version 2 records
+  `runs show` read the journal — `runs list --json` gives the bounded
+  `run-inventory/1` inventory, with `--limit`, `--status` and `--open`/`--ended`
+  applied before the bound and truncation stated in the result; `runs view`
+  gives the operational projection shared with the script-free loopback viewer,
+  `runs serve`. Version 2 records
   activity attempts, observed waits, report references and finish steps;
   version 1 remains readable without inventing those observations. Supported
   candidate commands pin the invoking worktree's selected run at entry and
