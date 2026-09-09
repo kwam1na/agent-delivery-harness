@@ -111,12 +111,15 @@ describe("locally executable assertions", () => {
         expect(dependency, `${manifest.name} runtime dependency`).toMatch(/^@agent-delivery-harness\//u);
       }
     }
-    expect(actual).toEqual(recorded);
+    // Preserve the historical composition artifact. This qualified adoption
+    // release advances every existing package together, without adding one.
+    expect(new Set(Object.values(recorded))).toEqual(new Set(["0.2.0"]));
+    expect(actual).toEqual(Object.fromEntries(Object.keys(recorded).map((name) => [name, "0.3.0"])));
   });
 
-  it("the CLI surface is exactly the recorded evidence loop", () => {
+  it("the CLI surface retains the recorded loop plus composite admission", () => {
     const names = COMMANDS.map((command) => command.name).sort();
-    expect(names).toEqual([...baseline.repositories.agentDeliveryHarness.cliCommands].sort());
+    expect(names).toEqual([...baseline.repositories.agentDeliveryHarness.cliCommands, "admit"].sort());
   });
 
   it("ordinary harness execution cannot own a managed delivery run", () => {
