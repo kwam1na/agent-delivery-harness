@@ -233,23 +233,30 @@ describe("the writer version a save-context observation is written at", () => {
       expect(await f.journal()).toEqual(before);
     }, 30000);
 
-  it("saves the same contract and stage again as a new v2 observation once the candidate has changed", async () => {
+  it("saves the same contract and stage again as a new v2 observation once what it observed has changed", async () => {
     const f = await fixture({ version: "2" });
     expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
     const payload = JSON.stringify({ contract, stage: "work" });
     expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
-    // A committed source change is a different candidate, so the same two
-    // operator members describe a different observation. The retry key is
-    // derived from the whole payload — the candidate identity, its binding,
-    // the policy digest and the release included — so this save is a new id
-    // and a second entry, not a refusal at /eventId.
+    // The retry key is derived from the whole observation, not from the two
+    // operator members, so the same contract and stage describe a different
+    // observation whenever anything the save reports has moved. Two such
+    // movements are asked here, one per term that a real operator can move on
+    // its own: the candidate the save is bound to, and the policy the save
+    // reports it was judged under. Each must produce a new id and a new entry
+    // rather than a refusal at /eventId.
     await writeFile(path.join(f.dir, "source.ts"), "export const value = 2;\n");
     await f.git("add", ".");
     await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "change the candidate");
     expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
     expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // Policy lives outside the candidate tree, so this moves the observation
+    // with candidateTreeSha and its binding held fixed: a key that digested
+    // only the candidate would refuse this save instead of recording it.
+    f.changePolicy();
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
     const saved = (await f.journal()).filter(event => event.kind === "context.saved");
-    expect(saved).toHaveLength(2);
-    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    expect(saved).toHaveLength(3);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(3);
   }, 30000);
 });
