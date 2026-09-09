@@ -43,6 +43,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { COMMANDS } from "@agent-delivery-harness/cli";
+import harnessConfig from "../harness.config.ts";
 import {
   FACADE_CAPABILITY_CLASSES,
   FACADE_OPERATIONS,
@@ -53,6 +55,9 @@ import {
   PRODUCT_TRUST_LABEL,
   projectShippedPersonas,
   readArchiveEntry,
+  validateRunEventInput,
+  RUN_EVENT_KINDS,
+  RUN_EVENT_KINDS_V1,
 } from "@agent-delivery-harness/kernel";
 
 const DOCS_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -486,7 +491,7 @@ describe("the rules the documentation states in prose", () => {
     }
   });
 
-  it("invokes only harness commands this CLI actually registers", () => {
+  it("invokes only harness commands, npm scripts and run-event kinds that exist", () => {
     // The runbook is a page of commands a fresh agent copies verbatim, and
     // nothing else in this tree executes it — `docs-examples.test.ts` reads
     // `getting-started.md` and no other page. So an invented command, a
@@ -500,12 +505,32 @@ describe("the rules the documentation states in prose", () => {
     // it, and a partial harvest would satisfy a bare floor.
     expect(new Set(invoked).size, "the runbook invokes no harness command").toBeGreaterThanOrEqual(8);
     expect(invoked, "the runbook walks through `prepare`").toContain("prepare");
-    const registered = new Set(
-      readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands"))
-        .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"))
-        .map((entry) => entry.replace(/\.ts$/, "")),
-    );
+    // Against the registry the CLI actually dispatches on, not against the
+    // filenames beside it: a module present but unregistered dispatches
+    // nothing, and the filename check would still pass.
+    const registered = new Set(COMMANDS.map((command) => command.name));
+    expect(registered.size, "the CLI registers no command").toBeGreaterThan(0);
     expect([...new Set(invoked)].filter((command) => !registered.has(command))).toEqual([]);
+
+    // The page reaches the CLI through npm scripts, so an invented script name
+    // fails as loudly as an invented command and was equally unchecked.
+    const scripts = new Set(
+      Object.keys(JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")).scripts ?? {}),
+    );
+    const run = [...runbook.matchAll(/npm run (?:--silent )?([a-z][a-z:-]*)/g)].map((match) => match[1]!);
+    expect(new Set(run).size, "the runbook runs no npm script").toBeGreaterThanOrEqual(3);
+    expect(run, "the runbook runs the gate").toContain("check");
+    expect([...new Set(run)].filter((script) => !scripts.has(script))).toEqual([]);
+
+    // Every `emit <kind>` the page writes, against the frozen kind vocabulary.
+    // A kind the grammar does not carry is refused at runtime, which is
+    // exactly the wrong place for a fresh agent to discover it.
+    const kinds = new Set<string>([...RUN_EVENT_KINDS, ...RUN_EVENT_KINDS_V1]);
+    expect(kinds.size, "the kernel exports no run-event kinds").toBeGreaterThan(0);
+    const emitted = [...runbook.matchAll(/emit ([a-z][a-z.]*[a-z])/g)].map((match) => match[1]!);
+    expect(new Set(emitted).size, "the runbook emits no run event").toBeGreaterThanOrEqual(4);
+    expect(emitted, "the runbook opens the run").toContain("run.started");
+    expect([...new Set(emitted)].filter((kind) => !kinds.has(kind))).toEqual([]);
   });
 
   it("states the base-movement rule the gate configuration actually carries", () => {
@@ -513,10 +538,68 @@ describe("the rules the documentation states in prose", () => {
     // replay — hangs off this one setting. Pinned by agreement rather than by
     // presence, so relaxing the configuration re-stamps the sentence instead
     // of leaving it confidently wrong.
-    const config = readFileSync(path.join(REPO_ROOT, "harness.config.ts"), "utf8");
-    const declared = /baseMovement:\s*"([a-z-]+)"/.exec(config);
-    expect(declared, "harness.config.ts declares no baseMovement").not.toBeNull();
-    documentStates("docs/delivery-runbook.md", `baseMovement: "${declared![1]!}"`);
+    // Read from the validated config object, not from its source text: a
+    // regex over the file cannot tell a deleted setting from a renamed one,
+    // and would go quiet — passing nothing — the moment the member moved.
+    const declared = harnessConfig.deliveryRecordVerification?.baseMovement;
+    expect(declared, "harness.config.ts declares no deliveryRecordVerification.baseMovement").toBeDefined();
+    documentStates("docs/delivery-runbook.md", `baseMovement: "${declared!}"`);
+  });
+
+  it("splits the round-event members the way the frozen grammar actually does", () => {
+    // A wrong member list on this page is the worst kind of documentation
+    // defect here: the emit is refused at runtime, in the middle of a round,
+    // by a page the agent is copying verbatim. Pinned behaviourally — the
+    // validator is asked, not the source text — so the sentence re-derives if
+    // the grammar ever moves a member across the two events.
+    const runbookStates = (phrase: string): void => {
+      const stated = textOf("docs/delivery-runbook.md").replace(/\s+/g, " ");
+      expect(stated, `docs/delivery-runbook.md no longer states: ${phrase}`).toContain(phrase);
+    };
+    const tree = "a".repeat(40);
+    const closed = {
+      version: "run-event/2", eventId: "e1", runId: "run-1", at: "2026-09-07T12:00:00Z",
+      repo: { commonDir: "/tmp/repo" }, actor: { role: "executor" }, attestation: "self",
+      kind: "review.round.closed", candidateTreeSha: tree,
+      payload: {
+        round: 1, roundId: "round-1", candidateTreeSha: tree, outcome: "aligned",
+        findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+        cost: { coverage: "unreported", reportedBy: "claude-code" },
+      },
+    };
+    // Anti-vacuity: if the baseline envelope stopped validating, every
+    // rejection below would pass for the wrong reason.
+    expect(validateRunEventInput(closed).ok, "the six-member closed envelope is refused").toBe(true);
+    for (const member of ["bound", "grace", "reopensRoundId"]) {
+      const value = member === "grace" ? true : member === "bound" ? 4 : "round-1";
+      expect(
+        validateRunEventInput({ ...closed, payload: { ...closed.payload, [member]: value } }).ok,
+        `review.round.closed accepts \`${member}\` after all`,
+      ).toBe(false);
+      runbookStates(`\`${member}\``);
+    }
+    runbookStates("adds the optional `bound`, `grace` and `reopensRoundId` to `review.round.opened` **only**");
+    runbookStates("no `lateFindings` member");
+  });
+
+  it("names only paths that exist in the agent guide's shape block", () => {
+    // The block is a map a reader navigates by. Every entry it carried before
+    // this delivery was a path, and one of them — `delivery/charters` — had
+    // stopped existing with the whole suite green, which is why it was
+    // rewritten. Presence of the block is not the claim; resolution of each
+    // row is.
+    const guide = textOf("docs/agent-guide.md");
+    const block = /## The shape of the repository\s*\n+```\n([\s\S]*?)```/.exec(guide);
+    expect(block, "docs/agent-guide.md has no fenced block under its shape heading").not.toBeNull();
+    const paths = block![1]!
+      .split("\n")
+      .map((line) => /^(\S+)\s\s+\S/.exec(line)?.[1])
+      .filter((entry): entry is string => entry !== undefined);
+    // Anti-vacuity from both ends: a reformatted block that stops matching the
+    // row pattern would satisfy the loop below with nothing in it.
+    expect(paths.length, "the shape block yields no paths").toBeGreaterThanOrEqual(17);
+    expect(paths, "the shape block names the root instruction file").toContain("AGENTS.md");
+    expect(paths.filter((entry) => !existsSync(path.join(REPO_ROOT, entry)))).toEqual([]);
   });
 
   it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {

@@ -65,7 +65,17 @@ npm run --silent harness -- runs show <run-id> --json \
 
 A version-1 journal also cannot carry `roundId`, `bound`, `grace` or
 `reopensRoundId` — the frozen grammar refuses them as `unknown_member`. On such
-a run, a reopened round can only be narrated in a `decision.recorded` payload.
+a run, a reopened round can only be narrated in a `decision.recorded` payload —
+and that payload takes `fork` and `choice` only, so a citation goes inside the
+`choice` prose rather than in a `citation` member, which is refused.
+
+Recovering the run id of a delivery you are resuming: `runs show` needs an id
+and `runs list` has no worktree attribution, so read it out of the journals by
+ticket instead.
+
+```sh
+grep -l "V26-0000" "$(git rev-parse --git-common-dir)"/managed-delivery/runs/*.jsonl
+```
 
 Then, before the first review round (the completeness evaluator enforces the
 order):
@@ -150,7 +160,10 @@ worktree clean — no unstaged tracked changes, no untracked files — from
 `prepare` through `record`. Capture refuses otherwise with
 `candidate_unprepared`. A mutating lens restores its probe with `git checkout --
 <file>`, which restores to `HEAD` and would take uncommitted candidate edits
-with it.
+with it. Restore **by path, never by tree** — `git checkout -- .` at a moment
+when a fix is still uncommitted destroys the fix under test. After any batch
+that was backgrounded and then interrupted, `git diff <the mutated file>` before
+trusting a green run: a killed batch can leave the plant in place.
 
 ## 4. Realizing the two lenses
 
@@ -208,12 +221,13 @@ ls -d "$REPO/.worktrees/v26-0000/.worktrees" 2>/dev/null && echo NESTED
 
 ### The round events
 
-Version 2 adds `roundId` and the optional `bound`, `grace` and
-`reopensRoundId`. The accepted members of `review.round.closed` are exactly
-`round`, `roundId`, `candidateTreeSha`, `outcome`, `findings`, `cost`, `bound`,
-`grace` and `reopensRoundId` — there is **no `lateFindings` member**, so a late
-finding's count lives in the lens's report and the pull-request table, not in
-the journal.
+Version 2 adds `roundId` to both round events, and adds the optional `bound`,
+`grace` and `reopensRoundId` to `review.round.opened` **only**. The accepted
+members of `review.round.closed` are exactly `round`, `roundId`,
+`candidateTreeSha`, `outcome`, `findings` and `cost`; putting `bound`, `grace`
+or `reopensRoundId` on the closed event draws `unknown_member`. There is also
+**no `lateFindings` member** on either, so a late finding's count lives in the
+lens's report and the pull-request table, not in the journal.
 
 ```sh
 TREE=$(npm run --silent harness -- review-context | sed -n 's/.*candidate tree \([0-9a-f]*\).*/\1/p')
@@ -231,10 +245,24 @@ the host reports no cost, say so — `{"coverage":"unreported","reportedBy":
 
 A deferral's follow-up belongs in Linear project `agent delivery harness`, team
 `yaegars`, related to the delivering item and naming the deferral and the lens
-that filed it. `execute-work` says when that has to exist; a deferral is
-discharged by filing it, not by folding the fix into the round — folding widens
-the delta the next round has to span and leaves the filed item with nothing to
-close.
+that filed it. `execute-work` says when that has to exist, and `obtain-review` says what
+discharges it.
+
+**Close the claim a finding states, not the mutation its remedy happened to
+name.** A remedy is sized to the plant the lens wrote, and a finding whose
+headline names more conditions than its discharge covers comes back. Enumerate
+the axes the mutated expression varies over — a bound and a filter are two — and
+add the case where every figure on screen differs, or the next round re-files
+the axis you left free.
+
+**When both lenses converge on one defect from different angles, fix it once.**
+Satisfying each remedy literally leaves two rows asserting the same thing.
+
+The one shape where a deferral is worth closing in-round is when its fixture is
+the fixture some finding already forces you to build: filing it separately
+leaves an item asking for a test that now exists. Even then the executor closes
+nothing — it changes what the lens observes, says so in the next round brief,
+and leaves the lens to report the deferral open or closed on its own judgement.
 
 ## 5. The evidence loop, in order
 
@@ -345,9 +373,12 @@ about doing that here:
 - Identical delivered lines do not mean the candidate still *works*. Pull
   request #114 replayed byte-identically onto a base that had deleted the very
   line its assertions bound, and three tests went red. **Run `npm run check` on
-  the replayed candidate before deciding a round is a reopen.** A green replay
-  reopens the round under `reopensRoundId`; a red one needs a fix, which changes
-  delivered bytes, which is a new round.
+  the replayed candidate before deciding a round is a reopen.** Rebase *before*
+  opening what you expect to be the last round, not after: a base move landing
+  between the last round and the merge has nowhere left to go. A green replay
+  reopens the round: the next `review.round.opened` carries `reopensRoundId`
+  naming the round it continues. A red one needs a fix, which changes delivered
+  bytes, which is a new round.
 
 ## 7. Pull request and merge
 
@@ -372,15 +403,29 @@ the pull-request head.
 ```sh
 gh pr checks <n> --watch
 git -C "$REPO" fetch origin && git -C "$REPO" rev-parse origin/main   # must equal the record's baseTipSha
+```
+
+`.agents/policy/repository-policy.json` grants the `merge-ready` finish line and
+`pr-creation` authority, and lists `merge` under `forbiddenAuthority`; the
+template's closing line is `Not merged.` So the merge below runs only under
+authority the user supplied for that delivery, and otherwise the delivery stops
+at `merge-ready` with the pull request open.
+
+```sh
 gh pr merge <n> --squash --delete-branch=false
 ```
 
-Only once the merge is confirmed:
+Only once the merge is confirmed — and only in a delivery that was authorized to
+merge:
 
 ```sh
 npm run --silent harness -- emit run.ended --event-id end-1 \
   --json '{"result":"complete","cost":{"coverage":"unreported","reportedBy":"claude-code"}}'
 ```
+
+At `merge-ready` without that authority, emit `run.ended` once the pull request
+is open and the hosted checks are green, with `{"result":"complete"}` and a
+`note` saying the finish line reached was `merge-ready`.
 
 `run.ended` is terminal and clears the worktree pointer. Green hosted checks are
 not the finish line — a base move landing after `run.ended` forks one delivery
@@ -389,14 +434,15 @@ across two journals with no way to record the second half.
 ## 8. Tracker hygiene
 
 Team `yaegars`, project `agent delivery harness`, statuses from
-`.agents/tracker-properties.json` (`In Progress`, `In Review`, `Done`) — read
-that file, never write to it. Read the item before any mutation; move it to
+`.agents/tracker-properties.json` (`In Progress`, `In Review`, `Done`). Read the item before any mutation; move it to
 `In Progress` when work begins; attach a comment (never a rewritten body) at
 meaningful progress and when the pull request opens, carrying branch, commit,
 posture, sensors and results, review outcome and rounds, deferrals and their
-items; move it to `Done` after the merge is confirmed. One mutation per
-invocation, and on a timeout or an ambiguous result reconcile by reading rather
-than repeating it. `trackerAbsenceFallback` is `proceed-without-tracker`: a
+items; move it to `Done` after the merge is confirmed, or leave it `In Review` with
+the pull-request link when the delivery stops at `merge-ready`. The
+mutation-safety rules — how often a mutation may be applied, and what to do
+after an ambiguous result — are `linear-tracker-adapter`'s, as is the rule
+about writing to the properties file. `trackerAbsenceFallback` is `proceed-without-tracker`: a
 missing tracker is recorded and the loop proceeds.
 
 ## 9. Pitfalls
@@ -452,4 +498,17 @@ missing tracker is recorded and the loop proceeds.
 - **Do not credit a red suite you have not attributed.** Several suites pin
   files by digest and go red on a comment-only edit; plant a comment-only no-op
   first and confirm it does not fail.
+- **A type-level guard is falsified by `npm run typecheck`, not by vitest.**
+  When a remedy narrows a parameter to a literal, the proof is a non-compiling
+  call site under a planted mutation. A lens told only to run tests reports the
+  guard as unfalsified.
+- **A row that drives the CLI end to end *and* waits on wall-clock time needs
+  its own `--testTimeout`.** The 5000 ms default is spent before the assertion
+  is reached.
+- **`verify --require-run-journal` on a reopened round of a version-1 run**
+  reports `gate-before-closed-round` and `round-not-bound-to-record` even when
+  the ordering is correct, because the second opening cannot carry
+  `reopensRoundId` and both fold into one round bound to the first candidate.
+  `verify` itself and `gate.yml` read the record, not the journal, so this is
+  cosmetic — but the flag cannot be cleared on such a run.
 - **Exit codes**: `0` pass, `1` policy block, `2` usage, `130` interrupted.
