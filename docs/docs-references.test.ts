@@ -1011,9 +1011,45 @@ describe("the corrections the delivery runbook carries", () => {
     statesInProse("**There is no `timeout(1)`**");
   });
 
-  it("says `save-context` cannot be used on a version-2 run", () => {
-    statesInProse("**`save-context` is refused on a version-2 run.**");
-    statesInProse("`unsupported_spec`");
+  /**
+   * The page's other conditional correction, and the second one a sibling
+   * delivery has invalidated under it.
+   *
+   * `save-context` built a `run-event/1` event unconditionally, so a version-2
+   * journal refused it as `unsupported_spec` and the page told a delivering
+   * agent to skip the command. V26-1960 made it write at the run's own writer
+   * version instead. Pinned by presence, the old sentence would have stayed
+   * green while sending an agent past a command that now works — the same
+   * failure the `--help` row two rows up exists to prevent, and the same one
+   * that cost this page's first delivery its grace round. So this claim is held
+   * to the command module by agreement too: it re-stamps itself in whichever
+   * direction the CLI moves, rather than only when someone notices.
+   */
+  it("says which event version `save-context` writes at, as the CLI behaves today", () => {
+    const command = readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands/save-context.ts"), "utf8");
+    // Anti-vacuity: a renamed or unreadable module would leave both branches
+    // below deciding on an empty string, and the `false` branch would then
+    // quietly demand the sentence that is wrong.
+    expect(command, "the save-context command module no longer builds a run event").toContain("buildRunEvent");
+    // The whole property: the event carries the version the *run* was started
+    // at, read from the run this command selected, rather than one the command
+    // fixes for itself.
+    if (/run\.version/.test(command)) {
+      statesInProse("**`save-context` writes at the run's own event version.**");
+      // The consequence, not only the mechanism — this is the sentence a
+      // delivering agent acts on.
+      statesInProse("it appends on a version-2 run as well as a version-1 one");
+      // And the page must not still be carrying the refusal as its headline
+      // claim, which is exactly how it would read if only the assertions above
+      // were added and the old paragraph left in place.
+      expect(
+        textOf("docs/delivery-runbook.md").replace(/\s+/g, " "),
+        "save-context follows the run's version, but the runbook still headlines the refusal",
+      ).not.toContain("**`save-context` is refused on a version-2 run.**");
+    } else {
+      statesInProse("**`save-context` is refused on a version-2 run.**");
+      statesInProse("`unsupported_spec`");
+    }
   });
 
   it("says how a round that is already open is resumed rather than reopened", () => {

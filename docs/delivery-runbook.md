@@ -111,14 +111,17 @@ refused),
 and `compounding.recorded {"outcome"[,"reference"]}`. `command.completed` is
 refused for `emit` — only the CLI writes it.
 
-**`save-context` is refused on a version-2 run.** It builds a `run-event/1`
-event, and appending a version-1 event to a version-2 journal is refused with
-`unsupported_spec`. Verified here: the command blocks with
-`[resume_context_invalid] Context was refused by the bounded run-event
-contract`, and the refusal is retained where `runs show` lists it under
-`refused appends`, not as a stored `context.saved`. It works on a version-1 run.
-`context.saved` is not a required journal entry, so on a version-2 run skip the
-command rather than debugging its payload.
+**`save-context` writes at the run's own event version.** It reads the writer
+version out of the journal's first event rather than fixing one of its own, so
+it appends on a version-2 run as well as a version-1 one. The event id it
+derives is the canonical digest of the observation, which makes an exact repeat
+idempotent — the same save twice appends once — while a changed observation, a
+different `stage` for instance, is a different id and a second entry. On a build
+predating that fix the command built a `run-event/1` event, a version-2 journal
+refused it as `unsupported_spec`, and `runs show` listed the refusal under
+`refused appends` rather than storing a `context.saved`; one journal here holds
+both, the refusal and the later success, on either side of the fix landing.
+`context.saved` is not a required journal entry either way.
 
 ## 3. Implementation
 
