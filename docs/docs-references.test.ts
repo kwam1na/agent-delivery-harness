@@ -39,10 +39,13 @@
  * pinned: there is nothing to recompute them against, and a pin over a
  * hand-maintained constant only moves the staleness into this file.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { COMMANDS } from "@agent-delivery-harness/cli";
+import harnessConfig from "../harness.config.ts";
 import {
   FACADE_CAPABILITY_CLASSES,
   FACADE_OPERATIONS,
@@ -53,10 +56,46 @@ import {
   PRODUCT_TRUST_LABEL,
   projectShippedPersonas,
   readArchiveEntry,
+  validateRunEventInput,
+  RUN_GATE_REPORTED_OUTCOMES,
+  RUN_ENDED_RESULTS,
+  RUN_EVENT_KINDS,
+  RUN_EVENT_KINDS_V1,
 } from "@agent-delivery-harness/kernel";
 
 const DOCS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(DOCS_DIR, "..");
+
+/**
+ * The envelope a payload harvested from the documentation would reach the
+ * validator inside, built the way `buildRunEvent` builds it for a live `emit`.
+ *
+ * `ticket` and `candidateTreeSha` are mirrored members: the grammar refuses an
+ * event whose envelope and payload disagree about either, in both directions,
+ * and the CLI satisfies that by copying them out of the payload verbatim.
+ * Copying them here rather than hard-coding an envelope is what keeps these
+ * rows a test of the documented payload instead of a test of this fixture —
+ * a page that changes which ticket its examples name stays valid, and a page
+ * that prints a malformed one still fails.
+ */
+const runEventEnvelope = (payload: unknown): Record<string, unknown> => {
+  const members = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+  const mirrored = Object.fromEntries(
+    (["ticket", "candidateTreeSha"] as const)
+      .filter((member) => members[member] !== undefined)
+      .map((member) => [member, members[member]]),
+  );
+  return {
+    version: "run-event/2",
+    eventId: "e1",
+    runId: "run-1",
+    at: "2026-09-07T12:00:00Z",
+    repo: { commonDir: "/tmp/repo" },
+    actor: { role: "executor" },
+    attestation: "self",
+    ...mirrored,
+  };
+};
 
 /**
  * The documents this sensor owns: the root agent instructions, the README, and
@@ -79,8 +118,86 @@ const scannedDocuments = (): readonly string[] => [
 interface DocumentReference {
   readonly document: string;
   readonly target: string;
-  readonly resolved: string;
+  /**
+   * The link target as a repository-relative POSIX path — the spelling
+   * `git ls-files` would have to print for the link to resolve. Deliberately
+   * not an absolute filesystem path: there is no longer one to hand to
+   * `existsSync`, so the resolver this row was written with cannot be put back
+   * at the call site without also reintroducing the field it needs.
+   */
+  readonly inTree: string;
 }
+
+/**
+ * Every path this repository tracks, spelled exactly as git spells it, plus
+ * every directory prefix of one.
+ *
+ * WHY NOT `existsSync`. `existsSync` asks the checkout; `git ls-files` asks the
+ * tree, and only the second question has the same answer on every host. macOS
+ * and Windows normalize case, so a link naming `.github/pull_request_template.md`
+ * for the tracked `.github/PULL_REQUEST_TEMPLATE.md` resolved locally and did
+ * not resolve on the Linux runners: this row passed on six consecutive local
+ * gate runs of the delivery that introduced the link, and all three hosted
+ * matrix jobs failed on it. Resolving against the index makes the row
+ * case-exact everywhere, so the repair happens on the laptop where it is cheap.
+ *
+ * `-z` rather than newline splitting because git quotes and escapes unusual
+ * path names in its default output and does not in the NUL-separated form.
+ */
+let trackedIndex: { readonly files: ReadonlySet<string>; readonly directories: ReadonlySet<string> } | undefined;
+const trackedPaths = (): { readonly files: ReadonlySet<string>; readonly directories: ReadonlySet<string> } => {
+  if (trackedIndex === undefined) {
+    const files = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+      .split("\0")
+      .filter((entry) => entry !== "");
+    const directories = new Set<string>();
+    for (const file of files) {
+      let directory = path.posix.dirname(file);
+      while (directory !== "." && directory !== "/" && directory !== "") {
+        directories.add(directory);
+        directory = path.posix.dirname(directory);
+      }
+    }
+    trackedIndex = { files: new Set(files), directories };
+  }
+  return trackedIndex;
+};
+
+/**
+ * Whether a repository-relative POSIX path names something git tracks — a file,
+ * or a directory that holds one. A trailing slash is how the guides write a
+ * directory, and it is not part of the name.
+ */
+const isTracked = (inTree: string): boolean => {
+  const normalized = inTree.replace(/\/+$/, "");
+  const index = trackedPaths();
+  return index.files.has(normalized) || index.directories.has(normalized);
+};
+
+/**
+ * `existsSync`, made case-exact on a case-insensitive host: every segment must
+ * appear, spelled this way, in its parent's own listing.
+ *
+ * Used where `isTracked` cannot answer — the paths the guides cite inside the
+ * installed release live behind `.agent-skills/current`, which is a tracked
+ * *symlink*, so the index knows the link and nothing beyond it. The class of
+ * defect is the same one `isTracked` closes for links; the mechanism has to
+ * differ because the target is not in the index at all.
+ */
+const existsCaseExactly = (relative: string): boolean => {
+  let directory = REPO_ROOT;
+  for (const segment of relative.split("/").filter((entry) => entry !== "" && entry !== ".")) {
+    let entries: readonly string[];
+    try {
+      entries = readdirSync(directory);
+    } catch {
+      return false;
+    }
+    if (!entries.includes(segment)) return false;
+    directory = path.join(directory, segment);
+  }
+  return true;
+};
 
 /**
  * Every relative link target in a document, with its anchor stripped and its
@@ -97,7 +214,8 @@ const referencesOf = (document: string): readonly DocumentReference[] => {
     if (/^(https?:|mailto:|#)/.test(target)) continue;
     const withoutAnchor = target.split("#")[0]!;
     if (withoutAnchor === "") continue;
-    found.push({ document, target, resolved: path.resolve(documentDir, withoutAnchor) });
+    const inTree = path.relative(REPO_ROOT, path.resolve(documentDir, withoutAnchor)).split(path.sep).join("/");
+    found.push({ document, target, inTree });
   }
   return found;
 };
@@ -115,6 +233,7 @@ describe("the documentation's references", () => {
       "docs/conformance.md",
       "docs/declared-checks.md",
       "docs/delivery-record.md",
+      "docs/delivery-runbook.md",
       "docs/getting-started.md",
       "docs/managed-delivery.md",
       "docs/ordinary-resume.md",
@@ -155,11 +274,48 @@ describe("the documentation's references", () => {
     expect(references.some((reference) => reference.document === "README.md" && reference.target === "docs/getting-started.md")).toBe(
       true,
     );
+    // The two references a delivering host arrives by. `AGENTS.md` is the only
+    // entry point a fresh agent is given, so these two links are what make the
+    // agent guide and the delivery runbook reachable at all; without them both
+    // pages are unreferenced prose. Asserted against the same scanned array as
+    // the existence check above, so a link that stops resolving fails there and
+    // a link that is deleted outright fails here.
+    for (const target of ["docs/agent-guide.md", "docs/delivery-runbook.md"]) {
+      expect(
+        references.some((reference) => reference.document === "AGENTS.md" && reference.target === target),
+        `AGENTS.md no longer points a delivering host at ${target}`,
+      ).toBe(true);
+    }
   });
 
+  /**
+   * The corpus, plus two probes carried through the very same predicate.
+   *
+   * Without them this row is the assertion that shipped a broken link: it read
+   * `existsSync`, and `existsSync` on this host says yes to a path whose case
+   * differs from the tracked one and yes to a path git does not track at all.
+   * The probes make both of those answers a failure of *this row*, on any host,
+   * rather than a difference the hosted runners discover later — and they are
+   * carried through `isTracked` at the same call site as the real references,
+   * so a resolver swapped back at that call site cannot pass them.
+   */
   it("links only to paths that exist in this tree", () => {
-    const broken = allReferences().filter((reference) => !existsSync(reference.resolved));
-    expect(broken.map((reference) => `${reference.document} -> ${reference.target}`)).toEqual([]);
+    // A case-flipped spelling of a path this tree really tracks. Rejected by
+    // the index on every host; accepted by `existsSync` on this one.
+    const caseProbe: DocumentReference = {
+      document: "<probe>",
+      target: ".github/pull_request_template.md",
+      inTree: ".github/pull_request_template.md",
+    };
+    // Present in every checkout and tracked in none, so this one separates the
+    // index from the filesystem on case-sensitive hosts too.
+    const untrackedProbe: DocumentReference = { document: "<probe>", target: ".git", inTree: ".git" };
+    expect(isTracked(".github/PULL_REQUEST_TEMPLATE.md"), "the case probe no longer names a tracked path").toBe(true);
+
+    const broken = [...allReferences(), caseProbe, untrackedProbe]
+      .filter((reference) => !isTracked(reference.inTree))
+      .map((reference) => `${reference.document} -> ${reference.target}`);
+    expect(broken).toEqual(["<probe> -> .github/pull_request_template.md", "<probe> -> .git"]);
   });
 });
 
@@ -485,6 +641,360 @@ describe("the rules the documentation states in prose", () => {
     }
   });
 
+  it("invokes only harness commands, npm scripts and run-event kinds that exist", () => {
+    // The runbook is a page of commands a fresh agent copies verbatim, and
+    // nothing else in this tree executes it — `docs-examples.test.ts` reads
+    // `getting-started.md` and no other page. So an invented command, a
+    // renamed one, or one deleted from the CLI would sit there looking
+    // authoritative with the whole suite green. Every `harness -- <command>`
+    // the page writes is checked against the command modules that exist.
+    const runbook = textOf("docs/delivery-runbook.md");
+    const invoked = [...runbook.matchAll(/harness -- ([a-z][a-z-]*)/g)].map((match) => match[1]!);
+    // Anti-vacuity from both ends, for the same reason the link scan has it: a
+    // regex that stops matching would satisfy the loop below with nothing in
+    // it, and a partial harvest would satisfy a bare floor.
+    expect(new Set(invoked).size, "the runbook invokes no harness command").toBeGreaterThanOrEqual(8);
+    expect(invoked, "the runbook walks through `prepare`").toContain("prepare");
+    // Against the registry the CLI actually dispatches on, not against the
+    // filenames beside it: a module present but unregistered dispatches
+    // nothing, and the filename check would still pass.
+    const registered = new Set(COMMANDS.map((command) => command.name));
+    expect(registered.size, "the CLI registers no command").toBeGreaterThan(0);
+    expect([...new Set(invoked)].filter((command) => !registered.has(command))).toEqual([]);
+
+    // The page reaches the CLI through npm scripts, so an invented script name
+    // fails as loudly as an invented command and was equally unchecked.
+    const scripts = new Set(
+      Object.keys(JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")).scripts ?? {}),
+    );
+    const run = [...runbook.matchAll(/npm run (?:--silent )?([a-z][a-z:-]*)/g)].map((match) => match[1]!);
+    expect(new Set(run).size, "the runbook runs no npm script").toBeGreaterThanOrEqual(3);
+    expect(run, "the runbook runs the gate").toContain("check");
+    expect([...new Set(run)].filter((script) => !scripts.has(script))).toEqual([]);
+
+    // Every run-event kind the page *names*, against the frozen vocabulary — not
+    // only the ones it prefixes with `emit`. The row's title is a general claim
+    // over the page's kinds, and half the kinds this page carries appear only in
+    // the prose paragraph listing the others worth emitting; harvesting on the
+    // literal `emit ` prefix left exactly those five unchecked, which is the
+    // half most likely to be invented because it was never executed.
+    const kinds = new Set<string>([...RUN_EVENT_KINDS, ...RUN_EVENT_KINDS_V1]);
+    expect(kinds.size, "the kernel exports no run-event kinds").toBeGreaterThan(0);
+    // Every kind in both grammars is dotted lowercase, so requiring the dot
+    // matches every real `emit <kind>` while leaving prose like "emit the pair
+    // the policy names" alone. A bare word after `emit` is English, not a kind.
+    const emitted = [...runbook.matchAll(/emit ([a-z]+(?:\.[a-z]+)+)/g)].map((match) => match[1]!);
+    // The prose side. Fenced blocks are removed first: a fence's own ``` would
+    // otherwise pair with the next inline backtick and hand this scan spans that
+    // are neither prose nor code. Each remaining inline span contributes its
+    // leading dotted-lowercase token, and only when the token ends there —
+    // `(?![\w-])` is what keeps `lens.outcome-correctness`, an id and not a
+    // kind, from arriving here truncated to `lens.outcome`. Filename-shaped
+    // tokens (`package.json`, `gate.yml`, `harness.config.ts`) share the kind
+    // shape and are dropped by extension; a kind renamed into anything else
+    // stays in the set and fails below.
+    const named = [...runbook.replace(/```[\s\S]*?```/g, " ").matchAll(/`([^`\n]+)`/g)]
+      .map((match) => /^([a-z]+(?:\.[a-z]+)+)(?![\w-])/.exec(match[1]!)?.[1])
+      .filter((token): token is string => token !== undefined)
+      .filter((token) => !/\.(ts|js|mjs|cjs|json|jsonl|md|yml|yaml|sh|lock)$/.test(token));
+    const allKinds = [...new Set([...emitted, ...named])];
+    // Anti-vacuity, raised to the harvest this page now yields: a floor of four
+    // was satisfied by the eight executable kinds alone, so a prose scan that
+    // silently stopped matching would have changed nothing.
+    expect(allKinds.length, "the runbook names too few run-event kinds to have been scanned").toBeGreaterThanOrEqual(13);
+    expect(emitted, "the runbook opens the run").toContain("run.started");
+    expect(allKinds, "the runbook no longer names the kinds it recommends in prose").toContain("gate.reported");
+    expect(allKinds.filter((kind) => !kinds.has(kind))).toEqual([]);
+
+    // The member lists the page prints beside those prose-named kinds, run
+    // through the validator rather than read. The page writes them as
+    // `<kind> {"a","b"[,"c"]}`, so the members are harvested from the page and
+    // the payload is built from what it says: a member the page renames —
+    // `durationMs` to `duration`, say — becomes an unknown member and the
+    // envelope is refused here instead of at an agent's live emit.
+    const sample: Record<string, unknown> = {
+      command: "npm run check", outcome: "pass", durationMs: 1000, ticket: "V26-0000",
+      code: "candidate_unprepared", summary: "s", fork: "f", choice: "c", cited: "round-1",
+      reference: "docs/solutions/x.md",
+    };
+    const listed = [...runbook.matchAll(/`([a-z]+(?:\.[a-z]+)+) \{([^}]*)\}/g)];
+    expect(listed.length, "the runbook lists no payload members beside a kind").toBeGreaterThanOrEqual(4);
+    for (const [, kind, members] of listed) {
+      const names = [...members!.matchAll(/"([a-zA-Z]+)"/g)].map((match) => match[1]!);
+      expect(names.length, `the runbook lists no members for ${kind}`).toBeGreaterThan(0);
+      const payload = Object.fromEntries(names.map((name) => [name, sample[name] ?? "x"]));
+      expect(
+        validateRunEventInput({ ...runEventEnvelope(payload), kind: kind!, payload }).ok,
+        `the runbook's stated payload for ${kind} is refused by the frozen grammar`,
+      ).toBe(true);
+    }
+  });
+
+  it("states the base-movement rule the gate configuration actually carries", () => {
+    // The runbook's whole tail — the serialized merge, the byte-identity
+    // replay — hangs off this one setting. Pinned by agreement rather than by
+    // presence, so relaxing the configuration re-stamps the sentence instead
+    // of leaving it confidently wrong.
+    // Read from the validated config object, not from its source text: a
+    // regex over the file cannot tell a deleted setting from a renamed one,
+    // and would go quiet — passing nothing — the moment the member moved.
+    const declared = harnessConfig.deliveryRecordVerification?.baseMovement;
+    expect(declared, "harness.config.ts declares no deliveryRecordVerification.baseMovement").toBeDefined();
+    documentStates("docs/delivery-runbook.md", `baseMovement: "${declared!}"`);
+  });
+
+  it("splits the round-event members the way the frozen grammar actually does", () => {
+    // A wrong member list on this page is the worst kind of documentation
+    // defect here: the emit is refused at runtime, in the middle of a round,
+    // by a page the agent is copying verbatim. Pinned behaviourally — the
+    // validator is asked, not the source text — so the sentence re-derives if
+    // the grammar ever moves a member across the two events.
+    const runbookStates = (phrase: string): void => {
+      const stated = textOf("docs/delivery-runbook.md").replace(/\s+/g, " ");
+      expect(stated, `docs/delivery-runbook.md no longer states: ${phrase}`).toContain(phrase);
+    };
+    const tree = "a".repeat(40);
+    const closed = {
+      version: "run-event/2", eventId: "e1", runId: "run-1", at: "2026-09-07T12:00:00Z",
+      repo: { commonDir: "/tmp/repo" }, actor: { role: "executor" }, attestation: "self",
+      kind: "review.round.closed", candidateTreeSha: tree,
+      payload: {
+        round: 1, roundId: "round-1", candidateTreeSha: tree, outcome: "aligned",
+        findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+        cost: { coverage: "unreported", reportedBy: "claude-code" },
+      },
+    };
+    // Anti-vacuity: if the baseline envelope stopped validating, every
+    // rejection below would pass for the wrong reason.
+    expect(validateRunEventInput(closed).ok, "the six-member closed envelope is refused").toBe(true);
+    for (const member of ["bound", "grace", "reopensRoundId"]) {
+      const value = member === "grace" ? true : member === "bound" ? 4 : "round-1";
+      expect(
+        validateRunEventInput({ ...closed, payload: { ...closed.payload, [member]: value } }).ok,
+        `review.round.closed accepts \`${member}\` after all`,
+      ).toBe(false);
+      runbookStates(`\`${member}\``);
+    }
+    runbookStates("adds the optional `bound`, `grace` and `reopensRoundId` to `review.round.opened` **only**");
+    runbookStates("no `lateFindings` member");
+
+    // The enumeration the page gives, checked against the set the validator
+    // actually accepts rather than against a list retyped here. Deriving it
+    // both ways — a member whose removal is refused is in; a candidate whose
+    // addition is refused is out — is what makes truncating the sentence, or
+    // padding it with `reopensRoundId`, a failure. A literal `toContain` on
+    // the whole sentence would catch neither once the wording drifts.
+    const baseline = Object.keys(closed.payload);
+    const accepted = baseline.filter((member) => {
+      const without = { ...closed.payload } as Record<string, unknown>;
+      delete without[member];
+      return !validateRunEventInput({ ...closed, payload: without }).ok;
+    });
+    for (const candidate of ["bound", "grace", "reopensRoundId", "lateFindings"]) {
+      if (validateRunEventInput({ ...closed, payload: { ...closed.payload, [candidate]: "x" } }).ok) {
+        accepted.push(candidate);
+      }
+    }
+    expect(accepted.slice().sort(), "the derived member set stopped matching the baseline envelope").toEqual(
+      baseline.slice().sort(),
+    );
+    const sentence = /accepted\s+members\s+of\s+`review\.round\.closed`\s+are\s+exactly([^;]+);/.exec(
+      textOf("docs/delivery-runbook.md").replace(/\s+/g, " "),
+    );
+    expect(sentence, "docs/delivery-runbook.md no longer enumerates review.round.closed's members").not.toBeNull();
+    const enumerated = [...sentence![1]!.matchAll(/`([a-zA-Z]+)`/g)].map((match) => match[1]!);
+    expect(enumerated.slice().sort(), "the runbook's enumeration is not the set the grammar accepts").toEqual(
+      accepted.slice().sort(),
+    );
+
+    // Section 6's carrier claim — the exact sentence a round-1 finding was
+    // filed against. It sits far from the enumeration above, in the section a
+    // reader is in when a base has moved, so it needs its own pin.
+    runbookStates("the next `review.round.opened` carries `reopensRoundId`");
+  });
+
+  // Two payload shapes the runbook writes at points where being wrong is
+  // expensive: `run.ended` is terminal, and `decision.recorded` is the only
+  // place a version-1 journal can carry a citation. Both were stated wrongly
+  // once, from a friction log rather than from the grammar, so pin them
+  // behaviourally: the shape the page tells an agent to emit must validate,
+  // and the misspelling the page warns about must not.
+  it("writes run-event payloads the frozen grammar accepts", () => {
+    const raw = textOf("docs/delivery-runbook.md");
+    const runbook = raw.replace(/\s+/g, " ");
+    const envelope = {
+      version: "run-event/2",
+      eventId: "e1",
+      runId: "run-1",
+      at: "2026-09-07T12:00:00Z",
+      repo: { commonDir: "/tmp/repo" },
+      actor: { role: "executor" },
+      attestation: "self",
+    } as const;
+    const cost = { coverage: "unreported", reportedBy: "claude-code" };
+
+    // THE PAYLOADS THE PAGE ACTUALLY PRINTS, harvested rather than retyped.
+    // The prose and the command beneath it are two independent surfaces, and a
+    // page whose sentence says `there is no note` above a command that sends
+    // one is worse than either alone, because the agent copies the command.
+    // So every `emit <kind> … --json <payload>` in every fenced block is pulled
+    // out, un-shelled, and put through the same validator a live emit reaches.
+    //
+    // Un-shelling is two substitutions and no guessing: continuation backslashes
+    // are joined, the double-quoted form's `\"` is unescaped, and the shell
+    // interpolations the page writes are replaced with grammar-valid literals
+    // from a table. Anything else placeholder-shaped left in a payload fails the
+    // row rather than being silently accepted — a new `<placeholder>` has to be
+    // given a literal here before its command can be claimed valid.
+    const literals: Record<string, string> = {
+      $TREE: "a".repeat(40),
+      "<pr url>": "https://example.test/pull/1",
+      "<why>": "the delivery uses the mandated pair only",
+    };
+    const printed = [...raw.matchAll(/```[a-z]*\n([\s\S]*?)```/g)]
+      .flatMap((block) => block[1]!.replace(/\\\n\s*/g, " ").split("\n"))
+      .map((line) => /\bemit\s+([a-z]+(?:\.[a-z]+)+)\b.*?--json\s+(?:'([^']*)'|"((?:[^"\\]|\\.)*)")/.exec(line))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => {
+        const shell = match[2] ?? match[3]!.replace(/\\"/g, '"');
+        const json = Object.entries(literals).reduce(
+          (text, [token, literal]) => text.split(token).join(literal),
+          shell,
+        );
+        return { kind: match[1]!, json };
+      });
+    // Anti-vacuity from both ends, and named rather than counted: a regex that
+    // stopped matching, or matched only the easy single-quoted blocks, would
+    // otherwise satisfy the loop below with nothing in it. `run.ended` is
+    // terminal and `review.round.opened` is the double-quoted interpolated form.
+    expect(printed.length, "no `emit … --json` command was harvested from the runbook").toBeGreaterThanOrEqual(8);
+    for (const kind of ["run.started", "review.round.opened", "review.round.closed", "pr.opened", "run.ended"]) {
+      expect(printed.map((command) => command.kind), `the runbook stopped printing an ${kind} command`).toContain(kind);
+    }
+    for (const { kind, json } of printed) {
+      expect(json, `the runbook's ${kind} payload still carries an unresolved placeholder`).not.toMatch(/[<$]/);
+      let payload: unknown;
+      expect(() => {
+        payload = JSON.parse(json);
+      }, `the runbook's ${kind} payload is not valid JSON: ${json}`).not.toThrow();
+      const verdict = validateRunEventInput({ ...runEventEnvelope(payload), kind, payload });
+      expect(
+        verdict.ok,
+        `the runbook prints a ${kind} payload the frozen grammar refuses: ${json}`,
+      ).toBe(true);
+    }
+
+    // `run.ended` takes exactly `result` and `cost`, both required. A `note`
+    // member — the thing the merge-ready branch once told an agent to send —
+    // is refused, and so is dropping `cost`.
+    const ended = { ...envelope, kind: "run.ended", payload: { result: "complete", cost } };
+    expect(validateRunEventInput(ended).ok, "the runbook's run.ended payload is refused").toBe(true);
+    expect(
+      validateRunEventInput({ ...ended, payload: { result: "complete" } }).ok,
+      "run.ended no longer requires cost",
+    ).toBe(false);
+    expect(
+      validateRunEventInput({ ...ended, payload: { result: "complete", cost, note: "merge-ready" } }).ok,
+      "run.ended accepts a note after all",
+    ).toBe(false);
+    expect(runbook, "docs/delivery-runbook.md no longer says run.ended has no note member").toContain(
+      "there is no `note`",
+    );
+
+    // `decision.recorded` does have the optional member — spelled `cited`.
+    const decision = {
+      ...envelope,
+      kind: "decision.recorded",
+      payload: { fork: "f", choice: "c", cited: "round-1" },
+    };
+    expect(validateRunEventInput(decision).ok, "decision.recorded rejects `cited`").toBe(true);
+    expect(
+      validateRunEventInput({ ...decision, payload: { fork: "f", choice: "c", citation: "round-1" } }).ok,
+      "decision.recorded accepts `citation` after all",
+    ).toBe(false);
+    expect(runbook, "docs/delivery-runbook.md no longer directs the citation into `cited`").toContain(
+      "put the round you are continuing in `cited`",
+    );
+
+    // Two closed vocabularies the page spells out. Both are frozen exports, so
+    // the page can be held to them by agreement instead of by a retyped list:
+    // re-freezing either one re-stamps the runbook rather than leaving it
+    // confidently wrong about a token an agent copies into a live emit.
+    expect(RUN_GATE_REPORTED_OUTCOMES.length, "the gate-outcome vocabulary is empty").toBeGreaterThan(0);
+    expect(
+      runbook,
+      "docs/delivery-runbook.md no longer lists the gate.reported outcome vocabulary the kernel freezes",
+    ).toContain(RUN_GATE_REPORTED_OUTCOMES.map((outcome) => `\`${outcome}\``).join(", "));
+    expect(RUN_ENDED_RESULTS, "run.ended no longer accepts the result the runbook emits").toContain("complete");
+    expect(runbook, "docs/delivery-runbook.md emits a run.ended result the grammar refuses").toContain(
+      '"result":"complete"',
+    );
+  });
+
+  it("names only paths that exist in the agent guide's shape section", () => {
+    // The section is a map a reader navigates by. Every entry it carried before
+    // this delivery was a path, and one of them — `delivery/charters` — had
+    // stopped existing with the whole suite green, which is why it was
+    // rewritten. Presence of the block is not the claim; resolution of each
+    // path is.
+    //
+    // And the claim is over the section, not over the block's first column.
+    // Parsing column one alone left the paths in the description text
+    // unchecked — `docs/plans/`, `docs/solutions/`, `docs/contracts/` — and
+    // left the trailing paragraph that resolves a lens charter to
+    // `.agent-skills/current/personas/` unchecked too, which is the very
+    // sentence that replaced the path that had rotted. So: column one, plus
+    // every slash-bearing token anywhere in the section.
+    const guide = textOf("docs/agent-guide.md");
+    const section = /## The shape of the repository\n([\s\S]*?)\n## /.exec(guide);
+    expect(section, "docs/agent-guide.md has no shape section").not.toBeNull();
+    const block = /```\n([\s\S]*?)```/.exec(section![1]!);
+    expect(block, "the shape section has no fenced block").not.toBeNull();
+    const columnOne = block![1]!
+      .split("\n")
+      .map((line) => /^(\S+)\s\s+\S/.exec(line)?.[1])
+      .filter((entry): entry is string => entry !== undefined);
+    // A path token is one bearing a separator, so it is recognised the same in
+    // a table row, in a description continuation line and in a paragraph. The
+    // lookbehind keeps a token from being harvested from its own middle; the
+    // two extensionless names in column one (`AGENTS.md`, `harness.config.ts`)
+    // carry no separator and arrive from the column-one pass instead.
+    const referenced = [...section![1]!.matchAll(/(?<![\w./-])((?:\.?[A-Za-z][\w.-]*)(?:\/[\w.-]*)+)/g)].map(
+      (match) => match[1]!,
+    );
+    const paths = [...new Set([...columnOne, ...referenced])];
+    // Anti-vacuity from both ends, and raised past the block's own row count so
+    // that a regex which stops reaching the prose fails rather than passing on
+    // the table alone.
+    expect(columnOne.length, "the shape block yields no rows").toBeGreaterThanOrEqual(17);
+    expect(paths.length, "the shape section yields no paths outside its table").toBeGreaterThanOrEqual(22);
+    expect(paths, "the shape block names the root instruction file").toContain("AGENTS.md");
+    expect(paths, "the shape section no longer says where a lens charter resolves from").toContain(
+      ".agent-skills/current/personas/",
+    );
+    expect(paths.filter((entry) => !existsCaseExactly(entry))).toEqual([]);
+  });
+
+  it("names only paths that exist in the delivery runbook's prose", () => {
+    // The runbook tells a host to read files out of the installed release — the
+    // round-brief template, the two persona charters, the release manifest, the
+    // compiled snapshot — and those are the paths most likely to move, because
+    // nothing in this repository authors them. They were unchecked while the
+    // guide's block and every markdown link were checked. Scoped to the two
+    // installed-and-policy roots deliberately: a glob or a `<placeholder>` path
+    // elsewhere on the page is not a resolvable claim, and widening this to
+    // every backticked token would pin illustrations rather than references.
+    const runbook = textOf("docs/delivery-runbook.md");
+    const cited = [
+      ...new Set([...runbook.matchAll(/`((?:\.agent-skills|\.agents)\/[\w./-]+)`/g)].map((match) => match[1]!)),
+    ];
+    expect(cited.length, "the runbook cites no installed-release path").toBeGreaterThanOrEqual(6);
+    expect(cited, "the runbook no longer names the round-brief template it says to fill").toContain(
+      ".agent-skills/current/skills/obtain-review/references/round-brief-template.md",
+    );
+    expect(cited.filter((entry) => !existsCaseExactly(entry))).toEqual([]);
+  });
+
   it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {
     // The key is a literal, and this file is not typechecked — `docs/**` sits
     // outside every `tsconfig` include, so the key type buys nothing here. It
@@ -494,5 +1004,213 @@ describe("the rules the documentation states in prose", () => {
     const rules = MANIFEST_REJECTION_REGISTRY["candidate_unprepared"].rules;
     expect(rules.length, "the registry gives candidate_unprepared no rule").toBeGreaterThan(0);
     for (const rule of rules) statesInProse(`${rule} \`candidate_unprepared\``);
+  });
+});
+
+/**
+ * The runbook's three corrections, pinned.
+ *
+ * These are the sentences that exist because a delivery got them wrong: each
+ * one contradicts the obvious guess, each was paid for in a lost round or a
+ * damaged sibling delivery, and none of them has a computed counterpart
+ * anywhere in this tree to disagree with. Deletion, not drift, is the failure
+ * — trimming a runbook to its confident half reads like an edit and leaves the
+ * page recommending exactly the thing that failed. Presence is the only
+ * available pin, so it is the one used, one row per correction.
+ */
+describe("the corrections the delivery runbook carries", () => {
+  const statesInProse = (phrase: string): void => {
+    const stated = textOf("docs/delivery-runbook.md")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/\s+/g, " ");
+    expect(stated, `docs/delivery-runbook.md no longer states: ${phrase}`).toContain(phrase);
+  };
+
+  it("says a byte-identical replay is still checked before it counts as a reopen", () => {
+    statesInProse("Run `npm run check` on the replayed candidate before deciding a round is a reopen.");
+    statesInProse("Compare the **delivered lines**, not the raw diff bytes.");
+    // The recipe's own two corrections. Without the space the header filter
+    // also eats a delivered line beginning `--`/`++`, so a changed markdown
+    // rule canonicalizes to the empty digest and a counted round is reopened
+    // for free; without `--name-status` the hash omits the path set the
+    // sentence above it promises.
+    statesInProse("The **space** in `'^(\\+\\+\\+ |--- )'` is what keeps it a header filter");
+    statesInProse("the `--name-status` line is what puts the **path set** inside the hash");
+    // And the command itself, not only the paragraph explaining it. The
+    // explanation is what a reader is persuaded by; the pipeline is what they
+    // copy, and the two can drift apart in either direction.
+    statesInProse("grep -Ev '^(\\+\\+\\+ |--- )'");
+    statesInProse("git diff --name-status <base>..<head> -- . ':!delivery/records'");
+  });
+
+  /**
+   * The one correction on this page whose truth is conditional on the CLI, so
+   * the one that must not be pinned by presence alone. It was hedged once — into
+   * "whether `<command> --help` is safe depends on the build" — on the strength
+   * of a sibling delivery's fix that had not merged, and the hedge is what an
+   * agent skims past on its way to running `record --help` mid-round. Held to
+   * the boundary and the command modules by agreement instead, which is how this
+   * row earned its keep: the fix landed on this delivery's base mid-review, the
+   * row went red on the replay, and the page had to be re-stamped to the
+   * predicate the boundary now carries rather than left warning about a hazard
+   * that is gone. The day one of these commands starts parsing its arguments,
+   * the same thing happens again; the day a fourth stops, the page has to name
+   * it.
+   */
+  it("names the commands whose `--help` executes them, as the CLI behaves today", () => {
+    const boundary = readFileSync(path.join(REPO_ROOT, "packages/cli/src/boundary.ts"), "utf8");
+    // The arity is the whole safety property: a help request is answered by the
+    // boundary only when `--help` is the entire argument list, so a page that
+    // said "`--help` is safe" without saying "alone" would be wrong in the one
+    // direction that costs a round.
+    const predicate = /args\.length === (\d+) && \(args\[0\] === "--help" \|\| args\[0\] === "-h"\)/.exec(boundary);
+    expect(predicate, "the CLI boundary no longer answers help from one arity-checked predicate").not.toBeNull();
+    expect(predicate![1], "the boundary's help predicate no longer requires a lone argument").toBe("1");
+    statesInProse("**exactly one argument**");
+
+    const commands = readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands"))
+      .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"));
+    // Anti-vacuity: a scan that stopped reading the directory would leave
+    // nothing to disagree, and the branch below would pass on an empty set.
+    expect(commands.length, "no command modules were read").toBeGreaterThan(5);
+    const registered = new Set(COMMANDS.map((command) => command.name));
+    // A module that never mentions its arguments cannot be judging a call that
+    // carries one: `--help` beside another token reaches it as an ordinary
+    // invocation and it runs.
+    const executes = commands
+      .filter((entry) => !/args/.test(readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands", entry), "utf8")))
+      .map((entry) => entry.replace(/\.ts$/, ""))
+      .filter((name) => registered.has(name));
+
+    const prose = textOf("docs/delivery-runbook.md").replace(/\s+/g, " ");
+    const clause = /((?:`[a-z-]+\.ts`(?:, | and )?)+) never read their arguments at all/.exec(prose);
+    if (executes.length === 0) {
+      // Which is where this tree stands: every registered command judges its own
+      // argument list, so the page must not still be warning about the hazard,
+      // and must say what replaced it.
+      expect(clause, "no command module ignores its arguments, but the runbook still names some that do").toBeNull();
+      statesInProse("is a usage refusal at exit `2` rather than a delivery record");
+    } else {
+      expect(clause, "docs/delivery-runbook.md no longer names the commands whose `--help` executes them").not.toBeNull();
+      const named = [...clause![1]!.matchAll(/`([a-z-]+)\.ts`/g)].map((match) => match[1]!);
+      expect(named.slice().sort(), "the runbook's `--help` warning is not the set of commands that ignore arguments").toEqual(
+        executes.slice().sort(),
+      );
+    }
+    // And the consequence, not only the rule: a correction trimmed to its
+    // mechanism stops saying why the reader should care, and the hazard is what
+    // an older checkout still has.
+    statesInProse("a delivery record written and the worktree dirtied mid-round");
+  });
+
+  /**
+   * The rest of the corrections this page carries because a delivery paid for
+   * them, each with no computable counterpart in this tree. Presence again, one
+   * assertion per rule, for the reason the block comment above this describe
+   * gives: deletion is the failure mode, and a page trimmed to its confident
+   * half reads like an edit.
+   */
+  it("says which shell this loop runs in and what that shell breaks", () => {
+    statesInProse("Write `--include='*.ts'`");
+    statesInProse("Put the loop in a `#!/bin/bash` file and run the file.");
+    statesInProse("**There is no `timeout(1)`**");
+  });
+
+  /**
+   * The page's other conditional correction, and the second one a sibling
+   * delivery has invalidated under it.
+   *
+   * `save-context` built a `run-event/1` event unconditionally, so a version-2
+   * journal refused it as `unsupported_spec` and the page told a delivering
+   * agent to skip the command. V26-1960 made it write at the run's own writer
+   * version instead. Pinned by presence, the old sentence would have stayed
+   * green while sending an agent past a command that now works — the same
+   * failure the `--help` row two rows up exists to prevent, and the same one
+   * that cost this page's first delivery its grace round. So this claim is held
+   * to the command module by agreement too: it re-stamps itself in whichever
+   * direction the CLI moves, rather than only when someone notices.
+   */
+  it("says which event version `save-context` writes at, as the CLI behaves today", () => {
+    const command = readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands/save-context.ts"), "utf8");
+    // Anti-vacuity: a renamed or unreadable module would leave both branches
+    // below deciding on an empty string, and the `false` branch would then
+    // quietly demand the sentence that is wrong.
+    expect(command, "the save-context command module no longer builds a run event").toContain("buildRunEvent");
+    // The whole property: the event carries the version the *run* was started
+    // at, read from the run this command selected, rather than one the command
+    // fixes for itself.
+    if (/run\.version/.test(command)) {
+      statesInProse("**`save-context` writes at the run's own event version.**");
+      // The consequence, not only the mechanism — this is the sentence a
+      // delivering agent acts on.
+      statesInProse("it appends on a version-2 run as well as a version-1 one");
+      // And the page must not still be carrying the refusal as its headline
+      // claim, which is exactly how it would read if only the assertions above
+      // were added and the old paragraph left in place.
+      expect(
+        textOf("docs/delivery-runbook.md").replace(/\s+/g, " "),
+        "save-context follows the run's version, but the runbook still headlines the refusal",
+      ).not.toContain("**`save-context` is refused on a version-2 run.**");
+    } else {
+      statesInProse("**`save-context` is refused on a version-2 run.**");
+      statesInProse("`unsupported_spec`");
+    }
+  });
+
+  it("says how a round that is already open is resumed rather than reopened", () => {
+    statesInProse("Re-realize only the lens that did not report");
+    statesInProse("Inspect the interrupted lens's worktree before relaunching.");
+  });
+
+  it("says why the round's review context is retained, not merely that it is", () => {
+    statesInProse("The retained file is the round's only surviving binding tuple");
+    statesInProse("`preparation_base_changed`");
+  });
+
+  it("says a rebased worktree is reinstalled before the gate is believed", () => {
+    statesInProse("Re-run `npm install` after every rebase, before the gate.");
+  });
+
+  it("says a suite is never stopped with a machine-wide pattern", () => {
+    statesInProse("there is no worktree scoping in `pkill`");
+  });
+
+  // The correction this page's own first delivery died on, and the one whose
+  // subject is the local gate itself: on a case-insensitive host no sensor run
+  // can observe the hazard, so nothing but the sentence carries it forward.
+  it("says a green local gate is not evidence about the case of a documented path", () => {
+    statesInProse("**The hosted runners have a case-sensitive filesystem and a developer's machine usually does not.**");
+    // The move, not only the hazard: without this half the page names a failure
+    // and leaves the reader nothing to do about it.
+    statesInProse("push before the last round you can still spend");
+  });
+
+  // The merge step is the one place the page can instruct a host to exceed the
+  // authority this repository grants it, so it is held to the policy document
+  // by agreement rather than by a retyped claim: a grant that moves re-stamps
+  // the sentence instead of leaving the page authorizing what policy forbids.
+  it("states the merge authority the compiled policy actually grants", () => {
+    const policy = JSON.parse(readFileSync(path.join(REPO_ROOT, ".agents/policy/repository-policy.json"), "utf8"));
+    const granted: string[] = policy.grantedAuthority ?? [];
+    const forbidden: string[] = policy.forbiddenAuthority ?? [];
+    const finishLines: string[] = policy.grantedFinishLines ?? [];
+    expect(granted.length + forbidden.length + finishLines.length, "the policy grants nothing to state").toBeGreaterThan(0);
+    expect(forbidden, "policy no longer forbids merge; the runbook's conditioning is now unmotivated").toContain("merge");
+    for (const finishLine of finishLines) statesInProse(`grants the \`${finishLine}\` finish line`);
+    for (const authority of granted) statesInProse(`\`${authority}\` authority`);
+    statesInProse("lists `merge` under `forbiddenAuthority`");
+    // The conditioning itself, not just the recital of the policy. Without
+    // this the page may state the grant and then merge unconditionally.
+    statesInProse("the merge below runs only under authority the user supplied for that delivery");
+  });
+
+  // The three sentences that keep this page from becoming a second copy of the
+  // installed workflow's rules. Each names the skill that owns the rule instead
+  // of restating it; deleting one silently reinstates the duplication the item
+  // exists to remove, and no other assertion in this tree notices.
+  it("defers the rules the installed skills own instead of restating them", () => {
+    statesInProse("the installed workflow's, read from the skills exposed under `.claude/skills`");
+    statesInProse("`execute-work` says when that has to exist, and `obtain-review` says what discharges it.");
+    statesInProse("are `linear-tracker-adapter`'s, as is the rule about writing to the properties file.");
   });
 });
