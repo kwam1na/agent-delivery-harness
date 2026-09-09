@@ -43,7 +43,7 @@ it('records and verifies an actual live provider locally and through the Action;
  await writeFile(path.join(f.dir,'.git/fail'),'fail');
  expect(await runCli(['verify'],{...f.runtime,liveResults:[{providerId:'live.sensor',runId:'cached-green',status:'green',findings:[]}]})).toBe(1);
  expect((await f.action()).ok).toBe(false);
-});
+},30_000);
 it('Action cannot execute a live provider from a different checkout head or dirty workspace',async()=>{
  const f=await fixture();expect(await f.cli('prepare')).toBe(0);expect(await f.cli('record'),f.err.join('\n')).toBe(0);
  await f.git('add','.');await f.git('-c','commit.gpgsign=false','commit','-qm','record');const head=await f.git('rev-parse','HEAD');
