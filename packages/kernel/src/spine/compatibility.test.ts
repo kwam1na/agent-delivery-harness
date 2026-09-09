@@ -26,6 +26,7 @@ import {
   CONFORMING_ATTESTATION_LEVEL,
   DELIVERY_EVIDENCE_1,
   REVIEW_GREEN_1,
+  REVIEW_GREEN_2,
   SUPPORTED_ENVELOPE_SPECS,
   SUPPORTED_PAYLOAD_SPECS,
 } from "../validator/codes.ts";
@@ -37,9 +38,10 @@ describe("envelope and payload spec tokens", () => {
   it("are exactly the shipped set — the spine adds families, never re-versions these", () => {
     expect(DELIVERY_EVIDENCE_1).toBe("delivery-evidence/1");
     expect(REVIEW_GREEN_1).toBe("review.green/1");
+    expect(REVIEW_GREEN_2).toBe("review.green/2");
     expect([...SUPPORTED_ENVELOPE_SPECS]).toEqual(["delivery-evidence/1"]);
     // V26-1846 adds declared check evidence; historical review tokens retain their meaning.
-    expect([...SUPPORTED_PAYLOAD_SPECS]).toEqual(["review.green/1", "checks.passed/1"]);
+    expect([...SUPPORTED_PAYLOAD_SPECS]).toEqual(["review.green/1", "review.green/2", "checks.passed/1"]);
     expect(DELIVERY_RECORD_VERSION).toBe("delivery-record/2");
   });
 });

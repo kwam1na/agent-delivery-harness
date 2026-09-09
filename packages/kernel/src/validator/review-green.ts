@@ -1,5 +1,6 @@
 /**
- * The normative `review.green/1` payload validator (spec §9).
+ * The normative `review.green/1` payload validator (spec §9) and its version-2
+ * deferral extension.
  *
  * The payload is a claim that an independent, complete code review of the final
  * candidate concluded green. The rules here never ask *how* the review was
@@ -58,6 +59,8 @@ const SETTLED_DISPOSITIONS: readonly string[] = Object.freeze(["resolved", "pre_
 
 /** RG-7: no P0 or P1 may ever be deferred, regardless of scope. */
 const DEFERRABLE_SEVERITIES: readonly string[] = Object.freeze(["P2", "P3"]);
+const V1_DEFERRABLE_SCOPES: readonly string[] = Object.freeze(["expansion"]);
+const V2_DEFERRABLE_SCOPES: readonly string[] = Object.freeze(["in_contract", "expansion"]);
 
 export type ReviewFindingCoherenceCode = "blocking_finding_present" | "actionable_unresolved" | "illegal_deferral";
 
@@ -70,6 +73,29 @@ export function reviewFindingCoherenceCodes(finding: {
   readonly disposition: unknown;
   readonly deferredIssueId?: unknown;
 }): readonly ReviewFindingCoherenceCode[] {
+  return reviewFindingCoherenceCodesForScopes(finding, V1_DEFERRABLE_SCOPES);
+}
+
+/** The coherence decision for a `review.green/2` finding. */
+export function reviewFindingCoherenceCodesV2(finding: {
+  readonly severity: unknown;
+  readonly scope: unknown;
+  readonly actionable: unknown;
+  readonly blocking: unknown;
+  readonly disposition: unknown;
+  readonly deferredIssueId?: unknown;
+}): readonly ReviewFindingCoherenceCode[] {
+  return reviewFindingCoherenceCodesForScopes(finding, V2_DEFERRABLE_SCOPES);
+}
+
+function reviewFindingCoherenceCodesForScopes(finding: {
+  readonly severity: unknown;
+  readonly scope: unknown;
+  readonly actionable: unknown;
+  readonly blocking: unknown;
+  readonly disposition: unknown;
+  readonly deferredIssueId?: unknown;
+}, deferrableScopes: readonly string[]): readonly ReviewFindingCoherenceCode[] {
   const codes: ReviewFindingCoherenceCode[] = [];
   if (finding.blocking === true) codes.push("blocking_finding_present");
   if (finding.actionable === true && !SETTLED_DISPOSITIONS.includes(finding.disposition as string)) {
@@ -77,7 +103,7 @@ export function reviewFindingCoherenceCodes(finding: {
   }
   if (finding.disposition === "deferred") {
     const legal = finding.actionable === true && finding.blocking === false &&
-      DEFERRABLE_SEVERITIES.includes(finding.severity as string) && finding.scope === "expansion" &&
+      DEFERRABLE_SEVERITIES.includes(finding.severity as string) && deferrableScopes.includes(finding.scope as string) &&
       isNonEmptyString(finding.deferredIssueId) && DEFERRED_ISSUE_ID.test(finding.deferredIssueId);
     if (!legal) codes.push("illegal_deferral");
   } else if (finding.deferredIssueId !== undefined) {
@@ -157,13 +183,26 @@ export interface ReviewGreenClaimInput {
 // ── Entry point ────────────────────────────────────────────────────────────
 
 export function validateReviewGreenClaim(input: ReviewGreenClaimInput, collector: Collector): void {
+  validateReviewGreenClaimWithScopes(input, collector, V1_DEFERRABLE_SCOPES);
+}
+
+/** `review.green/2`: preserve v1 shape while admitting tracked P2/P3 work in the delivery contract. */
+export function validateReviewGreenClaimV2(input: ReviewGreenClaimInput, collector: Collector): void {
+  validateReviewGreenClaimWithScopes(input, collector, V2_DEFERRABLE_SCOPES);
+}
+
+function validateReviewGreenClaimWithScopes(
+  input: ReviewGreenClaimInput,
+  collector: Collector,
+  deferrableScopes: readonly string[],
+): void {
   const { payload, at } = input;
 
   checkMembers(payload, at, PAYLOAD_MEMBERS, { unknown: GEN_1_UNKNOWN, missing: GEN_4_MISSING }, collector);
 
   checkVerdict(payload, at, collector);
   const selected = checkReviewers(payload, at, collector);
-  const findings = checkFindings(payload, at, collector);
+  const findings = checkFindings(payload, at, collector, deferrableScopes);
   checkApprovals(input, selected, collector);
   checkTelemetry(input, selected, findings, collector);
 }
@@ -253,7 +292,12 @@ interface DerivedFinding {
   readonly deferredIssueId: unknown;
 }
 
-function checkFindings(payload: Record<string, unknown>, at: string, collector: Collector): readonly DerivedFinding[] {
+function checkFindings(
+  payload: Record<string, unknown>,
+  at: string,
+  collector: Collector,
+  deferrableScopes: readonly string[],
+): readonly DerivedFinding[] {
   const findings = member(payload, "findings");
   const findingsAt = pointer(at, "findings");
 
@@ -308,7 +352,10 @@ function checkFindings(payload: Record<string, unknown>, at: string, collector: 
     }
 
     // RG-6.
-    const coherenceCodes = reviewFindingCoherenceCodes({ severity, scope, actionable, blocking, disposition, deferredIssueId: member(finding, "deferredIssueId") });
+    const coherenceCodes = reviewFindingCoherenceCodesForScopes(
+      { severity, scope, actionable, blocking, disposition, deferredIssueId: member(finding, "deferredIssueId") },
+      deferrableScopes,
+    );
     if (coherenceCodes.includes("blocking_finding_present")) {
       collector.emit("blocking_finding_present", "RG-6", pointer(findingAt, "blocking"), "a blocking finding contradicts a green verdict");
     }
@@ -320,7 +367,9 @@ function checkFindings(payload: Record<string, unknown>, at: string, collector: 
     const deferredIssueId = member(finding, "deferredIssueId");
     if (coherenceCodes.includes("illegal_deferral")) {
       collector.emit("illegal_deferral", "RG-7", disposition === "deferred" ? findingAt : pointer(findingAt, "deferredIssueId"),
-        disposition === "deferred" ? "deferral does not satisfy every condition deferral requires" : "a tracker id on a finding that was not deferred");
+        disposition === "deferred"
+          ? `a deferral requires actionable true, blocking false, severity P2 or P3, scope ${deferrableScopes.join(" or ")}, and a tracked issue id`
+          : "a tracker id on a finding that was not deferred");
     }
 
     derived.push({ severity, disposition, deferredIssueId });
@@ -435,7 +484,12 @@ function checkTelemetry(
   // the record of those passes.
   const iterationCount = member(telemetry, "iterationCount");
   if (iterationCount !== input.runHistoryLength) {
-    collector.emit("iteration_count_mismatch", "RG-9", pointer(at, "iterationCount"), "iteration count disagrees with the number of run history entries");
+    collector.emit(
+      "iteration_count_mismatch",
+      "RG-9",
+      pointer(at, "iterationCount"),
+      `iterationCount is ${String(iterationCount)}, but runHistory contains ${input.runHistoryLength} entries`,
+    );
   }
 
   // RG-8: re-derive, never trust.

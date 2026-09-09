@@ -23,18 +23,50 @@ import path from "node:path";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { oneLine } from "../run-surface.ts";
+import { applyDeliveryRecordRetention } from "../record-retention.ts";
 import { runProviderBackedAdmission } from "./gate.ts";
+
+interface RetentionOptions {
+  readonly scope: string;
+  readonly keepSuperseded: number;
+}
+
+function parseRetentionOptions(args: readonly string[]): RetentionOptions | undefined | string {
+  if (args.length === 0) return undefined;
+  let scope: string | undefined;
+  let keepSuperseded: number | undefined;
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (value === undefined) return `${flag ?? "record option"} requires a value`;
+    if (flag === "--retention-scope" && scope === undefined) scope = value;
+    else if (flag === "--keep-superseded" && keepSuperseded === undefined) {
+      if (!/^\d+$/.test(value)) return "--keep-superseded must be an integer from 0 through 100";
+      keepSuperseded = Number(value);
+    } else return `${oneLine(flag ?? "record option", 64)} is not a valid record retention option`;
+  }
+  if (scope === undefined || keepSuperseded === undefined) {
+    return "--retention-scope and --keep-superseded must be supplied together";
+  }
+  if (!Number.isSafeInteger(keepSuperseded) || keepSuperseded > 100) {
+    return "--keep-superseded must be an integer from 0 through 100";
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(scope)) {
+    return "--retention-scope must be a plain 1-128 character delivery key";
+  }
+  return { scope, keepSuperseded };
+}
 
 export const recordCommand: CommandDescriptor = {
   name: "record",
   sourceId: "delivery-harness.cli.record",
   summary: "Write the tracked delivery record for an admitted gate.",
-  usage: "Usage: delivery-harness record\nTakes no arguments; run gate first if a waiver is needed.",
+  usage: "Usage: delivery-harness record [--retention-scope <delivery-key> --keep-superseded <0-100>]\nRetention is opt-in; run gate first if a waiver is needed.",
   async run(context: CommandContext): Promise<CommandResult> {
     // Arguments before anything is wired, admitted, or written.
-    const unexpected = context.args[0];
-    if (unexpected !== undefined) {
-      return { kind: "usage", message: `record takes no arguments, and ${oneLine(unexpected, 64)} is one.\n${recordCommand.usage}` };
+    const retention = parseRetentionOptions(context.args);
+    if (typeof retention === "string") {
+      return { kind: "usage", message: `${retention}.\n${recordCommand.usage}` };
     }
     const wiring = await context.wire();
 
@@ -101,8 +133,49 @@ export const recordCommand: CommandDescriptor = {
     if (!checked.ok) return { kind: "blocked", blockers: [...checked.blockers] };
     const relativePath = deliveryRecordPathFor(context.config, decision.candidate.deliverable.digest);
     const absolutePath = path.join(context.rootDir, relativePath);
-    await context.artifacts.writeTextFile(absolutePath, deliveryRecordBytes(built.record));
+    const bytes = deliveryRecordBytes(built.record);
+    if (retention === undefined) {
+      await context.artifacts.writeTextFile(absolutePath, bytes);
+      return { kind: "ok", summary: `recorded ${relativePath}` };
+    }
 
-    return { kind: "ok", summary: `recorded ${relativePath}` };
+    const retained = await applyDeliveryRecordRetention({
+      rootDir: context.rootDir,
+      storageNamespace: context.config.storageNamespace,
+      scope: retention.scope,
+      keepSuperseded: retention.keepSuperseded,
+      recordBasePath: context.config.deliveryRecordPath,
+      current: {
+        relativePath,
+        deliverableDigest: decision.candidate.deliverable.digest,
+        bytes,
+      },
+      writeCurrent: () => context.artifacts.writeTextFile(absolutePath, bytes),
+    });
+    if (!retained.ok) {
+      return {
+        kind: "blocked",
+        blockers: [
+          commandBlocker({
+            code: retained.code,
+            sourceId: "delivery-harness.cli.record",
+            summary: "Tracked delivery-record retention did not complete.",
+            details: retained.detail,
+            remediations: [
+              {
+                id: "repair-record-retention",
+                kind: "manual_action",
+                summary: "Preserve the exact owned record bytes in Git, repair the named ownership conflict, then retry record with the same scope and bound.",
+              },
+            ],
+          }),
+        ],
+      };
+    }
+
+    return {
+      kind: "ok",
+      summary: `recorded ${relativePath}${retained.pruned.length === 0 ? "" : `; pruned Git-preserved ${retained.pruned.join(", ")}`}`,
+    };
   },
 };

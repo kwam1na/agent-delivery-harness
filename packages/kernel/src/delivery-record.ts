@@ -52,7 +52,7 @@ import type { EvidenceRecord, RecordCandidateBinding, WaiverResolution, Portable
 import type { RunJournalRow } from "./checkpoint/run-journal-completeness.ts";
 import { evaluateGate, RESOLUTION_OUTCOMES, type EvaluateGateInput, type GateDecision, type ResolutionOutcome } from "./evaluator.ts";
 
-import { verifyPortableEvidence, MAX_PORTABLE_RECORD_BYTES, portableBlocker } from "./portable-evidence.ts";
+import { verifyPortableEvidence, portableArtifactContents, MAX_PORTABLE_RECORD_BYTES, portableBlocker } from "./portable-evidence.ts";
 import { computeRecordId } from "./record-identity.ts";
 import { manifestDigest as computeManifestDigest } from "./digest.ts";
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -486,6 +486,12 @@ export interface DeliveryRecordCheck {
   readonly attestationLabel: string;
   readonly claims: readonly DeliveryRecordClaim[];
   /**
+   * Raw trees whose review rounds the verified record actually carries. The
+   * record tree is always present. An earlier tree appears only after the
+   * retained review-neutral projection has passed portable verification.
+   */
+  readonly reviewedCandidateTreeShas: readonly string[];
+  /**
    * The caller's self-attested run-journal row, echoed verbatim and absent when
    * the caller supplied none — which is every caller but the local `verify`.
    *
@@ -796,8 +802,46 @@ export function verifyDeliveryRecord(
     relaxedDriftClasses,
     attestationLabel: ATTESTATION_LABEL,
     claims: record.claims,
+    reviewedCandidateTreeShas: blockers.length === 0 ? projectedReviewTreeShas(record) : [binding.treeSha],
     ...(options.runJournal === undefined ? {} : { runJournal: options.runJournal }),
   };
+}
+
+/**
+ * Read projection coordinates only after the verifier has accepted all of the
+ * retained portable bytes. This function is deliberately private: an
+ * unverified record cannot ask the journal reader to bless another tree.
+ */
+function projectedReviewTreeShas(record: DeliveryRecord): readonly string[] {
+  const trees = new Set<string>([record.candidateBinding.treeSha]);
+  const evidence = record.claims.flatMap((claim) => [
+    ...(claim.evidence === undefined ? [] : [claim.evidence]),
+    ...(claim.supportingEvidence ?? []),
+  ]);
+  for (const entry of evidence) {
+    if (entry.resolution.kind !== "evidence" || entry.resolution.portable === undefined) continue;
+    const portable = entry.resolution.portable;
+    const manifest = portable.manifest;
+    if (portable.context.reviewerCharters.length === 0 || !isRecord(manifest) || !Array.isArray(manifest["artifacts"]) ||
+        !Array.isArray(manifest["claims"]) || !manifest["claims"].some((claim) => isRecord(claim) &&
+          (claim["payloadSpec"] === "review.green/1" || claim["payloadSpec"] === "review.green/2"))) continue;
+    const contents = portableArtifactContents(portable.artifacts).artifacts;
+    for (const declared of manifest["artifacts"]) {
+      if (!isRecord(declared) || declared["role"] !== "review-context-projection" || typeof declared["path"] !== "string") continue;
+      try {
+        const projection: unknown = JSON.parse(contents.get(declared["path"]) ?? "null");
+        if (!isRecord(projection) || projection["spec"] !== "review-context-projection/1" || !isRecord(projection["reviewedCandidate"]) ||
+            !isRecord(projection["preparedCandidate"]) || projection["reviewRoundAdded"] !== false ||
+            projection["preparedCandidate"]["treeSha"] !== record.candidateBinding.treeSha) continue;
+        const reviewedTreeSha = projection["reviewedCandidate"]["treeSha"];
+        if (typeof reviewedTreeSha === "string" && /^[a-f0-9]{40}$/.test(reviewedTreeSha)) trees.add(reviewedTreeSha);
+      } catch {
+        // Portable verification would already have rejected malformed bytes;
+        // a defensive parse failure contributes no observational coordinate.
+      }
+    }
+  }
+  return [...trees];
 }
 
 /** Reconstruct admission from retained evidence using the existing evaluator. */

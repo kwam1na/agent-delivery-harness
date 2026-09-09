@@ -11,8 +11,8 @@
  * file red immediately.
  */
 import { describe, expect, it } from "vitest";
-import { createCollector } from "./grammar.ts";
-import { validateReviewGreenClaim, type ReviewGreenClaimInput } from "./review-green.ts";
+import { createCollector, type Collector } from "./grammar.ts";
+import { validateReviewGreenClaim, validateReviewGreenClaimV2, type ReviewGreenClaimInput } from "./review-green.ts";
 
 const CANDIDATE = {
   vcs: "git",
@@ -67,6 +67,10 @@ function payload(over: PayloadOverrides = {}): Record<string, unknown> {
 }
 
 function codesFor(over: PayloadOverrides = {}, input: Partial<ReviewGreenClaimInput> = {}): readonly string[] {
+  return rejectionsFor(over, input).map((rejection) => rejection.code);
+}
+
+function rejectionsFor(over: PayloadOverrides = {}, input: Partial<ReviewGreenClaimInput> = {}): ReturnType<Collector["list"]> {
   const collector = createCollector();
   validateReviewGreenClaim(
     {
@@ -81,7 +85,29 @@ function codesFor(over: PayloadOverrides = {}, input: Partial<ReviewGreenClaimIn
     },
     collector,
   );
-  return collector.list().map((rejection) => rejection.code);
+  return collector.list();
+}
+
+function v2CodesFor(over: PayloadOverrides = {}, input: Partial<ReviewGreenClaimInput> = {}): readonly string[] {
+  return v2RejectionsFor(over, input).map((rejection) => rejection.code);
+}
+
+function v2RejectionsFor(over: PayloadOverrides = {}, input: Partial<ReviewGreenClaimInput> = {}): ReturnType<Collector["list"]> {
+  const collector = createCollector();
+  validateReviewGreenClaimV2(
+    {
+      payload: payload(over),
+      at: "/claims/0/payload",
+      provider: PROVIDER,
+      candidate: CANDIDATE,
+      artifacts: [{ index: 0, path: "reviewers/solo.json", sha256: "b".repeat(64), role: "reviewer-approval" }],
+      artifactContents: new Map([["reviewers/solo.json", approval()]]),
+      runHistoryLength: 2,
+      ...input,
+    },
+    collector,
+  );
+  return collector.list();
 }
 
 const LEGAL_DEFERRAL = {
@@ -135,6 +161,34 @@ describe("deferral", () => {
   });
 });
 
+describe("review.green/2 deferral", () => {
+  it.each(["P2", "P3"])("accepts a tracked, nonblocking %s in-contract finding", (severity) => {
+    expect(v2CodesFor({ findings: [{ ...LEGAL_DEFERRAL, severity, scope: "in_contract" }] })).toEqual([]);
+  });
+
+  it("continues to accept an expansion finding", () => {
+    expect(v2CodesFor({ findings: [LEGAL_DEFERRAL] })).toEqual([]);
+  });
+
+  it.each([
+    ["P0", { severity: "P0", scope: "in_contract" }],
+    ["P1", { severity: "P1", scope: "in_contract" }],
+    ["adjacent", { scope: "adjacent" }],
+    ["blocking", { blocking: true, scope: "in_contract" }],
+    ["untracked", { deferredIssueId: undefined, scope: "in_contract" }],
+  ])("still rejects a %s deferral", (_name, deviation) => {
+    expect(v2CodesFor({ findings: [{ ...LEGAL_DEFERRAL, ...deviation }] })).toContain("illegal_deferral");
+  });
+
+  it("names every required condition when refusing a deferral", () => {
+    const rejection = v2RejectionsFor({ findings: [{ ...LEGAL_DEFERRAL, scope: "adjacent" }] })
+      .find((entry) => entry.code === "illegal_deferral");
+    expect(rejection?.message).toBe(
+      "a deferral requires actionable true, blocking false, severity P2 or P3, scope in_contract or expansion, and a tracked issue id",
+    );
+  });
+});
+
 // ── RG-6 ───────────────────────────────────────────────────────────────────
 
 describe("open work", () => {
@@ -178,8 +232,10 @@ describe("telemetry", () => {
 
   it("counts iterations against the run history, not against itself", () => {
     expect(codesFor({}, {})).toEqual([]);
-    expect(codesFor({ telemetry: { iterationCount: 7 } })).toContain("iteration_count_mismatch");
-    expect(codesFor({}, { runHistoryLength: 3 })).toContain("iteration_count_mismatch");
+    expect(rejectionsFor({ telemetry: { iterationCount: 7 } }).find((rejection) => rejection.code === "iteration_count_mismatch")?.message)
+      .toBe("iterationCount is 7, but runHistory contains 2 entries");
+    expect(rejectionsFor({}, { runHistoryLength: 3 }).find((rejection) => rejection.code === "iteration_count_mismatch")?.message)
+      .toBe("iterationCount is 2, but runHistory contains 3 entries");
   });
 });
 

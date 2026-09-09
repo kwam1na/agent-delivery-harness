@@ -135,6 +135,32 @@ Optional `cost` uses the payload's `unit`, `total`, `reportedBy` and optional
 `subagent-tokens` with coverage stating that executor usage is unavailable is a
 partial measurement. The emitter never estimates missing usage.
 
+`iterationCount` counts the manifest's recorded prepare-and-evaluate passes,
+not submissions, journal events, or individual lenses. A single submission can
+carry several actual passes. For a fix followed by re-verification, retain the
+first pass's prepared tree, prepare and review the repaired tree, and supply
+both entries in order with the final pass identifier:
+
+```json
+{
+  "runHistory": [
+    { "preparedTreeSha": "<first prepared and reviewed tree>", "evaluatedInPassId": "pass-1" },
+    { "preparedTreeSha": "<final prepared and reviewed tree>", "evaluatedInPassId": "pass-2" }
+  ],
+  "finalPassId": "pass-2"
+}
+```
+
+These members extend the concluded `review-outcome/1` above. Its
+`contextDigest` must identify the final reviewed context; the emitter derives
+`iterationCount: 2` from the two entries. Keep each pass's original context and
+reviewer results in the retained outcome. Earlier plan reviews that had no
+prepared candidate are not prepare-and-evaluate passes: retain them as review
+history in the complete outcome and captured reduction, without inventing
+prepared trees. RG-9 checks the submitted history length and cannot recover
+review effort that the caller omitted. Journal round observations never supply
+or authorize admission history.
+
 One entry per reviewer the policy selects, and no ids: the ids are basenames of
 charter paths inside the installed archive, and a caller that restates them is
 redoing the emitter's own resolution with no way to check the answer. A review

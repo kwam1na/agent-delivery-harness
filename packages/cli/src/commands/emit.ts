@@ -241,7 +241,7 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
             details: `run ${runId}: ${first === undefined ? "the store refused the append" : `${first.code} at ${oneLine(first.pointer, 64) || "/"}: ${oneLine(first.message, 200)}`}`,
             remediation: {
               id: "correct-the-event",
-              summary: "Correct the kind or the payload against the run-event/1 contract and emit again.",
+              summary: `Correct the kind or the payload against the ${version} contract and emit again.`,
             },
           }),
         ],
@@ -330,7 +330,7 @@ async function startRun(surface: RunSurface, force: boolean, supplied: unknown,
           details: `run ${runId}: ${first === undefined ? "the store refused the append" : `${first.code} at ${oneLine(first.pointer, 64) || "/"}: ${oneLine(first.message, 200)}`}`,
           remediation: {
             id: "correct-the-event",
-            summary: "Correct the payload against the run-event/1 contract and emit again.",
+            summary: `Correct the payload against the ${version} contract and emit again.`,
           },
         }),
       ],

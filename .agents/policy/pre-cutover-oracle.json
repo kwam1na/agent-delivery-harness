@@ -37,7 +37,7 @@
         "freshness": "exact_candidate",
         "providerPolicy": "all",
         "providers": ["claude-code.ce-code-review"],
-        "acceptedPayloadSpecs": ["review.green/1"],
+        "acceptedPayloadSpecs": ["review.green/2", "review.green/1"],
         "minimumAttestationLevel": "self",
         "humanWaiverAllowed": true,
         "ciDelegation": [],

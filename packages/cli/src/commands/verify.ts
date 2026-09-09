@@ -199,22 +199,29 @@ export const verifyCommand: CommandDescriptor = {
       }
     }
 
-    // The row is resolved from the RECORD'S tree sha, not the recomputed
-    // identity: the identity digest excludes the review-neutral paths, and what
-    // a review round and a `pr.opened` bind is the raw tree the record carries.
-    const runJournal = await resolveRunJournalRow({
-      cwd: context.rootDir,
-      treeSha: parsed.record.candidateBinding.treeSha,
-      ...(parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }),
-    });
-
     const inputs = await capturePortableVerificationInputs(context.rootDir, context.config, capture.candidate, parsed.record);
     const live = await collectLiveProviderResults({rootDir:context.rootDir,config:context.config,candidate:capture.candidate,
       projection:inputs.projection,evidenceContext:inputs.evidenceContext,env:context.env,...(context.signal===undefined?{}:{signal:context.signal})});
-    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base, { candidateTreePaths, runJournal, ...inputs, liveResults:live.liveResults, executionContext: context.classifyContext() });
-    if (!check.ok) {
-      return { kind: "blocked", blockers: [...live.blockers, ...check.blockers] };
+    // Verify the portable record before letting any retained projection widen
+    // the observational tree coordinates. Corrupt or invented projection bytes
+    // therefore fail as record evidence and never influence journal matching.
+    const verified = verifyDeliveryRecord(context.config, parsed.record, identity, base,
+      { candidateTreePaths, ...inputs, liveResults:live.liveResults, executionContext: context.classifyContext() });
+    if (!verified.ok) {
+      return { kind: "blocked", blockers: [...live.blockers, ...verified.blockers] };
     }
+
+    // The record tree remains the primary coordinate. A product-validated
+    // review-neutral projection may additionally name the earlier raw tree the
+    // reviewers actually read; the journal stays observational either way.
+    const runJournal = await resolveRunJournalRow({
+      cwd: context.rootDir,
+      treeSha: parsed.record.candidateBinding.treeSha,
+      reviewedCandidateTreeShas: verified.reviewedCandidateTreeShas,
+      ...(parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }),
+    });
+    const check = verifyDeliveryRecord(context.config, parsed.record, identity, base,
+      { candidateTreePaths, runJournal, ...inputs, liveResults:live.liveResults, executionContext: context.classifyContext() });
 
     // The opt-in is judged AFTER the record's own verification, so a delivery
     // whose record is bad is never told its journal is the problem.

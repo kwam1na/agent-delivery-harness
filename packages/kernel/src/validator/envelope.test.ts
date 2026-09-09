@@ -346,9 +346,7 @@ describe("the artifact pool", () => {
 });
 
 describe("claims", () => {
-  it("rejects a payload spec the validator does not implement even when configuration accepts it", () => {
-    // Fail closed: accepting a payload no rule has ever read would admit
-    // unvalidated evidence on the strength of a configuration edit alone.
+  it("accepts review.green/2 only when configuration opts into it", () => {
     const widened = defineHarnessConfig({
       ...CONFIG_INPUT,
       obligations: CONFIG_INPUT.obligations.map((obligation) => ({
@@ -358,7 +356,29 @@ describe("claims", () => {
     });
     const submitted = manifest();
     (submitted["claims"] as Record<string, unknown>[])[0]!["payloadSpec"] = "review.green/2";
-    expect(codesFor(submitted, { config: widened })).toContain("unsupported_payload_spec");
+    expect(codesFor(submitted)).toContain("unsupported_payload_spec");
+    expect(codesFor(submitted, { config: widened })).toEqual([]);
+  });
+
+  it("keeps review.green/1 expansion-only while review.green/2 admits tracked in-contract P2 and P3 findings", () => {
+    const widened = defineHarnessConfig({
+      ...CONFIG_INPUT,
+      obligations: CONFIG_INPUT.obligations.map((obligation) => ({
+        ...obligation,
+        acceptedPayloadSpecs: [...obligation.acceptedPayloadSpecs, "review.green/2"],
+      })),
+    });
+    for (const severity of ["P2", "P3"]) {
+      const submitted = manifest();
+      const claim = (submitted["claims"] as Record<string, unknown>[])[0]!;
+      const payload = claim["payload"] as Record<string, unknown>;
+      payload["findings"] = [{ id: `tracked-${severity}`, severity, scope: "in_contract", actionable: true, blocking: false, disposition: "deferred", deferredIssueId: "V26-1963" }];
+      payload["telemetry"] = { iterationCount: 2, findingCounts: { P0: 0, P1: 0, P2: severity === "P2" ? 1 : 0, P3: severity === "P3" ? 1 : 0 }, deferredExpansionCount: 1, deferredIssueIds: ["V26-1963"] };
+
+      expect(codesFor(submitted, { config: widened })).toContain("illegal_deferral");
+      claim["payloadSpec"] = "review.green/2";
+      expect(codesFor(submitted, { config: widened })).toEqual([]);
+    }
   });
 
   it("does not judge provider registration for an obligation the repository has not configured", () => {

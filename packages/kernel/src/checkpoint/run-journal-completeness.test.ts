@@ -606,6 +606,16 @@ describe("the anchored constraints and the round rules", () => {
     expect(evaluateRunJournal(journal(COMPLETE), OTHER_TREE, MANDATED).status).toBe("incomplete");
   });
 
+  it("accepts a closed round bound to a verified review-neutral projection", () => {
+    const result = evaluateRunJournal(journal(COMPLETE), OTHER_TREE, MANDATED, [TREE]);
+    expect(result.violations).toEqual([]);
+    expect(result.status).toBe("complete");
+    expect(result.boundToRecord).toBe(true);
+
+    expect(evaluateRunJournal(journal(COMPLETE), OTHER_TREE, MANDATED, ["c".repeat(40)]).violations)
+      .toContain("round-not-bound-to-record");
+  });
+
   it("names mandated-pair-mismatch whatever the writer mix", () => {
     // The mandate rule is phrased over the lens.selected event alone and reads
     // no completion, so it must name the same violation in an executor-only

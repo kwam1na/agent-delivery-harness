@@ -542,6 +542,32 @@ describe("binding-owned provider result ingestion", () => {
     return opened;
   };
 
+  it("accepts tracked nonblocking P2 and P3 in-contract deferrals under review.green/2", { timeout: 180_000 }, async () => {
+    const { deliveryId, fence } = await openReview("provider-in-contract-deferrals");
+    const prepared = await fixtureProviderReview({ facade, deliveryId, fence, runId: "run-in-contract-deferrals" });
+    expect("result" in prepared, JSON.stringify(prepared)).toBe(true);
+    if (!("result" in prepared)) return;
+    const accepted = await facade.ingestProviderReviewResult({
+      deliveryId,
+      handoffId: prepared.handoff.handoffId,
+      resultBytes: JSON.stringify({
+        ...prepared.result,
+        findings: ["P2", "P3"].map((severity) => ({
+          id: `tracked-${severity}`,
+          severity,
+          scope: "in_contract",
+          actionable: true,
+          blocking: false,
+          disposition: "deferred",
+          deferredIssueId: "V26-1963",
+        })),
+      }),
+      fence,
+      invocationCapability: prepared.invocationCapability,
+    });
+    expect(accepted).toMatchObject({ ok: true, replay: "recorded", disposition: "approved" });
+  });
+
   it("refuses an approved result carrying a blocking unresolved finding before journaling it", { timeout: 180_000 }, async () => {
     const { deliveryId, fence } = await openReview("provider-approved-blocker");
     const prepared = await fixtureProviderReview({ facade, deliveryId, fence, runId: "run-approved-blocker" });

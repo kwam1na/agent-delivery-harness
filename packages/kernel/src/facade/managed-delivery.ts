@@ -77,7 +77,8 @@ import {
 import { publishPreparationReceipt } from "../preparation.ts";
 import { discoverRecords, resolveRecordStorage } from "../records.ts";
 import { submitManifest } from "../recorder.ts";
-import { reviewFindingCoherenceCodes } from "../validator/review-green.ts";
+import { reviewFindingCoherenceCodes, reviewFindingCoherenceCodesV2 } from "../validator/review-green.ts";
+import { REVIEW_GREEN_1, REVIEW_GREEN_2 } from "../validator/codes.ts";
 import { createCandidateCapture, evaluateCandidateActivation, type CandidateCommandRunner } from "../candidate.ts";
 import { isRecordNeutralPath, isReviewNeutralPath, withDeliverableIdentity } from "../identity.ts";
 import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
@@ -3702,7 +3703,11 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           "Complete a fresh native review run successfully.",
         );
       }
-      const coherenceCodes = result.findings.flatMap(reviewFindingCoherenceCodes);
+      const reviewPayloadSpec = config.obligations.find((obligation) => obligation.id === "review.green")
+        ?.acceptedPayloadSpecs.includes(REVIEW_GREEN_2) === true ? REVIEW_GREEN_2 : REVIEW_GREEN_1;
+      const coherenceCodes = result.findings.flatMap(
+        reviewPayloadSpec === REVIEW_GREEN_2 ? reviewFindingCoherenceCodesV2 : reviewFindingCoherenceCodes,
+      );
       const verdictCoherent = result.verdict === "approved" ? coherenceCodes.length === 0 : result.findings.length > 0;
       if (!verdictCoherent) {
         return refuseResult(
@@ -4110,7 +4115,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         claims: [
           {
             obligation: "review.green",
-            payloadSpec: "review.green/1",
+            payloadSpec: config.obligations.find((obligation) => obligation.id === "review.green")
+              ?.acceptedPayloadSpecs.includes(REVIEW_GREEN_2) === true ? REVIEW_GREEN_2 : REVIEW_GREEN_1,
             payload: {
               verdict: "green",
               finalized: true,

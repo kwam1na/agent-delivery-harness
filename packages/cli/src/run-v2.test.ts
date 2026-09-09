@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,60 @@ async function emit(rootDir: string, args: string[], payload: unknown) {
 const started = { host: "codex", workflow: { releaseId: "test", profile: "core" } };
 
 describe("explicit v2 writers", () => {
+  it("executes the installed workflow's complete two-round observation example", async () => {
+    const contract = await readFile(new URL("../../../.agents/skills/execute-work/references/run-observation-contract.md", import.meta.url), "utf8");
+    const examples = [...contract.matchAll(/```json\s*\n([\s\S]*?)\n```/g)]
+      .map(match => JSON.parse(match[1]!)).filter(Array.isArray);
+    expect(examples, "the shared workflow must supply one complete event sequence").toHaveLength(1);
+    const sequence = examples[0] as { eventId: string; kind: string; payload: Record<string, unknown> }[];
+    expect(sequence.filter(event => event.kind === "review.round.opened")).toHaveLength(2);
+    expect(sequence.filter(event => event.kind === "review.round.closed")).toHaveLength(2);
+    const root = await repository();
+    expect((await emit(root, ["run.started", "--version", "2", "--event-id", "example-start"], started)).kind).toBe("ok");
+    for (const event of sequence) {
+      const result = await emit(root, [event.kind, "--event-id", event.eventId], event.payload);
+      expect(result.kind, `${event.eventId}: ${JSON.stringify(result)}`).toBe("ok");
+    }
+    const resolved = await resolveRunSurface(root);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    const current = await resolved.surface.store.current(resolved.surface.worktreeKey);
+    if (!current.ok || !current.runId) throw new Error("no example run");
+    const read = await resolved.surface.store.read(current.runId);
+    if (!read.ok) throw new Error("unreadable example run");
+    expect(read.events).toHaveLength(sequence.length + 1);
+    expect(read.events.filter(event => event.kind === "review.round.closed").map(event => event.payload["round"])).toEqual([1, 2]);
+  });
+
+  it("names the selected event version when an immutable attempt binding is refused", async () => {
+    const root = await repository();
+    expect((await emit(root, ["run.started", "--version", "2", "--event-id", "start"], started)).kind).toBe("ok");
+    const binding = { activityId: "review", attemptId: "first", candidateTreeSha: "a".repeat(40),
+      owner: "codex", phase: "review", state: "running", nextStep: "Review the candidate" };
+    expect((await emit(root, ["activity.observed", "--event-id", "first"], binding)).kind).toBe("ok");
+    const replacement = { ...binding, attemptId: "second" };
+    const missing = await emit(root, ["activity.observed", "--event-id", "missing"], replacement);
+    expect(missing.kind).toBe("blocked");
+    expect(JSON.stringify(missing)).toContain("supersedesAttemptId");
+    expect(JSON.stringify(missing)).toContain("run-event/2 contract");
+    expect((await emit(root, ["activity.observed", "--event-id", "replacement"],
+      { ...replacement, supersedesAttemptId: "first" })).kind).toBe("ok");
+    const changed = await emit(root, ["activity.observed", "--event-id", "changed"],
+      { ...replacement, state: "completed" });
+    expect(changed.kind).toBe("blocked");
+    expect(JSON.stringify(changed)).toContain("supersedesAttemptId");
+    expect(JSON.stringify(changed)).toContain("run-event/2 contract");
+    expect((await emit(root, ["activity.observed", "--event-id", "completed"],
+      { ...replacement, supersedesAttemptId: "first", state: "completed" })).kind).toBe("ok");
+  });
+
+  it.each(["1", "2"])("names version %s in a refused run start", async version => {
+    const root = await repository();
+    const result = await emit(root, ["run.started", "--version", version,
+      ...(version === "2" ? ["--event-id", "bad-start"] : [])], { ...started, unsupported: true });
+    expect(result.kind).toBe("blocked");
+    expect(JSON.stringify(result)).toContain(`run-event/${version} contract`);
+  });
+
   it("deduplicates concurrent CLI retries across observation instants but preserves strict raw inputs", async () => {
     const root = await repository();
     expect((await emit(root, ["run.started", "--version", "2", "--event-id", "start-1"], started)).kind).toBe("ok");

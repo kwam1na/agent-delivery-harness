@@ -14,6 +14,7 @@
  */
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +25,8 @@ import {
   captureGitCandidate,
   createArtifactsPort,
   defineHarnessConfig,
+  digestCanonical,
+  manifestDigest as digestManifest,
   resolveRecordStorage,
   sha256Hex,
   withDeliverableIdentity,
@@ -108,7 +111,7 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
   return stdout.trim();
 }
 
-async function initRepo(): Promise<string> {
+async function initRepo(withReviewProduct = false): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dh-verify-run-"));
   cleanups.push(dir);
   await git(dir, "init", "--quiet", "--initial-branch", "main");
@@ -119,6 +122,28 @@ async function initRepo(): Promise<string> {
   await git(dir, "add", "harness.config.ts");
   await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "root");
   await git(dir, "branch", "origin/main");
+  if (withReviewProduct) {
+    const charter = "# correctness charter\n\nReview the candidate for correctness.\n";
+    const charterDigest = createHash("sha256").update(charter).digest("hex");
+    await mkdir(path.join(dir, ".agent-skills/current/personas"), { recursive: true });
+    await mkdir(path.join(dir, ".agent-skills/current/workflows"), { recursive: true });
+    await mkdir(path.join(dir, ".agents/policy"), { recursive: true });
+    await writeFile(path.join(dir, ".agent-skills/current/personas/manifest.json"), `${JSON.stringify({
+      schemaVersion: "reviewer-persona-manifest/1",
+      personas: [{ personaId: "persona.correctness", path: "personas/correctness.md" }],
+    })}\n`);
+    await writeFile(path.join(dir, ".agent-skills/current/personas/correctness.md"), charter);
+    await writeFile(path.join(dir, ".agent-skills/current/workflows/delivery-v1.json"), "{}\n");
+    await writeFile(path.join(dir, ".agent-skills/active.json"), `${JSON.stringify({ release: {
+      releaseId: "fixture-release", profile: "linear", archiveSha256: "a".repeat(64), metadataSha256: "b".repeat(64),
+    } })}\n`);
+    await writeFile(path.join(dir, ".agents/policy/compiled-snapshot.json"), `${JSON.stringify({
+      schemaVersion: "delivery-harness-compiled-policy-snapshot/1",
+      compiled: { snapshot: { reviewLenses: [{ lensId: "lens.correctness", category: "correctness", personaId: "persona.correctness", personaDigest: charterDigest }] } },
+    })}\n`);
+    await git(dir, "add", ".agent-skills", ".agents");
+    await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "install review product");
+  }
   writeFileSync(path.join(dir, "src.txt"), "hello world\n", "utf8");
   await git(dir, "add", "src.txt");
   await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "work");
@@ -137,7 +162,7 @@ interface Harness {
   readonly artifacts: ArtifactsPort;
   /** The candidate tree sha the record will bind, captured before the loop runs. */
   readonly treeSha: string;
-  cli(argv: readonly string[]): Promise<Invocation>;
+  cli(argv: readonly string[], extra?: Partial<CliRuntime>): Promise<Invocation>;
   emit(kind: string, payload: unknown): Promise<Invocation>;
 }
 
@@ -159,8 +184,8 @@ async function captureTreeSha(dir: string, config: HarnessConfig): Promise<strin
   return capture.candidate.treeSha;
 }
 
-async function makeHarness(overrides: Partial<HarnessConfigInput> = {}): Promise<Harness> {
-  const dir = await initRepo();
+async function makeHarness(overrides: Partial<HarnessConfigInput> = {}, withReviewProduct = false): Promise<Harness> {
+  const dir = await initRepo(withReviewProduct);
   const config = makeConfig(overrides);
   const artifacts = await makeArtifacts();
   const treeSha = await captureTreeSha(dir, config);
@@ -186,7 +211,7 @@ async function makeHarness(overrides: Partial<HarnessConfigInput> = {}): Promise
     config,
     artifacts,
     treeSha,
-    cli: (argv) => cli(argv),
+    cli: (argv, extra) => cli(argv, extra),
     emit: (kind, payload) => cli(["emit", kind], { readStdin: async () => JSON.stringify(payload) }),
   };
 }
@@ -439,6 +464,89 @@ describe("verify's run-journal completeness row", () => {
     // The opt-in agrees with the row it reads.
     const required = await harness.cli(["verify", "--require-run-journal"]);
     expect(required.code, required.err).toBe(EXIT_OK);
+  });
+
+  it("recognizes the raw reviewed tree through a verified neutral projection", { timeout: 120000 }, async () => {
+    const harness = await makeHarness({}, true);
+    const runId = await startRun(harness);
+    await emitAll(harness, prerequisites());
+
+    const prepared = await harness.cli(["prepare"]);
+    expect(prepared.code, prepared.err).toBe(EXIT_OK);
+    const reviewed = await harness.cli(["review-context", "--json"]);
+    expect(reviewed.code, reviewed.err).toBe(EXIT_OK);
+    const reviewedDocument = JSON.parse(reviewed.out) as { digest: string; binding: { candidate: { treeSha: string } } };
+    const reviewedTreeSha = reviewedDocument.binding.candidate.treeSha;
+    await emitAll(harness, [roundOpened(reviewedTreeSha), roundClosed(reviewedTreeSha)]);
+
+    await mkdir(path.join(harness.dir, "docs/reports"), { recursive: true });
+    await writeFile(path.join(harness.dir, "docs/reports/review.md"), "Reviewed delivery report.\n");
+    await git(harness.dir, "add", "docs/reports/review.md");
+    await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", "add neutral review report");
+    const projectedTreeSha = await captureTreeSha(harness.dir, harness.config);
+    expect(projectedTreeSha).not.toBe(reviewedTreeSha);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+
+    const contextDir = await mkdtemp(path.join(os.tmpdir(), "dh-reviewed-context-"));
+    cleanups.push(contextDir);
+    const contextPath = path.join(contextDir, "review-context.json");
+    await writeFile(contextPath, reviewed.out);
+    const outcome = {
+      spec: "review-outcome/1",
+      contextDigest: reviewedDocument.digest,
+      verdict: "green",
+      reviewers: [{ id: "correctness", result: "approved" }],
+      findings: [],
+    };
+    const emitted = await harness.cli(["emit-review-evidence", "--context", contextPath], {
+      readStdin: async () => `${JSON.stringify(outcome)}\n`,
+    });
+    expect(emitted.code, emitted.err).toBe(EXIT_OK);
+    const manifestPath = emitted.out.trim();
+    expect((await harness.cli(["submit-evidence", "--manifest", manifestPath])).code).toBe(EXIT_OK);
+    expect((await harness.cli(["gate"])).code).toBe(EXIT_OK);
+    expect((await harness.cli(["record"])).code).toBe(EXIT_OK);
+    expect(await recordedTreeSha(harness.dir)).toBe(projectedTreeSha);
+    await emitAll(harness, [["pr.opened", { url: "https://example.invalid/pr/neutral", candidateTreeSha: projectedTreeSha }]]);
+    await commitRecord(harness.dir);
+    await emitAll(harness, [ended()]);
+
+    const verified = await harness.cli(["verify", "--require-run-journal"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    const row = rowOf(verified.out);
+    expect(row).toContain(runId);
+    expect(row).toContain(`record candidate: ${projectedTreeSha}`);
+    expect(row).toContain(`reviewed candidate: ${reviewedTreeSha}`);
+    expect(row).toContain("verified review-neutral projection");
+    expect(row).not.toContain("gate-before-closed-round");
+    expect(row).not.toContain("round-not-bound-to-record");
+
+    const recordDir = path.join(harness.dir, "telemetry/delivery-runs");
+    const recordName = (await readdir(recordDir)).find((name) => name.startsWith("record--"));
+    if (recordName === undefined) throw new Error("record missing");
+    const recordPath = path.join(recordDir, recordName);
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    const portable = record.claims[0].evidence.resolution.portable;
+    const projectionEntry = portable.manifest.artifacts.find((entry: { role: string }) => entry.role === "review-context-projection");
+    const projection = JSON.parse(Buffer.from(portable.artifacts[projectionEntry.path], "base64").toString("utf8"));
+    projection.reviewedCandidate.treeSha = OTHER_TREE_SHA;
+    const corruptBytes = `${JSON.stringify(projection)}\n`;
+    portable.artifacts[projectionEntry.path] = Buffer.from(corruptBytes).toString("base64");
+    projectionEntry.sha256 = sha256Hex(corruptBytes);
+    const changedManifestDigest = digestManifest(portable.manifest);
+    record.manifestDigest = changedManifestDigest;
+    record.claims[0].manifestDigest = changedManifestDigest;
+    record.claims[0].evidence.resolution.manifestDigest = changedManifestDigest;
+    delete record.integrityDigest;
+    record.integrityDigest = digestCanonical(record);
+    await writeFile(recordPath, `${JSON.stringify(record)}\n`);
+    await git(harness.dir, "add", recordPath);
+    await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", "corrupt retained projection");
+
+    const refused = await harness.cli(["verify", "--require-run-journal"]);
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect(refused.err).toContain("portable_review_outcome_invalid");
+    expect(refused.out).not.toContain("reviewed candidate:");
   });
 
   it("finds the journal by the record's tree sha after the run ended and the pointer was cleared", { timeout: 120000 }, async () => {

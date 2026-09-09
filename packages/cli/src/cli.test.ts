@@ -595,6 +595,40 @@ describe("the full delivery loop", () => {
     expect(await runCli(["verify"], runtime)).toBe(EXIT_OK);
   });
 
+  it("bounds opt-in same-delivery records after the new record verifies and preserves Git history", { timeout: 120000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime, err, out } = makeRuntime(dir, config, artifacts);
+    const recordedPaths: string[] = [];
+
+    for (const attempt of [1, 2, 3]) {
+      if (attempt > 1) {
+        await writeFile(path.join(dir, `attempt-${attempt}.txt`), `attempt ${attempt}\n`);
+        await git(dir, "add", `attempt-${attempt}.txt`);
+        await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", `attempt ${attempt}`);
+      }
+      expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+      const manifestPath = await buildAcceptSubmission(dir, config, artifacts);
+      expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_OK);
+      const digest = await captureDigest(dir, config);
+      recordedPaths.push(deliveryRecordPathFor(config, digest));
+      expect(
+        await runCli(["record", "--retention-scope", "delivery-v26-1915", "--keep-superseded", "1"], runtime),
+        err.join(""),
+      ).toBe(EXIT_OK);
+      await commitRecord(dir);
+    }
+
+    expect(existsSync(path.join(dir, recordedPaths[0]!))).toBe(false);
+    expect(existsSync(path.join(dir, recordedPaths[1]!))).toBe(true);
+    expect(existsSync(path.join(dir, recordedPaths[2]!))).toBe(true);
+    expect(out.join("")).toContain(`pruned Git-preserved ${recordedPaths[0]}`);
+    expect(await runCli(["verify"], runtime)).toBe(EXIT_OK);
+    expect((await readdir(path.dirname(path.join(dir, recordedPaths[2]!)))).filter((name) => name.startsWith("record--"))).toHaveLength(2);
+    expect(await git(dir, "show", `HEAD^:${recordedPaths[0]}`)).toContain("delivery-record/2");
+  });
+
   it("invokes an opt-in provider at the existing record boundary and promotes only its retained green evidence", { timeout: 60000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig({ providers: [{ id: PROVIDER.id, findingCodes: [], command: ["fake-review-provider"] }] });
@@ -1579,8 +1613,11 @@ describe("unrecognized flags on the direct commands", () => {
       (await readdir(recordDir).catch(() => [] as string[])).filter((name) => name.startsWith("record--"));
 
     expect(await runCli(["record", "--help"], runtime)).toBe(EXIT_OK);
+    expect(out.join("")).toContain("--retention-scope <delivery-key> --keep-superseded <0-100>");
     expect(await records()).toEqual([]);
     expect(await runCli(["record", "--bogus-flag"], runtime)).toBe(EXIT_USAGE);
+    expect(await runCli(["record", "--retention-scope", "V26-1915"], runtime)).toBe(EXIT_USAGE);
+    expect(await runCli(["record", "--retention-scope", "V26-1915", "--keep-superseded", "101"], runtime)).toBe(EXIT_USAGE);
     expect(await records()).toEqual([]);
     // The admitted control: the same repository, the same runtime, the real
     // invocation — so the two empty listings above mean the arguments were
