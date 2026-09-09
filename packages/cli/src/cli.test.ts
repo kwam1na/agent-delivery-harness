@@ -1469,6 +1469,10 @@ describe("per-command help", () => {
     // configured path, where this runtime's loader throws — rendered as an
     // internal error, which is exit 1 and emphatically not the help exit.
     expect(await runCli(["prepare", "--refresh-record-neutral", "--help"], runtime)).not.toBe(EXIT_OK);
+    // And in leading position, which `args.length === 1` is what rejects: a
+    // predicate that merely looked for the token anywhere would answer this as
+    // help and swallow the real invocation.
+    expect(await runCli(["prepare", "--help", "--refresh-record-neutral"], runtime)).not.toBe(EXIT_OK);
   });
 });
 
@@ -1542,6 +1546,21 @@ describe("unrecognized flags on the direct commands", () => {
     // The positional form of the same argument, which is not a flag and must
     // not be swept up by the rejection.
     expect(await runCli(["submit-evidence", manifestPath], runtime)).toBe(EXIT_OK);
+    // A manifest path that begins with a hyphen is still `--manifest`'s VALUE,
+    // never an unknown flag: refusing it would be exactly the "reject a
+    // legitimate argument generically" failure CLI-004 forbids. Pinned against
+    // an ordinary missing path so the row asserts the two are treated
+    // identically, not merely that this one was not refused.
+    const hyphenLeading = await runCli(["submit-evidence", "--manifest", "-manifest.json"], runtime);
+    const ordinaryMissing = await runCli(["submit-evidence", "--manifest", "missing.json"], runtime);
+    expect(hyphenLeading).not.toBe(EXIT_USAGE);
+    expect(hyphenLeading).toBe(ordinaryMissing);
+    // The input the unknown-flag guard exists for: a mistyped flag ALONGSIDE a
+    // real `--manifest`. Without the guard the manifest is published and the
+    // mistyped flag is silently dropped, so `submit-evidence --bogus-flag`
+    // alone proves nothing — it was already a usage error before this change,
+    // by falling through to the missing-manifest arm.
+    expect(await runCli(["submit-evidence", "--manifest", manifestPath, "--bogus-flag"], runtime)).toBe(EXIT_USAGE);
     expect(await runCli(["verify", "--require-run-journal"], runtime)).not.toBe(EXIT_USAGE);
     expect(await runCli(["gate"], runtime)).toBe(EXIT_OK);
   }, 60_000);

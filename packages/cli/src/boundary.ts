@@ -146,8 +146,11 @@ export interface CommandDescriptor {
    * What a lone `--help`/`-h` on this command is answered with, printed by the
    * boundary before anything is loaded. It is the command's own text — its
    * invocation form and, where the command has one, the sentence explaining
-   * what its flags decide — and it is what a command's own usage errors are
-   * built from, so the two cannot drift apart.
+   * what its flags decide. Most commands build their own usage errors from it
+   * too, but nothing enforces that: `emit-review-evidence`, `maintain`,
+   * `managed` and `submit-evidence`'s missing-manifest arm phrase theirs from
+   * separate literals, so this member is the help answer and not a
+   * single-authority claim over every usage message.
    */
   readonly usage: string;
   run(context: CommandContext): Promise<CommandResult>;
