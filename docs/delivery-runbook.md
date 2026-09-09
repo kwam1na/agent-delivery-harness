@@ -53,6 +53,13 @@ npm run --silent harness -- emit run.started --version 2 --event-id start-1 \
 
 `releaseId` and `profile` come from `.agent-skills/current/release-manifest.json`.
 
+**A second attempt gets a second run, so say which run it continues.**
+`run.ended` is terminal, so a delivery that ends and is retried cannot reuse its
+journal. Version 2 adds an optional `predecessorRunId` to `run.started` and it is
+the only member that links the two; without it the second attempt is an
+unattributed run beside the first, which is the split this page warns about at
+the merge.
+
 **A run's writer version is fixed at `run.started` and cannot change.** If you
 are continuing someone else's delivery, read it before emitting anything — a
 version-1 run *refuses* `--event-id`, and its message ("Version 2 requires
@@ -104,6 +111,15 @@ refused),
 and `compounding.recorded {"outcome"[,"reference"]}`. `command.completed` is
 refused for `emit` — only the CLI writes it.
 
+**`save-context` is refused on a version-2 run.** It builds a `run-event/1`
+event, and appending a version-1 event to a version-2 journal is refused with
+`unsupported_spec`. Verified here: the command blocks with
+`[resume_context_invalid] Context was refused by the bounded run-event
+contract`, and the refusal is retained where `runs show` lists it under
+`refused appends`, not as a stored `context.saved`. It works on a version-1 run.
+`context.saved` is not a required journal entry, so on a version-2 run skip the
+command rather than debugging its payload.
+
 ## 3. Implementation
 
 ```sh
@@ -148,6 +164,29 @@ timeout rather than the default.
 line; there is no worktree scoping in `pkill`. Kill the process group you
 started, or let the stale run finish and ignore its result.
 
+### The shell this loop actually runs in
+
+Every delivery in this repository so far has lost tool calls to the same three
+facts, so they are here rather than in each agent's own notes. The interactive
+shell is `zsh` and the host has no coreutils.
+
+- **Quote a glob you mean to pass through.** `zsh` expands an unquoted flag
+  value and fails the whole command when nothing matches, so
+  `grep -rn X --include=*.ts packages` dies at
+  `(eval):1: no matches found: --include=*.ts` without ever running the grep.
+  Write `--include='*.ts'`. The auditing this page asks for — grep every call
+  site — is exactly where you meet it.
+- **Write loops to a file, not inline.** An inline `for … done; echo done`
+  comes back as `(eval):1: parse error` rather than running. Put the loop in a
+  `#!/bin/bash` file and run the file. That covers `for`, `while` and `until`,
+  so a poll loop is a file too.
+- **There is no `timeout(1)`** — neither `timeout` nor `gtimeout` is on this
+  host. For the `durationMs` that `gate.reported` wants, the portable form is
+  the shell's own counter:
+  ```sh
+  SECONDS=0; DELIVERY_HARNESS_MAX_WORKERS=4 npm run check; echo "$((SECONDS * 1000))"
+  ```
+
 ### Paths
 
 Writable in the `implement` checkpoint: `packages`, `scripts`, `docs`,
@@ -167,9 +206,16 @@ worktree clean — no unstaged tracked changes, no untracked files — from
 `candidate_unprepared`. A mutating lens restores its probe with `git checkout --
 <file>`, which restores to `HEAD` and would take uncommitted candidate edits
 with it. Restore **by path, never by tree** — `git checkout -- .` at a moment
-when a fix is still uncommitted destroys the fix under test. After any batch
-that was backgrounded and then interrupted, `git diff <the mutated file>` before
-trusting a green run: a killed batch can leave the plant in place.
+when a fix is still uncommitted destroys the fix under test.
+
+**Background a plant/verify/restore cycle from the start.** One file's suite is
+half a minute idle here and two minutes under concurrent sibling suites, against
+a 120-second default on the tool most hosts drive this shell with, so a chained
+cycle is interrupted rather than finished — and the interruption lands
+mid-cycle, with the plant still in the tree. After any batch that was
+backgrounded and then interrupted, `git diff <the mutated file>` before trusting
+a green run: a killed batch leaves the plant in place, and the next thing you
+run reads it as the candidate.
 
 ## 4. Realizing the two lenses
 
@@ -189,6 +235,17 @@ Both charter digests are pinned in `.agents/policy/compiled-snapshot.json` as
 `personaDigest`, and the evidence emitter re-checks the bytes and refuses on
 drift. The reviewer ids the emitter accepts are the charter basenames:
 `outcome-correctness` and `testing-policy`.
+
+**When a claim is derived from a closed member list, that list is the round's
+mutation plan — put it in the brief.** Most of what this repository's guards
+assert is a closed set: the members of a payload, the terms of a digest, the
+entries of a frozen vocabulary. A lens asked only to probe the guard finds the
+one term the round happened to discuss, and the next round finds the next one; a
+lens asked in round 1 to enumerate every member of the set and name a mutation
+per member settles the whole class in one pass. A delivery here spent all four
+rounds closing one term of a seven-term digest that way. This is an instruction
+to the brief, not to the executor: the executor cannot close the findings the
+enumeration produces.
 
 The binding tuple in the brief — release identifiers, graph digest,
 `subjectRef`, `candidateRef` — comes from `review-context --json`, never from a
@@ -224,6 +281,21 @@ ls -d "$REPO/.worktrees/v26-0000/.worktrees" 2>/dev/null && echo NESTED
 ```
 
 `git worktree remove --force <nested path>` cleans it up.
+
+**The lens worktree is also the only liveness signal you get.** A subagent's
+transcript is written when it finishes, so neither its size nor its timestamp
+says whether it is still working, and a host's list of running agents shows
+every sibling delivery's lenses beside yours with nothing distinguishing them.
+What is unambiguous is the worktree you created for that lens:
+
+```sh
+git -C "$REPO/.worktrees/v26-0000-r1-at" status --porcelain
+```
+
+A modified tracked file there is a planted mutation, which is the testing lens
+alive and mid-probe; a worktree that has been clean for a long time is either a
+lens between probes or one that stopped. Do not read a sibling delivery's
+worktree as your own.
 
 ### The round events
 
@@ -264,11 +336,37 @@ the axis you left free.
 **When both lenses converge on one defect from different angles, fix it once.**
 Satisfying each remedy literally leaves two rows asserting the same thing.
 
+**A deferral is discharged by filing its item, not by fixing it.** The pull is
+strong in the other direction — the fix is often two lines and already in front
+of you — and taking it costs twice: the delta the next round's lenses have to
+span grows, and the tracked item is filed asking for something that already
+exists.
+
 The one shape where a deferral is worth closing in-round is when its fixture is
 the fixture some finding already forces you to build: filing it separately
 leaves an item asking for a test that now exists. Even then the executor closes
 nothing — it changes what the lens observes, says so in the next round brief,
 and leaves the lens to report the deferral open or closed on its own judgement.
+
+### Resuming a round that is already open
+
+Deliveries here are handed between agents mid-round often enough that this is
+ordinary rather than exceptional. A round whose `review.round.opened` is already
+in the journal is **not** reopened and **not** re-emitted; a second opening for
+the same round is a second round to every reader of the journal. Read what was
+emitted from the journal file itself, then:
+
+- **Re-realize only the lens that did not report**, against the same
+  `candidateRef` and the same `roundId`, with the same brief. Close the round
+  once, with the two lens results combined.
+- **Reuse the round's retained `review-context --json`.** It is the binding
+  tuple the reporting lens was already bound to, and regenerating it after the
+  base has moved would bind the round to a base its sibling lens never saw.
+- **Inspect the interrupted lens's worktree before relaunching.** A lens that
+  stopped mid-probe leaves its plant in place — the restore is the lens's own
+  last step, and it never ran. `git -C <lens worktree> status --porcelain`, then
+  `git -C <lens worktree> checkout -- <file>` per path, before the replacement
+  lens reads that tree and reports the plant as the candidate.
 
 ## 5. The evidence loop, in order
 
@@ -286,14 +384,34 @@ npm run --silent harness -- review-context
 #   relevant lines N across M changed entries
 #   activation active (threshold 1)
 
-npm run --silent harness -- review-context --json > /tmp/review-context.json
+npm run --silent harness -- review-context --json > "$SCRATCH/review-context.json"
 ```
 
-Retain that JSON unchanged for the whole round: its `digest` is what the reduced
-outcome must name. Then, with the outcome on stdin:
+`$SCRATCH` is any directory outside the worktree: the delivery worktree has to
+stay clean from `prepare` through `record`, so a retained file written inside it
+is an untracked file that blocks the next capture.
+
+**Those two invocations return different documents, and neither is a superset of
+the other.** The `--json` form is the binding tuple — `spec`, `digest` and
+`binding`, and nothing else. The relevant-lines and changed-entry figures are
+built only on the plain form. A round that reports one from the other has not
+regressed; it read the wrong invocation.
+
+**Retain that `--json` output unchanged for the whole round**, in a scratch
+directory the session owns rather than in `/tmp`, which a restarted session
+loses.
+The reason is not only that its `digest` is what the reduced outcome must name.
+It is that once `origin/main` moves you cannot get it back: `review-context`
+refuses with `preparation_base_changed` ("The base moved after the candidate was
+prepared"), and re-preparing to obtain a fresh one would bind the round to a base
+neither lens reviewed under. The retained file is the round's only surviving
+binding tuple, and a delivery is handed to a new agent often enough that "it is
+still in my context" is not retention.
+
+Then, with the outcome on stdin:
 
 ```sh
-MANIFEST=$(npm run --silent review:evidence -- --context /tmp/review-context.json <<'JSON'
+MANIFEST=$(npm run --silent review:evidence -- --context "$SCRATCH/review-context.json" <<'JSON'
 {
   "spec": "review-outcome/1",
   "contextDigest": "<the retained context's digest, exactly>",
@@ -359,7 +477,10 @@ fails closed on a stale record. Two consequences.
 Take whatever lock the session is using, and inside it: fetch, rebase if needed,
 `npm install`, re-run the gate, redo `prepare` → evidence → `gate` → `record` →
 commit → `verify`, push, wait for the hosted checks, then confirm `origin/main`
-still equals the record's `baseTipSha` **immediately before** merging.
+still equals the record's `baseTipSha` **immediately before** merging. Expect the
+base to have moved while you waited: every holder but the first inherits a moved
+base, and the cost of that move is not only the rebase and the gate but
+re-realizing both lenses on the replayed candidate.
 
 **A replay is only free when it is genuinely identical.** `obtain-review` lets a
 round be reopened rather than counted when the deliverable identity is
@@ -373,9 +494,22 @@ about doing that here:
   Retain both raw diffs *and* the canonicalized comparison — the path set and the
   `+`/`-` lines:
   ```sh
-  git diff <base>..<head> -- . ':!delivery/records' > /tmp/old.diff
-  grep -E '^[+-]' /tmp/old.diff | grep -Ev '^(\+\+\+|---)' | shasum -a 256
+  git diff <base>..<head> -- . ':!delivery/records' > "$SCRATCH/old.diff"
+  { git diff --name-status <base>..<head> -- . ':!delivery/records'
+    grep -E '^[+-]' "$SCRATCH/old.diff" | grep -Ev '^(\+\+\+ |--- )'
+  } | shasum -a 256
   ```
+  Both details in that pipeline are load-bearing. The **space** in
+  `'^(\+\+\+ |--- )'` is what keeps it a header filter: git always writes
+  `--- a/path`, `--- /dev/null` and `+++ b/path` with one, whereas a delivered
+  line that removes the text `---` appears in the diff as `----` and matches a
+  spaceless `^---`. Without the space, a documentation change that moves a
+  markdown rule or a YAML front-matter delimiter canonicalizes to nothing and
+  hashes identical to a diff with no delivered lines at all. And the
+  `--name-status` line is what puts the **path set** inside the hash the prose
+  promises: the `+++ b/<path>` headers are exactly what the filter removes, so
+  without it file identity is not compared at all and the same delivered line
+  moving between two files reads as identical.
 - Identical delivered lines do not mean the candidate still *works*. Pull
   request #114 replayed byte-identically onto a base that had deleted the very
   line its assertions bound, and three tests went red. **Run `npm run check` on
@@ -467,11 +601,16 @@ missing tracker is recorded and the loop proceeds.
 - **One run is current per worktree.** A second `run.started` is
   `run_already_current`; end the first, or `--force` (which records
   `displacedRunId`).
-- **Per-command `--help`.** `npm run harness -- --help` at the top level is safe
-  and lists the commands. Whether `<command> --help` is safe depends on the
-  build: commands that parse no arguments used to run instead of printing usage.
-  Read `packages/cli/src/commands/<command>.ts` if you are unsure what a command
-  accepts.
+- **`--help` executes `gate`, `record` and `check`.** Only two forms print usage:
+  `npm run harness -- --help` at the top level, and `prepare --help`, which is
+  the single per-command help branch the CLI boundary carries. Every other
+  command receives `--help` as an ordinary argument, and `gate.ts`, `record.ts`
+  and `check.ts` never read their arguments at all — so
+  `npm run harness -- record --help`
+  writes a delivery record and dirties the worktree mid-round, and `gate --help`
+  runs the gate. `verify` and `emit` reject it as an unknown flag. This is the
+  first move an agent makes on an unfamiliar command, so make it reading
+  `packages/cli/src/commands/<command>.ts` instead.
 - **A stale `REBASE_HEAD`** is left behind by a conflicted rebase concluded with
   `--continue`; git does not clean it up. Candidate capture ignores it — the
   `rebase-merge` and `rebase-apply` directories are the authoritative signals.
@@ -506,6 +645,16 @@ missing tracker is recorded and the loop proceeds.
 - **Do not credit a red suite you have not attributed.** Several suites pin
   files by digest and go red on a comment-only edit; plant a comment-only no-op
   first and confirm it does not fail.
+- **"These two terms cannot be varied separately" is a claim, not a fact.**
+  Before writing a term off as an equivalent mutant, read the predicates this
+  repository's own configuration already applies to it — separating them is
+  usually one plumbing call rather than a new fixture. Two worked here: a commit
+  built over an existing tree with `git commit-tree` moves a candidate's
+  *binding* while leaving its `candidateTreeSha` untouched, and a file added
+  under a prefix `harness.config.ts` lists as `reviewNeutral` — `docs/reports/`
+  — moves the tree SHA while `identityDefinitionOf` excludes it from the
+  deliverable digest. A carried deferral resting on an inseparability claim is
+  worth re-testing for the same reason.
 - **A type-level guard is falsified by `npm run typecheck`, not by vitest.**
   When a remedy narrows a parameter to a literal, the proof is a non-compiling
   call site under a planted mutation. A lens told only to run tests reports the

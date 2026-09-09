@@ -66,6 +66,37 @@ const DOCS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(DOCS_DIR, "..");
 
 /**
+ * The envelope a payload harvested from the documentation would reach the
+ * validator inside, built the way `buildRunEvent` builds it for a live `emit`.
+ *
+ * `ticket` and `candidateTreeSha` are mirrored members: the grammar refuses an
+ * event whose envelope and payload disagree about either, in both directions,
+ * and the CLI satisfies that by copying them out of the payload verbatim.
+ * Copying them here rather than hard-coding an envelope is what keeps these
+ * rows a test of the documented payload instead of a test of this fixture —
+ * a page that changes which ticket its examples name stays valid, and a page
+ * that prints a malformed one still fails.
+ */
+const runEventEnvelope = (payload: unknown): Record<string, unknown> => {
+  const members = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+  const mirrored = Object.fromEntries(
+    (["ticket", "candidateTreeSha"] as const)
+      .filter((member) => members[member] !== undefined)
+      .map((member) => [member, members[member]]),
+  );
+  return {
+    version: "run-event/2",
+    eventId: "e1",
+    runId: "run-1",
+    at: "2026-09-07T12:00:00Z",
+    repo: { commonDir: "/tmp/repo" },
+    actor: { role: "executor" },
+    attestation: "self",
+    ...mirrored,
+  };
+};
+
+/**
  * The documents this sensor owns: the root agent instructions, the README, and
  * the top-level guides. The
  * vendored spec and the vendored plan under `docs/spec/` and `docs/plans/` are
@@ -536,18 +567,62 @@ describe("the rules the documentation states in prose", () => {
     expect(run, "the runbook runs the gate").toContain("check");
     expect([...new Set(run)].filter((script) => !scripts.has(script))).toEqual([]);
 
-    // Every `emit <kind>` the page writes, against the frozen kind vocabulary.
-    // A kind the grammar does not carry is refused at runtime, which is
-    // exactly the wrong place for a fresh agent to discover it.
+    // Every run-event kind the page *names*, against the frozen vocabulary — not
+    // only the ones it prefixes with `emit`. The row's title is a general claim
+    // over the page's kinds, and half the kinds this page carries appear only in
+    // the prose paragraph listing the others worth emitting; harvesting on the
+    // literal `emit ` prefix left exactly those five unchecked, which is the
+    // half most likely to be invented because it was never executed.
     const kinds = new Set<string>([...RUN_EVENT_KINDS, ...RUN_EVENT_KINDS_V1]);
     expect(kinds.size, "the kernel exports no run-event kinds").toBeGreaterThan(0);
     // Every kind in both grammars is dotted lowercase, so requiring the dot
     // matches every real `emit <kind>` while leaving prose like "emit the pair
     // the policy names" alone. A bare word after `emit` is English, not a kind.
     const emitted = [...runbook.matchAll(/emit ([a-z]+(?:\.[a-z]+)+)/g)].map((match) => match[1]!);
-    expect(new Set(emitted).size, "the runbook emits no run event").toBeGreaterThanOrEqual(4);
+    // The prose side. Fenced blocks are removed first: a fence's own ``` would
+    // otherwise pair with the next inline backtick and hand this scan spans that
+    // are neither prose nor code. Each remaining inline span contributes its
+    // leading dotted-lowercase token, and only when the token ends there —
+    // `(?![\w-])` is what keeps `lens.outcome-correctness`, an id and not a
+    // kind, from arriving here truncated to `lens.outcome`. Filename-shaped
+    // tokens (`package.json`, `gate.yml`, `harness.config.ts`) share the kind
+    // shape and are dropped by extension; a kind renamed into anything else
+    // stays in the set and fails below.
+    const named = [...runbook.replace(/```[\s\S]*?```/g, " ").matchAll(/`([^`\n]+)`/g)]
+      .map((match) => /^([a-z]+(?:\.[a-z]+)+)(?![\w-])/.exec(match[1]!)?.[1])
+      .filter((token): token is string => token !== undefined)
+      .filter((token) => !/\.(ts|js|mjs|cjs|json|jsonl|md|yml|yaml|sh|lock)$/.test(token));
+    const allKinds = [...new Set([...emitted, ...named])];
+    // Anti-vacuity, raised to the harvest this page now yields: a floor of four
+    // was satisfied by the eight executable kinds alone, so a prose scan that
+    // silently stopped matching would have changed nothing.
+    expect(allKinds.length, "the runbook names too few run-event kinds to have been scanned").toBeGreaterThanOrEqual(13);
     expect(emitted, "the runbook opens the run").toContain("run.started");
-    expect([...new Set(emitted)].filter((kind) => !kinds.has(kind))).toEqual([]);
+    expect(allKinds, "the runbook no longer names the kinds it recommends in prose").toContain("gate.reported");
+    expect(allKinds.filter((kind) => !kinds.has(kind))).toEqual([]);
+
+    // The member lists the page prints beside those prose-named kinds, run
+    // through the validator rather than read. The page writes them as
+    // `<kind> {"a","b"[,"c"]}`, so the members are harvested from the page and
+    // the payload is built from what it says: a member the page renames —
+    // `durationMs` to `duration`, say — becomes an unknown member and the
+    // envelope is refused here instead of at an agent's live emit.
+    const sample: Record<string, unknown> = {
+      command: "npm run check", outcome: "pass", durationMs: 1000, ticket: "V26-0000",
+      code: "candidate_unprepared", summary: "s", fork: "f", choice: "c", cited: "round-1",
+      reference: "docs/solutions/x.md",
+    };
+    const listed = [...runbook.matchAll(/`([a-z]+(?:\.[a-z]+)+) \{([^}]*)\}/g)];
+    expect(listed.length, "the runbook lists no payload members beside a kind").toBeGreaterThanOrEqual(4);
+    for (const [, kind, members] of listed) {
+      const names = [...members!.matchAll(/"([a-zA-Z]+)"/g)].map((match) => match[1]!);
+      expect(names.length, `the runbook lists no members for ${kind}`).toBeGreaterThan(0);
+      const payload = Object.fromEntries(names.map((name) => [name, sample[name] ?? "x"]));
+      expect(
+        validateRunEventInput({ ...runEventEnvelope(payload), kind: kind!, payload }).ok,
+        `the runbook's stated payload for ${kind} is refused by the frozen grammar`,
+      ).toBe(true);
+    }
   });
 
   it("states the base-movement rule the gate configuration actually carries", () => {
@@ -640,7 +715,8 @@ describe("the rules the documentation states in prose", () => {
   // behaviourally: the shape the page tells an agent to emit must validate,
   // and the misspelling the page warns about must not.
   it("writes run-event payloads the frozen grammar accepts", () => {
-    const runbook = textOf("docs/delivery-runbook.md").replace(/\s+/g, " ");
+    const raw = textOf("docs/delivery-runbook.md");
+    const runbook = raw.replace(/\s+/g, " ");
     const envelope = {
       version: "run-event/2",
       eventId: "e1",
@@ -651,6 +727,57 @@ describe("the rules the documentation states in prose", () => {
       attestation: "self",
     } as const;
     const cost = { coverage: "unreported", reportedBy: "claude-code" };
+
+    // THE PAYLOADS THE PAGE ACTUALLY PRINTS, harvested rather than retyped.
+    // The prose and the command beneath it are two independent surfaces, and a
+    // page whose sentence says `there is no note` above a command that sends
+    // one is worse than either alone, because the agent copies the command.
+    // So every `emit <kind> … --json <payload>` in every fenced block is pulled
+    // out, un-shelled, and put through the same validator a live emit reaches.
+    //
+    // Un-shelling is two substitutions and no guessing: continuation backslashes
+    // are joined, the double-quoted form's `\"` is unescaped, and the shell
+    // interpolations the page writes are replaced with grammar-valid literals
+    // from a table. Anything else placeholder-shaped left in a payload fails the
+    // row rather than being silently accepted — a new `<placeholder>` has to be
+    // given a literal here before its command can be claimed valid.
+    const literals: Record<string, string> = {
+      $TREE: "a".repeat(40),
+      "<pr url>": "https://example.test/pull/1",
+      "<why>": "the delivery uses the mandated pair only",
+    };
+    const printed = [...raw.matchAll(/```[a-z]*\n([\s\S]*?)```/g)]
+      .flatMap((block) => block[1]!.replace(/\\\n\s*/g, " ").split("\n"))
+      .map((line) => /\bemit\s+([a-z]+(?:\.[a-z]+)+)\b.*?--json\s+(?:'([^']*)'|"((?:[^"\\]|\\.)*)")/.exec(line))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => {
+        const shell = match[2] ?? match[3]!.replace(/\\"/g, '"');
+        const json = Object.entries(literals).reduce(
+          (text, [token, literal]) => text.split(token).join(literal),
+          shell,
+        );
+        return { kind: match[1]!, json };
+      });
+    // Anti-vacuity from both ends, and named rather than counted: a regex that
+    // stopped matching, or matched only the easy single-quoted blocks, would
+    // otherwise satisfy the loop below with nothing in it. `run.ended` is
+    // terminal and `review.round.opened` is the double-quoted interpolated form.
+    expect(printed.length, "no `emit … --json` command was harvested from the runbook").toBeGreaterThanOrEqual(8);
+    for (const kind of ["run.started", "review.round.opened", "review.round.closed", "pr.opened", "run.ended"]) {
+      expect(printed.map((command) => command.kind), `the runbook stopped printing an ${kind} command`).toContain(kind);
+    }
+    for (const { kind, json } of printed) {
+      expect(json, `the runbook's ${kind} payload still carries an unresolved placeholder`).not.toMatch(/[<$]/);
+      let payload: unknown;
+      expect(() => {
+        payload = JSON.parse(json);
+      }, `the runbook's ${kind} payload is not valid JSON: ${json}`).not.toThrow();
+      const verdict = validateRunEventInput({ ...runEventEnvelope(payload), kind, payload });
+      expect(
+        verdict.ok,
+        `the runbook prints a ${kind} payload the frozen grammar refuses: ${json}`,
+      ).toBe(true);
+    }
 
     // `run.ended` takes exactly `result` and `cost`, both required. A `note`
     // member — the thing the merge-ready branch once told an agent to send —
@@ -699,24 +826,68 @@ describe("the rules the documentation states in prose", () => {
     );
   });
 
-  it("names only paths that exist in the agent guide's shape block", () => {
-    // The block is a map a reader navigates by. Every entry it carried before
+  it("names only paths that exist in the agent guide's shape section", () => {
+    // The section is a map a reader navigates by. Every entry it carried before
     // this delivery was a path, and one of them — `delivery/charters` — had
     // stopped existing with the whole suite green, which is why it was
     // rewritten. Presence of the block is not the claim; resolution of each
-    // row is.
+    // path is.
+    //
+    // And the claim is over the section, not over the block's first column.
+    // Parsing column one alone left the paths in the description text
+    // unchecked — `docs/plans/`, `docs/solutions/`, `docs/contracts/` — and
+    // left the trailing paragraph that resolves a lens charter to
+    // `.agent-skills/current/personas/` unchecked too, which is the very
+    // sentence that replaced the path that had rotted. So: column one, plus
+    // every slash-bearing token anywhere in the section.
     const guide = textOf("docs/agent-guide.md");
-    const block = /## The shape of the repository\s*\n+```\n([\s\S]*?)```/.exec(guide);
-    expect(block, "docs/agent-guide.md has no fenced block under its shape heading").not.toBeNull();
-    const paths = block![1]!
+    const section = /## The shape of the repository\n([\s\S]*?)\n## /.exec(guide);
+    expect(section, "docs/agent-guide.md has no shape section").not.toBeNull();
+    const block = /```\n([\s\S]*?)```/.exec(section![1]!);
+    expect(block, "the shape section has no fenced block").not.toBeNull();
+    const columnOne = block![1]!
       .split("\n")
       .map((line) => /^(\S+)\s\s+\S/.exec(line)?.[1])
       .filter((entry): entry is string => entry !== undefined);
-    // Anti-vacuity from both ends: a reformatted block that stops matching the
-    // row pattern would satisfy the loop below with nothing in it.
-    expect(paths.length, "the shape block yields no paths").toBeGreaterThanOrEqual(17);
+    // A path token is one bearing a separator, so it is recognised the same in
+    // a table row, in a description continuation line and in a paragraph. The
+    // lookbehind keeps a token from being harvested from its own middle; the
+    // two extensionless names in column one (`AGENTS.md`, `harness.config.ts`)
+    // carry no separator and arrive from the column-one pass instead.
+    const referenced = [...section![1]!.matchAll(/(?<![\w./-])((?:\.?[A-Za-z][\w.-]*)(?:\/[\w.-]*)+)/g)].map(
+      (match) => match[1]!,
+    );
+    const paths = [...new Set([...columnOne, ...referenced])];
+    // Anti-vacuity from both ends, and raised past the block's own row count so
+    // that a regex which stops reaching the prose fails rather than passing on
+    // the table alone.
+    expect(columnOne.length, "the shape block yields no rows").toBeGreaterThanOrEqual(17);
+    expect(paths.length, "the shape section yields no paths outside its table").toBeGreaterThanOrEqual(22);
     expect(paths, "the shape block names the root instruction file").toContain("AGENTS.md");
+    expect(paths, "the shape section no longer says where a lens charter resolves from").toContain(
+      ".agent-skills/current/personas/",
+    );
     expect(paths.filter((entry) => !existsSync(path.join(REPO_ROOT, entry)))).toEqual([]);
+  });
+
+  it("names only paths that exist in the delivery runbook's prose", () => {
+    // The runbook tells a host to read files out of the installed release — the
+    // round-brief template, the two persona charters, the release manifest, the
+    // compiled snapshot — and those are the paths most likely to move, because
+    // nothing in this repository authors them. They were unchecked while the
+    // guide's block and every markdown link were checked. Scoped to the two
+    // installed-and-policy roots deliberately: a glob or a `<placeholder>` path
+    // elsewhere on the page is not a resolvable claim, and widening this to
+    // every backticked token would pin illustrations rather than references.
+    const runbook = textOf("docs/delivery-runbook.md");
+    const cited = [
+      ...new Set([...runbook.matchAll(/`((?:\.agent-skills|\.agents)\/[\w./-]+)`/g)].map((match) => match[1]!)),
+    ];
+    expect(cited.length, "the runbook cites no installed-release path").toBeGreaterThanOrEqual(6);
+    expect(cited, "the runbook no longer names the round-brief template it says to fill").toContain(
+      ".agent-skills/current/skills/obtain-review/references/round-brief-template.md",
+    );
+    expect(cited.filter((entry) => !existsSync(path.join(REPO_ROOT, entry)))).toEqual([]);
   });
 
   it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {
@@ -753,6 +924,89 @@ describe("the corrections the delivery runbook carries", () => {
   it("says a byte-identical replay is still checked before it counts as a reopen", () => {
     statesInProse("Run `npm run check` on the replayed candidate before deciding a round is a reopen.");
     statesInProse("Compare the **delivered lines**, not the raw diff bytes.");
+    // The recipe's own two corrections. Without the space the header filter
+    // also eats a delivered line beginning `--`/`++`, so a changed markdown
+    // rule canonicalizes to the empty digest and a counted round is reopened
+    // for free; without `--name-status` the hash omits the path set the
+    // sentence above it promises.
+    statesInProse("The **space** in `'^(\\+\\+\\+ |--- )'` is what keeps it a header filter");
+    statesInProse("the `--name-status` line is what puts the **path set** inside the hash");
+    // And the command itself, not only the paragraph explaining it. The
+    // explanation is what a reader is persuaded by; the pipeline is what they
+    // copy, and the two can drift apart in either direction.
+    statesInProse("grep -Ev '^(\\+\\+\\+ |--- )'");
+    statesInProse("git diff --name-status <base>..<head> -- . ':!delivery/records'");
+  });
+
+  /**
+   * The one correction on this page whose truth is conditional on the CLI, so
+   * the one that must not be pinned by presence alone. It was hedged once — into
+   * "whether `<command> --help` is safe depends on the build" — on the strength
+   * of a sibling delivery's fix that never merged, and the hedge is what an
+   * agent skims past on its way to running `record --help` mid-round. Held to
+   * the boundary and the command modules by agreement instead: the day one of
+   * these commands starts parsing its arguments, this row makes the page say so
+   * rather than leaving it warning about a hazard that is gone, and the day a
+   * fourth stops, the page has to name it.
+   */
+  it("names the commands whose `--help` executes them, as the CLI behaves today", () => {
+    const boundary = readFileSync(path.join(REPO_ROOT, "packages/cli/src/boundary.ts"), "utf8");
+    const branch = /descriptor\.name === "([a-z-]+)"[^;]*?"--help"/s.exec(boundary);
+    expect(branch, "the CLI boundary no longer carries a single per-command help branch").not.toBeNull();
+    statesInProse(`\`${branch![1]!} --help\``);
+
+    const commands = readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands"))
+      .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"));
+    const registered = new Set(COMMANDS.map((command) => command.name));
+    // A module that never mentions its arguments cannot be printing usage for
+    // one: `--help` reaches it as an ordinary invocation and it runs.
+    const executes = commands
+      .filter((entry) => !/args/.test(readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands", entry), "utf8")))
+      .map((entry) => entry.replace(/\.ts$/, ""))
+      .filter((name) => registered.has(name));
+    // Anti-vacuity: a scan that stopped reading the directory, or a rename that
+    // detached every module from the registry, would leave nothing to disagree.
+    expect(executes.length, "no command module was found to ignore its arguments").toBeGreaterThan(0);
+
+    const clause = /((?:`[a-z-]+\.ts`(?:, | and )?)+) never read their arguments at all/.exec(
+      textOf("docs/delivery-runbook.md").replace(/\s+/g, " "),
+    );
+    expect(clause, "docs/delivery-runbook.md no longer names the commands whose `--help` executes them").not.toBeNull();
+    const named = [...clause![1]!.matchAll(/`([a-z-]+)\.ts`/g)].map((match) => match[1]!);
+    expect(named.slice().sort(), "the runbook's `--help` warning is not the set of commands that ignore arguments").toEqual(
+      executes.slice().sort(),
+    );
+    // And the consequence, not only the list: a warning trimmed to its names
+    // stops saying why the reader should care.
+    statesInProse("writes a delivery record and dirties the worktree mid-round");
+  });
+
+  /**
+   * The rest of the corrections this page carries because a delivery paid for
+   * them, each with no computable counterpart in this tree. Presence again, one
+   * assertion per rule, for the reason the block comment above this describe
+   * gives: deletion is the failure mode, and a page trimmed to its confident
+   * half reads like an edit.
+   */
+  it("says which shell this loop runs in and what that shell breaks", () => {
+    statesInProse("Write `--include='*.ts'`");
+    statesInProse("Put the loop in a `#!/bin/bash` file and run the file.");
+    statesInProse("**There is no `timeout(1)`**");
+  });
+
+  it("says `save-context` cannot be used on a version-2 run", () => {
+    statesInProse("**`save-context` is refused on a version-2 run.**");
+    statesInProse("`unsupported_spec`");
+  });
+
+  it("says how a round that is already open is resumed rather than reopened", () => {
+    statesInProse("Re-realize only the lens that did not report");
+    statesInProse("Inspect the interrupted lens's worktree before relaunching.");
+  });
+
+  it("says why the round's review context is retained, not merely that it is", () => {
+    statesInProse("The retained file is the round's only surviving binding tuple");
+    statesInProse("`preparation_base_changed`");
   });
 
   it("says a rebased worktree is reinstalled before the gate is believed", () => {
