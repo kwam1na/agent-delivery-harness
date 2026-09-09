@@ -320,6 +320,17 @@ console.log(manifestPath);
 
 ## 3. Commit the wiring and preflight
 
+The provider template above illustrates one concluded pass. For multiple
+prepare-and-evaluate passes, append each actual prepared tree and pass id to
+`runHistory`, set `provider.finalPassId` to the final entry's pass id, and derive
+`telemetry.iterationCount` from `runHistory.length`. A fix and re-verification
+can therefore be recorded as two passes in one submission. Do not stamp a
+review of the earlier tree as approval of the repaired tree: obtain the final
+review after preparing the repair. The shipped emitter accepts this history
+directly; see [multi-pass host review evidence](provider-guide.md#emit-concluded-host-reviews).
+Reviews before any preparation remain retained review history, not invented
+prepared passes. The journal's round count is separate observational accounting.
+
 The config and the script are part of your tree now — commit them (the harness
 will not capture an uncommitted tree), then let `check` prove the config loads
 and the evidence store is writable before anything depends on either.

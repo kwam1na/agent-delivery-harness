@@ -6,7 +6,7 @@
  * writes the tracked delivery record under `delivery/records/`, and
  * `.github/workflows/gate.yml` verifies that record against the pull request
  * head with the Action in `packages/action`. One obligation, deliberately: a
- * green code review, submitted as `review.green/1` evidence by this
+ * green code review, submitted as `review.green/2` evidence by this
  * repository's review provider.
  *
  * WHY THE IDENTITY TOKEN IS CONSUMER-OWNED. `deliverable-tree/v1` is defined
@@ -84,7 +84,9 @@ export default defineHarnessConfig({
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
       providers: ["delivery-harness.independent-review"],
-      acceptedPayloadSpecs: ["review.green/1"],
+      // Version 2 admits tracked, nonblocking P2/P3 findings in contract. Keep
+      // version 1 readable without changing its expansion-only interpretation.
+      acceptedPayloadSpecs: ["review.green/2", "review.green/1"],
       allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
       humanWaiverAllowed: true,
       minimumAttestationLevel: "self",

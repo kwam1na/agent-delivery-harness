@@ -33,6 +33,8 @@ import { computeRecordId } from "./record-identity.ts";
 import { PORTABLE_STAGE_GRANT } from "./policy/compile.ts";
 import { RUN_JOURNAL_REQUIRED_ENTRIES, RUN_JOURNAL_VIOLATIONS } from "./checkpoint/run-journal-completeness.ts";
 
+type Mutable<T> = { -readonly [P in keyof T]: T[P] extends object ? Mutable<T[P]> : T[P] };
+
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 const DIGEST = "a".repeat(64);
@@ -699,6 +701,35 @@ describe("verifyDeliveryRecord", () => {
 
     const withoutRow = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, FRESH_BASE);
     expect("runJournal" in withoutRow, "a caller that supplied no row gets no member").toBe(false);
+  });
+
+  it("does not expose an invented review projection as a journal coordinate", () => {
+    const record = structuredClone(buildFreshRecord());
+    const evidence = record.claims[0]!.evidence!;
+    if (evidence.resolution.kind !== "evidence" || evidence.resolution.portable === undefined) throw new Error("portable evidence missing");
+    const portable = evidence.resolution.portable as Mutable<typeof evidence.resolution.portable>;
+    const manifest = portable.manifest as Mutable<Record<string, unknown>> & {
+      artifacts: { path: string; role: string; sha256: string }[];
+    };
+    const path = "review-context-projection.json";
+    const bytes = `${JSON.stringify({
+      spec: "review-context-projection/1",
+      reviewRoundAdded: false,
+      reviewedCandidate: { treeSha: "c".repeat(40) },
+      preparedCandidate: { treeSha: record.candidateBinding.treeSha },
+    })}\n`;
+    portable.artifacts[path] = Buffer.from(bytes).toString("base64");
+    manifest.artifacts.push({ path, role: "review-context-projection", sha256: sha256Hex(bytes) });
+    const digest = digestManifest(manifest);
+    (evidence.resolution as Mutable<typeof evidence.resolution>).manifestDigest = digest;
+    (record.claims[0] as Mutable<typeof record.claims[0]>).manifestDigest = digest;
+    (record as Mutable<DeliveryRecord>).manifestDigest = digest;
+    delete (record as { integrityDigest?: string }).integrityDigest;
+    (record as Mutable<DeliveryRecord>).integrityDigest = digestCanonical(record);
+
+    const check = verifyDeliveryRecord(makeConfig(), record, RECOMPUTED, FRESH_BASE);
+    expect(check.ok, JSON.stringify(check.blockers)).toBe(true);
+    expect(check.reviewedCandidateTreeShas).toEqual([record.candidateBinding.treeSha]);
   });
 
   it("never lets a run-journal row change the verdict it is attached to", () => {

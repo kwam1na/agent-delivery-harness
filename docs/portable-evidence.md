@@ -8,6 +8,27 @@ Commit the record at the path the command reports. `delivery-harness verify` and
 
 The transport remains **self-attested**. Its digest detects accidental or inconsistent rewriting; it is not a signature or proof of independent review. Original reviewer context, raw outcomes, approval artifacts, findings, filed deferrals, reported cost and raw round history remain inspectable. An omitted host cost stays omitted.
 
+## Review payload versions
+
+`review.green/1` retains its published meaning: only a tracked, actionable,
+nonblocking P2 or P3 finding with `scope: "expansion"` may be deferred.
+`review.green/2` keeps the same closed payload shape and adds
+`scope: "in_contract"` to that allowed set. It does not permit adjacent, P0,
+P1, blocking, non-actionable, or untracked deferrals. The validator reports the
+required severity, scopes, state, and tracker id when it refuses one.
+
+The version-2 payload retains the `deferredExpansionCount` member for wire-shape
+compatibility and defines it as the count of all deferred findings. Version 1
+already derived the member that way, where every legal deferral was necessarily
+an expansion. `deferredIssueIds` remains the sorted, deduplicated set of their
+tracked follow-up ids.
+
+Repositories can accept both versions while evidence is in flight. The shipped
+review emitter prefers version 2 when the obligation accepts it and falls back
+to version 1 when that is the only supported review payload. Validators always
+apply the rule named by the claim's exact `payloadSpec`; accepting version 2
+does not reinterpret stored version-1 evidence.
+
 ## Run reports and accepted evidence
 
 [Run report capture](run-artifacts.md) retains acquisition output, including

@@ -140,6 +140,10 @@ export interface RunJournalRow {
   readonly status: RunJournalStatus;
   readonly missing: readonly RunJournalRequiredEntry[];
   readonly violations?: readonly RunJournalViolation[];
+  /** Record tree used to resolve this row when a verified projection exists. */
+  readonly recordTreeSha?: string;
+  /** Raw trees the verified record says were actually reviewed. */
+  readonly reviewedCandidateTreeShas?: readonly string[];
   readonly attestation: "self";
 }
 
@@ -254,11 +258,14 @@ export function runJournalCarries(events: readonly RunEvent[], entry: RunJournal
  *   labeled unbound to a record.
  * @param mandatedLensIds the two mandated lens ids, when the operator supplies
  *   them. Without them the mandate check is arity-and-non-emptiness only.
+ * @param reviewedTreeShas additional raw trees accepted only after the caller
+ *   has verified the record's retained review-neutral projection.
  */
 export function evaluateRunJournal(
   events: readonly RunEvent[],
   treeSha?: string,
   mandatedLensIds?: readonly string[],
+  reviewedTreeShas: readonly string[] = [],
 ): RunJournalEvaluation {
   const missing: RunJournalRequiredEntry[] = [];
   const violations: RunJournalViolation[] = [];
@@ -292,7 +299,8 @@ export function evaluateRunJournal(
   const executorOnly = completions.length === 0;
 
   const { paired, inverted } = pairRounds(events);
-  const qualifying = paired.filter((entry) => treeSha === undefined || payloadOf(entry.closed)["candidateTreeSha"] === treeSha);
+  const acceptedTrees = new Set(treeSha === undefined ? [] : [treeSha, ...reviewedTreeShas]);
+  const qualifying = paired.filter((entry) => treeSha === undefined || acceptedTrees.has(String(payloadOf(entry.closed)["candidateTreeSha"])));
   const requiredRound = first(
     qualifying.map((entry) => ({ at: entry.closedAt, event: entry.closed })).sort((left, right) => left.at - right.at),
   );

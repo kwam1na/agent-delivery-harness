@@ -16,9 +16,34 @@ same tracked record the Action verifies. What it adds is everything around the
 evidence: who may do what, at which stage, with what authorization, and what
 happens when the host dies mid-delivery.
 
+## Review reduction ownership
+
+The legacy `reduce-review` command invokes the managed facade's persisted
+findings-driven loop. Three changes-requested reductions can enter remediation;
+a fourth changes-requested reduction records `review.loop-bound-reached`.
+An aligned reduction does not spend that budget. An unreadable persisted
+reduction still counts, so deleting a result cannot reset the bound. This lane
+does not accept the portable caller-declared bound, constrained grace, or
+base-movement reopening inputs.
+
+The installed `obtain-review`, `review-work`, and `execute-work` workflows are
+coordinated by the native host. Their portable delivery bound counts acquired
+rounds, except the documented constrained grace and a reopening caused solely
+by actual base movement with the unchanged delivered diff proved by comparison.
+That reopening retains the original round number, selected lenses and findings;
+it does not reset the bound. A repair, dispute or failed-acquisition retry still
+spends an ordinary round. The Python/provider reducer is a separate executable
+implementation: use only capabilities qualified for the installed release.
+
+These bounds deliberately measure different things. The legacy command's
+findings budget is not an implementation of the host workflow's delivery
+budget. Ordinary Athena delivery coordinates the installed workflows and
+submits their concluded evidence; it does not call `reduce-review`. Both paths
+remain subject to the same candidate freshness and evidence admission checks.
+
 ## What it does not do
 
-Stated first, because the boundary is the design:
+The ownership boundary is explicit:
 
 > The facade never launches a coding agent, schedules a subagent, creates or
 > deletes a worktree, or advances a checkpoint from a host-activity observation.

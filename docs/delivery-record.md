@@ -139,6 +139,54 @@ relaxed under any policy.
    policy, no blocked claim, every configured obligation covered, and no
    delivery-owned path in the candidate tree.
 
+## Bounded retention of tracked records
+
+An adopter that creates several per-digest records for one delivery can opt in
+to a bounded tracked set:
+
+```sh
+delivery-harness record --retention-scope V26-1915 --keep-superseded 1
+```
+
+The scope is a stable delivery key chosen by the adopter. The bound counts old
+records, so this example keeps the current record plus one superseded record.
+Both options are required together. A plain `delivery-harness record` retains
+its existing behavior and removes nothing.
+
+Retention runs inside `record`, after the gate admits, the candidate identity
+is rechecked, the record is built, and its portable verification passes. The
+command then writes the current record before removing eligible old tracked
+copies. Commit the resulting addition and deletions together, then run
+`delivery-harness verify` against that commit. This keeps cleanup outside the
+admission decision and ensures it cannot turn an unverified record into the
+authoritative current record.
+
+An adopter that previously staged only the path returned by
+`deliveryRecordPathFor` must also stage the exact deleted record paths reported
+by this opt-in command. In Athena's delivery runner, retention therefore belongs
+at the existing `record` boundary: collect the current addition and reported
+deletions, stage them together, refresh the record-neutral preparation receipt,
+and then verify. Its independently derived per-run telemetry path is outside
+this change; V26-1213 owns that retention lifecycle.
+
+The harness records explicit ownership in an owner-only, per-worktree ledger
+under the configured git-private storage namespace. A scope may reserve only
+its derived per-digest path while that path is absent; it never adopts an
+existing file. Before pruning, every owned file must still be a regular file
+with the exact receipted bytes, and the same path and bytes must already be a
+regular blob at `HEAD`. Git therefore retains the exact audit proof before the
+tracked working copy is removed. The ledger records a pending prune before an
+unlink, so retrying the same command completes an interrupted cleanup and
+converges on the declared bound.
+
+Malformed ledgers, duplicate ownership, changed or symlinked owned files,
+unowned current paths, and records not yet preserved byte-for-byte at `HEAD`
+all fail closed. The command derives every eligible path from the configured
+record base path and owned deliverable digest; callers cannot provide a
+deletion list. The current record, the declared number of superseded records,
+records owned by other scopes, evidence records, run history, and telemetry
+remain outside cleanup. Telemetry retention is a separate lifecycle concern.
+
 ## A deferral with no follow-up item never reaches a record
 
 A green review may defer expansion work rather than repair it, and the harness

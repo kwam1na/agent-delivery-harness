@@ -254,21 +254,27 @@ const ABSENT: RunJournalRow = { status: "absent", missing: [], attestation: "sel
 export async function resolveRunJournalRow(input: {
   readonly cwd: string;
   readonly treeSha: string;
+  readonly reviewedCandidateTreeShas?: readonly string[];
   readonly mandatedLensIds?: readonly string[];
 }): Promise<RunJournalRow> {
   const resolved = await resolveRunSurface(input.cwd);
   if (!resolved.ok) return ABSENT;
-  const match = await resolved.surface.store.findByCandidateTreeSha(input.treeSha);
+  const acceptedTrees = [...new Set([input.treeSha, ...(input.reviewedCandidateTreeShas ?? [])])];
+  const matches = await Promise.all(acceptedTrees.map((treeSha) => resolved.surface.store.findByCandidateTreeSha(treeSha)));
+  const match = matches.find((entry) => entry !== undefined);
   if (match === undefined) return ABSENT;
   const read = await resolved.surface.store.read(match.runId);
   if (!read.ok) return ABSENT;
-  const evaluation = evaluateRunJournal(read.events, input.treeSha, input.mandatedLensIds);
+  const evaluation = evaluateRunJournal(read.events, input.treeSha, input.mandatedLensIds, acceptedTrees.slice(1));
+  const alsoMatching = [...new Set(matches.flatMap((entry) => entry === undefined ? [] : [entry.runId, ...entry.alsoMatching]))]
+    .filter((runId) => runId !== match.runId);
   return {
     runId: match.runId,
-    ...(match.alsoMatching.length === 0 ? {} : { alsoMatching: match.alsoMatching }),
+    ...(alsoMatching.length === 0 ? {} : { alsoMatching }),
     status: evaluation.status,
     missing: evaluation.missing,
     ...(evaluation.violations.length === 0 ? {} : { violations: evaluation.violations }),
+    ...(acceptedTrees.length === 1 ? {} : { recordTreeSha: input.treeSha, reviewedCandidateTreeShas: acceptedTrees.slice(1) }),
     attestation: "self",
   };
 }
@@ -284,6 +290,10 @@ export function runJournalRows(row: RunJournalRow): readonly string[] {
   if (row.runId !== undefined) rows.push(`    run: ${oneLine(row.runId, 128)}`);
   if (row.alsoMatching !== undefined && row.alsoMatching.length > 0) {
     rows.push(`    also matching: ${row.alsoMatching.map((id) => oneLine(id, 128)).join(", ")}`);
+  }
+  if (row.recordTreeSha !== undefined && row.reviewedCandidateTreeShas !== undefined) {
+    rows.push(`    record candidate: ${oneLine(row.recordTreeSha, 64)}`);
+    rows.push(`    reviewed candidate: ${row.reviewedCandidateTreeShas.map((tree) => oneLine(tree, 64)).join(", ")} (verified review-neutral projection)`);
   }
   rows.push(`    missing: ${row.missing.length === 0 ? "(none)" : row.missing.map((entry) => oneLine(entry, 64)).join(", ")}`);
   if (row.violations !== undefined && row.violations.length > 0) {

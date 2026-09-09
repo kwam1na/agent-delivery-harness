@@ -173,7 +173,7 @@ const CONFIG_INPUT = {
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
       providers: ["claude-code.ce-code-review"],
-      acceptedPayloadSpecs: ["review.green/1"],
+      acceptedPayloadSpecs: ["review.green/2", "review.green/1"],
       allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
       humanWaiverAllowed: true,
       minimumAttestationLevel: "self",

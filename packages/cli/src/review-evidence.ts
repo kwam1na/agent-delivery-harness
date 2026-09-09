@@ -27,6 +27,8 @@ import {
   type CapturedCandidate,
   type PreparationReceipt,
   type HarnessConfig,
+  REVIEW_GREEN_1,
+  REVIEW_GREEN_2,
 } from "@agent-delivery-harness/kernel";
 import type { CommandContext } from "./boundary.ts";
 
@@ -45,8 +47,9 @@ export const INSTALLED_ARCHIVE_DIR = ".agent-skills/current";
 
 export const CHARTER_EXTENSION = ".md";
 
-/** The payload spec this provider emits evidence for. */
-export const REVIEW_PAYLOAD_SPEC = "review.green/1";
+/** Review payloads this provider can emit, in preference order. */
+export const REVIEW_PAYLOAD_SPECS = [REVIEW_GREEN_2, REVIEW_GREEN_1] as const;
+export const REVIEW_PAYLOAD_SPEC = REVIEW_GREEN_2;
 
 /** The envelope spec the manifest declares. */
 export const ENVELOPE_SPEC = "delivery-evidence/1";
@@ -121,11 +124,11 @@ export interface GateBinding {
  */
 export function resolveGateBinding(config: HarnessConfig): GateBinding {
   const obligations = config.obligations.filter((obligation) =>
-    obligation.acceptedPayloadSpecs.includes(REVIEW_PAYLOAD_SPEC),
+    REVIEW_PAYLOAD_SPECS.some((payloadSpec) => obligation.acceptedPayloadSpecs.includes(payloadSpec)),
   );
   if (obligations.length !== 1) {
     throw new OutcomeError(
-      `the gate declares ${obligations.length} obligations accepting ${REVIEW_PAYLOAD_SPEC}; this provider serves exactly one`,
+      `the gate declares ${obligations.length} obligations accepting a supported review.green payload; this provider serves exactly one`,
     );
   }
   const obligation = obligations[0]!;
@@ -135,6 +138,16 @@ export function resolveGateBinding(config: HarnessConfig): GateBinding {
     );
   }
   return { obligationId: obligation.id, providerId: obligation.providers[0]! };
+}
+
+function resolveReviewPayloadSpec(
+  config: HarnessConfig,
+  obligationId: string,
+): (typeof REVIEW_PAYLOAD_SPECS)[number] {
+  const obligation = config.obligations.find((entry) => entry.id === obligationId);
+  const payloadSpec = REVIEW_PAYLOAD_SPECS.find((candidate) => obligation?.acceptedPayloadSpecs.includes(candidate));
+  if (payloadSpec === undefined) throw new OutcomeError(`obligation ${obligationId} accepts no supported review.green payload`);
+  return payloadSpec;
 }
 
 // ── The manifest ─────────────────────────────────────────────────────────────
@@ -164,6 +177,7 @@ export async function emitReviewEvidence(context: CommandContext, original: unkn
   const charters = current.binding.charters.map((charter) => charter.reviewerId).sort();
   const outcome = parseReviewOutcome(document, charters);
   const binding = current.binding.gate;
+  const payloadSpec = resolveReviewPayloadSpec(config, binding.obligationId);
   const candidate = manifestCandidate(captured);
 
   const provider = {
@@ -246,7 +260,7 @@ export async function emitReviewEvidence(context: CommandContext, original: unkn
     claims: [
       {
         obligation: binding.obligationId,
-        payloadSpec: REVIEW_PAYLOAD_SPEC,
+        payloadSpec,
         payload: {
           verdict: outcome.verdict,
           finalized: true,

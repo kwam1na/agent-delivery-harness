@@ -34,6 +34,7 @@ import type { HarnessConfig, ObligationPolicy } from "../config.ts";
 import {
   CONFORMING_ATTESTATION_LEVEL,
   REVIEW_GREEN_1,
+  REVIEW_GREEN_2,
   SUPPORTED_ENVELOPE_SPECS,
   SUPPORTED_PAYLOAD_SPECS,
   type ManifestRejection,
@@ -57,7 +58,7 @@ import {
   pointer,
   type Collector,
 } from "./grammar.ts";
-import { validateReviewGreenClaim } from "./review-green.ts";
+import { validateReviewGreenClaim, validateReviewGreenClaimV2 } from "./review-green.ts";
 
 // ── The validated shapes ───────────────────────────────────────────────────
 
@@ -602,6 +603,20 @@ function checkClaims(root: Record<string, unknown>, input: ClaimCheckInput): voi
     }
     if (payloadSpecUsable && payloadSpec === REVIEW_GREEN_1 && isRecord(payload)) {
       validateReviewGreenClaim(
+        {
+          payload,
+          at: pointer(at, "payload"),
+          provider: input.providerIdentity,
+          candidate: member(root, "candidate"),
+          artifacts: input.artifacts,
+          artifactContents: context.artifactContents,
+          runHistoryLength: input.runHistoryLength,
+        },
+        collector,
+      );
+    }
+    if (payloadSpecUsable && payloadSpec === REVIEW_GREEN_2 && isRecord(payload)) {
+      validateReviewGreenClaimV2(
         {
           payload,
           at: pointer(at, "payload"),

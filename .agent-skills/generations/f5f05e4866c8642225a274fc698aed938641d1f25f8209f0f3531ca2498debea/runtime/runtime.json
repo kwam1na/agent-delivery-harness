@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "delivery-runtime/1",
+  "runtimeVersion": "0.2.0",
+  "nodeMinimum": "22.6.0",
+  "workflowContentSha256": "f0796c7103e420cee9e420908ff0d7a8ba92f8fed1d48a14db1d32fa47489346",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "02ed546806a3298b12c633742eb2fd354821d5dc9a5ee4384d4ae8196737a83f"
+    },
+    {
+      "path": "NOTICE",
+      "sha256": "547c61e2d762d0cadff8c1560ac7b9c072d4d71315797e11629654079ce0882d"
+    },
+    {
+      "path": "bootstrap.mjs",
+      "sha256": "5df698a9e5d7bae942ec5a40819ba52b0688cab87c653ee8b42e30160ad1225a"
+    },
+    {
+      "path": "cli-api.d.mts",
+      "sha256": "463fd495446754844c7e9ce50b44fd8975dbf7a0e4b9b7656dbf580cd146aa61"
+    },
+    {
+      "path": "cli-api.mjs",
+      "sha256": "f95f503cd13a0fe2aac08e9e9434ff8397f32f5d3fec804c6e9b705b06edb756"
+    },
+    {
+      "path": "cli.mjs",
+      "sha256": "99a762f7bf004dd6071efe9347f0aa282e292531f8d668e8875183b084964fa2"
+    },
+    {
+      "path": "kernel.d.mts",
+      "sha256": "4a8565a0f7efd1fe5c7eac1fb6099975309831e04d426facd39bc5ab865a3588"
+    },
+    {
+      "path": "kernel.mjs",
+      "sha256": "de91c25337a47f2bee422131568f6b2e3ec6061f0a31f352058e3c7b4f71260b"
+    },
+    {
+      "path": "loader.mjs",
+      "sha256": "d00b40605a54f7defd9b8cab05825009af57baf2d5884d736eddc391ba35a1e8"
+    },
+    {
+      "path": "policy.mjs",
+      "sha256": "36dec08fc5b57649b1cfe73e9d777e32f2a8593063c14fb5cb8ab49e9776e277"
+    }
+  ]
+}

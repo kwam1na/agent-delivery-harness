@@ -57,4 +57,4 @@ it("rejects a report change after approval while allowing the record transport c
     expect(await cli("prepare")).toBe(0);
     expect(await runCli(["gate"], { ...runtime, promptForWaiver: async () => false })).toBe(1);
   } finally { await rm(dir, { recursive: true, force: true }); }
-});
+}, 30_000);

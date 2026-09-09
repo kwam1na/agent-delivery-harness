@@ -88,6 +88,7 @@ export {
   META_RULE_IDS,
   RECORDER_EMITTED_CODES,
   REVIEW_GREEN_1,
+  REVIEW_GREEN_2,
   SUPPORTED_ENVELOPE_SPECS,
   SUPPORTED_PAYLOAD_SPECS,
   VALIDATOR_EMITTED_CODES,
@@ -761,6 +762,7 @@ export {
   type JournalStore,
   type MaintenanceJournalStore,
 } from "./checkpoint/journal-store.ts";
+export { ProcessLockRefused, withProcessLock } from "./checkpoint/append-only-file.ts";
 export {
   RECHECKED_VALUES,
   evaluateCanonicalRecheck,

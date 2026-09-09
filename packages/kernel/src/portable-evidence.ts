@@ -6,6 +6,7 @@ import type { ArtifactObservation, ArtifactsPort } from "./artifacts.types.ts";
 import type { PortableEvidence, PortableEvidenceContext, RecordCandidateBinding, CheckBinding } from "./records.types.ts";
 import { readWorkflowRelease, resolveReviewCharters, type ReviewInputReader } from "./review-inputs.ts";
 import { validateReviewedContext, parseReviewOutcome, reviewerLists, deriveTelemetry, type ReviewContextDocument } from "./review-outcome.ts";
+import { REVIEW_GREEN_1, REVIEW_GREEN_2 } from "./validator/codes.ts";
 import { declaredArtifacts, judgeArtifact } from "./validator/artifacts.ts";
 import { isSafeRelativePath, validateManifest, type DeliveryEvidenceManifest } from "./validator/envelope.ts";
 
@@ -107,7 +108,7 @@ export function verifyPortableEvidence(config: HarnessConfig, portable: Portable
   if (!validation.ok) blockers.push(...validation.rejections.map((rejection) => portableBlocker(rejection.code, rejection.message)));
   else {
     for (const claim of validation.manifest.claims) {
-      if (claim.payloadSpec !== "review.green/1") continue;
+      if (claim.payloadSpec !== REVIEW_GREEN_1 && claim.payloadSpec !== REVIEW_GREEN_2) continue;
       if (expected.reviewerCharters.length > 0) blockers.push(...verifyOriginalReview(validation.manifest, claim, read.artifacts, expected));
       const reviewers = isRecord(claim.payload["reviewers"]) ? claim.payload["reviewers"]["selected"] : undefined;
       if (!Array.isArray(reviewers) || expected.reviewerCharters.some((charter) => !reviewers.includes(charter.reviewerId))) {

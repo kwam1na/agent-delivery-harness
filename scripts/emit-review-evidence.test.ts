@@ -135,7 +135,7 @@ interface Manifest {
   readonly provider: { readonly id: string };
   readonly runHistory: readonly unknown[];
   readonly artifacts: readonly { readonly path: string; readonly sha256: string; readonly role: string }[];
-  readonly claims: readonly { readonly obligation: string; readonly payload: ManifestPayload }[];
+  readonly claims: readonly { readonly obligation: string; readonly payloadSpec: string; readonly payload: ManifestPayload }[];
 }
 
 async function readManifest(manifestPath: string): Promise<Manifest> {
@@ -219,7 +219,7 @@ ${FINDING_CODE_LISTS}
     },
 `;
 
-const fixtureConfig = (decoys: boolean): string => `import { defineHarnessConfig } from "@agent-delivery-harness/kernel";
+const fixtureConfig = (decoys: boolean, payloadSpecs: readonly string[]): string => `import { defineHarnessConfig } from "@agent-delivery-harness/kernel";
 
 export default defineHarnessConfig({
   gateId: "fixture.pr-admission",
@@ -256,7 +256,7 @@ ${decoys ? DECOY_OBLIGATION : ""}    {
       activation: { kind: "relevant_change" },
       freshness: "exact_candidate",
       providers: [${JSON.stringify(FIXTURE_PROVIDER_ID)}],
-      acceptedPayloadSpecs: ["review.green/1"],
+      acceptedPayloadSpecs: ${JSON.stringify(payloadSpecs)},
       allowedResolutionKinds: ["satisfied_evidence", "waived", "not_applicable"],
       humanWaiverAllowed: true,
       minimumAttestationLevel: "self",
@@ -295,6 +295,7 @@ interface FixtureOptions {
   /** The lenses the fixture's compiled policy activates. */
   readonly charters?: readonly string[];
   readonly decoys?: boolean;
+  readonly payloadSpecs?: readonly string[];
   /** Write this charter's bytes so they no longer hash to the policy's digest. */
   readonly drift?: string;
   /** Ship the manifest record for this charter, but not its bytes. */
@@ -335,7 +336,11 @@ async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
     path.join(dir, "node_modules", "@agent-delivery-harness", "kernel"),
   );
 
-  await writeFile(path.join(dir, "harness.config.ts"), fixtureConfig(options.decoys === true), "utf8");
+  await writeFile(
+    path.join(dir, "harness.config.ts"),
+    fixtureConfig(options.decoys === true, options.payloadSpecs ?? ["review.green/2", "review.green/1"]),
+    "utf8",
+  );
 
   // The installed generation: a charter manifest naming every charter it
   // ships, and the bytes for each. `omit` leaves one declared and unshipped;
@@ -1146,18 +1151,20 @@ describe("the review outcome the emitter is given", () => {
         verdict: "green",
         reviewers: approvedBy(FIXTURE_CHARTERS),
         // Deliberately more than one of everything the derivation does: two
-        // severities beyond the deferred ones, three deferrals naming two
+        // severities beyond the deferred ones, five deferrals naming three
         // distinct ids, emitted out of order and with one repeated. A tally
         // that assigns instead of increments, an id list that neither sorts
         // nor deduplicates, and a constant lifted from a single sample each
-        // disagree with what RG-8 re-derives from these six rows.
+        // disagree with what RG-8 re-derives from these eight rows.
         findings: [
           deferral("f-1", "V26-1541"),
           deferral("f-2", "V26-1467"),
           deferral("f-3", "V26-1541"),
-          { id: "f-4", severity: "P2", scope: "adjacent", actionable: true, blocking: false, disposition: "resolved" },
-          { id: "f-5", severity: "P3", scope: "adjacent", actionable: true, blocking: false, disposition: "pre_existing" },
-          { id: "f-6", severity: "P1", scope: "in_contract", actionable: false, blocking: false, disposition: "advisory" },
+          { ...deferral("f-4", "V26-1963"), severity: "P3", scope: "in_contract" },
+          { ...deferral("f-5", "V26-1963"), severity: "P2", scope: "in_contract" },
+          { id: "f-6", severity: "P2", scope: "adjacent", actionable: true, blocking: false, disposition: "resolved" },
+          { id: "f-7", severity: "P3", scope: "adjacent", actionable: true, blocking: false, disposition: "pre_existing" },
+          { id: "f-8", severity: "P1", scope: "in_contract", actionable: false, blocking: false, disposition: "advisory" },
         ],
       });
       expect(emitted.code, `emit failed: ${emitted.stderr}`).toBe(0);
@@ -1166,9 +1173,10 @@ describe("the review outcome the emitter is given", () => {
       const telemetry = manifest.claims[0]!.payload.telemetry;
       // Derived, not stated: RG-8 re-derives these and RG-9 ties the iteration
       // count to the run history, so a constant here cannot survive submission.
-      expect(telemetry.findingCounts).toEqual({ P0: 0, P1: 1, P2: 4, P3: 1 });
-      expect(telemetry.deferredExpansionCount).toBe(3);
-      expect(telemetry.deferredIssueIds).toEqual(["V26-1467", "V26-1541"]);
+      expect(manifest.claims[0]!["payloadSpec"]).toBe("review.green/2");
+      expect(telemetry.findingCounts).toEqual({ P0: 0, P1: 1, P2: 5, P3: 2 });
+      expect(telemetry.deferredExpansionCount).toBe(5);
+      expect(telemetry.deferredIssueIds).toEqual(["V26-1467", "V26-1541", "V26-1963"]);
       // One emitter run is one evaluated pass, and RG-9 ties the two together.
       // Stated as literals: comparing the two fields of one file to each other
       // is an assertion that cannot fail.
@@ -1182,6 +1190,16 @@ describe("the review outcome the emitter is given", () => {
       expect(gated.code, `gate blocked: ${gated.stdout}${gated.stderr}`).toBe(0);
     },
   );
+
+  it("falls back to review.green/1 for an older adopter and preserves its expansion-only contract", { timeout: 300_000 }, async () => {
+    const fixture = await createFixture({ payloadSpecs: ["review.green/1"] });
+    const emitted = await emit(fixture, { ...greenOutcome, findings: [deferral("f-v1", "V26-1963")] });
+    expect(emitted.code, emitted.stderr).toBe(0);
+    const manifestPath = emitted.stdout.trim();
+    expect((await readManifest(manifestPath)).claims[0]?.payloadSpec).toBe("review.green/1");
+    const submitted = await harness(fixture, "submit-evidence", "--manifest", manifestPath);
+    expect(submitted.code, submitted.stderr).toBe(0);
+  });
 
   it(
     "produces a manifest the harness refuses when the review was not green",
