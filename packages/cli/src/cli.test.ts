@@ -20,6 +20,7 @@ import {
   classifyExecutionContext,
   createArtifactsPort,
   createBlocker,
+  compileRepositoryPolicy,
   defineHarnessConfig,
   deliveryRecordPathFor,
   parseDeliveryRecord,
@@ -28,6 +29,7 @@ import {
   receiptFileName,
   runAdmission,
   sha256Hex,
+  runGitCommand,
   withDeliverableIdentity,
   type ArtifactsPort,
   type CapturedCandidate,
@@ -51,6 +53,7 @@ import {
 } from "./index.ts";
 import { runProviderBackedAdmission } from "./commands/gate.ts";
 import type { ProviderRailMessage, ProviderRailSession } from "./provider-rails.ts";
+import { runAction } from "../../action/src/main.ts";
 
 const run = promisify(execFile);
 const cleanups: string[] = [];
@@ -293,6 +296,68 @@ async function initRepo(): Promise<string> {
   await git(dir, "add", "src.txt");
   await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "work");
   return dir;
+}
+
+async function installHostedCheckPolicy(dir: string): Promise<void> {
+  const correctness = "# Correctness\n\nReview outcomes.\n";
+  const testing = "# Testing\n\nReview adversarial tests.\n";
+  const document = {
+    spec: "repository-policy-document/1",
+    repositoryId: "consumer-repo",
+    policyGeneration: 1,
+    grantedFinishLines: ["merge-ready"],
+    grantedAuthority: [],
+    forbiddenAuthority: [],
+    reviewLenses: [
+      { lensId: "lens.correctness", category: "outcome-correctness", personaId: "persona.correctness" },
+      { lensId: "lens.testing", category: "testing-policy", personaId: "persona.testing" },
+    ],
+    obligations: [{ obligationId: "review.green" }],
+    requiredCapabilities: [{ capabilityId: "sensor.acceptance", kind: "sensor", version: "1" }],
+    approvals: [],
+    trackerAbsenceFallback: "proceed-without-tracker",
+    hostedChecks: {
+      required: true,
+      exemptions: [{
+        scope: { repositoryId: "consumer-repo", baseRef: "origin/main" },
+        reason: "Hosted runner billing is unavailable.",
+        grantedBy: "repository-owner@example.com",
+        until: "2999-01-01T00:00:00Z",
+      }],
+    },
+  };
+  const adapters = [{ spec: "adapter-capability/1", capabilityId: "sensor.acceptance", kind: "sensor", version: "1", resultSpec: "sensor-result/1" }];
+  const compiled = compileRepositoryPolicy({
+    document,
+    adapters,
+    personas: [
+      { personaId: "persona.correctness", digest: sha256Hex(correctness), origin: "composition" },
+      { personaId: "persona.testing", digest: sha256Hex(testing), origin: "composition" },
+    ],
+    productTrustRevocationEpoch: 0,
+    repositoryAuthorityRevocationEpoch: 0,
+  });
+  if (!compiled.ok) throw new Error(JSON.stringify(compiled.rejections));
+  const files: Readonly<Record<string, string>> = {
+    ".agents/policy/repository-policy.json": `${JSON.stringify(document)}\n`,
+    ".agents/policy/adapters.json": `${JSON.stringify(adapters)}\n`,
+    ".agents/policy/compiled-snapshot.json": `${JSON.stringify({ schemaVersion: "delivery-harness-compiled-policy-snapshot/1", compiled: compiled.compiled })}\n`,
+    ".agent-skills/active.json": `${JSON.stringify({ release: { releaseId: "fixture-release", profile: "linear", archiveSha256: "a".repeat(64), metadataSha256: "b".repeat(64) } })}\n`,
+    ".agent-skills/current/personas/manifest.json": `${JSON.stringify({ schemaVersion: "reviewer-persona-manifest/1", personas: [
+      { personaId: "persona.correctness", path: "personas/correctness.md" },
+      { personaId: "persona.testing", path: "personas/testing.md" },
+    ] })}\n`,
+    ".agent-skills/current/personas/correctness.md": correctness,
+    ".agent-skills/current/personas/testing.md": testing,
+    ".agent-skills/current/workflows/delivery-v1.json": "{}\n",
+  };
+  for (const [relative, contents] of Object.entries(files)) {
+    const absolute = path.join(dir, relative);
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await writeFile(absolute, contents, "utf8");
+  }
+  await git(dir, "add", ".agents", ".agent-skills");
+  await git(dir, "commit", "--quiet", "--no-gpg-sign", "-m", "owner hosted-check policy");
 }
 
 interface Runtime {
@@ -592,7 +657,7 @@ describe("the full delivery loop", () => {
     expect(written.filter((name) => name.startsWith("record--") && name.endsWith(".json"))).toHaveLength(1);
 
     await commitRecord(dir);
-    expect(await runCli(["verify"], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["verify"], runtime), err.join("")).toBe(EXIT_OK);
   });
 
   it("bounds opt-in same-delivery records after the new record verifies and preserves Git history", { timeout: 120000 }, async () => {
@@ -922,6 +987,80 @@ describe("the full delivery loop", () => {
   });
 });
 
+describe("owner-declared hosted-check exemptions", () => {
+  it("records and prints the active exemption in a disposable consumer while still requiring a passing local gate", { timeout: 60000 }, async () => {
+    const dir = await initRepo();
+    await installHostedCheckPolicy(dir);
+    const provider = `require('readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.kind==='negotiate')console.log(JSON.stringify({kind:'negotiation',outcome:'supported',selectedVersion:'delivery-provider-rails/1',supportedVersions:['delivery-provider-rails/1']}));if(m.kind==='request')console.log(JSON.stringify({kind:'terminal',version:m.version,requestId:m.requestId,sequence:1,summary:'Local gate passed',outcome:'success'}));});`;
+    const config = makeConfig({
+      providers: [{ id: PROVIDER.id, findingCodes: [], command: [process.execPath, "-e", provider] }],
+      obligations: [{
+        id: "review.green",
+        activation: { kind: "relevant_change" },
+        freshness: "live",
+        providers: [PROVIDER.id],
+        acceptedPayloadSpecs: ["review.green/1"],
+        allowedResolutionKinds: ["satisfied_live_fact", "not_applicable"],
+        humanWaiverAllowed: false,
+        minimumAttestationLevel: "self",
+        ciDelegationPolicyIds: [],
+        remediation: { default: [{ id: "run-provider", kind: "retry", summary: "Run the local provider." }] },
+        waivableCodes: [],
+        nonWaivableCodes: [...STRUCTURAL_WAIVABLE, ...STRUCTURAL_NONWAIVABLE],
+      }],
+    });
+    const artifacts = await makeArtifacts();
+    const driven = makeRuntime(dir, config, artifacts);
+    const runtime = driven.runtime;
+
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+    const recordDir = path.join(dir, "telemetry/delivery-runs");
+    const recordName = (await readdir(recordDir)).find((name) => name.startsWith("record--") && name.endsWith(".json"));
+    expect(recordName).toBeDefined();
+    if (recordName === undefined) return;
+    const parsed = parseDeliveryRecord(await readFile(path.join(recordDir, recordName), "utf8"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.claims[0]?.outcome).toBe("satisfied_live_fact");
+    expect(parsed.record.hostedChecks?.exemption?.scope).toEqual({ repositoryId: "consumer-repo", baseRef: "origin/main" });
+
+    await commitRecord(dir);
+    driven.out.length = 0;
+    expect(await runCli(["verify"], runtime), driven.err.join("")).toBe(EXIT_OK);
+    expect(driven.out.join("")).toContain("hosted checks: exempted for consumer-repo at origin/main");
+    expect(driven.out.join("")).toContain("granted by repository-owner@example.com");
+    expect(driven.out.join("")).toContain("Hosted runner billing is unavailable.");
+
+    const headSha = await git(dir, "rev-parse", "HEAD");
+    const baseSha = await git(dir, "rev-parse", "origin/main");
+    const eventPath = path.join(dir, ".git", "hosted-check-event.json");
+    await writeFile(eventPath, JSON.stringify({ action: "synchronize", pull_request: {
+      head: { sha: headSha, ref: "feature" }, base: { sha: baseSha, ref: "main" },
+    } }));
+    const outputs: Readonly<Record<string, string>>[] = [];
+    const actionRuntime = {
+      workspace: dir,
+      env: { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_SHA: "f".repeat(40) },
+      git: runGitCommand,
+      readFile: (absolutePath: string) => readFile(absolutePath, "utf8"),
+      loadConfig: async () => config,
+      writeSummary: async () => {},
+      writeOutputs: async (value: Readonly<Record<string, string>>) => { outputs.push(value); },
+      log: () => {},
+    };
+    const active = await runAction({ ...actionRuntime, observedAt: "2998-12-31T23:59:59Z" });
+    expect(active.ok, JSON.stringify(active.blockers)).toBe(true);
+    expect(active.summary).toContain("Hosted checks: exempted");
+    expect(outputs.at(-1)?.["hosted-checks"]).toBe("exempted");
+
+    const expired = await runAction({ ...actionRuntime, observedAt: "2999-01-01T00:00:00Z" });
+    expect(expired.ok).toBe(false);
+    expect(expired.blockers.map((blocker) => blocker.code)).toContain("hosted_check_exemption_expired");
+    expect(outputs.at(-1)?.["hosted-checks"]).toBe("blocked");
+  });
+});
+
 // ── Self-neutrality ──────────────────────────────────────────────────────────
 
 describe("delivery record self-neutrality", () => {
@@ -1245,7 +1384,12 @@ describe("error paths", () => {
     const artifacts = await makeArtifacts();
     const { runtime, out } = makeRuntime(dir, config, artifacts);
     expect(await runCli(["check"], runtime)).toBe(EXIT_OK);
-    expect(out.join("")).toContain("test.gate");
+    const report = out.join("");
+    expect(report).toContain("test.gate");
+    expect(report).toContain("delivery record path telemetry/delivery-runs/record--<deliverableDigest>.json");
+    expect(report).toContain("base movement stale:");
+    expect(report).toContain("verification refuses");
+    expect(report).toContain("admit again against the current base");
   });
 });
 
@@ -1551,7 +1695,7 @@ describe("the top-level usage listing", () => {
 });
 
 describe("unrecognized flags on the direct commands", () => {
-  const DIRECT = ["prepare", "review-context", "emit-review-evidence", "submit-evidence", "gate", "record", "verify", "check"];
+  const DIRECT = ["admit", "prepare", "review-context", "emit-review-evidence", "submit-evidence", "gate", "record", "verify", "check"];
 
   it.each(DIRECT)("rejects %s --bogus-flag as a usage error", async (name) => {
     const dir = await initRepo();

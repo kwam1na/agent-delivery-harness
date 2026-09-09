@@ -443,6 +443,130 @@ function rowOf(out: string): string {
 
 // ── Scenarios ────────────────────────────────────────────────────────────────
 
+describe("the composite admit command", () => {
+  it("transcribes a concluded outcome against the exact current context and records the admitted candidate", { timeout: 120000 }, async () => {
+    const harness = await makeHarness({}, true);
+    const prepared = await harness.cli(["prepare"]);
+    expect(prepared.code, prepared.err).toBe(EXIT_OK);
+    const reviewed = await harness.cli(["review-context", "--json"]);
+    expect(reviewed.code, reviewed.err).toBe(EXIT_OK);
+    const reviewContext = JSON.parse(reviewed.out) as { digest: string };
+    const outcome = {
+      spec: "review-outcome/1",
+      contextDigest: reviewContext.digest,
+      verdict: "green",
+      reviewers: [{ id: "correctness", result: "approved" }],
+      findings: [],
+    };
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "dh-admit-outcome-"));
+    cleanups.push(scratch);
+    const outcomePath = path.join(scratch, "outcome.json");
+    await writeFile(outcomePath, `${JSON.stringify(outcome, null, 2)}\n`);
+
+    const admitted = await harness.cli(["admit", "--outcome", outcomePath]);
+    expect(admitted.code, admitted.err).toBe(EXIT_OK);
+    expect(admitted.out).toContain("prepared:");
+    expect(admitted.out).toContain("review evidence:");
+    expect(admitted.out).toContain("submitted:");
+    expect(admitted.out).toContain("gate: admitted");
+    expect(admitted.out).toContain("recorded telemetry/delivery-runs/record--");
+
+    const recordDir = path.join(harness.dir, "telemetry/delivery-runs");
+    const names = (await readdir(recordDir)).filter((name) => name.startsWith("record--") && name.endsWith(".json"));
+    expect(names).toHaveLength(1);
+    const record = JSON.parse(await readFile(path.join(recordDir, names[0]!), "utf8"));
+    const portable = record.claims[0].evidence.resolution.portable;
+    const contextEntry = portable.manifest.artifacts.find((entry: { role: string }) => entry.role === "review-context");
+    const outcomeEntry = portable.manifest.artifacts.find((entry: { role: string }) => entry.role === "review-outcome");
+    expect(JSON.parse(Buffer.from(portable.artifacts[contextEntry.path], "base64").toString("utf8"))).toEqual(JSON.parse(reviewed.out));
+    expect(JSON.parse(Buffer.from(portable.artifacts[outcomeEntry.path], "base64").toString("utf8"))).toEqual(outcome);
+  });
+
+  it("refuses an outcome for any other review context before evidence or a record is published", { timeout: 120000 }, async () => {
+    const harness = await makeHarness({}, true);
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "dh-admit-mismatch-"));
+    cleanups.push(scratch);
+    const outcomePath = path.join(scratch, "outcome.json");
+    await writeFile(outcomePath, `${JSON.stringify({
+      spec: "review-outcome/1",
+      contextDigest: "f".repeat(64),
+      verdict: "green",
+      reviewers: [{ id: "correctness", result: "approved" }],
+      findings: [],
+    })}\n`);
+
+    const refused = await harness.cli(["admit", "--outcome", outcomePath]);
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect(refused.err).toContain("review_outcome_invalid");
+    expect(refused.err).toContain("does not name the original review context digest");
+    const storage = await resolveRecordStorage(harness.dir, { storageNamespace: harness.config.storageNamespace });
+    expect((await readdir(storage.storageDir).catch(() => [])).filter((name) => name.endsWith(".json"))).toEqual([]);
+    expect(await readdir(path.join(harness.dir, "telemetry/delivery-runs")).catch(() => [])).toEqual([]);
+  });
+
+  it("stops at a failed preparation without interpreting the review outcome", { timeout: 120000 }, async () => {
+    const harness = await makeHarness({
+      preparationCommands: [{ id: "failing-check", command: [process.execPath, "-e", "process.exit(7)"], timeoutMs: 5_000 }],
+    }, true);
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "dh-admit-prepare-failure-"));
+    cleanups.push(scratch);
+    const outcomePath = path.join(scratch, "outcome.json");
+    await writeFile(outcomePath, `${JSON.stringify({
+      spec: "review-outcome/1",
+      contextDigest: "f".repeat(64),
+      verdict: "green",
+      reviewers: [{ id: "correctness", result: "approved" }],
+      findings: [],
+    })}\n`);
+
+    const refused = await harness.cli(["admit", "--outcome", outcomePath]);
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect(refused.err).toContain("preparation_command_failed");
+    expect(refused.err).not.toContain("review_outcome_invalid");
+    expect(await readdir(path.join(harness.dir, "telemetry/delivery-runs")).catch(() => [])).toEqual([]);
+  });
+
+  it("transcribes a non-green review without turning it into an admitted record", { timeout: 120000 }, async () => {
+    const harness = await makeHarness({}, true);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    const context = await harness.cli(["review-context", "--json"]);
+    expect(context.code, context.err).toBe(EXIT_OK);
+    const reviewed = JSON.parse(context.out) as { digest: string };
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "dh-admit-rejected-"));
+    cleanups.push(scratch);
+    const outcomePath = path.join(scratch, "outcome.json");
+    await writeFile(outcomePath, `${JSON.stringify({
+      spec: "review-outcome/1",
+      contextDigest: reviewed.digest,
+      verdict: "changes-requested",
+      reviewers: [{ id: "correctness", result: "rejected" }],
+      findings: [],
+    })}\n`);
+
+    const refused = await harness.cli(["admit", "--outcome", outcomePath]);
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect(refused.err).toContain("verdict_not_green");
+    expect(refused.err).toContain("approval_missing");
+    expect(await readdir(path.join(harness.dir, "telemetry/delivery-runs")).catch(() => [])).toEqual([]);
+  });
+
+  it("rejects malformed outcome input before preparing or writing a record", { timeout: 120000 }, async () => {
+    const harness = await makeHarness({}, true);
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "dh-admit-malformed-"));
+    cleanups.push(scratch);
+    const outcomePath = path.join(scratch, "outcome.json");
+    await writeFile(outcomePath, "{\n");
+
+    const refused = await harness.cli(["admit", "--outcome", outcomePath]);
+    expect(refused.code).toBe(EXIT_USAGE);
+    expect(refused.err).toContain("readable JSON document");
+    const unprepared = await harness.cli(["review-context"]);
+    expect(unprepared.code).toBe(EXIT_POLICY);
+    expect(unprepared.err).toContain("review_context_requires_receipt");
+    expect(await readdir(path.join(harness.dir, "telemetry/delivery-runs")).catch(() => [])).toEqual([]);
+  });
+});
+
 describe("verify's run-journal completeness row", () => {
   it("reports complete for a record whose candidate has a complete journal", { timeout: 120000 }, async () => {
     const harness = await makeHarness();

@@ -333,6 +333,8 @@ export {
   type DeliveryRecordClaim,
   type DeliveryRecordDriftClass,
   type DeliveryRecordFile,
+  type DeliveryRecordHostedChecks,
+  type RecordedHostedCheckExemption,
   type ListedTreeEntry,
   type ParseDeliveryRecordResult,
   type RecomputedIdentity,
@@ -714,6 +716,12 @@ export {
   validateRepositoryPolicyDocument,
   type CheckpointOverride,
   type RepositoryPolicyDocument,
+  type HostedCheckExemptionScope,
+  type HostedCheckExemption,
+  type HostedChecksPolicy,
+  isHostedCheckExemption,
+  isHostedCheckInstant,
+  isHostedChecksPolicy,
 } from "./policy/document.ts";
 export {
   COMPILED_POLICY_SPEC,
@@ -725,6 +733,7 @@ export {
   checkBoundPolicy,
   compileRepositoryPolicy,
   verifyCompiledPolicy,
+  effectiveHostedChecksPolicy,
   type CompiledCheckpointGrant,
   type CompiledPolicy,
   type CompileRepositoryPolicyInput,
@@ -1005,7 +1014,7 @@ export {
 export { captureCheckBindings, captureCheckOutputs, captureCheckOutputSnapshots, computeCheckWiringFingerprint, type CheckBindingOptions } from "./checks.ts";
 export type { CheckBinding } from "./records.types.ts";
 export { retainedCheckOutput } from "./validator/checks-passed.ts";
-export { resolveReviewCharters, readWorkflowRelease, ReviewInputError, type ResolvedCharter, type ReviewInputReader } from "./review-inputs.ts";
+export { readCompiledRepositoryPolicy, resolveReviewCharters, readWorkflowRelease, ReviewInputError, type ResolvedCharter, type ReviewInputReader } from "./review-inputs.ts";
 
 export { validateReviewedContext, parseReviewOutcome, deriveTelemetry, reviewerLists, REVIEWER_RESULTS } from "./review-outcome.ts";
 export type { ReviewOutcome, ReviewerOutcome, ReviewerResult } from "./review-outcome.ts";

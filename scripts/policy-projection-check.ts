@@ -55,6 +55,13 @@ const SNAPSHOT_FILE = "compiled-snapshot.json";
 const REPORT_FILE = "comparison-report.json";
 
 /**
+ * Commands introduced after the immutable pre-cutover oracle was recorded.
+ * They are checked beside its standalone set so extending the operator surface
+ * does not rewrite the historical phase vector.
+ */
+export const POST_CUTOVER_CLI_COMMANDS: readonly string[] = ["admit"];
+
+/**
  * Where this repository's reviewer charters come from. Both lenses reference
  * their charter by identity alone, which the compiler resolves only against
  * charters of `origin: "composition"` — the authenticated set the installed
@@ -402,7 +409,7 @@ export async function runPolicyProjectionCheck(
     );
     if (
       !equalStringArrays(
-        sorted([...oraclePhaseCommands, ...oracle.phaseVector.standaloneCommands]),
+        sorted([...oraclePhaseCommands, ...oracle.phaseVector.standaloneCommands, ...POST_CUTOVER_CLI_COMMANDS]),
         sorted(registered),
       )
     ) {

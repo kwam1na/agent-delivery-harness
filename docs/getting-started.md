@@ -11,6 +11,12 @@ prepare ──▶ review-context ──▶ submit-evidence ──▶ gate ──
 (receipt)   (what to review)   (manifest → records) (admit)  (tracked)  (recompute)
 ```
 
+After an independent review has produced a concluded `review-outcome/1`
+document, `admit --outcome <path>` composes preparation, review-evidence
+emission, submission, the gate, and the tracked record write. Review context
+acquisition and the independent review still happen before that command; the
+composite does not create an approval or commit the record.
+
 Every command on this page is executed, not illustrated: the test suite
 ([`docs-examples.test.ts`](docs-examples.test.ts)) parses the fenced code
 blocks out of this file and runs them verbatim against a fixture repository —
@@ -35,6 +41,12 @@ you consume them from a checkout of this repository (with `npm ci` run inside
 it), pointed at by `$DELIVERY_HARNESS_CHECKOUT`. Two things need wiring: a
 `delivery-harness` command on your `PATH`, and `@agent-delivery-harness/kernel`
 resolvable from your repository root (your `harness.config.ts` imports it).
+
+`npm ci` builds the kernel's declaration bundle; `npm run build:types` refreshes
+it after changing a producer checkout. The package's `types` export resolves to
+that bundle, so a strict Bundler consumer can include its harness scripts in
+`tsc --noEmit` without enabling `allowImportingTsExtensions` or excluding them.
+Packed kernel artifacts include the same declarations.
 
 ```sh
 # From your repository root. DELIVERY_HARNESS_CHECKOUT is a checkout of the
@@ -341,6 +353,13 @@ git commit -m "wire the delivery harness"
 delivery-harness check
 ```
 
+The preflight prints the content-addressed record template, such as
+`telemetry/delivery-runs/record--<deliverableDigest>.json`, rather than the
+configuration stem that is never written directly. When policy says base
+movement is `stale`, the same report explains that verification refuses a
+record after the configured base ref, tip, or merge base moves and that the
+candidate must be admitted again against the current base.
+
 ## 4. Prepare, then see what a review must cover
 
 `prepare` captures the candidate — the exact tree, its base coordinates, its
@@ -426,6 +445,19 @@ git commit -m "delivery record for the current candidate"
 delivery-harness verify
 ```
 
+For a concluded host review, retain `review-context --json` outside the
+worktree before giving that exact context to the independent reviewers, and
+copy its digest into the outcome's `contextDigest`. Then
+`delivery-harness admit --outcome /absolute/path/to/outcome.json` replaces the
+separate emission, submission, gate, and record invocations above. It runs
+preparation again, reconstructs the current context, and refuses the outcome if
+candidate, base, policy, wiring, release, or charters no longer match. The
+emitter retains that exact context and the supplied outcome in the portable
+record evidence. Commit the resulting candidate-keyed record and run `verify`
+as usual. Use the explicit emitter path for a configured review-neutral
+projection from an older raw tree, because that path accepts the separately
+retained original context.
+
 - `gate` resolves each obligation to one of six outcomes (satisfied by
   evidence, satisfied by a live fact, waived, delegated, not applicable,
   blocked). Freshness is judged by deliverable identity — narration-only
@@ -482,7 +514,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - uses: ./packages/action
+      - uses: kwam1na/agent-delivery-harness/packages/action@<full-reviewed-commit-sha>
 ```
 
 Three things to know before the first PR:
@@ -502,9 +534,21 @@ Three things to know before the first PR:
   GitHub's `synchronize` events. See the extensive commentary in
   [`packages/action/action.yml`](../packages/action/action.yml).
 
-In v1 the supported form is self-hosted (`uses: ./packages/action` from a
-checkout of this repository); the published-action form ships with the release
-mechanics.
+For a foreign repository, replace `<full-reviewed-commit-sha>` with the full
+40-character commit SHA of a reviewed harness release containing the Action.
+Bump that pin in a reviewed dependency update and rerun local record verification.
+GitHub downloads the pinned Action repository outside the consumer workspace;
+you do not add a second harness checkout or a per-worktree shim. The Action
+runs `npm ci --ignore-scripts` in its own workspace when needed (registry access
+is required on a cold runner), then loads consumer configuration with its pinned
+kernel. No consumer-side harness npm installation is needed. The Action package
+alone, copied without its sibling kernel and workspace manifest, is unsupported.
+This repository can continue using `uses: ./packages/action` after checkout.
+
+The foreign-installation regression executes the literal composite shell body
+outside the producer checkout against a fresh record and a changed head. Hosted
+GitHub execution is separately reported; a local simulated event does not prove
+remote runner availability.
 
 ## Following the work
 

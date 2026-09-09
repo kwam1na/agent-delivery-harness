@@ -37,7 +37,7 @@
  *   npm run policy:recompile           # rewrite the snapshot in place
  *   npm run policy:recompile -- --check  # report drift, write nothing
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import { readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -122,11 +122,38 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * `--check` report, and a test can assert byte-identity without touching the
  * authority tree.
  */
-export async function recompilePolicySnapshot(rootDir: string, options: { readonly product?: boolean } = {}): Promise<RecompileResult> {
+export async function recompilePolicySnapshot(rootDir: string, options: { readonly product?: boolean; readonly bootstrap?: boolean } = {}): Promise<RecompileResult> {
   const policyDir = path.join(rootDir, POLICY_PROJECTION_DIR);
   const snapshotPath = path.join(policyDir, SNAPSHOT_FILE);
-
-  const recordedText = await readFile(snapshotPath, "utf8").catch((error: unknown) => {
+  let initial: RecordedSnapshot | undefined;
+  if (options.bootstrap) {
+    if (!options.product) throw new RecompileError("bootstrap requires --product and a verified installed runtime");
+    for (const name of [SNAPSHOT_FILE, REPORT_FILE]) {
+      const present = await lstat(path.join(policyDir, name)).then(() => true, (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error; });
+      if (present) throw new RecompileError(`bootstrap requires absent ${name}; existing or partial authority state is never replaced`);
+    }
+    const inputs = await readJson(path.join(policyDir, "bootstrap-inputs.json"), "explicit bootstrap-inputs.json");
+    const epochs = ["productTrustRevocationEpoch", "repositoryAuthorityRevocationEpoch"] as const;
+    if (!isRecord(inputs) || Object.keys(inputs).length !== epochs.length || epochs.some((key) => !Number.isSafeInteger(inputs[key]) || (inputs[key] as number) < 0)) {
+      throw new RecompileError("bootstrap-inputs.json must declare exactly both nonnegative safe-integer revocation epochs");
+    }
+    const read = repositoryEvidenceReader(rootDir, createArtifactsPort());
+    const release = await readWorkflowRelease(read);
+    if (release === null) throw new RecompileError("bootstrap requires an installed release");
+    const runtime = await readJson(path.join(rootDir, INSTALLED_ARCHIVE_DIR, "runtime/runtime.json"), "installed runtime descriptor");
+    if (!isRecord(runtime) || runtime["schemaVersion"] !== "delivery-runtime/1") throw new RecompileError("bootstrap requires a verified product runtime descriptor");
+    const compilerBytes = await readFile(path.join(rootDir, INSTALLED_ARCHIVE_DIR, "runtime/kernel.mjs"));
+    const compilerEntry = Array.isArray(runtime["files"]) ? runtime["files"].find((entry: unknown) => isRecord(entry) && entry["path"] === "kernel.mjs") : undefined;
+    if (!isRecord(compilerEntry) || compilerEntry["sha256"] !== sha256(compilerBytes)) throw new RecompileError("bootstrap compiler bytes do not match the installed runtime descriptor");
+    initial = { schemaVersion: "delivery-harness-compiled-policy-snapshot/1", compiledWith: {
+      productTrustRevocationEpoch: inputs["productTrustRevocationEpoch"] as number,
+      repositoryAuthorityRevocationEpoch: inputs["repositoryAuthorityRevocationEpoch"] as number,
+      module: "runtime/kernel.mjs", compilerSha256: sha256(compilerBytes), runtimeVersion: runtime["runtimeVersion"],
+      bootstrapInputsSha256: sha256(await readFile(path.join(policyDir, "bootstrap-inputs.json"))),
+      personaSource: { archiveSha256: release["archiveSha256"] },
+    } };
+  }
+  const recordedText = initial ? "" : await readFile(snapshotPath, "utf8").catch((error: unknown) => {
     throw new RecompileError(
       `${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE} is unreadable, and this script re-records a snapshot rather than minting the first one: ${
         error instanceof Error ? error.message : String(error)
@@ -135,7 +162,7 @@ export async function recompilePolicySnapshot(rootDir: string, options: { readon
   });
   let recorded: RecordedSnapshot;
   try {
-    recorded = JSON.parse(recordedText) as RecordedSnapshot;
+    recorded = initial ?? JSON.parse(recordedText) as RecordedSnapshot;
   } catch (error) {
     throw new RecompileError(
       `${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
@@ -230,6 +257,10 @@ export async function recompilePolicySnapshot(rootDir: string, options: { readon
   // person's — but saying so is, because the projection sensor's
   // `report_input_stale` finding is otherwise the first anyone hears of it.
   let staleReport = false;
+  const reportAbsent = await lstat(path.join(policyDir, REPORT_FILE)).then(() => false, (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return true; throw error; });
+  // A first compile has no human comparison adjudication. Product recovery
+  // preserves that absence; existing reports are still parsed and checked.
+  if (reportAbsent && options.product) return { text, unchanged: text === recordedText, staleReport: false };
   const report = await readJson(path.join(policyDir, REPORT_FILE), `${POLICY_PROJECTION_DIR}/${REPORT_FILE}`);
   const inputs = isRecord(report) ? report["inputs"] : undefined;
   if (
@@ -249,7 +280,8 @@ async function main(argv: readonly string[], rootDir: string): Promise<void> {
   const checkOnly = argv.includes("--check");
   let result: RecompileResult;
   try {
-    result = await recompilePolicySnapshot(rootDir, { product: argv.includes("--product") });
+    if (argv.some((arg) => !["--check", "--product", "--bootstrap"].includes(arg))) throw new RecompileError("usage: [--check] [--product [--bootstrap]]");
+    result = await recompilePolicySnapshot(rootDir, { product: argv.includes("--product"), bootstrap: argv.includes("--bootstrap") });
   } catch (error) {
     process.stderr.write(
       `recompile-policy-snapshot: ${error instanceof RecompileError ? error.message : String(error)}\n`,
@@ -275,7 +307,7 @@ async function main(argv: readonly string[], rootDir: string): Promise<void> {
   if (result.unchanged) {
     process.stdout.write(`recompile-policy-snapshot: ${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE} unchanged\n`);
   } else {
-    await writeFile(path.join(rootDir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), result.text, "utf8");
+    await writeFile(path.join(rootDir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), result.text, { encoding: "utf8", flag: argv.includes("--bootstrap") ? "wx" : "w" });
     process.stdout.write(`recompile-policy-snapshot: rewrote ${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE}\n`);
   }
   if (result.staleReport) {

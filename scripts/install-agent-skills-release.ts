@@ -9,22 +9,29 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 export class InstallError extends Error {}
-export interface InstallRequest { readonly archive: string; readonly metadata: string }
+export interface InstallRequest { readonly archive: string; readonly metadata: string; readonly bootstrapPolicy?: boolean }
 export interface ExpectedRelease { readonly releaseId: string; readonly profile: string; readonly archiveSha256: string }
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 export function parseInstallArgs(argv: readonly string[]): InstallRequest {
   const values = new Map<string, string>();
-  for (let i = 0; i < argv.length; i += 2) {
+  let bootstrapPolicy = false;
+  for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i]!;
+    if (flag === "--bootstrap-policy") {
+      if (bootstrapPolicy) throw new InstallError("--bootstrap-policy may occur only once");
+      bootstrapPolicy = true;
+      continue;
+    }
     const value = argv[i + 1];
     if (!["--archive", "--metadata"].includes(flag) || values.has(flag) || !value || value.startsWith("--") || value.includes("\0")) {
       throw new InstallError("usage: --archive <distributed-product.zip> --metadata <release.json>; each flag is required once");
     }
     values.set(flag, path.resolve(value));
+    i += 1;
   }
   if (values.size !== 2) throw new InstallError("--archive and --metadata are required");
-  return { archive: values.get("--archive")!, metadata: values.get("--metadata")! };
+  return { archive: values.get("--archive")!, metadata: values.get("--metadata")!, ...(bootstrapPolicy ? { bootstrapPolicy } : {}) };
 }
 export function checkInstalledStatus(status: unknown, expected: ExpectedRelease): void {
   if (!isRecord(status)) throw new InstallError("the lifecycle status is not an object");
@@ -73,11 +80,7 @@ export async function install(request: InstallRequest, rootDir: string): Promise
       }
     };
     const prefix = ["-B", archive, "--root", rootDir, "--product"];
-    const exists = await stat(path.join(rootDir, ".agent-skills/active.json")).then(() => true, (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    });
-    await execute([...prefix, exists ? "update" : "install", "--archive", archive, "--metadata", metadataFile, "--maintenance"]);
+    await execute([...prefix, "install", "--archive", archive, "--metadata", metadataFile, "--maintenance", ...(request.bootstrapPolicy ? ["--bootstrap-policy"] : [])]);
     const status = await execute([...prefix, "status"]);
     checkInstalledStatus(JSON.parse(status.stdout), { releaseId: metadata["releaseId"], profile: metadata["profile"], archiveSha256: digest });
     process.stdout.write(`installed ${metadata["releaseId"]}; archive ${digest}; product ready\n`);

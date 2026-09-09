@@ -39,9 +39,9 @@
  * never consulted for identity. `GITHUB_SHA` is recorded in the summary as the
  * commit that was *not* verified, and is resolved nowhere.
  *
- * NO CLOCK (sensor rule e). Nothing here reads a clock. A record's freshness is
- * its identity's agreement with the head, never elapsed time, and an Action that
- * consulted a clock would be able to expire evidence the kernel considers valid.
+ * Record freshness remains identity-based. This module reads no clock; the
+ * runtime boundary supplies one instant solely to evaluate the expiry of an
+ * owner-declared hosted-check exemption. Evidence age never enters admission.
  *
  * FAIL CLOSED, ALWAYS. Every path that cannot reach a verdict — an event that is
  * not a pull request, a payload without a head, a config that will not load, a
@@ -54,6 +54,7 @@ import { realpathSync } from "node:fs";
 import { access, appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { observeHostedCheckTime } from "./observation.ts";
 import {
   ATTESTATION_LABEL,
   BlockedError,
@@ -145,6 +146,8 @@ export const CI_POLICY_INPUT_ENV = "DELIVERY_HARNESS_CI_POLICY_ID";
  * simulated git would let the head-vs-merge-ref proof pass against a fiction.
  */
 export interface ActionRuntime {
+  /** Boundary-observed UTC instant used only for owner-declared exemption expiry. */
+  readonly observedAt?: string;
   readonly env: EnvSnapshot;
   /** The checked-out repository root. Used as git's cwd, never as the identity source. */
   readonly workspace: string;
@@ -671,6 +674,13 @@ function renderSummary(input: SummaryInput, config: HarnessConfig | null): strin
   lines.push(`| Attestation | ${ATTESTATION_LABEL} |`);
   lines.push("");
 
+  if (input.ok && input.check?.hostedChecks.status === "exempted") {
+    const body = JSON.stringify(input.check.hostedChecks.exemption, null, 2)
+      .replace(/[\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const fence = fenceFor(body);
+    lines.push("### Hosted checks: exempted", "", `${fence}json`, body, fence, "");
+  }
+
   if (input.check !== null && config !== null && input.check.claims.length > 0) {
     lines.push("### Claims");
     lines.push("");
@@ -736,6 +746,7 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
       try {
         await runtime.writeOutputs({
           verified: String(ok),
+          "hosted-checks": ok ? (check?.hostedChecks.status ?? "required") : "blocked",
           mode,
           "head-sha": headSha ?? "",
           "record-path": recordPath ?? "",
@@ -993,7 +1004,7 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
     }
     const live = await collectLiveProviderResults({rootDir:repoRoot,config,candidate,projection:inputs.projection,evidenceContext:inputs.evidenceContext,
       env:runtime.env,run:runtime.git,...(runtime.signal===undefined?{}:{signal:runtime.signal})});
-    check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths, ...inputs, liveResults:live.liveResults,
+    check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths, ...inputs, ...(runtime.observedAt === undefined ? {} : { observedAt: runtime.observedAt }), liveResults:live.liveResults,
       executionContext: classifyExecutionContext({ config, env: runtime.env, stdinIsTTY: false, stdoutIsTTY: false }) });
     if (!check.ok) blockers.push(...live.blockers, ...check.blockers);
     return await settle();
@@ -1069,6 +1080,7 @@ export function defaultRuntime(): ActionRuntime {
   const outputPath = process.env["GITHUB_OUTPUT"];
   return {
     env: process.env,
+    observedAt: observeHostedCheckTime(),
     workspace,
     git: runGitCommand,
     readFile: (absolutePath) => readFile(absolutePath, "utf8"),

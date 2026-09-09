@@ -1,6 +1,6 @@
 {
   "name": "@agent-delivery-harness/kernel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Config-driven delivery-evidence kernel: validator, identity, records, gate evaluator",
   "license": "FSL-1.1-ALv2",
@@ -13,9 +13,16 @@
     "node": ">=22.6.0"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "prepack": "node --import tsx ../../scripts/build-kernel-types.ts"
   },
   "files": [
+    "dist",
     "src",
     "!src/**/*.test.ts",
     "LICENSE",

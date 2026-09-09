@@ -1,8 +1,8 @@
 {
   "name": "@agent-delivery-harness/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
-  "description": "Delivery harness CLI: prepare, review-context, submit-evidence, gate, record, verify, check",
+  "description": "Delivery harness CLI: admit, prepare, review-context, submit-evidence, gate, record, verify, check",
   "license": "FSL-1.1-ALv2",
   "repository": {
     "type": "git",
@@ -13,7 +13,7 @@
     "node": ">=22.6.0"
   },
   "dependencies": {
-    "@agent-delivery-harness/kernel": "0.2.0"
+    "@agent-delivery-harness/kernel": "0.3.0"
   },
   "exports": {
     ".": "./src/index.ts"

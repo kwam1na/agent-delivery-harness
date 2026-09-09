@@ -111,6 +111,16 @@ JSON
 delivery-harness submit-evidence --manifest "$MANIFEST"
 ```
 
+When the concluded outcome names the exact context the current prepared
+candidate still produces, save that outcome as JSON and run
+`delivery-harness admit --outcome /absolute/path/to/outcome.json`. The composite
+reruns preparation, reconstructs and validates the context named by
+`contextDigest`, then uses the same emitter, submission, gate, and tracked
+record paths shown above. It does not run reviewers, create approvals, commit
+the record, or turn a mismatch into evidence. Keep using the explicit
+`emit-review-evidence --context` form when a review-neutral projection needs the
+separately retained original context.
+
 Emission requires a current preparation receipt and rejects mismatched context
 or outcomes. After changes confined to configured review-neutral paths, prepare
 again and supply the original review context: its deliverable identity must still

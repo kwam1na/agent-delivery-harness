@@ -110,3 +110,89 @@ that absent independent review blocks the gate. It does not manufacture review
 or replace final host proofs. Rebuild all affected qualification records against
 the final archive, metadata, runtime descriptor, and selected profile. Old exact
 release attestations cannot qualify changed bytes.
+
+## Runtime versions and exact artifact identity
+
+`runtimeVersion` is the runtime builder's copy of the kernel package version.
+The root and every workspace package version, plus `HARNESS_VERSION`, move in
+lockstep; release checks enforce this. `HARNESS_VERSION` participates in
+preparation fingerprints, so advancing it invalidates preparation for the prior
+runtime. It is not a manifest schema label.
+
+For newly qualified releases, advance that shared version when observable CLI
+behavior or the public API changes: a backwards-compatible correction advances
+the patch version, an additive API or command advances the minor version, and
+an incompatible contract change advances the major version. During the 0.x
+series, incompatible changes advance the minor version and must describe the
+break explicitly. These are release boundaries: several changes can accumulate
+on one development version before the next qualified release. A version is a
+compatibility claim to validate, never proof that two builds contain equal bytes.
+
+`schemaVersion` names a specific serialized format such as `delivery-runtime/1`.
+Change it when that format changes incompatibly; independently apply the runtime
+version rule if reading or producing that format changes runtime behavior. A
+schema label does not substitute for package or runtime advancement.
+
+The archive SHA-256 identifies the exact distributed ZIP. The lifecycle's
+generation/content digest identifies its verified payload. Adopters pin the
+archive checksum and metadata and retain the installed generation identity;
+these are how an adopter selects and audits exact behavior and API bytes.
+Repackaging can change an archive digest without changing the runtime API.
+Never infer interchangeability from matching `runtimeVersion` values alone.
+
+Earlier distributed archives recorded `0.2.0` across behavior changes before
+this release policy was explicit. Those historical values remain unchanged.
+They denote the recorded package baseline, not identical behavior or a
+retroactive compatibility guarantee. For example, two archives both reporting
+`0.2.0` with different archive digests remain distinct pins. Use their actual
+metadata/digests to identify them; do not rewrite historical records or payloads.
+
+The retained `linear-contract-alignment-v1` generations illustrate this:
+archive `4a21ef3114195bfd0294a9e44e3dc3b8b094456760919aa7ec8cb3d9b17492ad`
+and archive `f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea`
+both record runtime `0.2.0`. They are different artifacts even though their
+release labels and runtime versions agree. These are historical examples, not
+recommended current adoption pins.
+
+Applying this rule: suppressing journal events for `prepare --help` is observable
+behavior and requires at least a patch advance at the next qualification; adding
+a public API requires a minor advance; an incompatible manifest schema change
+requires its own schema label change and the appropriate runtime advancement.
+Documentation-only clarification does not require rebuilding an archive or
+advancing a runtime version. The runtime builder and lockstep checks remain the
+sources of the recorded values; exact digest verification remains mandatory.
+
+## First policy bootstrap
+
+A new product release supports `--product apply` for both first installation and
+updates. The archive owns that choice; the repository wrapper only authenticates
+and snapshots the supplied bytes before invoking it. Existing releases without
+`apply` retain their documented `install` and `update` entry points.
+
+For an adopter with policy inputs but no compiled snapshot, explicitly add
+`--bootstrap-policy` to `apply`. Supply these repository-owned files first:
+
+- `.agents/policy/repository-policy.json`: the actual authority and review policy.
+- `.agents/policy/adapters.json`: explicit typed capability adapters.
+- `.agents/policy/bootstrap-inputs.json`: exactly
+  `productTrustRevocationEpoch` and `repositoryAuthorityRevocationEpoch`, each a
+  nonnegative safe integer selected by the adopter.
+
+For example, after authenticating the archive and supplying those inputs:
+
+```sh
+python3 -B /artifacts/product.zip --root /repo --product apply --archive /artifacts/product.zip --metadata /artifacts/product.json --maintenance --bootstrap-policy
+```
+
+The verified installed runtime compiles the existing policy against installed
+review charters and records the selected archive and compiler digest. It does
+not infer adapters, grant authority, or create `comparison-report.json`.
+Bootstrap refuses an existing snapshot or comparison report, including partial
+state; subsequent recovery uses ordinary reconciliation after inspecting the
+reported state. The first snapshot is created exclusively, so an existing
+snapshot cannot be overwritten by a racing bootstrap. Existing comparison
+adjudications are never manufactured or rewritten by installation.
+
+This adoption batch advances the shared runtime/package baseline to `0.3.0`
+for the additive admission command and policy/bootstrap interfaces. It does not
+change historical artifacts or publish packages to npm.

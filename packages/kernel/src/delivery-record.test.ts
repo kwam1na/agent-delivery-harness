@@ -30,7 +30,8 @@ import {
   type DeliveryRecord,
 } from "./delivery-record.ts";
 import { computeRecordId } from "./record-identity.ts";
-import { PORTABLE_STAGE_GRANT } from "./policy/compile.ts";
+import { compileRepositoryPolicy, PORTABLE_STAGE_GRANT, type CompiledPolicy } from "./policy/compile.ts";
+import { compositionPersonaSetFixture, policyDocumentFixture, repositoryAdapterSetFixture } from "./policy/fixtures.ts";
 import { RUN_JOURNAL_REQUIRED_ENTRIES, RUN_JOURNAL_VIOLATIONS } from "./checkpoint/run-journal-completeness.ts";
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] extends object ? Mutable<T[P]> : T[P] };
@@ -180,6 +181,26 @@ function buildFreshRecord(config = makeConfig()): DeliveryRecord {
   });
   if (!built.ok) throw new Error("expected build to succeed");
   return built.record;
+}
+
+function compiledHostedPolicy(baseRef = "origin/main", until = "2026-09-12T00:00:00Z"): CompiledPolicy {
+  const result = compileRepositoryPolicy({
+    document: policyDocumentFixture({
+      repositoryId: "test-repo",
+      hostedChecks: { required: true, exemptions: [{
+        scope: { repositoryId: "test-repo", baseRef },
+        reason: "Hosted runners are unavailable while billing is repaired.",
+        grantedBy: "repository-owner@example.com",
+        until,
+      }] },
+    }),
+    adapters: repositoryAdapterSetFixture(),
+    personas: compositionPersonaSetFixture(),
+    productTrustRevocationEpoch: 0,
+    repositoryAuthorityRevocationEpoch: 0,
+  });
+  if (!result.ok) throw new Error(JSON.stringify(result.rejections));
+  return result.compiled;
 }
 
 // ── bindingOf + path ─────────────────────────────────────────────────────────
@@ -415,6 +436,96 @@ describe("verifyDeliveryRecord", () => {
     expect(check.ok).toBe(true);
     expect(check.blockers).toHaveLength(0);
     expect(check.attestationLabel).toContain("process discipline");
+  });
+
+  it("records and verifies an active hosted-check exemption without changing local evidence claims", () => {
+    const config = makeConfig();
+    const compiledPolicy = compiledHostedPolicy();
+    const built = buildDeliveryRecord({
+      config,
+      decision: admittedDecision([evidenceResolution("review.green", "rec-1")]),
+      evidenceRecords: [evidenceRecord("review.green", "rec-1", "d".repeat(64), config)],
+      compiledPolicy,
+      observedAt: "2026-09-10T00:00:00Z",
+    });
+    expect(built.ok, JSON.stringify(built)).toBe(true);
+    if (!built.ok) return;
+    expect(built.record.claims[0]?.outcome).toBe("satisfied_evidence");
+    expect(built.record.hostedChecks?.exemption).toMatchObject({
+      scope: { repositoryId: "test-repo", baseRef: "origin/main" },
+      grantedBy: "repository-owner@example.com",
+      until: "2026-09-12T00:00:00Z",
+      policyDigest: compiledPolicy.compiledDigest,
+    });
+    const check = verifyDeliveryRecord(config, built.record, RECOMPUTED, FRESH_BASE, {
+      compiledPolicy,
+      observedAt: "2026-09-10T00:00:01Z",
+    });
+    expect(check.ok, JSON.stringify(check.blockers)).toBe(true);
+    expect(check.hostedChecks).toEqual({ status: "exempted", exemption: built.record.hostedChecks?.exemption });
+  });
+
+  it("does not activate an exemption for another base ref", () => {
+    const config = makeConfig();
+    const compiledPolicy = compiledHostedPolicy("origin/release");
+    const built = buildDeliveryRecord({
+      config,
+      decision: admittedDecision([evidenceResolution("review.green", "rec-1")]),
+      evidenceRecords: [evidenceRecord("review.green", "rec-1", "d".repeat(64), config)],
+      compiledPolicy,
+      observedAt: "2026-09-10T00:00:00Z",
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.record.hostedChecks).toEqual({ required: true });
+    expect(verifyDeliveryRecord(config, built.record, RECOMPUTED, FRESH_BASE, {
+      compiledPolicy,
+      observedAt: "2026-09-10T00:00:01Z",
+    }).hostedChecks.status).toBe("required");
+  });
+
+  it("refuses a forged or expired hosted-check exemption", () => {
+    const config = makeConfig();
+    const compiledPolicy = compiledHostedPolicy();
+    const built = buildDeliveryRecord({
+      config,
+      decision: admittedDecision([evidenceResolution("review.green", "rec-1")]),
+      evidenceRecords: [evidenceRecord("review.green", "rec-1", "d".repeat(64), config)],
+      compiledPolicy,
+      observedAt: "2026-09-10T00:00:00Z",
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok || built.record.hostedChecks?.exemption === undefined) return;
+
+    const forgedBody = {
+      ...built.record,
+      hostedChecks: {
+        required: true as const,
+        exemption: { ...built.record.hostedChecks.exemption, grantedBy: "agent" },
+      },
+    };
+    delete (forgedBody as { integrityDigest?: string }).integrityDigest;
+    const forged = { ...forgedBody, integrityDigest: digestCanonical(forgedBody) };
+    const forgedCheck = verifyDeliveryRecord(config, forged, RECOMPUTED, FRESH_BASE, {
+      compiledPolicy,
+      observedAt: "2026-09-10T00:00:01Z",
+    });
+    expect(forgedCheck.blockers.map((blocker) => blocker.code)).toContain("hosted_check_exemption_unrecognized");
+
+    const expiredCheck = verifyDeliveryRecord(config, built.record, RECOMPUTED, FRESH_BASE, {
+      compiledPolicy,
+      observedAt: "2026-09-12T00:00:00Z",
+    });
+    expect(expiredCheck.blockers.map((blocker) => blocker.code)).toContain("hosted_check_exemption_expired");
+    expect(expiredCheck.hostedChecks.status).toBe("required");
+  });
+
+  it("keeps legacy records and consumers without compiled policy compatible", () => {
+    const record = buildFreshRecord();
+    expect("hostedChecks" in record).toBe(false);
+    const check = verifyDeliveryRecord(makeConfig(), record, RECOMPUTED, FRESH_BASE);
+    expect(check.ok).toBe(true);
+    expect(check.hostedChecks).toEqual({ status: "required" });
   });
 
   it("fails on a changed deliverable identity, naming the drift class", () => {

@@ -119,6 +119,7 @@ export const verifyCommand: CommandDescriptor = {
   summary: "Verify the tracked delivery record against the current candidate.",
   usage: USAGE,
   async run(context: CommandContext): Promise<CommandResult> {
+    const observedAt = `${new Date().toISOString().slice(0, 19)}Z`;
     // Arguments first: a malformed invocation is a usage error and captures
     // nothing, exactly as `emit` and `submit-evidence` order it.
     const parsedArgs = parseArgs(context.args);
@@ -206,7 +207,7 @@ export const verifyCommand: CommandDescriptor = {
     // the observational tree coordinates. Corrupt or invented projection bytes
     // therefore fail as record evidence and never influence journal matching.
     const verified = verifyDeliveryRecord(context.config, parsed.record, identity, base,
-      { candidateTreePaths, ...inputs, liveResults:live.liveResults, executionContext: context.classifyContext() });
+      { candidateTreePaths, ...inputs, observedAt, liveResults:live.liveResults, executionContext: context.classifyContext() });
     if (!verified.ok) {
       return { kind: "blocked", blockers: [...live.blockers, ...verified.blockers] };
     }
@@ -221,7 +222,7 @@ export const verifyCommand: CommandDescriptor = {
       ...(parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }),
     });
     const check = verifyDeliveryRecord(context.config, parsed.record, identity, base,
-      { candidateTreePaths, runJournal, ...inputs, liveResults:live.liveResults, executionContext: context.classifyContext() });
+      { candidateTreePaths, runJournal, ...inputs, observedAt, liveResults:live.liveResults, executionContext: context.classifyContext() });
 
     // The opt-in is judged AFTER the record's own verification, so a delivery
     // whose record is bad is never told its journal is the problem.
@@ -232,10 +233,15 @@ export const verifyCommand: CommandDescriptor = {
     const relaxation = check.baseMovementRelaxed
       ? ` (base movement relaxed by policy: ${check.relaxedDriftClasses.join(", ")})`
       : "";
+    const exemption = check.hostedChecks.exemption;
+    const hostedCheckRow = exemption === undefined ? [] : [
+      `hosted checks: exempted for ${oneLine(exemption.scope.repositoryId, 128)} at ${oneLine(exemption.scope.baseRef, 256)}; granted by ${oneLine(exemption.grantedBy, 256)}; until ${exemption.until}; reason: ${oneLine(exemption.reason, 512)}`,
+    ];
     return {
       kind: "ok",
       summary: [
         `verified ${relativePath}${relaxation}; attestation: ${check.attestationLabel}`,
+        ...hostedCheckRow,
         ...runJournalRows(runJournal),
       ].join("\n"),
     };

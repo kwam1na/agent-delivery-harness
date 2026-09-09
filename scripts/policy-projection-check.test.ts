@@ -19,6 +19,7 @@ import { DELIVERY_RECORD_DRIFT_CLASSES, PREPARATION_FAILURE_CLASSES } from "@age
 import {
   INSTALLED_ARCHIVE_DIR,
   POLICY_PROJECTION_DIR,
+  POST_CUTOVER_CLI_COMMANDS,
   PRE_CUTOVER_ORACLE_DIGEST,
   parseReleaseSurfaceFilters,
   pathFilterMatches,
@@ -355,8 +356,10 @@ describe("phase parity against the live CLI registry", () => {
         entry.command.replace(/^delivery-harness /, ""),
       ),
       ...oracle.phaseVector.standaloneCommands,
+      ...POST_CUTOVER_CLI_COMMANDS,
     ].sort();
     expect(fromOracle).toEqual(COMMANDS.map((command) => command.name).sort());
+    expect(POST_CUTOVER_CLI_COMMANDS).toEqual(["admit"]);
   });
 
   it("reports drift when a frozen phase names a command the CLI does not register", async () => {

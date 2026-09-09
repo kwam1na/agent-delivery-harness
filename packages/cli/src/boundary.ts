@@ -359,6 +359,7 @@ const isHelpRequest = (args: readonly string[]): boolean =>
  * fails safe for a store nothing authoritative may read.
  */
 export const COMPLETION_WRAPPED_COMMANDS: readonly string[] = [
+  "admit",
   "check",
   "prepare",
   "review-context",

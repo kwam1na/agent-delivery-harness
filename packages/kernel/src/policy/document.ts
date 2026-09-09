@@ -15,6 +15,11 @@
  */
 import { FINISH_LINES } from "../spine/contract.ts";
 import {
+  boundedText,
+  closed,
+  closedArray,
+  literal,
+  MAX_FREE_TEXT,
   oneOf,
   positiveInt,
   sha256,
@@ -23,6 +28,9 @@ import {
   spinePointer,
   stringArray,
   text,
+  SPINE_INSTANT,
+  SPINE_ID,
+  type MemberCheck,
   type MemberRule,
 } from "../spine/grammar.ts";
 import { REVIEW_LENS_CATEGORIES } from "../spine/policy.ts";
@@ -53,6 +61,26 @@ export interface CheckpointOverride {
   readonly additionalForbiddenOperations: readonly string[];
 }
 
+/** The repository and target branch to which an owner exemption applies. */
+export interface HostedCheckExemptionScope {
+  readonly repositoryId: string;
+  readonly baseRef: string;
+}
+
+/** An attributed, expiring owner declaration. It is never agent-minted. */
+export interface HostedCheckExemption {
+  readonly scope: HostedCheckExemptionScope;
+  readonly reason: string;
+  readonly grantedBy: string;
+  readonly until: string;
+}
+
+/** Hosted checks remain required; exemptions can only make an attributed exception visible. */
+export interface HostedChecksPolicy {
+  readonly required: true;
+  readonly exemptions: readonly HostedCheckExemption[];
+}
+
 export interface RepositoryPolicyDocument {
   readonly spec: typeof REPOSITORY_POLICY_DOCUMENT_SPEC;
   readonly repositoryId: string;
@@ -77,6 +105,7 @@ export interface RepositoryPolicyDocument {
   readonly requiredCapabilities: readonly { readonly capabilityId: string; readonly kind: string; readonly version: string }[];
   readonly approvals: readonly { readonly action: string; readonly approval: (typeof APPROVAL_REQUIREMENTS)[number] }[];
   readonly trackerAbsenceFallback: (typeof TRACKER_ABSENCE_FALLBACKS)[number];
+  readonly hostedChecks?: HostedChecksPolicy;
   readonly checkpoints?: readonly CheckpointOverride[];
   /** The admission gate, validated by the characterized `HarnessConfig` loader at compile time. */
   readonly admission?: unknown;
@@ -124,6 +153,79 @@ const CHECKPOINT_REQUIRED: readonly MemberRule[] = [
   { name: "additionalForbiddenOperations", check: stringArray() },
 ];
 
+const boundedIdentity: MemberCheck = (value, at, collector): void => {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 256) {
+    collector.emit("malformed_member", at, "expected a non-empty identity of at most 256 characters");
+  }
+};
+
+const boundedBaseRef: MemberCheck = (value, at, collector): void => {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256 || /[\u0000\r\n]/.test(value)) {
+    collector.emit("malformed_member", at, "expected a non-empty single-line base ref of at most 256 characters");
+  }
+};
+
+/** Shape plus calendar validity. The compiler compares only supplied instants and never reads a clock. */
+export function isHostedCheckInstant(value: unknown): value is string {
+  if (typeof value !== "string" || !SPINE_INSTANT.test(value)) return false;
+  const [year, month, day, hour, minute, second] = value.slice(0, -1).split(/[-T:]/).map(Number);
+  if (year === undefined || month === undefined || day === undefined || hour === undefined || minute === undefined || second === undefined) return false;
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= (days[month - 1] ?? 0);
+}
+
+const hostedCheckInstant: MemberCheck = (value, at, collector): void => {
+  if (!isHostedCheckInstant(value)) {
+    collector.emit("malformed_member", at, "expected a valid UTC instant of the form YYYY-MM-DDTHH:MM:SSZ");
+  }
+};
+
+const HOSTED_CHECK_SCOPE_RULES: readonly MemberRule[] = [
+  { name: "repositoryId", check: spineId },
+  { name: "baseRef", check: boundedBaseRef },
+];
+
+const HOSTED_CHECK_EXEMPTION_RULES: readonly MemberRule[] = [
+  { name: "scope", check: closed(HOSTED_CHECK_SCOPE_RULES) },
+  { name: "reason", check: boundedText },
+  { name: "grantedBy", check: boundedIdentity },
+  { name: "until", check: hostedCheckInstant },
+];
+
+const HOSTED_CHECK_RULES: readonly MemberRule[] = [
+  { name: "required", check: literal(true) },
+  { name: "exemptions", check: closedArray(HOSTED_CHECK_EXEMPTION_RULES) },
+];
+
+const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
+  Object.keys(value).sort().join("\u0000") === [...keys].sort().join("\u0000");
+
+/** Runtime shape guard shared by compiled-policy and delivery-record verification. */
+export function isHostedCheckExemption(value: unknown): value is HostedCheckExemption {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const exemption = value as Record<string, unknown>;
+  if (!hasExactKeys(exemption, ["scope", "reason", "grantedBy", "until"])) return false;
+  const scope = exemption["scope"];
+  if (typeof scope !== "object" || scope === null || Array.isArray(scope)) return false;
+  const scoped = scope as Record<string, unknown>;
+  return hasExactKeys(scoped, ["repositoryId", "baseRef"]) &&
+    typeof scoped["repositoryId"] === "string" && SPINE_ID.test(scoped["repositoryId"]) &&
+    typeof scoped["baseRef"] === "string" && scoped["baseRef"].length > 0 && scoped["baseRef"].length <= 256 &&
+      !/[\u0000\r\n]/.test(scoped["baseRef"]) &&
+    typeof exemption["reason"] === "string" && exemption["reason"].length > 0 && exemption["reason"].length <= MAX_FREE_TEXT &&
+    typeof exemption["grantedBy"] === "string" && exemption["grantedBy"].trim().length > 0 && exemption["grantedBy"].length <= 256 &&
+    isHostedCheckInstant(exemption["until"]);
+}
+
+export function isHostedChecksPolicy(value: unknown): value is HostedChecksPolicy {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  return hasExactKeys(policy, ["required", "exemptions"]) && policy["required"] === true &&
+    Array.isArray(policy["exemptions"]) && policy["exemptions"].every(isHostedCheckExemption);
+}
+
 const closedArrayWithOptionals =
   (required: readonly MemberRule[], collectorRef: PolicyCollector, optional: readonly MemberRule[] = []) =>
   (value: unknown, at: string): void => {
@@ -159,6 +261,7 @@ export function validateRepositoryPolicyDocument(value: unknown): PolicyVerdict 
   ];
   const OPTIONAL: readonly MemberRule[] = [
     { name: "checkpoints", check: (nested, at) => nestedClosed(CHECKPOINT_REQUIRED)(nested, at) },
+    { name: "hostedChecks", check: closed(HOSTED_CHECK_RULES) },
     {
       name: "admission",
       check: (nested, at) => {

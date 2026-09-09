@@ -42,6 +42,15 @@ const REPO_ROOT = path.resolve(SCRIPTS_DIR, "..");
 const SCRIPT_PATH = path.join(SCRIPTS_DIR, "recompile-policy-snapshot.ts");
 const TSX_BIN = path.join(REPO_ROOT, "node_modules", ".bin", "tsx");
 
+it("bootstrap refuses existing authority artifacts instead of replacing them", async () => {
+  const dir = await fixture();
+  const before = await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8");
+  const result = await run(dir, "--product", "--bootstrap");
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("bootstrap requires absent");
+  expect(await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8")).toBe(before);
+});
+
 /**
  * The script as a command, run against a fixture root. The script file stays
  * in this checkout so `@agent-delivery-harness/kernel` resolves the way it
@@ -118,6 +127,36 @@ const writePolicyJson = (dir: string, file: string, value: unknown): Promise<voi
   writeFile(path.join(dir, POLICY_PROJECTION_DIR, file), `${JSON.stringify(value, null, 2)}\n`, "utf8");
 
 describe("re-recording the compiled policy snapshot", () => {
+  it("bootstraps explicit inputs without a comparison approval and refuses partial states", async () => {
+    const dir = await fixture();
+    await cp(path.join(REPO_ROOT, ".agent-skills/active.json"), path.join(dir, ".agent-skills/active.json"));
+    await cp(path.join(REPO_ROOT, INSTALLED_ARCHIVE_DIR, "runtime"), path.join(dir, INSTALLED_ARCHIVE_DIR, "runtime"), { recursive: true });
+    await rm(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE));
+    // A remaining comparison report is partial authority state, not permission.
+    await expect(recompilePolicySnapshot(dir, { product: true, bootstrap: true })).rejects.toThrow("bootstrap requires absent comparison-report.json");
+    await rm(path.join(dir, POLICY_PROJECTION_DIR, REPORT_FILE));
+    await expect(recompilePolicySnapshot(dir, { product: true, bootstrap: true })).rejects.toThrow("explicit bootstrap-inputs.json");
+    await writePolicyJson(dir, "bootstrap-inputs.json", { productTrustRevocationEpoch: 2, repositoryAuthorityRevocationEpoch: 3 });
+    const result = await recompilePolicySnapshot(dir, { product: true, bootstrap: true });
+    const snapshot = JSON.parse(result.text) as Snapshot;
+    expect(snapshot.compiled.snapshot.productTrustRevocationEpoch).toBe(2);
+    expect(snapshot.compiled.snapshot.repositoryAuthorityRevocationEpoch).toBe(3);
+    expect(snapshot.compiledWith["compilerSha256"]).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.staleReport).toBe(false);
+    expect((await run(dir, "--product", "--bootstrap")).code).toBe(0);
+    await expect(readFile(path.join(dir, POLICY_PROJECTION_DIR, REPORT_FILE))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await run(dir, "--product", "--check")).code).toBe(0);
+    expect((await run(dir, "--product", "--bootstrap")).code).toBe(1);
+  });
+
+  it.each([{}, { productTrustRevocationEpoch: -1, repositoryAuthorityRevocationEpoch: 0 }, { productTrustRevocationEpoch: 0, repositoryAuthorityRevocationEpoch: 0, grant: true }])("refuses invalid explicit bootstrap provenance %j", async (inputs) => {
+    const dir = await fixture();
+    await rm(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE));
+    await rm(path.join(dir, POLICY_PROJECTION_DIR, REPORT_FILE));
+    await writePolicyJson(dir, "bootstrap-inputs.json", inputs);
+    await expect(recompilePolicySnapshot(dir, { product: true, bootstrap: true })).rejects.toThrow("exactly both nonnegative");
+    await expect(readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE))).rejects.toMatchObject({ code: "ENOENT" });
+  });
   it("product reconciliation follows the selected archive while preserving other provenance", async () => {
     const dir = await fixture();
     await cp(path.join(REPO_ROOT, ".agent-skills/active.json"), path.join(dir, ".agent-skills/active.json"));

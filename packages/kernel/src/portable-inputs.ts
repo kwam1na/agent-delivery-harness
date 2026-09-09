@@ -11,7 +11,7 @@ import { capturePortableEvidenceContext, portableArtifactContents, portableBlock
 import { computeDeliverableIdentity } from "./identity.ts";
 import { captureCheckBindings } from "./checks.ts";
 import { retainedCheckOutput } from "./validator/checks-passed.ts";
-import type { ReviewInputReader } from "./review-inputs.ts";
+import { readCompiledRepositoryPolicy, type ReviewInputReader } from "./review-inputs.ts";
 import { isSafeRelativePath } from "./validator/envelope.ts";
 
 export async function candidateTreeEvidenceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<ReviewInputReader> {
@@ -65,6 +65,7 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
   };
   const preparationFingerprint = await computePreparationFingerprint(rootDir, config, { readWiring });
   const evidenceContext = await capturePortableEvidenceContext(config, read, preparationFingerprint);
+  const compiledPolicy = await readCompiledRepositoryPolicy(read);
   const checkBindings = await captureCheckBindings(rootDir, config, candidate, { readWiring, readReleaseInputs: read,
     readOutput: async (repoPath, providerId) => {
       const evidence = record.claims.flatMap(claim => [
@@ -87,5 +88,6 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
       computeDeliverableIdentity({ rootDir, treeSha, config: validationConfig }, { run })));
     waiverCandidateMatches = approved === target;
   }
-  return { evidenceContext, checkBindings, projection, ...(waiverCandidateMatches === undefined ? {} : { waiverCandidateMatches }) };
+  return { evidenceContext, checkBindings, projection, ...(compiledPolicy === null ? {} : { compiledPolicy }),
+    ...(waiverCandidateMatches === undefined ? {} : { waiverCandidateMatches }) };
 }

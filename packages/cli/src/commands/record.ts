@@ -13,11 +13,13 @@
  */
 import {
   buildDeliveryRecord,
+  candidateTreeEvidenceReader,
   computePreparationFingerprint, capturePortableEvidenceContext, repositoryEvidenceReader, capturePortableVerificationInputs, verifyDeliveryRecord,
   deliveryRecordBytes,
   deliveryRecordPathFor,
   discoverRecords,
   type EvidenceRecord,
+  readCompiledRepositoryPolicy,
 } from "@agent-delivery-harness/kernel";
 import path from "node:path";
 import { commandBlocker } from "../boundary.ts";
@@ -63,6 +65,7 @@ export const recordCommand: CommandDescriptor = {
   summary: "Write the tracked delivery record for an admitted gate.",
   usage: "Usage: delivery-harness record [--retention-scope <delivery-key> --keep-superseded <0-100>]\nRetention is opt-in; run gate first if a waiver is needed.",
   async run(context: CommandContext): Promise<CommandResult> {
+    const observedAt = `${new Date().toISOString().slice(0, 19)}Z`;
     // Arguments before anything is wired, admitted, or written.
     const retention = parseRetentionOptions(context.args);
     if (typeof retention === "string") {
@@ -119,9 +122,13 @@ export const recordCommand: CommandDescriptor = {
       evidenceRecords.push(...discovery.records);
     }
 
-    const evidenceContext = await capturePortableEvidenceContext(context.config, repositoryEvidenceReader(context.rootDir, context.artifacts),
+    const evidenceReader = repositoryEvidenceReader(context.rootDir, context.artifacts);
+    const evidenceContext = await capturePortableEvidenceContext(context.config, evidenceReader,
       await computePreparationFingerprint(context.rootDir, context.config));
-    const built = buildDeliveryRecord({ config: context.config, decision, evidenceRecords, context: evidenceContext });
+    const compiledPolicy = context.policyBinding?.compiledPolicy ??
+      await readCompiledRepositoryPolicy(await candidateTreeEvidenceReader(context.rootDir, recheck.candidate.treeSha));
+    const built = buildDeliveryRecord({ config: context.config, decision, evidenceRecords, context: evidenceContext,
+      ...(compiledPolicy === null ? {} : { compiledPolicy, observedAt }) });
     if (!built.ok) {
       return { kind: "blocked", blockers: [...built.blockers] };
     }
@@ -129,7 +136,7 @@ export const recordCommand: CommandDescriptor = {
     const verificationInputs = await capturePortableVerificationInputs(context.rootDir, context.config, recheck.candidate, built.record);
     const checked = verifyDeliveryRecord(context.config, built.record,
       { deliverableDigest: recheck.candidate.deliverable.digest, identityToken: recheck.candidate.deliverable.identity }, recheck.candidate.base,
-      { ...verificationInputs, liveResults: admission.observedLiveResults ?? [], executionContext: context.classifyContext() });
+      { ...verificationInputs, observedAt, liveResults: admission.observedLiveResults ?? [], executionContext: context.classifyContext() });
     if (!checked.ok) return { kind: "blocked", blockers: [...checked.blockers] };
     const relativePath = deliveryRecordPathFor(context.config, decision.candidate.deliverable.digest);
     const absolutePath = path.join(context.rootDir, relativePath);

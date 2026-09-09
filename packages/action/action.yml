@@ -95,14 +95,14 @@
 #       - uses: actions/setup-node@v4
 #         with:
 #           node-version: "22"
-#       - uses: ./packages/action
+#       - uses: kwam1na/agent-delivery-harness/packages/action@<full-reviewed-commit-sha>
 # ```
 #
-# The first `actions/checkout` is not optional and is not the same one this
-# action performs internally: GitHub resolves a *local* action reference
-# (`uses: ./…`) from the workspace on disk, so without a checkout the workflow
-# fails before this action is ever loaded. The action then re-checks-out the
-# head by sha itself, which is what pins what gets verified.
+# The first checkout establishes the consumer workspace. For a local action
+# reference (`uses: ./packages/action`), it also makes the action resolvable.
+# For a pinned remote reference, GitHub downloads the Action repository outside
+# that workspace; the consumer does not check out or install the harness itself.
+# This action then checks out the PR head by sha, which pins what gets verified.
 #
 # Two more things that are easy to get wrong:
 #
@@ -195,6 +195,9 @@ inputs:
     default: "0"
 
 outputs:
+  hosted-checks:
+    description: 'Owner policy posture: required, exempted, or blocked when verification failed.'
+    value: ${{ steps.verify.outputs.hosted-checks }}
   verified:
     description: "`true` when the check passed."
     value: ${{ steps.verify.outputs.verified }}
@@ -259,7 +262,7 @@ runs:
           # The published-action shape. Say so in the harness's own voice: an
           # operator who gets ERR_MODULE_NOT_FOUND here learns nothing, while
           # this names the boundary and the supported form.
-          message="delivery-harness: this action runs from TypeScript source and needs its own npm workspace root above ${DELIVERY_HARNESS_ACTION_PATH}, which does not exist. The published-action form is not supported in v1 (it also hits ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING); use the self-hosted form, 'uses: ./packages/action', from a checkout of the harness repository."
+          message="delivery-harness: this action runs from TypeScript source and needs its own npm workspace root above ${DELIVERY_HARNESS_ACTION_PATH}, which does not exist. Keep the complete pinned Action repository with its workspace and sibling kernel; use 'kwam1na/agent-delivery-harness/packages/action@<full-commit-sha>' or the self-hosted 'uses: ./packages/action'."
           printf '%s\n' "${message}" >&2
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             # The attestation label, spelled out because the module that owns it
@@ -299,4 +302,4 @@ runs:
           node_flags="--experimental-strip-types ${node_flags}"
         fi
         # shellcheck disable=SC2086
-        node ${node_flags} "${DELIVERY_HARNESS_ACTION_PATH}/src/main.ts"
+        node ${node_flags} --import "${DELIVERY_HARNESS_ACTION_PATH}/src/bootstrap.mjs" "${DELIVERY_HARNESS_ACTION_PATH}/src/main.ts"

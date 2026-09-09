@@ -64,6 +64,7 @@ export type StandaloneRule =
   | "install-failed"
   | "sibling-missing"
   | "entry-import-failed"
+  | "consumer-typecheck-failed"
   | "cli-command-failed"
   | "run-store-unexpected"
   | "anti-vacuity";
@@ -216,7 +217,7 @@ const RUN_STARTED_PAYLOAD = JSON.stringify({
 });
 
 export const CLI_SMOKE_CASES: readonly CliSmokeCase[] = [
-  { args: ["--help"], exitCode: 0, expected: ["prepare", "gate", "record", "verify"] },
+  { args: ["--help"], exitCode: 0, expected: ["admit", "prepare", "gate", "record", "verify"] },
   {
     args: ["runs", "list"],
     proves: "empty, before anything is allocated",
@@ -656,6 +657,16 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
       }
       packagesProbed.push(pkg.name);
       log(`installed ${pkg.name} into ${installDir}`);
+
+      if (pkg.name === `${PACKAGE_SCOPE}/kernel`) {
+        writeFileSync(path.join(installDir, "consumer.ts"), 'import { parseDeliveryRecord } from "@agent-delivery-harness/kernel";\nparseDeliveryRecord("{}");\n// @ts-expect-error retain the actual public input type\nparseDeliveryRecord(42);\n');
+        try {
+          execFileSync(process.execPath, [path.join(root, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict", "--target", "ES2023", "--module", "ESNext", "--moduleResolution", "Bundler", "--types", "node", "--typeRoots", path.join(root, "node_modules/@types"), "consumer.ts"], { cwd: installDir, encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: CAPTURED });
+          log("strict Bundler consumer typecheck passed without allowImportingTsExtensions");
+        } catch (error) {
+          findings.push({ rule: "consumer-typecheck-failed", subject: pkg.name, message: describe(error) });
+        }
+      }
 
       // Every declared sibling is physically there — no symlink, no workspace.
       for (const sibling of pkg.siblingDependencies) {

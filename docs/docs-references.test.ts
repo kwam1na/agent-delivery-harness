@@ -335,6 +335,7 @@ const NUMBER_WORDS: Readonly<Record<number, string>> = Object.freeze({
   12: "twelve",
   13: "thirteen",
   14: "fourteen",
+  15: "fifteen",
 });
 
 /**
@@ -848,6 +849,7 @@ describe("the rules the documentation states in prose", () => {
     // given a literal here before its command can be claimed valid.
     const literals: Record<string, string> = {
       $TREE: "a".repeat(40),
+      $DELIVERY_HOST: "codex",
       "<pr url>": "https://example.test/pull/1",
       "<why>": "the delivery uses the mandated pair only",
     };
@@ -926,9 +928,7 @@ describe("the rules the documentation states in prose", () => {
       "docs/delivery-runbook.md no longer lists the gate.reported outcome vocabulary the kernel freezes",
     ).toContain(RUN_GATE_REPORTED_OUTCOMES.map((outcome) => `\`${outcome}\``).join(", "));
     expect(RUN_ENDED_RESULTS, "run.ended no longer accepts the result the runbook emits").toContain("complete");
-    expect(runbook, "docs/delivery-runbook.md emits a run.ended result the grammar refuses").toContain(
-      '"result":"complete"',
-    );
+    expect(printed.find((command) => command.kind === "run.ended")?.json).toContain('"result":"complete"');
   });
 
   it("names only paths that exist in the agent guide's shape section", () => {
@@ -986,12 +986,14 @@ describe("the rules the documentation states in prose", () => {
     // every backticked token would pin illustrations rather than references.
     const runbook = textOf("docs/delivery-runbook.md");
     const cited = [
-      ...new Set([...runbook.matchAll(/`((?:\.agent-skills|\.agents)\/[\w./-]+)`/g)].map((match) => match[1]!)),
+      ...new Set([...runbook.matchAll(/`((?:\.agent-skills|\.agents|\.claude)\/[\w./-]+)`/g)].map((match) => match[1]!)),
     ];
     expect(cited.length, "the runbook cites no installed-release path").toBeGreaterThanOrEqual(6);
-    expect(cited, "the runbook no longer names the round-brief template it says to fill").toContain(
-      ".agent-skills/current/skills/obtain-review/references/round-brief-template.md",
-    );
+    expect(runbook).toContain("`$DELIVERY_SKILLS/obtain-review/references/round-brief-template.md`");
+    for (const exposure of [".agents/skills", ".claude/skills"]) {
+      expect(cited).toContain(exposure);
+      expect(existsCaseExactly(`${exposure}/obtain-review/references/round-brief-template.md`)).toBe(true);
+    }
     expect(cited.filter((entry) => !existsCaseExactly(entry))).toEqual([]);
   });
 
@@ -1209,7 +1211,8 @@ describe("the corrections the delivery runbook carries", () => {
   // of restating it; deleting one silently reinstates the duplication the item
   // exists to remove, and no other assertion in this tree notices.
   it("defers the rules the installed skills own instead of restating them", () => {
-    statesInProse("the installed workflow's, read from the skills exposed under `.claude/skills`");
+    statesInProse("through the invoking agent's own host exposure");
+    statesInProse("`.agents/skills` is the default for Codex and other hosts; Claude Code uses `.claude/skills`");
     statesInProse("`execute-work` says when that has to exist, and `obtain-review` says what discharges it.");
     statesInProse("are `linear-tracker-adapter`'s, as is the rule about writing to the properties file.");
   });
