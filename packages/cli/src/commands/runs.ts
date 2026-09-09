@@ -22,7 +22,7 @@ import { runArtifactCommand } from "../run-artifact-commands.ts";
  */
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { evaluateRunJournal } from "@agent-delivery-harness/kernel";
+import { RUN_JOURNAL_STATUSES, evaluateRunJournal } from "@agent-delivery-harness/kernel";
 import {
   READOUT_LABELS,
   detailOf,
@@ -43,7 +43,7 @@ import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescript
 
 const USAGE = [
   "Usage: delivery-harness runs capabilities --json",
-  "Usage: delivery-harness runs list",
+  "       delivery-harness runs list [--json] [--limit <n>] [--status <status>] [--open|--ended]",
   "       delivery-harness runs show <run-id> [--json]",
   "       delivery-harness runs view <run-id> [--json] [--record <repository-relative-path>]",
   "       delivery-harness runs export <run-id> --output <file>",
@@ -99,16 +99,123 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
     // worktree's store to resolve first.
     if (subcommand === "serve") return serveRuns(context, rest);
 
+    // `list`'s argument surface is decided BEFORE the store is resolved. A
+    // mistyped bound is a usage error wherever it was typed, and an operator
+    // standing outside a repository should not have to fix the repository to
+    // find out the flag was wrong.
+    const listArgs = subcommand === "list" ? parseListArgs(rest) : undefined;
+    if (listArgs !== undefined && !listArgs.ok) return { kind: "usage", message: listArgs.message };
+
     const resolved = await resolveRunSurface(context.rootDir);
     if (!resolved.ok) return unresolvable(resolved.reason);
 
-    return subcommand === "list"
-      ? listRuns(resolved.surface, context)
-      : showRun(resolved.surface, context, rest[0]!, rest[1] === "--json");
+    if (listArgs !== undefined && listArgs.ok) return listRuns(resolved.surface, context, listArgs.args);
+    return showRun(resolved.surface, context, rest[0]!, rest[1] === "--json");
   },
 };
 
 // ── list ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The one label this listing prints for a journal it could not read at all.
+ * It is not a completeness verdict — nothing was evaluated — so it is not one
+ * of the kernel's statuses, and it is spelled once, here.
+ */
+export const RUN_LIST_UNREADABLE = "unreadable";
+
+/**
+ * `absent` is the completeness vocabulary's answer to "no journal bound this
+ * candidate", which an inventory of the journals that exist can never be. It
+ * is excluded rather than accepted-and-never-matched, because a selector that
+ * cannot select anything whatever the store holds is a false affordance: an
+ * agent filtering on it would read the empty result as "no such runs" rather
+ * than as "this question cannot be asked here".
+ */
+const STATUS_NEVER_LISTED = "absent";
+
+/**
+ * Exactly the statuses a row of this listing can carry, which is what
+ * `--status` accepts. Derived from the kernel's closed vocabulary so a status
+ * renamed there is a compile-and-test problem here rather than a filter that
+ * silently stops matching.
+ */
+export const RUN_LIST_STATUSES: readonly string[] = Object.freeze([
+  ...RUN_JOURNAL_STATUSES.filter((status) => status !== STATUS_NEVER_LISTED),
+  RUN_LIST_UNREADABLE,
+]);
+
+/** The spec every machine-readable inventory carries, beside `runs show --json`'s export spec. */
+export const RUN_INVENTORY_SPEC = "run-inventory/1";
+
+interface ListArgs {
+  readonly json: boolean;
+  readonly limit?: number;
+  readonly status?: string;
+  /** True selects the runs with no `run.ended`; false selects the ended ones. */
+  readonly open?: boolean;
+}
+
+type ListParse = { readonly ok: true; readonly args: ListArgs } | { readonly ok: false; readonly message: string };
+
+/**
+ * The separate-argument form the rest of this command uses, and the same
+ * refusal discipline: an unknown flag, a repeated one, a positional, and a
+ * value that is not a bound are all usage errors rather than conveniences.
+ *
+ * A LIMIT IS A COUNT OF ROWS, so it is a positive integer and nothing else.
+ * `0` is refused rather than read as "no rows" or as "no bound": both readings
+ * are plausible, an operator cannot tell which one they got from the output,
+ * and neither is a thing anyone means to ask for.
+ */
+function parseListArgs(args: readonly string[]): ListParse {
+  const refuse = (reason: string): ListParse => ({ ok: false, message: `runs list: ${reason}.\n${USAGE}` });
+  let json = false;
+  let limit: number | undefined;
+  let status: string | undefined;
+  let open: boolean | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === "--json") {
+      if (json) return refuse("--json was given twice");
+      json = true;
+      continue;
+    }
+    if (token === "--open" || token === "--ended") {
+      // Two names for one question, so asking it twice — however spelled —
+      // has no answer to give.
+      if (open !== undefined) return refuse("use at most one of --open and --ended");
+      open = token === "--open";
+      continue;
+    }
+    if (token === "--limit" || token === "--status") {
+      const value = args[index + 1];
+      if (value === undefined) return refuse(`${token} needs a value`);
+      index += 1;
+      if (token === "--limit") {
+        if (limit !== undefined) return refuse("--limit was given twice");
+        if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
+          return refuse(`--limit needs a positive whole number, not ${oneLine(value, 64)}`);
+        }
+        limit = Number(value);
+        continue;
+      }
+      if (status !== undefined) return refuse("--status was given twice");
+      if (!RUN_LIST_STATUSES.includes(value)) {
+        return refuse(`--status accepts ${RUN_LIST_STATUSES.join(", ")}, not ${oneLine(value, 64)}`);
+      }
+      status = value;
+      continue;
+    }
+    if (token.startsWith("--")) return refuse(`unknown flag ${oneLine(token, 64)}`);
+    return refuse("it takes no positional arguments");
+  }
+
+  return {
+    ok: true,
+    args: { json, ...(limit === undefined ? {} : { limit }), ...(status === undefined ? {} : { status }), ...(open === undefined ? {} : { open }) },
+  };
+}
 
 /** The journal's size on disk, or zero where it cannot be measured. */
 async function sizeOf(runsDir: string, runId: string): Promise<number> {
@@ -119,32 +226,111 @@ async function sizeOf(runsDir: string, runId: string): Promise<number> {
   }
 }
 
-async function listRuns(surface: RunSurface, context: ConfigFreeCommandContext): Promise<CommandResult> {
+/** One run as both surfaces see it: the same five facts, rendered or serialized. */
+interface InventoryRow {
+  readonly runId: string;
+  readonly status: string;
+  readonly open: boolean;
+  readonly current: boolean;
+  readonly bytes: number;
+}
+
+/**
+ * Every run the store holds, in the store's own order.
+ *
+ * THE ORDER IS THE STORE'S, and the store sorts run ids ascending. That is
+ * what makes a bounded listing reproducible: the same store bounded the same
+ * way returns the same rows, and the row a `--limit 1` returns is the one an
+ * unbounded listing printed first. Nothing here re-orders it, so the order
+ * this surface documents is the order the store defines and not a second one
+ * that happens to agree today.
+ */
+async function inventoryOf(
+  surface: RunSurface,
+): Promise<{ readonly rows: readonly InventoryRow[]; readonly currentRunId: string | undefined }> {
   const runIds = await surface.store.list();
   const current = await surface.store.current(surface.worktreeKey);
   const currentRunId = current.ok ? current.runId : undefined;
+
+  const rows: InventoryRow[] = [];
+  for (const runId of runIds) {
+    const bytes = await sizeOf(surface.runsDir, runId);
+    const read = await surface.store.read(runId);
+    rows.push(
+      read.ok
+        ? {
+            runId,
+            status: evaluateRunJournal(read.events).status,
+            open: !read.events.some((event) => event.kind === "run.ended"),
+            current: runId === currentRunId,
+            bytes,
+          }
+        : // Nothing was read, so nothing is claimed: an unreadable journal is
+          // not open, not current, and carries no completeness verdict.
+          { runId, status: RUN_LIST_UNREADABLE, open: false, current: false, bytes },
+    );
+  }
+  return { rows, currentRunId };
+}
+
+/**
+ * `runs list`, human and machine.
+ *
+ * THE FILTER RUNS BEFORE THE BOUND. A bound applied first would spend its rows
+ * on runs the filter then discards, so `--status x --limit 1` could answer
+ * "none" for a store that holds one — the bound is a bound on the ANSWER, not
+ * on how far the store was read.
+ *
+ * WHAT `total` COUNTS is the set the filters selected, before the bound. That
+ * is the number a reader needs to know it was bounded (`returned` below it
+ * means rows were cut), and with no filter it is the whole store — which is
+ * why the unfiltered human listing's total line is unchanged.
+ */
+async function listRuns(surface: RunSurface, context: ConfigFreeCommandContext, args: ListArgs): Promise<CommandResult> {
+  const { rows, currentRunId } = await inventoryOf(surface);
+  const selected = rows.filter(
+    (row) => (args.status === undefined || row.status === args.status) && (args.open === undefined || row.open === args.open),
+  );
+  const totalBytes = selected.reduce((sum, row) => sum + row.bytes, 0);
+  const shown = args.limit === undefined ? selected : selected.slice(0, args.limit);
+  const truncated = shown.length < selected.length;
+
+  if (args.json) {
+    context.write(
+      JSON.stringify(
+        {
+          spec: RUN_INVENTORY_SPEC,
+          labels: READOUT_LABELS,
+          runsDir: surface.runsDir,
+          current: currentRunId ?? null,
+          runs: shown,
+          total: { count: selected.length, bytes: totalBytes },
+          returned: shown.length,
+          truncated,
+        },
+        null,
+        2,
+      ),
+    );
+    return { kind: "ok" };
+  }
 
   // The status column carries a completeness verdict, so this readout is
   // labeled exactly like `show`'s. `list` is the command an operator reaches
   // for first, before it knows which id to show; an unlabeled `complete` here
   // is the misreading the labels exist to prevent.
   const lines: string[] = [`runs in ${oneLine(surface.runsDir, 400)}`, `  (${READOUT_LABELS})`];
-  let total = 0;
-  for (const runId of runIds) {
-    const size = await sizeOf(surface.runsDir, runId);
-    total += size;
-    const read = await surface.store.read(runId);
-    if (!read.ok) {
-      lines.push(`  ${runId}  unreadable  ${size} bytes`);
-      continue;
-    }
-    const evaluation = evaluateRunJournal(read.events);
-    const open = !read.events.some((event) => event.kind === "run.ended");
+  for (const row of shown) {
     lines.push(
-      `  ${runId}  ${evaluation.status}  ${open ? "open" : "ended"}${runId === currentRunId ? " current" : ""}  ${size} bytes`,
+      row.status === RUN_LIST_UNREADABLE
+        ? `  ${row.runId}  ${RUN_LIST_UNREADABLE}  ${row.bytes} bytes`
+        : `  ${row.runId}  ${row.status}  ${row.open ? "open" : "ended"}${row.current ? " current" : ""}  ${row.bytes} bytes`,
     );
   }
-  lines.push(`total ${total} bytes across ${runIds.length} run(s)`);
+  lines.push(`total ${totalBytes} bytes across ${selected.length} run(s)`);
+  // Said only when something was actually cut, so the unbounded listing keeps
+  // the bytes it always had.
+  if (truncated) lines.push(`showing ${shown.length} of ${selected.length} run(s) (--limit ${args.limit})`);
   for (const line of lines) context.write(line);
   return { kind: "ok" };
 }

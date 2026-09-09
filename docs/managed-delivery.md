@@ -555,7 +555,12 @@ directory for that reason, and so must any reviewer exercising `emit` end to
 end.
 
 **Reading it back.** `runs list` reports each run's completeness status, whether
-it is still open, its size, and the store's total. `runs show <id>` renders the
+it is still open, its size, and the store's total, in the store's own ascending
+run-id order. `--json` prints the same facts as the `run-inventory/1` structure,
+and `--limit`, `--status` and `--open`/`--ended` bound and select it — the
+filters first, so the bound bounds the answer — with the selected set's count
+beside the returned one so a truncated result says so; see
+[the run view](run-view.md). `runs show <id>` renders the
 timeline — every event labeled with its writer's role, the rounds with the
 candidate each was bound to, the decisions, the refused appends — and a
 completeness readout. Both commands print a completeness verdict, so both
