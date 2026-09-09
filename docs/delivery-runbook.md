@@ -94,7 +94,9 @@ raises `mandated-pair-mismatch` unless `mandated` names exactly those two ids.
 
 Other kinds worth emitting: `decision.recorded {"fork","choice"}`,
 `blocker.recorded {"code","summary"}`, `gate.reported {"command","outcome",
-"durationMs","ticket"}` for `npm run check` (which is not a product command),
+"durationMs","ticket"}` for `npm run check` (which is not a product command;
+`outcome` is one of `pass`, `fail`, `blocked`, `interrupted` — `passed` is
+refused),
 and `compounding.recorded {"outcome"[,"reference"]}`. `command.completed` is
 refused for `emit` — only the CLI writes it.
 
