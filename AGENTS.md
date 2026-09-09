@@ -5,6 +5,13 @@ workflow projection installed under `.agent-skills/`. The two are separate:
 the skills say how work is decomposed and executed; the harness says what a
 candidate must prove before it is merge-ready.
 
+A host delivering a tracked item here reads two further documents: [the agent
+guide](docs/agent-guide.md) for the module boundaries, the sensors, and where a
+review lens that plants mutations runs them, and [the delivery
+runbook](docs/delivery-runbook.md) for this repository's loop from a fresh
+worktree to a merged pull request. Neither is a source of workflow rules; both
+carry mechanics this repository owns.
+
 ## Use the installed skills
 
 The `linear` profile release is installed by an operator through the

@@ -17,18 +17,33 @@ turn this page into a second source of agent instructions.
 ## The shape of the repository
 
 ```
-.agent-skills/       the installed workflow-skill release, exposed under .agents/skills and .claude/skills
-packages/kernel      the whole decision surface — pure where it matters
-packages/cli         the fourteen-command operator surface
-packages/mcp         a read-only MCP projection of the CLI
-packages/conformance the 89-vector golden kit and its generator
-packages/action      the GitHub Action that verifies the tracked record
-scripts/             the static sensors and the qualification drivers
-docs/                the guides, the vendored spec, the vendored plan
-delivery/            tracked delivery records, and this repo's own charters
-qualifications/      graded host capability records and pinned fixtures
-.agents/policy/      this repository's own compiled policy — protected
+AGENTS.md              the root instruction file a delivering host reads first
+harness.config.ts      this repository's own gate configuration
+.agent-skills/         the installed workflow-skill release and its generations
+.agents/skills/        one tracked exposure of that release
+.claude/skills/        the other tracked exposure — symlinks, and nothing else
+.agents/policy/        this repository's own compiled policy — protected
+.agents/tracker-properties.json  the exposed Linear adapter's properties
+packages/kernel        the whole decision surface — pure where it matters
+packages/cli           the fourteen-command operator surface
+packages/mcp           a read-only MCP projection of the CLI
+packages/conformance   the 89-vector golden kit and its generator
+packages/action        the GitHub Action that verifies the tracked record
+scripts/               the static sensors and the qualification drivers
+docs/                  the guides and their two sensors, plus the vendored spec
+                       (docs/spec/), the vendored plan (docs/plans/), the pinned
+                       contracts (docs/contracts/), and the review-neutral
+                       narration under docs/solutions/
+delivery/records/      the tracked delivery records — the only thing under
+                       delivery/, and the whole of it
+qualifications/        graded host capability records and pinned fixtures
+.github/               the CI and delivery-gate workflows
 ```
+
+Review charters are no longer files in this repository. A lens's charter is
+resolved from the installed release by persona identity, under
+`.agent-skills/current/personas/`, and its digest is pinned in the compiled
+policy snapshot.
 
 ## Kernel module boundaries
 
@@ -193,5 +208,7 @@ each is a correctness problem on its own rather than an avoidable annoyance:
 
 - [The managed delivery product](managed-delivery.md) — the facade, the policy
   compiler, the host ladder, and the trust posture.
+- [The delivery runbook](delivery-runbook.md) — this repository's loop, from a
+  fresh worktree to a merged pull request.
 - [Getting started](getting-started.md) — the gate loop, executable.
 - [Conformance](conformance.md) — running and regenerating the kit.

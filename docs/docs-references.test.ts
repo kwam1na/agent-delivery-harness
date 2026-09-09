@@ -115,6 +115,7 @@ describe("the documentation's references", () => {
       "docs/conformance.md",
       "docs/declared-checks.md",
       "docs/delivery-record.md",
+      "docs/delivery-runbook.md",
       "docs/getting-started.md",
       "docs/managed-delivery.md",
       "docs/ordinary-resume.md",
@@ -485,6 +486,39 @@ describe("the rules the documentation states in prose", () => {
     }
   });
 
+  it("invokes only harness commands this CLI actually registers", () => {
+    // The runbook is a page of commands a fresh agent copies verbatim, and
+    // nothing else in this tree executes it — `docs-examples.test.ts` reads
+    // `getting-started.md` and no other page. So an invented command, a
+    // renamed one, or one deleted from the CLI would sit there looking
+    // authoritative with the whole suite green. Every `harness -- <command>`
+    // the page writes is checked against the command modules that exist.
+    const runbook = textOf("docs/delivery-runbook.md");
+    const invoked = [...runbook.matchAll(/harness -- ([a-z][a-z-]*)/g)].map((match) => match[1]!);
+    // Anti-vacuity from both ends, for the same reason the link scan has it: a
+    // regex that stops matching would satisfy the loop below with nothing in
+    // it, and a partial harvest would satisfy a bare floor.
+    expect(new Set(invoked).size, "the runbook invokes no harness command").toBeGreaterThanOrEqual(8);
+    expect(invoked, "the runbook walks through `prepare`").toContain("prepare");
+    const registered = new Set(
+      readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands"))
+        .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"))
+        .map((entry) => entry.replace(/\.ts$/, "")),
+    );
+    expect([...new Set(invoked)].filter((command) => !registered.has(command))).toEqual([]);
+  });
+
+  it("states the base-movement rule the gate configuration actually carries", () => {
+    // The runbook's whole tail — the serialized merge, the byte-identity
+    // replay — hangs off this one setting. Pinned by agreement rather than by
+    // presence, so relaxing the configuration re-stamps the sentence instead
+    // of leaving it confidently wrong.
+    const config = readFileSync(path.join(REPO_ROOT, "harness.config.ts"), "utf8");
+    const declared = /baseMovement:\s*"([a-z-]+)"/.exec(config);
+    expect(declared, "harness.config.ts declares no baseMovement").not.toBeNull();
+    documentStates("docs/delivery-runbook.md", `baseMovement: "${declared![1]!}"`);
+  });
+
   it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {
     // The key is a literal, and this file is not typechecked — `docs/**` sits
     // outside every `tsconfig` include, so the key type buys nothing here. It
@@ -494,5 +528,38 @@ describe("the rules the documentation states in prose", () => {
     const rules = MANIFEST_REJECTION_REGISTRY["candidate_unprepared"].rules;
     expect(rules.length, "the registry gives candidate_unprepared no rule").toBeGreaterThan(0);
     for (const rule of rules) statesInProse(`${rule} \`candidate_unprepared\``);
+  });
+});
+
+/**
+ * The runbook's three corrections, pinned.
+ *
+ * These are the sentences that exist because a delivery got them wrong: each
+ * one contradicts the obvious guess, each was paid for in a lost round or a
+ * damaged sibling delivery, and none of them has a computed counterpart
+ * anywhere in this tree to disagree with. Deletion, not drift, is the failure
+ * — trimming a runbook to its confident half reads like an edit and leaves the
+ * page recommending exactly the thing that failed. Presence is the only
+ * available pin, so it is the one used, one row per correction.
+ */
+describe("the corrections the delivery runbook carries", () => {
+  const statesInProse = (phrase: string): void => {
+    const stated = textOf("docs/delivery-runbook.md")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/\s+/g, " ");
+    expect(stated, `docs/delivery-runbook.md no longer states: ${phrase}`).toContain(phrase);
+  };
+
+  it("says a byte-identical replay is still checked before it counts as a reopen", () => {
+    statesInProse("Run `npm run check` on the replayed candidate before deciding a round is a reopen.");
+    statesInProse("Compare the **delivered lines**, not the raw diff bytes.");
+  });
+
+  it("says a rebased worktree is reinstalled before the gate is believed", () => {
+    statesInProse("Re-run `npm install` after every rebase, before the gate.");
+  });
+
+  it("says a suite is never stopped with a machine-wide pattern", () => {
+    statesInProse("there is no worktree scoping in `pkill`");
   });
 });
