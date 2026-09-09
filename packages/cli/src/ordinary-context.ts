@@ -44,9 +44,9 @@ export function ordinaryEventWriter(version: RunEventVersion, kind: string, payl
   readonly eventId?: string;
 } {
   if (version !== "run-event/2") return { version };
-  // `kind` scopes the digest so two kinds can never collide on one id, and the
-  // whole id stays inside the store's 128-character run-id charset.
-  return { version, eventId: `${kind.replaceAll(".", "-")}-${digestCanonical({ kind, payload })}` };
+  // The kind prefix scopes the id, so two kinds cannot collide on one digest,
+  // and the whole id stays inside the store's 128-character run-id charset.
+  return { version, eventId: `${kind.replaceAll(".", "-")}-${digestCanonical(payload)}` };
 }
 
 export async function recoveryRun(rootDir: string, named?: string): Promise<

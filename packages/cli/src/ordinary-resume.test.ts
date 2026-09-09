@@ -8,6 +8,7 @@ import { createArtifactsPort, defineHarnessConfig } from "@agent-delivery-harnes
 import adopterConfig from "../../../harness.config.ts";
 import { runCli, type CliRuntime } from "./index.ts";
 import { resolveRunSurface } from "./run-surface.ts";
+import { rejectionDetails } from "./ordinary-context.ts";
 import { costLabel } from "./run-projection.ts";
 
 const exec = promisify(execFile);
@@ -127,6 +128,26 @@ it("refuses contradictory observed outcomes", async () => {
   expect(f.errors.join("\n")).toContain("resume_action_unreconciled");
 });
 
+describe("the rejection a refusal reports", () => {
+  it("says the store refused rather than inventing a location when no rejection was given", () => {
+    expect(rejectionDetails([])).toBe("the store refused the append");
+  });
+
+  it("keeps an empty pointer readable as the document root", () => {
+    expect(rejectionDetails([{ code: "malformed_member", pointer: "", message: "bad" }])).toBe("malformed_member at /: bad");
+  });
+
+  it("bounds each of the three parts, so a store answer cannot flood the blocker", () => {
+    const detail = rejectionDetails([{ code: "c".repeat(200), pointer: `/${"p".repeat(300)}`, message: "m".repeat(500) }]);
+    const [code, rest] = detail.split(" at ");
+    const [pointer, message] = rest!.split(": ");
+    expect(code).toHaveLength(64);
+    expect(pointer).toHaveLength(128);
+    expect(message).toHaveLength(200);
+    expect(detail.endsWith("\u2026")).toBe(true);
+  });
+});
+
 describe("the writer version a save-context observation is written at", () => {
   it("writes the selected run's version, so a run-event/2 journal accepts the save and resume reads it back", async () => {
     const f = await fixture({ version: "2" });
@@ -160,6 +181,9 @@ describe("the writer version a save-context observation is written at", () => {
     const payload = JSON.stringify({ contract, stage: "work" });
     expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
     const first = await f.journal();
+    // Past a tick of the second-granular run instant, so the retry is proven
+    // to reuse the first save's instant rather than to coincide with it.
+    await new Promise(resolve => { setTimeout(resolve, 1200); });
     // The same observation, saved again: the same event, instant and sequence.
     expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
     expect(await f.journal()).toEqual(first);
@@ -181,7 +205,25 @@ describe("the writer version a save-context observation is written at", () => {
     expect(reported).toContain("resume_context_invalid");
     expect(reported).toContain("malformed_member");
     expect(reported).toContain("/payload/contract/acceptanceCriteria");
+    // The store's own words, not just its code and pointer: an operator who
+    // cannot read the rule has a location without a reason.
+    expect(reported).toContain("expected 1 to 32 bounded acceptance criteria");
     // No false success, and no rewritten history.
+    expect(await f.journal()).toEqual(before);
+  });
+
+  it.each(["1", "2"] as const)("reports an omitted contract on a v%s run as the missing member it is", async version => {
+    const f = await fixture({ version });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const before = await f.journal();
+    // An omitted member must never reach the writer as a present undefined:
+    // deriving a v2 retry key over one is a crash, not a typed refusal.
+    expect(await f.run("save-context", "--json", JSON.stringify({ stage: "work" }))).toBe(1);
+    const reported = f.errors.join("\n");
+    expect(reported).toContain("resume_context_invalid");
+    expect(reported).toContain("missing_member");
+    expect(reported).toContain("/payload/contract");
+    expect(reported).not.toContain("internal_error");
     expect(await f.journal()).toEqual(before);
   });
 });

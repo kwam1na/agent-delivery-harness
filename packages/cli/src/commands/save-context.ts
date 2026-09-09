@@ -25,7 +25,11 @@ export const saveContextCommand: CommandDescriptor = {
     try { release = await installedRelease(context.rootDir); }
     catch { return { kind: "blocked", blockers: [recoveryBlocker("resume_release_unreadable", "The installed workflow release identity cannot be read; restore a valid installation before saving context.")] }; }
     const candidate = capture.candidate;
-    const payload = { spec: "ordinary-run-context/1", contract: input.contract, stage: input.stage,
+    // An omitted member is absent, never present-and-undefined: the contract
+    // reports it as a missing member, and the v2 retry key stays derivable.
+    const payload = { spec: "ordinary-run-context/1",
+      ...(input.contract === undefined ? {} : { contract: input.contract }),
+      ...(input.stage === undefined ? {} : { stage: input.stage }),
       candidateTreeSha: candidate.treeSha,
       candidateBinding: { deliverableDigest: candidate.deliverable.digest, identity: candidate.deliverable.identity,
         baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId },
