@@ -149,7 +149,16 @@ describe("re-recording the compiled policy snapshot", () => {
     expect((await run(dir, "--product", "--bootstrap")).code).toBe(1);
   });
 
-  it.each([{}, { productTrustRevocationEpoch: -1, repositoryAuthorityRevocationEpoch: 0 }, { productTrustRevocationEpoch: 0, repositoryAuthorityRevocationEpoch: 0, grant: true }])("refuses invalid explicit bootstrap provenance %j", async (inputs) => {
+  it.each([
+    {},
+    { productTrustRevocationEpoch: 2, repositoryAuthorityRevocationEpoch: 3, grant: true },
+    ...["productTrustRevocationEpoch", "repositoryAuthorityRevocationEpoch"].flatMap((field) =>
+      [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, "3", null, undefined].map((invalid) => ({
+        productTrustRevocationEpoch: 2,
+        repositoryAuthorityRevocationEpoch: 3,
+        [field]: invalid,
+      }))),
+  ])("refuses invalid explicit bootstrap provenance %j", async (inputs) => {
     const dir = await fixture();
     await rm(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE));
     await rm(path.join(dir, POLICY_PROJECTION_DIR, REPORT_FILE));

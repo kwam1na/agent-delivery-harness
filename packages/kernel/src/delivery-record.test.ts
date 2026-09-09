@@ -28,6 +28,7 @@ import {
   RECEIPTED_SKILLS_ROOT,
   verifyDeliveryRecord as verifyRecord,
   type DeliveryRecord,
+  type RecordedHostedCheckExemption,
 } from "./delivery-record.ts";
 import { computeRecordId } from "./record-identity.ts";
 import { compileRepositoryPolicy, PORTABLE_STAGE_GRANT, type CompiledPolicy } from "./policy/compile.ts";
@@ -202,6 +203,42 @@ function compiledHostedPolicy(baseRef = "origin/main", until = "2026-09-12T00:00
   if (!result.ok) throw new Error(JSON.stringify(result.rejections));
   return result.compiled;
 }
+
+const hostedExemptionMutations = [
+  {
+    field: "reason",
+    mutate: (exemption: RecordedHostedCheckExemption) => ({ ...exemption, reason: "A different owner reason." }),
+  },
+  {
+    field: "grantedBy",
+    mutate: (exemption: RecordedHostedCheckExemption) => ({ ...exemption, grantedBy: "another-owner@example.com" }),
+  },
+  {
+    field: "scope.repositoryId",
+    mutate: (exemption: RecordedHostedCheckExemption) => ({
+      ...exemption,
+      scope: { ...exemption.scope, repositoryId: "another-repo" },
+    }),
+  },
+  {
+    field: "scope.baseRef",
+    mutate: (exemption: RecordedHostedCheckExemption) => ({
+      ...exemption,
+      scope: { ...exemption.scope, baseRef: "origin/release" },
+    }),
+  },
+  {
+    field: "until",
+    mutate: (exemption: RecordedHostedCheckExemption) => ({ ...exemption, until: "2026-09-11T00:00:00Z" }),
+  },
+  {
+    field: "policyDigest",
+    mutate: (exemption: RecordedHostedCheckExemption) => ({ ...exemption, policyDigest: "f".repeat(64) }),
+  },
+] satisfies readonly {
+  readonly field: string;
+  readonly mutate: (exemption: RecordedHostedCheckExemption) => RecordedHostedCheckExemption;
+}[];
 
 // ── bindingOf + path ─────────────────────────────────────────────────────────
 
@@ -484,7 +521,7 @@ describe("verifyDeliveryRecord", () => {
     }).hostedChecks.status).toBe("required");
   });
 
-  it("refuses a forged or expired hosted-check exemption", () => {
+  it.each(hostedExemptionMutations)("refuses a resealed hosted-check exemption with mismatched $field", ({ mutate }) => {
     const config = makeConfig();
     const compiledPolicy = compiledHostedPolicy();
     const built = buildDeliveryRecord({
@@ -497,20 +534,35 @@ describe("verifyDeliveryRecord", () => {
     expect(built.ok).toBe(true);
     if (!built.ok || built.record.hostedChecks?.exemption === undefined) return;
 
-    const forgedBody = {
+    const mismatchedBody = {
       ...built.record,
       hostedChecks: {
         required: true as const,
-        exemption: { ...built.record.hostedChecks.exemption, grantedBy: "agent" },
+        exemption: mutate(built.record.hostedChecks.exemption),
       },
     };
-    delete (forgedBody as { integrityDigest?: string }).integrityDigest;
-    const forged = { ...forgedBody, integrityDigest: digestCanonical(forgedBody) };
-    const forgedCheck = verifyDeliveryRecord(config, forged, RECOMPUTED, FRESH_BASE, {
+    delete (mismatchedBody as { integrityDigest?: string }).integrityDigest;
+    const resealed = { ...mismatchedBody, integrityDigest: digestCanonical(mismatchedBody) };
+    const check = verifyDeliveryRecord(config, resealed, RECOMPUTED, FRESH_BASE, {
       compiledPolicy,
       observedAt: "2026-09-10T00:00:01Z",
     });
-    expect(forgedCheck.blockers.map((blocker) => blocker.code)).toContain("hosted_check_exemption_unrecognized");
+    expect(check.blockers.map((blocker) => blocker.code)).toEqual(["hosted_check_exemption_unrecognized"]);
+    expect(check.hostedChecks).toEqual({ status: "required" });
+  });
+
+  it("refuses an expired hosted-check exemption", () => {
+    const config = makeConfig();
+    const compiledPolicy = compiledHostedPolicy();
+    const built = buildDeliveryRecord({
+      config,
+      decision: admittedDecision([evidenceResolution("review.green", "rec-1")]),
+      evidenceRecords: [evidenceRecord("review.green", "rec-1", "d".repeat(64), config)],
+      compiledPolicy,
+      observedAt: "2026-09-10T00:00:00Z",
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
 
     const expiredCheck = verifyDeliveryRecord(config, built.record, RECOMPUTED, FRESH_BASE, {
       compiledPolicy,
