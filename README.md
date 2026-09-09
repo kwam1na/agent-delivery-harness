@@ -106,6 +106,10 @@ cannot drift from the tool.
   candidate commands pin the invoking worktree's selected run at entry and
   report their lifecycle automatically for version 2; legacy runs retain
   completion reporting. Observation failures preserve the command's result.
+  A lone `--help`/`-h` on any of them is answered at the dispatch boundary with
+  that command's own usage, before configuration loading, wiring, observation
+  or the action; an unrecognized flag on a direct command is a usage error
+  (exit `2`) raised before the action runs.
   [Run progress](docs/run-progress.md) explains freshness and host limits;
   [report capture](docs/run-artifacts.md), [portable archives](docs/run-archives.md)
   and [the run view](docs/run-view.md) cover retained output and inspection.

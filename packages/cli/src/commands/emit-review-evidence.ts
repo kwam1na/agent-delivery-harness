@@ -7,6 +7,7 @@ export const emitReviewEvidenceCommand: CommandDescriptor = {
   name: "emit-review-evidence",
   sourceId: "delivery-harness.cli.emit-review-evidence",
   summary: "Bind concluded review outcomes to their original prepared context.",
+  usage: "Usage: delivery-harness emit-review-evidence --context <review-context.json>\nReads a review-outcome/1 document on stdin.",
   async run(context) {
     if (context.args.length !== 2 || context.args[0] !== "--context" || !context.args[1] || context.args[1].startsWith("-")) {
       return { kind: "usage", message: "emit-review-evidence requires --context <review-context.json> and a review-outcome/1 document on stdin." };

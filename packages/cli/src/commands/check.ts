@@ -12,6 +12,7 @@
 import path from "node:path";
 import { resolveRecordStorage, BlockedError } from "@agent-delivery-harness/kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
+import { oneLine } from "../run-surface.ts";
 
 /** Named so an interrupted run leaves something obviously disposable. */
 const PROBE_FILE = ".delivery-harness-write-probe";
@@ -20,7 +21,12 @@ export const checkCommand: CommandDescriptor = {
   name: "check",
   sourceId: "delivery-harness.cli.check",
   summary: "Confirm the config loads and the evidence store is usable.",
+  usage: "Usage: delivery-harness check\nTakes no arguments.",
   async run(context: CommandContext): Promise<CommandResult> {
+    const unexpected = context.args[0];
+    if (unexpected !== undefined) {
+      return { kind: "usage", message: `check takes no arguments, and ${oneLine(unexpected, 64)} is one.\n${checkCommand.usage}` };
+    }
     try {
       const storage = await resolveRecordStorage(context.rootDir, { storageNamespace: context.config.storageNamespace });
       const probe = path.join(storage.storageDir, PROBE_FILE);

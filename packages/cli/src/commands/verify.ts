@@ -117,6 +117,7 @@ export const verifyCommand: CommandDescriptor = {
   name: "verify",
   sourceId: "delivery-harness.cli.verify",
   summary: "Verify the tracked delivery record against the current candidate.",
+  usage: USAGE,
   async run(context: CommandContext): Promise<CommandResult> {
     // Arguments first: a malformed invocation is a usage error and captures
     // nothing, exactly as `emit` and `submit-evidence` order it.

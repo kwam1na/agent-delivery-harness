@@ -129,6 +129,7 @@ export const maintainCommand: CommandDescriptor = {
   name: "maintain",
   sourceId: SOURCE_ID,
   summary: "Maintain the product installation (update, rollback, trust-state pin/revoke/unrevoke/high-water-mark).",
+  usage: `Usage: delivery-harness maintain <operation> [options]\nOperations: ${MAINTAIN_OPERATIONS.join(" | ")}`,
   async run(context: CommandContext): Promise<CommandResult> {
     const [operation, ...rest] = context.args;
     if (operation === undefined) {

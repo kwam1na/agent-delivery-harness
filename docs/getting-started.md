@@ -441,6 +441,16 @@ delivery-harness verify
 Exit codes are part of the contract on every command: `0` pass, `1` policy
 block (typed, rendered blockers), `2` usage error, `130` interrupted.
 
+Asking a command what it does never performs it. A lone `--help` or `-h` on any
+command prints that command's own usage and exits `0` from the dispatch
+boundary — before the configuration is loaded, before the repository is wired,
+and before the command's action runs — so `gate`, `record` and `check` answer
+the question rather than evaluating the gate, writing the record, or probing
+the store. It is answered the same way in a repository that has no
+`harness.config.ts` at all. An unrecognized flag on one of the direct commands
+is likewise refused as a usage error before the action runs; the invocation
+performs nothing and is reported as a usage outcome, never as a completed one.
+
 ## 7. Wire the pull-request check
 
 The GitHub Action re-runs the same verification on every pull request — against

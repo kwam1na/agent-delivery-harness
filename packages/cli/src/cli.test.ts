@@ -37,6 +37,7 @@ import {
 } from "@agent-delivery-harness/kernel";
 import {
   CliInterruption,
+  COMMANDS,
   EXIT_INTERRUPTED,
   EXIT_OK,
   EXIT_POLICY,
@@ -450,7 +451,7 @@ async function captureDigest(dir: string, config: HarnessConfig): Promise<string
 // ── Boundary contract (synthetic commands) ───────────────────────────────────
 
 function fakeCommand(name: string, result: CommandDescriptor["run"]): CommandDescriptor {
-  return { name, sourceId: `delivery-harness.cli.${name}`, summary: `${name} summary`, run: result };
+  return { name, sourceId: `delivery-harness.cli.${name}`, summary: `${name} summary`, usage: `Usage: delivery-harness ${name}`, run: result };
 }
 
 function boundaryRuntime(): Runtime {
@@ -1412,4 +1413,160 @@ describe("verify over a candidate carrying a Claude skill exposure", () => {
     expect(verified.code).toBe(EXIT_POLICY);
     expect(verified.err).toContain("record_protected_authority_path");
   });
+});
+
+// ── Per-command help and unrecognized flags ──────────────────────────────────
+
+/**
+ * WHY THIS IS A BOUNDARY CONCERN, NOT A PER-COMMAND ONE. `--help` is a request
+ * to be told what a command does; performing the command instead is the wrong
+ * answer to it, and it was the answer `gate`, `record` and `check` gave — they
+ * parse no arguments at all, so the boundary loaded config, wired the repo and
+ * ran the action while the operator was asking a question. The lone help token
+ * is now answered once, after the descriptor is found and before anything is
+ * loaded, from the descriptor's own `usage`. So the assertions below are about
+ * WHEN the answer arrives as much as what it says: a `loadConfig` that throws
+ * proves nothing was loaded, because a help path that loaded it would throw.
+ */
+describe("per-command help", () => {
+  const helpRuntime = (): Runtime => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const runtime: CliRuntime = {
+      cwd: process.cwd(),
+      env: {},
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      stdout: (text) => out.push(text),
+      stderr: (text) => err.push(text),
+      // The tripwire: reaching config loading at all is the defect.
+      loadConfig: async () => {
+        throw new Error("config was loaded for a help request");
+      },
+    };
+    return { runtime, out, err };
+  };
+
+  it.each(COMMANDS.map((command) => command.name))("answers %s --help with its own usage and loads nothing", async (name) => {
+    for (const flag of ["--help", "-h"]) {
+      const { runtime, out, err } = helpRuntime();
+      expect(await runCli([name, flag], runtime), `${name} ${flag}: ${err.join("")}`).toBe(EXIT_OK);
+      expect(out.join("")).toContain(`Usage: delivery-harness ${name}`);
+      expect(err.join("")).toBe("");
+    }
+  });
+
+  it("keeps the descriptor's usage and its summary distinct and non-empty", () => {
+    for (const command of COMMANDS) {
+      expect(command.usage, `${command.name} declares a usage`).toContain(`delivery-harness ${command.name}`);
+      expect(command.summary.length, `${command.name} declares a summary`).toBeGreaterThan(0);
+    }
+  });
+
+  it("still runs the command when the help token is not the whole invocation", async () => {
+    const { runtime } = helpRuntime();
+    // Two arguments, one of them `--help`: not a help request. It reaches the
+    // configured path, where this runtime's loader throws — rendered as an
+    // internal error, which is exit 1 and emphatically not the help exit.
+    expect(await runCli(["prepare", "--refresh-record-neutral", "--help"], runtime)).not.toBe(EXIT_OK);
+  });
+});
+
+/**
+ * THE LISTING SEPARATOR. `emit-review-evidence` is twenty characters against a
+ * pad width of sixteen, so the top-level listing printed
+ * `emit-review-evidenceBind concluded review outcomes…` — a name and a sentence
+ * fused into one token. The column is computed from the longest registered name
+ * now, and this reads every line back through one grammar so a name that
+ * outgrows the column again cannot pass.
+ */
+describe("the top-level usage listing", () => {
+  const listing = async (): Promise<readonly string[]> => {
+    const out: string[] = [];
+    const runtime: CliRuntime = {
+      cwd: process.cwd(), env: {}, stdinIsTTY: false, stdoutIsTTY: false,
+      stdout: (text) => out.push(text), stderr: () => {}, loadConfig: async () => makeConfig(),
+    };
+    expect(await runCli(["--help"], runtime)).toBe(EXIT_OK);
+    const lines = out.join("").split("\n");
+    const header = lines.indexOf("Commands:");
+    expect(header).toBeGreaterThan(-1);
+    return lines.slice(header + 1).filter((line) => line.trim() !== "");
+  };
+
+  it("separates every command name from its summary, longest name included", async () => {
+    const rows = await listing();
+    expect(rows).toHaveLength(COMMANDS.length);
+    const summaries = new Map(COMMANDS.map((command) => [command.name, command.summary]));
+    for (const row of rows) {
+      // Two spaces of indent, the name, at least two spaces, then the summary.
+      // Anchored, so a fused row cannot satisfy it by matching a later word.
+      const match = /^ {2}(\S+) {2,}(\S.*)$/.exec(row);
+      expect(match, `listing row is separated: ${JSON.stringify(row)}`).not.toBeNull();
+      const [, name, summary] = match!;
+      expect(summaries.get(name!), `${name} is a registered command`).toBe(summary);
+    }
+    // Anti-vacuity: the row that fused under the old pad width is present.
+    const longest = [...COMMANDS].sort((a, b) => b.name.length - a.name.length)[0]!;
+    expect(rows.some((row) => row.startsWith(`  ${longest.name} `))).toBe(true);
+  });
+});
+
+describe("unrecognized flags on the direct commands", () => {
+  const DIRECT = ["prepare", "review-context", "emit-review-evidence", "submit-evidence", "gate", "record", "verify", "check"];
+
+  it.each(DIRECT)("rejects %s --bogus-flag as a usage error", async (name) => {
+    const dir = await initRepo();
+    const { runtime, err } = makeRuntime(dir, makeConfig(), await makeArtifacts());
+    expect(await runCli([name, "--bogus-flag"], runtime), err.join("")).toBe(EXIT_USAGE);
+    // A usage error is about the CALL: it renders no blocker at all, so the
+    // renderer's `[code] summary` / `Source:` shape must be absent. Merely
+    // checking the exit code would pass for a command that blocked its way to
+    // exit 2 after wiring the repository.
+    expect(err.join("")).not.toMatch(/^\[[a-z_]+\] /m);
+    expect(err.join("")).not.toContain("Source: command:");
+  }, 30_000);
+
+  it("accepts every direct command's real arguments", async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare", "--refresh-record-neutral"], runtime)).toBe(EXIT_OK);
+    // `--json` needs an installed workflow release this fixture has not got,
+    // so it blocks — the point here is only that the flag is not refused.
+    expect(await runCli(["review-context", "--json"], runtime)).not.toBe(EXIT_USAGE);
+    expect(await runCli(["review-context"], runtime)).toBe(EXIT_OK);
+    const manifestPath = await buildAcceptSubmission(dir, config, artifacts);
+    expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_OK);
+    // The positional form of the same argument, which is not a flag and must
+    // not be swept up by the rejection.
+    expect(await runCli(["submit-evidence", manifestPath], runtime)).toBe(EXIT_OK);
+    expect(await runCli(["verify", "--require-run-journal"], runtime)).not.toBe(EXIT_USAGE);
+    expect(await runCli(["gate"], runtime)).toBe(EXIT_OK);
+  }, 60_000);
+
+  it("neither records nor admits for a help request or a nonsense flag on record", async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime, out } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const manifestPath = await buildAcceptSubmission(dir, config, artifacts);
+    expect(await runCli(["submit-evidence", "--manifest", manifestPath], runtime)).toBe(EXIT_OK);
+
+    const recordDir = path.join(dir, "telemetry/delivery-runs");
+    const records = async (): Promise<string[]> =>
+      (await readdir(recordDir).catch(() => [] as string[])).filter((name) => name.startsWith("record--"));
+
+    expect(await runCli(["record", "--help"], runtime)).toBe(EXIT_OK);
+    expect(await records()).toEqual([]);
+    expect(await runCli(["record", "--bogus-flag"], runtime)).toBe(EXIT_USAGE);
+    expect(await records()).toEqual([]);
+    // The admitted control: the same repository, the same runtime, the real
+    // invocation — so the two empty listings above mean the arguments were
+    // refused, not that this fixture could never have recorded.
+    expect(await runCli(["record"], runtime), out.join("")).toBe(EXIT_OK);
+    expect(await records()).toHaveLength(1);
+  }, 60_000);
 });
