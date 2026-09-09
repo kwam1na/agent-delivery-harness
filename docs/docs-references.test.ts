@@ -39,7 +39,8 @@
  * pinned: there is nothing to recompute them against, and a pin over a
  * hand-maintained constant only moves the staleness into this file.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -117,8 +118,86 @@ const scannedDocuments = (): readonly string[] => [
 interface DocumentReference {
   readonly document: string;
   readonly target: string;
-  readonly resolved: string;
+  /**
+   * The link target as a repository-relative POSIX path — the spelling
+   * `git ls-files` would have to print for the link to resolve. Deliberately
+   * not an absolute filesystem path: there is no longer one to hand to
+   * `existsSync`, so the resolver this row was written with cannot be put back
+   * at the call site without also reintroducing the field it needs.
+   */
+  readonly inTree: string;
 }
+
+/**
+ * Every path this repository tracks, spelled exactly as git spells it, plus
+ * every directory prefix of one.
+ *
+ * WHY NOT `existsSync`. `existsSync` asks the checkout; `git ls-files` asks the
+ * tree, and only the second question has the same answer on every host. macOS
+ * and Windows normalize case, so a link naming `.github/pull_request_template.md`
+ * for the tracked `.github/PULL_REQUEST_TEMPLATE.md` resolved locally and did
+ * not resolve on the Linux runners: this row passed on six consecutive local
+ * gate runs of the delivery that introduced the link, and all three hosted
+ * matrix jobs failed on it. Resolving against the index makes the row
+ * case-exact everywhere, so the repair happens on the laptop where it is cheap.
+ *
+ * `-z` rather than newline splitting because git quotes and escapes unusual
+ * path names in its default output and does not in the NUL-separated form.
+ */
+let trackedIndex: { readonly files: ReadonlySet<string>; readonly directories: ReadonlySet<string> } | undefined;
+const trackedPaths = (): { readonly files: ReadonlySet<string>; readonly directories: ReadonlySet<string> } => {
+  if (trackedIndex === undefined) {
+    const files = execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+      .split("\0")
+      .filter((entry) => entry !== "");
+    const directories = new Set<string>();
+    for (const file of files) {
+      let directory = path.posix.dirname(file);
+      while (directory !== "." && directory !== "/" && directory !== "") {
+        directories.add(directory);
+        directory = path.posix.dirname(directory);
+      }
+    }
+    trackedIndex = { files: new Set(files), directories };
+  }
+  return trackedIndex;
+};
+
+/**
+ * Whether a repository-relative POSIX path names something git tracks — a file,
+ * or a directory that holds one. A trailing slash is how the guides write a
+ * directory, and it is not part of the name.
+ */
+const isTracked = (inTree: string): boolean => {
+  const normalized = inTree.replace(/\/+$/, "");
+  const index = trackedPaths();
+  return index.files.has(normalized) || index.directories.has(normalized);
+};
+
+/**
+ * `existsSync`, made case-exact on a case-insensitive host: every segment must
+ * appear, spelled this way, in its parent's own listing.
+ *
+ * Used where `isTracked` cannot answer — the paths the guides cite inside the
+ * installed release live behind `.agent-skills/current`, which is a tracked
+ * *symlink*, so the index knows the link and nothing beyond it. The class of
+ * defect is the same one `isTracked` closes for links; the mechanism has to
+ * differ because the target is not in the index at all.
+ */
+const existsCaseExactly = (relative: string): boolean => {
+  let directory = REPO_ROOT;
+  for (const segment of relative.split("/").filter((entry) => entry !== "" && entry !== ".")) {
+    let entries: readonly string[];
+    try {
+      entries = readdirSync(directory);
+    } catch {
+      return false;
+    }
+    if (!entries.includes(segment)) return false;
+    directory = path.join(directory, segment);
+  }
+  return true;
+};
 
 /**
  * Every relative link target in a document, with its anchor stripped and its
@@ -135,7 +214,8 @@ const referencesOf = (document: string): readonly DocumentReference[] => {
     if (/^(https?:|mailto:|#)/.test(target)) continue;
     const withoutAnchor = target.split("#")[0]!;
     if (withoutAnchor === "") continue;
-    found.push({ document, target, resolved: path.resolve(documentDir, withoutAnchor) });
+    const inTree = path.relative(REPO_ROOT, path.resolve(documentDir, withoutAnchor)).split(path.sep).join("/");
+    found.push({ document, target, inTree });
   }
   return found;
 };
@@ -208,9 +288,34 @@ describe("the documentation's references", () => {
     }
   });
 
+  /**
+   * The corpus, plus two probes carried through the very same predicate.
+   *
+   * Without them this row is the assertion that shipped a broken link: it read
+   * `existsSync`, and `existsSync` on this host says yes to a path whose case
+   * differs from the tracked one and yes to a path git does not track at all.
+   * The probes make both of those answers a failure of *this row*, on any host,
+   * rather than a difference the hosted runners discover later — and they are
+   * carried through `isTracked` at the same call site as the real references,
+   * so a resolver swapped back at that call site cannot pass them.
+   */
   it("links only to paths that exist in this tree", () => {
-    const broken = allReferences().filter((reference) => !existsSync(reference.resolved));
-    expect(broken.map((reference) => `${reference.document} -> ${reference.target}`)).toEqual([]);
+    // A case-flipped spelling of a path this tree really tracks. Rejected by
+    // the index on every host; accepted by `existsSync` on this one.
+    const caseProbe: DocumentReference = {
+      document: "<probe>",
+      target: ".github/pull_request_template.md",
+      inTree: ".github/pull_request_template.md",
+    };
+    // Present in every checkout and tracked in none, so this one separates the
+    // index from the filesystem on case-sensitive hosts too.
+    const untrackedProbe: DocumentReference = { document: "<probe>", target: ".git", inTree: ".git" };
+    expect(isTracked(".github/PULL_REQUEST_TEMPLATE.md"), "the case probe no longer names a tracked path").toBe(true);
+
+    const broken = [...allReferences(), caseProbe, untrackedProbe]
+      .filter((reference) => !isTracked(reference.inTree))
+      .map((reference) => `${reference.document} -> ${reference.target}`);
+    expect(broken).toEqual(["<probe> -> .github/pull_request_template.md", "<probe> -> .git"]);
   });
 });
 
@@ -867,7 +972,7 @@ describe("the rules the documentation states in prose", () => {
     expect(paths, "the shape section no longer says where a lens charter resolves from").toContain(
       ".agent-skills/current/personas/",
     );
-    expect(paths.filter((entry) => !existsSync(path.join(REPO_ROOT, entry)))).toEqual([]);
+    expect(paths.filter((entry) => !existsCaseExactly(entry))).toEqual([]);
   });
 
   it("names only paths that exist in the delivery runbook's prose", () => {
@@ -887,7 +992,7 @@ describe("the rules the documentation states in prose", () => {
     expect(cited, "the runbook no longer names the round-brief template it says to fill").toContain(
       ".agent-skills/current/skills/obtain-review/references/round-brief-template.md",
     );
-    expect(cited.filter((entry) => !existsSync(path.join(REPO_ROOT, entry)))).toEqual([]);
+    expect(cited.filter((entry) => !existsCaseExactly(entry))).toEqual([]);
   });
 
   it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {
@@ -1068,6 +1173,16 @@ describe("the corrections the delivery runbook carries", () => {
 
   it("says a suite is never stopped with a machine-wide pattern", () => {
     statesInProse("there is no worktree scoping in `pkill`");
+  });
+
+  // The correction this page's own first delivery died on, and the one whose
+  // subject is the local gate itself: on a case-insensitive host no sensor run
+  // can observe the hazard, so nothing but the sentence carries it forward.
+  it("says a green local gate is not evidence about the case of a documented path", () => {
+    statesInProse("**The hosted runners have a case-sensitive filesystem and a developer's machine usually does not.**");
+    // The move, not only the hazard: without this half the page names a failure
+    // and leaves the reader nothing to do about it.
+    statesInProse("push before the last round you can still spend");
   });
 
   // The merge step is the one place the page can instruct a host to exceed the

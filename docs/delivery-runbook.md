@@ -532,7 +532,7 @@ npm run --silent harness -- emit pr.opened --event-id pr-1 \
   --json "{\"url\":\"<pr url>\",\"candidateTreeSha\":\"$TREE\",\"ticket\":\"V26-0000\"}"
 ```
 
-The body follows [`.github/pull_request_template.md`](../.github/pull_request_template.md):
+The body follows [`.github/PULL_REQUEST_TEMPLATE.md`](../.github/PULL_REQUEST_TEMPLATE.md):
 a lead sentence, the `Linear:` link, `## What changed`, `## Evidence` (the gate
 result, the other sensors run, the record path, `gate admitted:` and `verify`),
 and `## Review` — the bound you declared, the lens ids, and a
@@ -542,6 +542,21 @@ discharged and each deferral tracked.
 Hosted checks are `ci.yml` (matrix `node-22`, `node-24`, `bun-latest`) and
 `gate.yml`, whose `verify-delivery-record` job runs `packages/action` against
 the pull-request head.
+
+**The hosted runners have a case-sensitive filesystem and a developer's machine
+usually does not.** A green local `npm run check` on macOS is not evidence about
+the *case* of any path this repository's documentation names: `existsSync`
+resolves `.github/pull_request_template.md` against the tracked
+`.github/PULL_REQUEST_TEMPLATE.md` here and refuses it there. That one mismatch
+passed six consecutive local gate runs of this page's own first delivery and
+failed all three hosted matrix jobs, after the bound was spent. Both halves of
+`docs/docs-references.test.ts`'s path checking are case-exact now — documented
+links resolve through `git ls-files`, and the prose paths that sit behind the
+`.agent-skills/current` symlink resolve through case-exact directory listings —
+so this particular class is carried locally. It is still the class a local gate
+structurally cannot see, so **push before the last round you can still spend**:
+a push is review-neutral, costs nothing, and moves a host disagreement to a point
+in the loop where a round remains to absorb it.
 
 ```sh
 gh pr checks <n> --watch
