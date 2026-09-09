@@ -228,6 +228,7 @@ export const managedCommand: CommandDescriptor = {
   name: "managed",
   sourceId: SOURCE_ID,
   summary: "Drive the managed delivery's next checkpoint (status, stages, sensor, review, admission, record, finish).",
+  usage: `Usage: delivery-harness managed <operation> [options]\nOperations: ${MANAGED_OPERATIONS.join(" | ")}`,
   async run(context: CommandContext): Promise<CommandResult> {
     const [operation, ...rest] = context.args;
     if (operation === undefined) {

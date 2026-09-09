@@ -12,6 +12,7 @@ import { runDeclaredCheck } from "../declared-checks.ts";
  */
 import { computeDeliverableIdentity, runAdmission, type AdmissionResult, type Blocker, type LiveProviderResult } from "@agent-delivery-harness/kernel";
 import { CliInterruption, type CommandContext, type CommandDescriptor, type CommandResult } from "../boundary.ts";
+import { oneLine } from "../run-surface.ts";
 
 /**
  * Runs the ordinary admission first, invokes only configured providers that can
@@ -122,7 +123,14 @@ export const gateCommand: CommandDescriptor = {
   name: "gate",
   sourceId: "delivery-harness.cli.gate",
   summary: "Evaluate the delivery gate for the current candidate.",
+  usage: "Usage: delivery-harness gate\nTakes no arguments; a waiver is offered only under a real TTY.",
   async run(context: CommandContext): Promise<CommandResult> {
+    // Arguments before admission: `gate` accepts none, and a call it cannot
+    // honour is answered about the call rather than performed approximately.
+    const unexpected = context.args[0];
+    if (unexpected !== undefined) {
+      return { kind: "usage", message: `gate takes no arguments, and ${oneLine(unexpected, 64)} is one.\n${gateCommand.usage}` };
+    }
     const result = await runProviderBackedAdmission(context, { allowPrompt: true, includeInjectedLiveResults: true });
 
     if (result.admitted) {

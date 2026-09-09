@@ -18,17 +18,18 @@ import {
 } from "@agent-delivery-harness/kernel";
 import { CliInterruption, type CommandContext, type CommandDescriptor, type CommandResult } from "../boundary.ts";
 
+const USAGE = "Usage: delivery-harness prepare [--refresh-record-neutral]";
+
 export const prepareCommand: CommandDescriptor = {
   name: "prepare",
   sourceId: "delivery-harness.cli.prepare",
   summary: "Run preparation checks; --refresh-record-neutral permits proven artifact-only receipt refresh.",
+  // The text prepare has always answered `--help` with, unchanged; the
+  // boundary is what prints it now, for every command rather than this one.
+  usage: `${USAGE}\nOrdinary prepare always runs mechanical checks. The refresh flag reuses prior success only when strict validation, policy, wiring and base are unchanged; otherwise it runs the checks.`,
   async run(context: CommandContext): Promise<CommandResult> {
-    const usage = "Usage: delivery-harness prepare [--refresh-record-neutral]";
-    if (context.args.length === 1 && ["--help", "-h"].includes(context.args[0]!)) {
-      return { kind: "ok", summary: `${usage}\nOrdinary prepare always runs mechanical checks. The refresh flag reuses prior success only when strict validation, policy, wiring and base are unchanged; otherwise it runs the checks.` };
-    }
     if (context.args.length > 1 || (context.args.length === 1 && context.args[0] !== "--refresh-record-neutral")) {
-      return { kind: "usage", message: usage };
+      return { kind: "usage", message: USAGE };
     }
     const refreshRecordNeutral = context.args[0] === "--refresh-record-neutral";
     const wiring = await context.wire();

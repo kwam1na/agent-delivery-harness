@@ -10,13 +10,16 @@ import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { buildReviewContext, OutcomeError } from "../review-evidence.ts";
 
+const USAGE = "Usage: delivery-harness review-context [--json]";
+
 export const reviewContextCommand: CommandDescriptor = {
   name: "review-context",
   sourceId: "delivery-harness.cli.review-context",
   summary: "Show the reviewable-change context for the prepared candidate.",
+  usage: USAGE,
   async run(context: CommandContext): Promise<CommandResult> {
     if (context.args.length > 0 && !(context.args.length === 1 && context.args[0] === "--json")) {
-      return { kind: "usage", message: "review-context accepts only --json." };
+      return { kind: "usage", message: `review-context accepts only --json.\n${USAGE}` };
     }
     const wiring = await context.wire();
     const capture = await wiring.captureCandidate();

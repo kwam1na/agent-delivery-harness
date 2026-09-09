@@ -142,6 +142,17 @@ export interface CommandDescriptor {
   /** The blocker `source.id` this command stamps on failures it raises itself. */
   readonly sourceId: string;
   readonly summary: string;
+  /**
+   * What a lone `--help`/`-h` on this command is answered with, printed by the
+   * boundary before anything is loaded. It is the command's own text — its
+   * invocation form and, where the command has one, the sentence explaining
+   * what its flags decide. Most commands build their own usage errors from it
+   * too, but nothing enforces that: `emit-review-evidence`, `maintain`,
+   * `managed` and `submit-evidence`'s missing-manifest arm phrase theirs from
+   * separate literals, so this member is the help answer and not a
+   * single-authority claim over every usage message.
+   */
+  readonly usage: string;
   run(context: CommandContext): Promise<CommandResult>;
 }
 
@@ -180,6 +191,8 @@ export interface ConfigFreeCommandDescriptor {
   readonly name: string;
   readonly sourceId: string;
   readonly summary: string;
+  /** As {@link CommandDescriptor.usage}: one help contract across both classes. */
+  readonly usage: string;
   /** The discriminator the boundary dispatches on, before any config load. */
   readonly configFree: true;
   run(context: ConfigFreeCommandContext): Promise<CommandResult>;
@@ -304,13 +317,32 @@ export async function wireRepo(rootDir: string, config: HarnessConfig): Promise<
 
 // ── The boundary ─────────────────────────────────────────────────────────────
 
-const USAGE = (commands: readonly AnyCommandDescriptor[]): string =>
-  [
+/**
+ * The listing column is computed from the longest registered name, never a
+ * constant: a fixed pad width silently fused `emit-review-evidence` (twenty
+ * characters) into its own summary, and every later command name long enough
+ * to reach the width would have done the same. Two spaces is the separator, so
+ * the longest name is still visibly separated from its summary.
+ */
+const NAME_GAP = 2;
+
+const USAGE = (commands: readonly AnyCommandDescriptor[]): string => {
+  const column = Math.max(0, ...commands.map((command) => command.name.length)) + NAME_GAP;
+  return [
     "Usage: delivery-harness <command> [options]",
     "",
     "Commands:",
-    ...commands.map((command) => `  ${command.name.padEnd(16)}${command.summary}`),
+    ...commands.map((command) => `  ${command.name.padEnd(column)}${command.summary}`),
   ].join("\n");
+};
+
+/**
+ * A lone `--help`/`-h`, and nothing else. Deliberately exact: `--help` among
+ * other arguments is an invocation the command itself has to judge, and
+ * answering it as help would let a real invocation be silently swallowed.
+ */
+const isHelpRequest = (args: readonly string[]): boolean =>
+  args.length === 1 && (args[0] === "--help" || args[0] === "-h");
 
 /**
  * THE WRAPPED COMMANDS, NAMED ONE BY ONE.
@@ -360,6 +392,20 @@ export async function runCliBoundary(
     return EXIT_USAGE;
   }
 
+  // HELP IS ANSWERED HERE, AND ONLY HERE. After the descriptor is resolved —
+  // so the answer is that command's own usage — and before config loading,
+  // wiring, the command observation, or the action. Answering it inside each
+  // command would put the answer after the config load the command class
+  // performs for it, which is how `gate --help`, `record --help` and
+  // `check --help` came to run the gate, the record and the preflight: those
+  // commands parse no arguments at all, so a help request reached their action
+  // unexamined. A read-only question is answered read-only, for every command
+  // in both classes, from one predicate.
+  if (isHelpRequest(args)) {
+    runtime.stdout(`${descriptor.usage}\n`);
+    return EXIT_OK;
+  }
+
   // CONFIG-FREE COMMANDS ARE DISPATCHED FIRST, before any config load. That
   // ordering is the whole point of the class: `emit` runs in a repository with
   // no `harness.config.ts`, and no other command's `config_unloadable` timing
@@ -368,11 +414,8 @@ export async function runCliBoundary(
     return runConfigFreeCommand(descriptor, args, runtime);
   }
 
-  // Prepare's help branch is discovery, not an executed preparation. Keep
-  // the exact help-only predicate aligned with the command's usage branch.
-  const prepareHelp = descriptor.name === "prepare" && args.length === 1 && ["--help", "-h"].includes(args[0]!);
   const startedAt = Date.now();
-  const observation = !prepareHelp && COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)
+  const observation = COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)
     ? await beginCommandObservation(runtime.cwd, descriptor.name) : undefined;
   let digest: string | undefined;
   const code = await runConfiguredCommand(descriptor, args, runtime, value => { digest = value; }, observation);

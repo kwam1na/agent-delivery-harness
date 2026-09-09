@@ -1074,6 +1074,72 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(after.at(-1)).toMatchObject({ kind: "command.completed", actor: { role: "cli" }, payload: { command: "prepare", outcome: "ok" } });
   });
 
+  /**
+   * THE SAME GUARANTEE, FOR THE COMMANDS THAT HAD NONE. `prepare` answered its
+   * help token; `gate`, `record`, `check` and `verify` parse no help token at
+   * all, so the boundary loaded config, opened an activity and ran the action
+   * while the operator was asking what the command does. Help is answered at
+   * the dispatch boundary now, which is why these invocations leave the journal
+   * byte-identical: no activity is opened, so there is no completion to write.
+   */
+  it.each(["gate", "record", "check", "verify", "review-context", "submit-evidence", "emit-review-evidence"])(
+    "answers %s --help without journaling an invocation or writing a record",
+    async (command) => {
+      const dir = await initRepo();
+      const runId = await startRun(dir);
+      const before = await journalOf(dir, runId);
+      for (const flag of ["--help", "-h"]) {
+        const help = await cli(dir, [command, flag]);
+        expect(help.code, `${command} ${flag}: ${help.err}`).toBe(EXIT_OK);
+        expect(help.out).toContain(`Usage: delivery-harness ${command}`);
+        expect(help.err).toBe("");
+        expect(await journalOf(dir, runId)).toEqual(before);
+      }
+      await expect(readFile(path.join(dir, "telemetry/delivery-runs/record.json"), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+    30_000,
+  );
+
+  /**
+   * The config-absent control. Without `harness.config.ts` the configured path
+   * cannot even load, so before this these four answered a help request with
+   * `config_unloadable` (or, worse, began the command). The shipped loader is
+   * the seam here — no `loadConfig` override — so an answer arriving at all
+   * proves it was answered ahead of loading.
+   */
+  it("answers help in a repository with no harness config at all", async () => {
+    const dir = await initRepo({ withConfig: false });
+    await writeFile(path.join(dir, "harness.config.ts"), "throw new Error('imported');\n", "utf8");
+    for (const command of ["gate", "record", "check", "verify"]) {
+      const help = await cli(dir, [command, "--help"], { loadConfig: undefined });
+      expect(help.code, `${command}: ${help.err}`).toBe(EXIT_OK);
+      expect(help.out).toContain(`Usage: delivery-harness ${command}`);
+      expect(help.err).not.toContain("config_unloadable");
+    }
+    // The deny side: the same repository still refuses the ordinary command.
+    expect((await cli(dir, ["check"], { loadConfig: undefined })).code).not.toBe(EXIT_OK);
+  });
+
+  /**
+   * A refused invocation is journaled truthfully — as a usage outcome, never as
+   * a completed action — and it performs none of the action it names.
+   */
+  it("journals a nonsense record flag as usage and records nothing", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    const refused = await cli(dir, ["record", "--bogus-flag"]);
+    expect(refused.code, refused.err).toBe(EXIT_USAGE);
+    await expect(readFile(path.join(dir, "telemetry/delivery-runs/record.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const completions = (await journalOf(dir, runId)).filter((event) => event.kind === "command.completed");
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ payload: { command: "record", outcome: "usage" } });
+    expect(completions[0]!.payload["digest"]).toBeUndefined();
+  }, 30_000);
+
   it("wraps only the commands on the completion allowlist", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);

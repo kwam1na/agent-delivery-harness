@@ -2,11 +2,14 @@ import { buildRunEvent } from "../run-surface.ts";
 import { installedRelease, policyDigest, recoveryBlocker, recoveryRun } from "../ordinary-context.ts";
 import type { CommandDescriptor } from "../boundary.ts";
 
+const USAGE = "Usage: delivery-harness save-context --json '{\"contract\":{\"objective\":\"...\",\"acceptanceCriteria\":[\"...\"],\"finishLine\":\"merge-ready\"},\"stage\":\"work\"}'";
+
 export const saveContextCommand: CommandDescriptor = {
   name: "save-context", sourceId: "delivery-harness.cli.save-context",
   summary: "Save a bounded delivery contract and stage observation in the current run.",
+  usage: USAGE,
   async run(context) {
-    if (context.args.length !== 2 || context.args[0] !== "--json") return { kind: "usage", message: "Usage: delivery-harness save-context --json '{\"contract\":{\"objective\":\"...\",\"acceptanceCriteria\":[\"...\"],\"finishLine\":\"merge-ready\"},\"stage\":\"work\"}'" };
+    if (context.args.length !== 2 || context.args[0] !== "--json") return { kind: "usage", message: USAGE };
     let input: { contract?: unknown; stage?: unknown };
     try {
       const value: unknown = JSON.parse(context.args[1]!);

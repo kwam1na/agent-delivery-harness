@@ -137,6 +137,7 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
   name: "emit",
   sourceId: "delivery-harness.cli.emit",
   summary: "Append one run event to the current delivery run's journal.",
+  usage: USAGE,
   configFree: true,
   async run(context: ConfigFreeCommandContext): Promise<CommandResult> {
     const parsed = parseArgs(context.args);

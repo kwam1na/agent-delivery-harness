@@ -22,13 +22,20 @@ import {
 import path from "node:path";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
+import { oneLine } from "../run-surface.ts";
 import { runProviderBackedAdmission } from "./gate.ts";
 
 export const recordCommand: CommandDescriptor = {
   name: "record",
   sourceId: "delivery-harness.cli.record",
   summary: "Write the tracked delivery record for an admitted gate.",
+  usage: "Usage: delivery-harness record\nTakes no arguments; run gate first if a waiver is needed.",
   async run(context: CommandContext): Promise<CommandResult> {
+    // Arguments before anything is wired, admitted, or written.
+    const unexpected = context.args[0];
+    if (unexpected !== undefined) {
+      return { kind: "usage", message: `record takes no arguments, and ${oneLine(unexpected, 64)} is one.\n${recordCommand.usage}` };
+    }
     const wiring = await context.wire();
 
     // The gate is run without a prompt: `record` is not the waiver surface. If a

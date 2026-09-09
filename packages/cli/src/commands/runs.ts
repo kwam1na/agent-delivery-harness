@@ -72,6 +72,7 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
   name: "runs",
   sourceId: "delivery-harness.cli.runs",
   summary: "List, show, and serve the delivery runs this repository has recorded.",
+  usage: USAGE,
   configFree: true,
   async run(context: ConfigFreeCommandContext): Promise<CommandResult> {
     const [subcommand, ...rest] = context.args;

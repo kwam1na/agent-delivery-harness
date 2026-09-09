@@ -2,11 +2,14 @@ import { classifyCandidateDrift, digestCanonical, evaluatePreparationReceipt, ru
 import { installedRelease, policyDigest, reconciliationActions, recoveryBlocker, recoveryRun } from "../ordinary-context.ts";
 import type { CommandDescriptor } from "../boundary.ts";
 
+const USAGE = "Usage: delivery-harness resume [--run <run-id>]";
+
 export const resumeCommand: CommandDescriptor = {
   name: "resume", sourceId: "delivery-harness.cli.resume",
   summary: "Read saved ordinary context and recheck evidence without executing or replaying work.",
+  usage: USAGE,
   async run(context) {
-    if (context.args.length !== 0 && (context.args.length !== 2 || context.args[0] !== "--run")) return { kind: "usage", message: "Usage: delivery-harness resume [--run <run-id>]" };
+    if (context.args.length !== 0 && (context.args.length !== 2 || context.args[0] !== "--run")) return { kind: "usage", message: USAGE };
     const run = await recoveryRun(context.rootDir, context.args[1]);
     if (!run.ok) return { kind: "blocked", blockers: [run.blocker] };
     const saved = [...run.events].reverse().find(event => event.kind === "context.saved");

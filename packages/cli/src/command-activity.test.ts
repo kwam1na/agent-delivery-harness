@@ -52,7 +52,7 @@ import type { GateDecision } from "@agent-delivery-harness/kernel";
 it.each(["success","failure","interrupt"])("observes the executing CLI boundary: %s",async(mode)=>{
  const s=await setup();
  execFileSync("git",["-c","user.name=Test","-c","user.email=test@example.com","commit","--allow-empty","-qm","fixture"],{cwd:s.root});
- const descriptor:CommandDescriptor={name:"check",sourceId:"test.command",summary:"fixture",run:async()=>{
+ const descriptor:CommandDescriptor={name:"check",sourceId:"test.command",summary:"fixture",usage:"Usage: delivery-harness fixture",run:async()=>{
    const events=await s.read();expect(events.at(-1)?.payload["state"]).toBe("running");
    if(mode==="interrupt")throw new CliInterruption();
    if(mode==="failure")throw Error("controlled failure");
@@ -86,7 +86,7 @@ it("keeps the invocation on its original run when the current pointer changes",a
 });
 it("does not change a boundary failure when its run journal disappears",async()=>{
  const s=await setup();execFileSync("git",["-c","user.name=Test","-c","user.email=test@example.com","commit","--allow-empty","-qm","fixture"],{cwd:s.root});
- const descriptor:CommandDescriptor={name:"check",sourceId:"test.command",summary:"fixture",run:async()=>{
+ const descriptor:CommandDescriptor={name:"check",sourceId:"test.command",summary:"fixture",usage:"Usage: delivery-harness fixture",run:async()=>{
    await rm(s.store.runsDir,{recursive:true,force:true});throw new CliInterruption();
  }};
  await expect(runCliBoundary(["check"],[descriptor],{cwd:s.root,env:{},stdinIsTTY:false,stdoutIsTTY:false,stdout:()=>{},stderr:()=>{},loadConfig:async()=>({...config,baseRef:"HEAD"})})).resolves.toBe(130);
@@ -105,7 +105,7 @@ it("connects a native CLI prompt to its observed wait without changing the answe
  execFileSync("git",["-c","user.name=Test","-c","user.email=test@example.com","commit","--allow-empty","-qm","fixture"],{cwd:s.root});
  const decision={candidate:{treeSha:"a".repeat(40)}} as GateDecision;
  let nativeCalls=0;
- const descriptor:CommandDescriptor={name:"gate",sourceId:"test.command",summary:"fixture",run:async(context)=>{
+ const descriptor:CommandDescriptor={name:"gate",sourceId:"test.command",summary:"fixture",usage:"Usage: delivery-harness fixture",run:async(context)=>{
    expect(context.promptForWaiver).toBeDefined();
    expect(await context.promptForWaiver!(decision,[])).toBe(false);
    return {kind:"ok"};
