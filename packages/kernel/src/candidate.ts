@@ -234,13 +234,23 @@ type ObservationResult = { readonly ok: true; readonly observation: Observation 
  * the git directory. Every entry is asked for by `--git-path` and answered by
  * whether the file or directory is there, which is how git itself decides —
  * `MERGE_HEAD` and its siblings are plain files, not refs that need resolving,
- * and one `rev-parse` can name all six paths at once.
+ * and one `rev-parse` can name all five paths at once.
  *
- * The two directories are not redundant with `REBASE_HEAD`. A rebase that
- * *conflicts* writes `REBASE_HEAD`; a rebase that merely *stops* — a failing
- * `--exec`, an `edit` or `break` instruction — writes none, leaves a clean
- * status and a perfectly writable index tree, and would otherwise capture as a
- * healthy candidate while the branch is half rewritten.
+ * A rebase is named by its directory — `rebase-merge` for the merge backend,
+ * `rebase-apply` for `--apply` — and by nothing else. The directory is present
+ * for the whole operation however it paused: conflicted, stopped by a failing
+ * `--exec`, or held at an `edit` or `break` instruction, the last two of which
+ * leave a clean status and a perfectly writable index tree and would otherwise
+ * capture as a healthy candidate while the branch is half rewritten.
+ *
+ * `REBASE_HEAD` is deliberately *not* in this list. It is a leftover, not a
+ * state: git writes it when a rebase stops on a commit and does not remove it
+ * when `--continue` concludes the rebase, so a worktree can carry the ref with
+ * no directory, a clean status, and `git rebase --abort` answering that there
+ * is no rebase in progress. Treating that ref as an operation refused exactly
+ * the candidates a conflicted base-movement rebase produces, with a remediation
+ * — conclude the rebase — that was already done. Anything genuinely in progress
+ * has a directory, so nothing is lost by reading only the directories.
  *
  * Order matters only for the message: the first match names the operation, and
  * a rebase implemented as a sequence of cherry-picks would otherwise be
@@ -249,7 +259,6 @@ type ObservationResult = { readonly ok: true; readonly observation: Observation 
 const IN_PROGRESS_STATES: readonly { readonly gitPath: string; readonly operation: string }[] = [
   { gitPath: "rebase-merge", operation: "rebase" },
   { gitPath: "rebase-apply", operation: "rebase" },
-  { gitPath: "REBASE_HEAD", operation: "rebase" },
   { gitPath: "MERGE_HEAD", operation: "merge" },
   { gitPath: "CHERRY_PICK_HEAD", operation: "cherry-pick" },
   { gitPath: "REVERT_HEAD", operation: "revert" },
