@@ -477,6 +477,42 @@ describe("the human runs listing", () => {
     expect(listed.code, listed.err).toBe(EXIT_OK);
     expect(listed.out).toContain(open);
     expect(listed.out).not.toContain(ended);
-    expect(listed.out).toContain("across 1 run(s)");
+    // "totals only what it selected" is this test's own name, and both halves of
+    // the total line make that claim. The BOUND axis is pinned above; this is the
+    // FILTER axis, and it is the only place either half of the line is separable
+    // from the filter — every other byte-pinned human listing in this file is
+    // unfiltered, where the selected rows are all the rows.
+    const rows = rowsOf(await listJson(dir));
+    const openBytes = rows.find((row) => row.runId === open)!.bytes;
+    const everyRunsBytes = rows.reduce((sum, row) => sum + row.bytes, 0);
+    expect(everyRunsBytes).toBeGreaterThan(openBytes);
+    expect(listed.out).toContain(`total ${openBytes} bytes across 1 run(s)`);
+  });
+
+  it("totals what the filter selected even when a bound also cuts the rows", async () => {
+    // The filter and the bound are separate axes, and a pin on either one alone
+    // is satisfied by a total that honours only that one. Here they are BOTH
+    // engaged and all three figures on screen differ: the shown row's bytes, the
+    // selected runs' bytes, and every run's bytes.
+    const dir = await initRepo();
+    const first = await startRun(dir);
+    const second = await startRun(dir, ["--force"]);
+    const ended = await startRun(dir, ["--force"]);
+    await finishExecutorOnly(dir, ended);
+    const openIds = [first, second].sort();
+
+    const rows = rowsOf(await listJson(dir));
+    const bytesOf = (id: string): number => rows.find((row) => row.runId === id)!.bytes;
+    const shownBytes = bytesOf(openIds[0]!);
+    const selectedBytes = bytesOf(first) + bytesOf(second);
+    const everyRunsBytes = rows.reduce((sum, row) => sum + row.bytes, 0);
+    expect(selectedBytes).toBeGreaterThan(shownBytes);
+    expect(everyRunsBytes).toBeGreaterThan(selectedBytes);
+
+    const listed = await cli(dir, ["runs", "list", "--open", "--limit", "1"]);
+    expect(listed.code, listed.err).toBe(EXIT_OK);
+    expect(listed.out).toContain(`total ${selectedBytes} bytes across 2 run(s)`);
+    // The bound's own line counts the selected runs as its denominator too.
+    expect(listed.out).toContain("showing 1 of 2 run(s) (--limit 1)");
   });
 });
