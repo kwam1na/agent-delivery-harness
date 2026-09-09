@@ -14,6 +14,7 @@
  * observation being provoked is synthetic.
  */
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -89,6 +90,16 @@ async function write(repo: string, repoPath: string, contents: string): Promise<
   const absolute = path.join(repo, repoPath);
   await mkdir(path.dirname(absolute), { recursive: true });
   await writeFile(absolute, contents, "utf8");
+}
+
+/**
+ * Whether git's own answer for `--git-path <name>` exists — the same question
+ * capture asks, asked the same way, so a fixture's claim about what git left
+ * behind is git's claim rather than an assumption about `.git/` layout.
+ */
+async function gitPathExists(repo: string, gitPath: string): Promise<boolean> {
+  const resolved = await drive(repo, ["rev-parse", "--git-path", gitPath]);
+  return existsSync(path.resolve(repo, resolved));
 }
 
 function lines(count: number, prefix = "line"): string {
@@ -373,6 +384,35 @@ describe("candidate capture", () => {
     }
   });
 
+  it("captures a worktree whose only rebase leftover is a stale REBASE_HEAD", async () => {
+    const { work } = await preparedFixture();
+    await drive(work, ["checkout", "--quiet", "-b", "side"]);
+    await write(work, "src/app.ts", lines(10, "side"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "side"]);
+    await drive(work, ["checkout", "--quiet", "main"]);
+    await write(work, "src/app.ts", lines(10, "trunk"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "trunk"]);
+    // Conflict, resolve by hand, conclude. This is the shape a delivery lands
+    // in whenever a base move rebases a candidate over a conflicting change.
+    await drive(work, ["rebase", "side"]).catch(() => undefined);
+    await write(work, "src/app.ts", lines(10, "resolved"));
+    await drive(work, ["add", "--all"]);
+    await drive(work, ["-c", "core.editor=true", "rebase", "--continue"]);
+
+    // Git concluded the rebase and still left the ref: no directory, a clean
+    // status, and `git rebase --abort` reporting there is nothing to abort.
+    expect(await gitPathExists(work, "rebase-merge")).toBe(false);
+    expect(await gitPathExists(work, "rebase-apply")).toBe(false);
+    expect(await gitPathExists(work, "REBASE_HEAD")).toBe(true);
+    expect(await drive(work, ["status", "--porcelain"])).toBe("");
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.candidate.mode).toBe("clean");
+    expect(result.candidate.headSha).toBe(await drive(work, ["rev-parse", "HEAD"]));
+  });
+
   it("exposes the whole-candidate port as a bound thunk", async () => {
     const { work } = await preparedFixture();
     const capture = createCandidateCapture(captureOptions(work));
@@ -456,6 +496,31 @@ describe("candidate capture refuses unprepared workspaces", () => {
     await write(work, "src/app.ts", lines(10, "trunk"));
     await drive(work, ["commit", "--no-gpg-sign", "-am", "trunk"]);
     await drive(work, ["rebase", "side"]).catch(() => undefined);
+    // The directory is the signal being asserted on: a rebase git is really
+    // part-way through always has one, and it is what must keep this refusing.
+    expect(await gitPathExists(work, "rebase-merge")).toBe(true);
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_merge_in_progress");
+    expect(result.blockers[0].summary).toContain("rebase");
+  });
+
+  it("refuses a conflicted rebase run on the `--apply` backend", async () => {
+    const { work } = await preparedFixture();
+    await drive(work, ["checkout", "--quiet", "-b", "side"]);
+    await write(work, "src/app.ts", lines(10, "side"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "side"]);
+    await drive(work, ["checkout", "--quiet", "main"]);
+    await write(work, "src/app.ts", lines(10, "trunk"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "trunk"]);
+    // The other backend writes the other directory, and it is the only signal
+    // left for this rebase: `REBASE_HEAD`, which git also writes here, is no
+    // longer read at all.
+    await drive(work, ["rebase", "--apply", "side"]).catch(() => undefined);
+    expect(await gitPathExists(work, "rebase-apply")).toBe(true);
+    expect(await gitPathExists(work, "rebase-merge")).toBe(false);
 
     const result = await captureGitCandidate(captureOptions(work));
     expect(result.ok).toBe(false);
