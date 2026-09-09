@@ -39,13 +39,16 @@ export function rejectionDetails(rejections: readonly { readonly code: string; r
  * operator has to reason about. It is also stable across processes and hosts,
  * which a random id is not.
  */
-export function ordinaryEventWriter(version: RunEventVersion, kind: string, payload: unknown): {
+export function ordinaryEventWriter(version: RunEventVersion, kind: "context.saved", payload: unknown): {
   readonly version: RunEventVersion;
   readonly eventId?: string;
 } {
   if (version !== "run-event/2") return { version };
-  // The kind prefix scopes the id, so two kinds cannot collide on one digest,
-  // and the whole id stays inside the store's 128-character run-id charset.
+  // `kind` is narrowed to the one kind this writer serves, so the prefix is a
+  // constant that keeps the id readable and inside the store's 128-character
+  // run-id charset. It is deliberately not a general scoping claim: dots are
+  // folded to hyphens, which is not injective over arbitrary kinds, so a
+  // second kind must not be added here without an injective encoding.
   return { version, eventId: `${kind.replaceAll(".", "-")}-${digestCanonical(payload)}` };
 }
 

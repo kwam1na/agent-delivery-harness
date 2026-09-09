@@ -214,18 +214,42 @@ describe("the writer version a save-context observation is written at", () => {
     expect(await f.journal()).toEqual(before);
   });
 
-  it.each(["1", "2"] as const)("reports an omitted contract on a v%s run as the missing member it is", async version => {
-    const f = await fixture({ version });
+  // Both operator members are spread conditionally, so both are asked at both
+  // writer versions: a fix proven only for contract leaves stage unfalsified.
+  it.each([["1", "contract"], ["2", "contract"], ["1", "stage"], ["2", "stage"]] as const)(
+    "reports an omission on a v%s run as the missing member it is: %s", async (version, omitted) => {
+      const f = await fixture({ version });
+      expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+      const before = await f.journal();
+      // An omitted member must never reach the writer as a present undefined:
+      // deriving a v2 retry key over one is a crash, not a typed refusal.
+      const supplied = omitted === "contract" ? { stage: "work" } : { contract };
+      expect(await f.run("save-context", "--json", JSON.stringify(supplied))).toBe(1);
+      const reported = f.errors.join("\n");
+      expect(reported).toContain("resume_context_invalid");
+      expect(reported).toContain("missing_member");
+      expect(reported).toContain(`/payload/${omitted}`);
+      expect(reported).not.toContain("internal_error");
+      expect(await f.journal()).toEqual(before);
+    }, 30000);
+
+  it("saves the same contract and stage again as a new v2 observation once the candidate has changed", async () => {
+    const f = await fixture({ version: "2" });
     expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
-    const before = await f.journal();
-    // An omitted member must never reach the writer as a present undefined:
-    // deriving a v2 retry key over one is a crash, not a typed refusal.
-    expect(await f.run("save-context", "--json", JSON.stringify({ stage: "work" }))).toBe(1);
-    const reported = f.errors.join("\n");
-    expect(reported).toContain("resume_context_invalid");
-    expect(reported).toContain("missing_member");
-    expect(reported).toContain("/payload/contract");
-    expect(reported).not.toContain("internal_error");
-    expect(await f.journal()).toEqual(before);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // A committed source change is a different candidate, so the same two
+    // operator members describe a different observation. The retry key is
+    // derived from the whole payload — the candidate identity, its binding,
+    // the policy digest and the release included — so this save is a new id
+    // and a second entry, not a refusal at /eventId.
+    await writeFile(path.join(f.dir, "source.ts"), "export const value = 2;\n");
+    await f.git("add", ".");
+    await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "change the candidate");
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
   }, 30000);
 });
