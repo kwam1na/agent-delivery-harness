@@ -25,7 +25,7 @@ function contextsSaved(events: readonly RunEvent[]) {
   return events.filter(event => event.kind === "context.saved")
     .map(event => ({ eventId: event.eventId, payload: event.payload as {
       readonly contract?: unknown; readonly stage?: unknown;
-      readonly candidateTreeSha: string; readonly candidateBinding: unknown;
+      readonly candidateTreeSha: string; readonly candidateBinding: Record<string, string>;
       readonly policyDigest: string; readonly release: unknown;
     } }));
 }
@@ -259,8 +259,8 @@ describe("the writer version a save-context observation is written at", () => {
     // policy the save reports it was judged under. Each must produce a new id
     // and a new entry rather than a refusal at /eventId. The candidate moves
     // as tree and binding together here, which is what an operator committing
-    // work does; the two rows below separate the halves, and the release
-    // identity is the one remaining term this fixture cannot move on its own.
+    // work does; the rows below separate the halves, move the merge base alone,
+    // and move the installed release alone.
     await writeFile(path.join(f.dir, "source.ts"), "export const value = 2;\n");
     await f.git("add", ".");
     await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "change the candidate");
@@ -316,8 +316,13 @@ describe("the writer version a save-context observation is written at", () => {
     const saved = contextsSaved(await f.journal());
     expect(saved).toHaveLength(2);
     expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    const binding = saved.map(event => event.payload.candidateBinding);
     expect(saved[0]!.payload.candidateTreeSha).toBe(saved[1]!.payload.candidateTreeSha);
-    expect(saved[0]!.payload.candidateBinding).not.toEqual(saved[1]!.payload.candidateBinding);
+    // Named rather than left as an inequality over the whole binding: a general
+    // assertion over six members is satisfied by whichever one happens to move.
+    expect(binding[0]!["baseTipSha"]).not.toBe(binding[1]!["baseTipSha"]);
+    expect(binding[0]!["deliverableDigest"]).toBe(binding[1]!["deliverableDigest"]);
+    expect(binding[0]!["mergeBaseSha"]).toBe(binding[1]!["mergeBaseSha"]);
   }, 30000);
 
   it("saves again as a new v2 observation when only the review-neutral part of the candidate tree has moved", async () => {
@@ -340,5 +345,61 @@ describe("the writer version a save-context observation is written at", () => {
     expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
     expect(saved[0]!.payload.candidateTreeSha).not.toBe(saved[1]!.payload.candidateTreeSha);
     expect(saved[0]!.payload.candidateBinding).toEqual(saved[1]!.payload.candidateBinding);
+  }, 30000);
+
+  it("saves again as a new v2 observation when only the merge base the candidate is replayed from has moved", async () => {
+    const f = await fixture({ version: "2" });
+    const tree = await f.git("rev-parse", "HEAD^{tree}");
+    const upstream = await f.git("commit-tree", tree, "-p", "origin/main", "-m", "unrelated upstream commit");
+    await f.git("update-ref", "refs/heads/origin/main", upstream);
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // A forced rebase replays the candidate onto the advanced base: the tree
+    // and the base tip are where they were, and only the merge base moves. It
+    // is this repository's most ordinary mid-delivery movement, and the row
+    // above cannot reach it — advancing the base past HEAD leaves the merge
+    // base at HEAD.
+    const replayed = await f.git("commit-tree", tree, "-p", upstream, "-m", "replayed onto the advanced base");
+    await f.git("reset", "--hard", "-q", replayed);
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const saved = contextsSaved(await f.journal());
+    const binding = saved.map(event => event.payload.candidateBinding);
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    expect(saved[0]!.payload.candidateTreeSha).toBe(saved[1]!.payload.candidateTreeSha);
+    expect(binding[0]!["baseTipSha"]).toBe(binding[1]!["baseTipSha"]);
+    expect(binding[0]!["deliverableDigest"]).toBe(binding[1]!["deliverableDigest"]);
+    expect(saved[0]!.payload.policyDigest).toBe(saved[1]!.payload.policyDigest);
+    expect(binding[0]!["mergeBaseSha"]).not.toBe(binding[1]!["mergeBaseSha"]);
+  }, 30000);
+
+  it("saves again as a new v2 observation when only the installed release has changed", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // The installed release is read from the worktree, not from the candidate
+    // tree, so a harness upgrade that rewrites it in a workspace which does not
+    // track that path moves `release` alone: the candidate stays clean and
+    // captures identically. All three of its operator-visible members are moved
+    // in turn, so none of them rides on another.
+    await f.git("update-index", "--assume-unchanged", ".agent-skills/active.json");
+    const install = async (release: Record<string, string>) => {
+      await writeFile(path.join(f.dir, ".agent-skills/active.json"), JSON.stringify({ release }));
+      expect(await f.git("status", "--porcelain")).toBe("");
+      expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+      expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    };
+    await install({ releaseId: "next", profile: "linear", archiveSha256: "a".repeat(64) });
+    await install({ releaseId: "next", profile: "github", archiveSha256: "a".repeat(64) });
+    await install({ releaseId: "next", profile: "github", archiveSha256: "b".repeat(64) });
+    const saved = contextsSaved(await f.journal());
+    expect(saved).toHaveLength(4);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(4);
+    expect(new Set(saved.map(event => event.payload.candidateTreeSha)).size).toBe(1);
+    expect(new Set(saved.map(event => JSON.stringify(event.payload.candidateBinding))).size).toBe(1);
+    expect(new Set(saved.map(event => event.payload.policyDigest)).size).toBe(1);
   }, 30000);
 });
