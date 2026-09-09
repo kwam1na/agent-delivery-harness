@@ -270,10 +270,18 @@ async function startRun(dir: string, extra: readonly string[] = []): Promise<str
  * two CLI completions, with `gate.reported` in its ordered place: Athena's
  * finished state, and the one status the config-presence note attaches to.
  */
-async function executorOnlyRun(dir: string, rationale = "the shipped pair"): Promise<string> {
+async function executorOnlyRun(
+  dir: string,
+  rationale = "the shipped pair",
+  // The ticket and the reported result are parameters so two such runs can be
+  // served side by side and still be told apart in the run list.
+  identity: { readonly ticket?: string; readonly result?: string } = {},
+): Promise<string> {
+  const ticket = identity.ticket ?? "V26-1549";
+  const result = identity.result ?? "complete";
   const runId = await startRun(dir);
   const steps: readonly (readonly [string, unknown])[] = [
-    ["ticket.read", { ticket: "V26-1549", tracker: "linear" }],
+    ["ticket.read", { ticket, tracker: "linear" }],
     ["posture.declared", { posture: "test-first" }],
     [
       "lens.selected",
@@ -292,7 +300,7 @@ async function executorOnlyRun(dir: string, rationale = "the shipped pair"): Pro
     ],
     ["gate.reported", { command: "npm run check", outcome: "pass", durationMs: 5 }],
     ["pr.opened", { url: "https://example.invalid/pr/1", candidateTreeSha: TREE_SHA }],
-    ["run.ended", { result: "complete", cost: { unit: "usd", total: 0, reportedBy: "vitest" } }],
+    ["run.ended", { result, cost: { unit: "usd", total: 0, reportedBy: "vitest" } }],
   ];
   for (const [kind, payload] of steps) {
     const result = await emit(dir, [kind], payload);
@@ -1533,6 +1541,7 @@ interface ServedState {
     readonly open: boolean;
     readonly live: boolean;
     readonly readable: boolean;
+    readonly lastAt: string;
     readonly durationSeconds: number;
     readonly rounds: { readonly opened: number; readonly closed: number };
     readonly gate?: { readonly outcome: string; readonly writer: string };
@@ -2042,6 +2051,23 @@ describe("runs serve", () => {
     const finishedRunId = await executorOnlyRun(finished);
     const barelyStarted = await initRepo();
     const barelyStartedRunId = await startRun(barelyStarted);
+    // A THIRD repository, carrying a journal shaped like `finished`'s. It exists for two
+    // directions one open run and one ended run cannot answer:
+    //   - the run list splits into an open and an ended section and maps each
+    //     separately, so with one run per section a cell bound to that section
+    //     slice's own first (or last) element IS the run itself. Two ended runs
+    //     in different repositories make the slice-local read answerable.
+    //   - the per-run readout root is looked up per served repository, so with
+    //     two repositories the noted run is always either the first or the
+    //     last one. Served second of three, it is neither.
+    // Its ticket and its reported result differ from `finished`'s so the two
+    // ended cards are distinguishable in every cell that carries a claim, not
+    // only in the repository this delivery is about.
+    const alsoFinished = await initRepo();
+    const alsoFinishedRunId = await executorOnlyRun(alsoFinished, "the shipped pair", {
+      ticket: "V26-1801",
+      result: "partial",
+    });
     // One refused append, against the barely-started run alone. Notes are the
     // fourth per-run block, and with NEITHER run carrying one the block is
     // empty under both headings — which is exactly what a notes table read off
@@ -2050,16 +2076,19 @@ describe("runs serve", () => {
     const refused = await emit(barelyStarted, ["not.a.kind"], { anything: true });
     expect(refused.code, refused.err).toBe(EXIT_POLICY);
 
-    // `barelyStarted` is served FIRST deliberately. The config-presence note
-    // below is carried by `finished` alone, so a readout handed a fixed
-    // repository root instead of its own run's is answerable only in the
-    // direction where that fixed root is not the noted run's. Serving the
-    // noted run second makes the direction this delivery is about — the block
-    // reading the page's FIRST entry — the falsifiable one.
-    const server = await serve([barelyStarted, finished]);
+    // `finished` is served in the MIDDLE deliberately. The config-presence note
+    // below names the repository root of the run that carries it, and that root
+    // is looked up per served repository; a readout handed a fixed repository
+    // instead of its own run's is answerable only where the fixed one is not
+    // the noted run's. Served neither first nor last, the noted run makes both
+    // fixed directions — the first served repository and the last — falsifiable.
+    const server = await serve([barelyStarted, finished, alsoFinished]);
     const { page, state } = await pageAndState(server);
-    expect([...state.runs].map((run) => run.runId).sort()).toEqual([finishedRunId, barelyStartedRunId].sort());
+    expect([...state.runs].map((run) => run.runId).sort()).toEqual(
+      [finishedRunId, barelyStartedRunId, alsoFinishedRunId].sort(),
+    );
     expect(runOf(state, finishedRunId).readout.status).toBe("complete-executor-only");
+    expect(runOf(state, alsoFinishedRunId).readout.status).toBe("complete-executor-only");
     expect(runOf(state, barelyStartedRunId).readout.status).toBe("incomplete");
 
     // Each heading is followed by ITS run's completeness, not the page's first.
@@ -2123,25 +2152,66 @@ describe("runs serve", () => {
     // directions: binding the cell to `state.runs[0]` and to
     // `state.runs.at(-1)` are each RED here.
     //
-    // The first-run read this answers is over the whole served set, not over
-    // one section's slice. `runsTable` splits the runs into an open and an
-    // ended section and maps each separately, and these two runs land one in
-    // each, so a cell bound to that local slice's first element is the run
-    // itself and mutating it changes nothing. Answering that one needs two runs
-    // in one section, which this row does not have and does not claim.
+    // Both reads are answered here, because `runsTable` splits the runs into an
+    // open and an ended section and maps each separately. `barelyStarted` is
+    // the open section; `finished` and `alsoFinished` are two cards in the
+    // ended one, in repositories whose basenames differ. So a cell bound to the
+    // whole served set's first (or last) run is RED, and so is a cell bound to
+    // its own section slice's first (or last) — the direction that stays an
+    // equivalent mutant while a section holds a single card.
+    //
+    // Each card is bounded by its own closing `</article>` as well as the next
+    // card's anchor, so the LAST card on the page is a card and not the rest of
+    // the document.
     const cardOf = (runId: string): string => {
       const anchor = `data-key="${escapeHtml(runOf(state, runId).href ?? runId)}"`;
       const after = page.slice(page.indexOf(anchor) + anchor.length);
-      const next = after.indexOf('data-key="');
-      return next === -1 ? after : after.slice(0, next);
+      const end = [after.indexOf('data-key="'), after.indexOf("</article>")].filter((at) => at !== -1);
+      return end.length === 0 ? after : after.slice(0, Math.min(...end));
     };
     const basenameOf = (dir: string): string =>
       escapeHtml(realpathSync(dir).split("/").filter(Boolean).at(-1) ?? "");
-    // The denial is only worth making because the two roots differ here.
-    expect(basenameOf(finished)).not.toBe(basenameOf(barelyStarted));
+    // The denials are only worth making because all three roots differ here.
+    expect(new Set([basenameOf(finished), basenameOf(barelyStarted), basenameOf(alsoFinished)]).size).toBe(3);
     expect(cardOf(finishedRunId)).toContain(`<p class="meta">${basenameOf(finished)}</p>`);
     expect(cardOf(barelyStartedRunId)).toContain(`<p class="meta">${basenameOf(barelyStarted)}</p>`);
     expect(cardOf(barelyStartedRunId)).not.toContain(`<p class="meta">${basenameOf(finished)}</p>`);
+    // The two ended cards, which share a section: whichever of them a slice-local
+    // read picks, the other card names the wrong repository.
+    expect(cardOf(alsoFinishedRunId)).toContain(`<p class="meta">${basenameOf(alsoFinished)}</p>`);
+    expect(cardOf(alsoFinishedRunId)).not.toContain(`<p class="meta">${basenameOf(finished)}</p>`);
+    expect(cardOf(finishedRunId)).not.toContain(`<p class="meta">${basenameOf(alsoFinished)}</p>`);
+
+    // The card's other cells, bound the same way. The ticket and the status
+    // differ between all three runs — including between the two that share the
+    // ended section — so both the set-wide and the section-local reads of them
+    // are answerable here too.
+    expect(cardOf(finishedRunId)).toContain(">V26-1549</a>");
+    expect(cardOf(alsoFinishedRunId)).toContain(">V26-1801</a>");
+    expect(cardOf(barelyStartedRunId)).toContain(`>${barelyStartedRunId}</a>`);
+    expect(cardOf(barelyStartedRunId)).not.toContain(">V26-1549</a>");
+    expect(cardOf(alsoFinishedRunId)).not.toContain(">V26-1549</a>");
+    expect(cardOf(finishedRunId)).not.toContain(">V26-1801</a>");
+    expect(cardOf(finishedRunId)).toContain('<span class="status">Reported complete</span>');
+    expect(cardOf(alsoFinishedRunId)).toContain('<span class="status">Reported partial</span>');
+    expect(cardOf(barelyStartedRunId)).toContain('<span class="status">Open</span>');
+    expect(cardOf(barelyStartedRunId)).not.toContain("Reported complete");
+    expect(cardOf(alsoFinishedRunId)).not.toContain("Reported complete");
+    expect(cardOf(finishedRunId)).not.toContain("Reported partial");
+    // Each card's own last-reported stamp, which also denies the literal the
+    // empty case renders. It does NOT separate one card's stamp from another's:
+    // these journals are written milliseconds apart and the stamp is spelled to
+    // the second, so a cell handed the page's first stamp usually prints the
+    // same text. That direction belongs to V26-1841 with the caption below.
+    expect(cardOf(finishedRunId)).toContain(`Last reported ${runOf(state, finishedRunId).lastAt}`);
+    expect(cardOf(barelyStartedRunId)).toContain(`Last reported ${runOf(state, barelyStartedRunId).lastAt}`);
+    expect(cardOf(barelyStartedRunId)).not.toContain("Last reported unknown");
+    // The rounds caption stays unbound in the same way: every served journal
+    // here closes every round it opens, so `closed of opened` and
+    // `opened of closed` render the same page. Distinguishing them needs a run
+    // with a round left open, which this row does not have — V26-1841 carries it.
+    expect(cardOf(finishedRunId)).toContain("1 of 1 review rounds closed");
+    expect(cardOf(barelyStartedRunId)).toContain("0 of 0 review rounds closed");
   });
 
   it("distinguishes a round that was never opened, exactly as runs show does", async () => {
