@@ -1,8 +1,3 @@
-// packages/cli/src/main.ts
-import { realpathSync } from "node:fs";
-import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
-
 // packages/cli/src/commands/check.ts
 import path2 from "node:path";
 import { resolveRecordStorage, BlockedError } from "./kernel.mjs";
@@ -1744,11 +1739,16 @@ import path8 from "node:path";
 import { createHash, randomUUID as randomUUID4 } from "node:crypto";
 import { execFile as execFile3 } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { chmod, lstat, mkdir, open, readFile as readFile3, readdir as readdir2, rename, rm, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile as readFile3, readdir as readdir2, rename, unlink } from "node:fs/promises";
 import path7 from "node:path";
 import { promisify } from "node:util";
-import { setTimeout as delay } from "node:timers/promises";
-import { deriveDeliveryRecordPath, resolveRecordStorage as resolveRecordStorage3, sha256Hex as sha256Hex3 } from "./kernel.mjs";
+import {
+  ProcessLockRefused,
+  deriveDeliveryRecordPath,
+  resolveRecordStorage as resolveRecordStorage3,
+  sha256Hex as sha256Hex3,
+  withProcessLock
+} from "./kernel.mjs";
 var execFileAsync = promisify(execFile3);
 var SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 var DIGEST = /^[a-f0-9]{64}$/;
@@ -1852,19 +1852,6 @@ async function gitCarriesExactRecord(rootDir, entry) {
     return false;
   }
 }
-async function acquireLock(lockPath) {
-  const deadline = Date.now() + 5e3;
-  while (Date.now() < deadline) {
-    try {
-      await mkdir(lockPath, { mode: 448 });
-      return true;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      await delay(25);
-    }
-  }
-  return false;
-}
 async function applyDeliveryRecordRetention(input) {
   if (!SCOPE.test(input.scope)) return failure("retention_scope_invalid", "retention scope must be a plain 1-128 character key");
   if (!Number.isSafeInteger(input.keepSuperseded) || input.keepSuperseded < 0 || input.keepSuperseded > 100) {
@@ -1877,116 +1864,120 @@ async function applyDeliveryRecordRetention(input) {
   const ledgerPath = path7.join(storage.storageDir, `${scopeDigest(input.scope)}.json`);
   const lockPath = path7.join(storage.storageDir, ".ownership.lock");
   await mkdir(storage.storageDir, { recursive: true, mode: 448 });
-  if (!await acquireLock(lockPath)) return failure("retention_lock_unavailable", `retention scope ${input.scope} is already being updated`);
   try {
-    const loaded = await readLedgers(storage.storageDir);
-    if (!loaded.ok) return loaded;
-    const existing = loaded.ledgers.get(input.scope);
-    if (existing !== void 0 && existing.recordBasePath !== input.recordBasePath) {
-      return failure("retention_ledger_invalid", `retention scope ${input.scope} was created for a different delivery record path`);
-    }
-    let ledger = existing ?? {
-      version: LEDGER_VERSION,
-      scope: input.scope,
-      recordBasePath: input.recordBasePath,
-      owned: [],
-      pendingPrune: []
-    };
-    const currentSha = sha256Hex3(input.current.bytes);
-    const currentReceipt = {
-      relativePath: input.current.relativePath,
-      deliverableDigest: input.current.deliverableDigest,
-      sha256: currentSha
-    };
-    const returningCurrent = ledger.pendingPrune.find((entry) => entry.relativePath === currentReceipt.relativePath);
-    if (returningCurrent !== void 0) {
-      if (returningCurrent.sha256 !== currentReceipt.sha256 || returningCurrent.deliverableDigest !== currentReceipt.deliverableDigest) {
-        return failure("retention_owned_record_changed", `${currentReceipt.relativePath} conflicts with its pending ownership receipt`);
+    return await withProcessLock(lockPath, 5e3, async () => {
+      const loaded = await readLedgers(storage.storageDir);
+      if (!loaded.ok) return loaded;
+      const existing = loaded.ledgers.get(input.scope);
+      if (existing !== void 0 && existing.recordBasePath !== input.recordBasePath) {
+        return failure("retention_ledger_invalid", `retention scope ${input.scope} was created for a different delivery record path`);
       }
-      ledger = {
-        ...ledger,
-        owned: [...ledger.owned, returningCurrent],
-        pendingPrune: ledger.pendingPrune.filter((entry) => entry.relativePath !== currentReceipt.relativePath)
+      let ledger = existing ?? {
+        version: LEDGER_VERSION,
+        scope: input.scope,
+        recordBasePath: input.recordBasePath,
+        owned: [],
+        pendingPrune: []
       };
-      await writeLedger(ledgerPath, ledger);
-    }
-    for (const pending of ledger.pendingPrune) {
-      const absolute = path7.join(input.rootDir, pending.relativePath);
-      const present = await lstat(absolute).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error));
-      if (present) {
-        const verified = await verifyWorkingRecord(input.rootDir, pending);
+      const currentSha = sha256Hex3(input.current.bytes);
+      const currentReceipt = {
+        relativePath: input.current.relativePath,
+        deliverableDigest: input.current.deliverableDigest,
+        sha256: currentSha
+      };
+      const returningCurrent = ledger.pendingPrune.find((entry) => entry.relativePath === currentReceipt.relativePath);
+      if (returningCurrent !== void 0) {
+        if (returningCurrent.sha256 !== currentReceipt.sha256 || returningCurrent.deliverableDigest !== currentReceipt.deliverableDigest) {
+          return failure("retention_owned_record_changed", `${currentReceipt.relativePath} conflicts with its pending ownership receipt`);
+        }
+        ledger = {
+          ...ledger,
+          owned: [...ledger.owned, returningCurrent],
+          pendingPrune: ledger.pendingPrune.filter((entry) => entry.relativePath !== currentReceipt.relativePath)
+        };
+        await writeLedger(ledgerPath, ledger);
+      }
+      for (const pending of ledger.pendingPrune) {
+        const absolute = path7.join(input.rootDir, pending.relativePath);
+        const present = await lstat(absolute).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error));
+        if (present) {
+          const verified = await verifyWorkingRecord(input.rootDir, pending);
+          if (!verified.ok) return verified;
+          if (!await gitCarriesExactRecord(input.rootDir, pending)) {
+            return failure("retention_history_missing", `${pending.relativePath} is not preserved byte-for-byte at HEAD`);
+          }
+          try {
+            await unlink(absolute);
+          } catch (error) {
+            return failure("retention_cleanup_failed", `could not remove ${pending.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
+      if (ledger.pendingPrune.length > 0) {
+        ledger = { ...ledger, pendingPrune: [] };
+        await writeLedger(ledgerPath, ledger);
+      }
+      const currentIndex = ledger.owned.findIndex((entry) => entry.relativePath === currentReceipt.relativePath);
+      if (currentIndex >= 0 && (ledger.owned[currentIndex].sha256 !== currentSha || ledger.owned[currentIndex].deliverableDigest !== currentReceipt.deliverableDigest)) {
+        return failure("retention_owned_record_changed", `${currentReceipt.relativePath} conflicts with its ownership receipt`);
+      }
+      for (const other of loaded.ledgers.values()) {
+        if (other.scope !== input.scope && [...other.owned, ...other.pendingPrune].some((entry) => entry.relativePath === currentReceipt.relativePath)) {
+          return failure("retention_ownership_ambiguous", `${currentReceipt.relativePath} belongs to retention scope ${other.scope}`);
+        }
+      }
+      const currentStats = await lstat(path7.join(input.rootDir, currentReceipt.relativePath)).catch((error) => error.code === "ENOENT" ? void 0 : Promise.reject(error));
+      if (currentIndex < 0 && currentStats !== void 0) {
+        return failure("retention_path_unowned", `${currentReceipt.relativePath} existed before retention scope ${input.scope} owned it`);
+      }
+      for (const entry of ledger.owned) {
+        if (entry.relativePath === currentReceipt.relativePath && currentStats === void 0) continue;
+        const verified = await verifyWorkingRecord(input.rootDir, entry);
         if (!verified.ok) return verified;
-        if (!await gitCarriesExactRecord(input.rootDir, pending)) {
-          return failure("retention_history_missing", `${pending.relativePath} is not preserved byte-for-byte at HEAD`);
-        }
-        try {
-          await unlink(absolute);
-        } catch (error) {
-          return failure("retention_cleanup_failed", `could not remove ${pending.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
-        }
       }
-    }
-    if (ledger.pendingPrune.length > 0) {
-      ledger = { ...ledger, pendingPrune: [] };
-      await writeLedger(ledgerPath, ledger);
-    }
-    const currentIndex = ledger.owned.findIndex((entry) => entry.relativePath === currentReceipt.relativePath);
-    if (currentIndex >= 0 && (ledger.owned[currentIndex].sha256 !== currentSha || ledger.owned[currentIndex].deliverableDigest !== currentReceipt.deliverableDigest)) {
-      return failure("retention_owned_record_changed", `${currentReceipt.relativePath} conflicts with its ownership receipt`);
-    }
-    for (const other of loaded.ledgers.values()) {
-      if (other.scope !== input.scope && [...other.owned, ...other.pendingPrune].some((entry) => entry.relativePath === currentReceipt.relativePath)) {
-        return failure("retention_ownership_ambiguous", `${currentReceipt.relativePath} belongs to retention scope ${other.scope}`);
-      }
-    }
-    const currentStats = await lstat(path7.join(input.rootDir, currentReceipt.relativePath)).catch((error) => error.code === "ENOENT" ? void 0 : Promise.reject(error));
-    if (currentIndex < 0 && currentStats !== void 0) {
-      return failure("retention_path_unowned", `${currentReceipt.relativePath} existed before retention scope ${input.scope} owned it`);
-    }
-    for (const entry of ledger.owned) {
-      if (entry.relativePath === currentReceipt.relativePath && currentStats === void 0) continue;
-      const verified = await verifyWorkingRecord(input.rootDir, entry);
-      if (!verified.ok) return verified;
-    }
-    const ordered = [
-      ...ledger.owned.filter((entry) => entry.relativePath !== currentReceipt.relativePath),
-      currentReceipt
-    ];
-    const retainCount = input.keepSuperseded + 1;
-    const pendingPrune = ordered.slice(0, Math.max(0, ordered.length - retainCount));
-    for (const entry of pendingPrune) {
-      if (!await gitCarriesExactRecord(input.rootDir, entry)) {
-        return failure("retention_history_missing", `${entry.relativePath} is not preserved byte-for-byte at HEAD`);
-      }
-    }
-    ledger = { ...ledger, owned: ordered, pendingPrune: [] };
-    await writeLedger(ledgerPath, ledger);
-    if (currentStats === void 0) {
-      try {
-        await input.writeCurrent();
-      } catch (error) {
-        return failure("retention_write_failed", error instanceof Error ? error.message : String(error));
-      }
-    }
-    const verifiedCurrent = await verifyWorkingRecord(input.rootDir, currentReceipt);
-    if (!verifiedCurrent.ok) return verifiedCurrent;
-    if (pendingPrune.length > 0) {
-      const kept = ordered.slice(pendingPrune.length);
-      ledger = { ...ledger, owned: kept, pendingPrune };
-      await writeLedger(ledgerPath, ledger);
+      const ordered = [
+        ...ledger.owned.filter((entry) => entry.relativePath !== currentReceipt.relativePath),
+        currentReceipt
+      ];
+      const retainCount = input.keepSuperseded + 1;
+      const pendingPrune = ordered.slice(0, Math.max(0, ordered.length - retainCount));
       for (const entry of pendingPrune) {
-        try {
-          await unlink(path7.join(input.rootDir, entry.relativePath));
-        } catch (error) {
-          return failure("retention_cleanup_failed", `could not remove ${entry.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+        if (!await gitCarriesExactRecord(input.rootDir, entry)) {
+          return failure("retention_history_missing", `${entry.relativePath} is not preserved byte-for-byte at HEAD`);
         }
       }
-      ledger = { ...ledger, pendingPrune: [] };
+      ledger = { ...ledger, owned: ordered, pendingPrune: [] };
       await writeLedger(ledgerPath, ledger);
+      if (currentStats === void 0) {
+        try {
+          await input.writeCurrent();
+        } catch (error) {
+          return failure("retention_write_failed", error instanceof Error ? error.message : String(error));
+        }
+      }
+      const verifiedCurrent = await verifyWorkingRecord(input.rootDir, currentReceipt);
+      if (!verifiedCurrent.ok) return verifiedCurrent;
+      if (pendingPrune.length > 0) {
+        const kept = ordered.slice(pendingPrune.length);
+        ledger = { ...ledger, owned: kept, pendingPrune };
+        await writeLedger(ledgerPath, ledger);
+        for (const entry of pendingPrune) {
+          try {
+            await unlink(path7.join(input.rootDir, entry.relativePath));
+          } catch (error) {
+            return failure("retention_cleanup_failed", `could not remove ${entry.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        ledger = { ...ledger, pendingPrune: [] };
+        await writeLedger(ledgerPath, ledger);
+      }
+      return { ok: true, pruned: pendingPrune.map((entry) => entry.relativePath), ledgerPath };
+    });
+  } catch (error) {
+    if (error instanceof ProcessLockRefused) {
+      return failure("retention_lock_unavailable", `retention scope ${input.scope} is already being updated: ${error.reason}`);
     }
-    return { ok: true, pruned: pendingPrune.map((entry) => entry.relativePath), ledgerPath };
-  } finally {
-    await rm(lockPath, { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -5099,6 +5090,7 @@ var resumeCommand = {
 };
 
 // packages/cli/src/index.ts
+var PACKAGE_NAME = "@agent-delivery-harness/cli";
 var COMMANDS = [
   prepareCommand,
   reviewContextCommand,
@@ -5118,112 +5110,35 @@ var COMMANDS = [
 function runCli(argv, runtime) {
   return runCliBoundary(argv, COMMANDS, runtime);
 }
-
-// packages/cli/src/main.ts
-function createWaiverPrompt(input, output) {
-  return (decision, obligationIds) => new Promise((resolve, reject) => {
-    const rl = createInterface({ input, output });
-    let settled = false;
-    const settle = (action) => {
-      if (settled) return;
-      settled = true;
-      action();
-    };
-    rl.on("SIGINT", () => {
-      settle(() => {
-        rl.close();
-        reject(new CliInterruption("Waiver prompt interrupted."));
-      });
-    });
-    rl.on("close", () => {
-      settle(() => resolve(false));
-    });
-    output.write(`Waiving covers ${obligationIds.length} obligation(s): ${obligationIds.join(", ")}.
-`);
-    output.write(`Candidate: ${decision.candidate.treeSha}. Approval covers only these findings under the current policy; live obligations require new approval each invocation.
-`);
-    for (const resolution of decision.resolutions) {
-      if (resolution.kind === "blocked" && obligationIds.includes(resolution.obligationId)) {
-        for (const blocker of resolution.blockers) output.write(`${resolution.obligationId}: [${blocker.code}] ${blocker.summary}
-`);
-      }
-    }
-    const finish = (value2) => settle(() => {
-      rl.close();
-      resolve(value2);
-    });
-    rl.question("Waive all of them? [y/N] ", (answer) => {
-      if (!/^\s*y(es)?\s*$/i.test(answer)) return finish(false);
-      rl.question("Author: ", (author) => {
-        if (!author.trim() || author.length > 256) return finish(false);
-        rl.question("Reason: ", (reason) => {
-          if (!reason.trim() || reason.length > 4096) return finish(false);
-          finish({ author: author.trim(), reason: reason.trim() });
-        });
-      });
-    });
-  });
-}
-var readlineWaiverPrompt = (decision, obligationIds) => createWaiverPrompt(process.stdin, process.stderr)(decision, obligationIds);
-function canonicalEntryPath(entryPath) {
-  try {
-    return realpathSync(entryPath);
-  } catch {
-    return entryPath;
-  }
-}
-function invokedDirectly(argvEntry, moduleHref) {
-  if (argvEntry === void 0) return false;
-  let modulePath;
-  try {
-    modulePath = fileURLToPath(moduleHref);
-  } catch {
-    return false;
-  }
-  return canonicalEntryPath(argvEntry) === canonicalEntryPath(modulePath);
-}
-function readStdinText(input) {
-  if (input.isTTY === true) return Promise.resolve("");
-  return new Promise((resolve) => {
-    let text2 = "";
-    input.setEncoding("utf8");
-    input.on("data", (chunk) => {
-      text2 += chunk;
-    });
-    input.once("error", () => resolve(text2));
-    input.once("end", () => resolve(text2));
-  });
-}
-function defaultRuntime() {
-  return {
-    cwd: process.cwd(),
-    env: process.env,
-    stdinIsTTY: process.stdin.isTTY === true,
-    stdoutIsTTY: process.stdout.isTTY === true,
-    stdout: (text2) => process.stdout.write(text2),
-    stderr: (text2) => process.stderr.write(text2),
-    promptForWaiver: readlineWaiverPrompt,
-    readStdin: () => readStdinText(process.stdin)
-  };
-}
-async function main(argv) {
-  return runCli(argv, defaultRuntime());
-}
-if (invokedDirectly(process.argv[1], import.meta.url)) {
-  process.exitCode = EXIT_POLICY;
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  }).catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}
-`);
-    process.exitCode = EXIT_POLICY;
-  });
-}
 export {
-  createWaiverPrompt,
-  defaultRuntime,
-  invokedDirectly,
-  main,
-  readStdinText,
-  readlineWaiverPrompt
+  COMMANDS,
+  COMPLETION_WRAPPED_COMMANDS,
+  CliInterruption,
+  EXIT_INTERRUPTED,
+  EXIT_OK,
+  EXIT_POLICY,
+  EXIT_USAGE,
+  PACKAGE_NAME,
+  buildRunExport,
+  checkCommand,
+  commandBlocker,
+  emitCommand,
+  emitReviewEvidenceCommand,
+  gateCommand,
+  importHarnessConfig,
+  isConfigFreeCommand,
+  maintainCommand,
+  managedCommand,
+  parseRunExport,
+  prepareCommand,
+  recordCommand,
+  resumeCommand,
+  reviewContextCommand,
+  runCli,
+  runCliBoundary,
+  runsCommand,
+  saveContextCommand,
+  submitEvidenceCommand,
+  verifyCommand,
+  wireRepo
 };

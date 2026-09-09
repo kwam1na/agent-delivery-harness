@@ -11709,6 +11709,16 @@ var JournalAccessRefused = class extends Error {
     this.reason = reason;
   }
 };
+var ProcessLockRefused = class extends Error {
+  lockPath;
+  reason;
+  constructor(lockPath, reason) {
+    super(`${lockPath}: ${reason}`);
+    this.name = "ProcessLockRefused";
+    this.lockPath = lockPath;
+    this.reason = reason;
+  }
+};
 var EMPTY_RAW = { lines: [], terminatedByteLength: 0, interruptedTail: false };
 function splitTerminated(text4) {
   const lastNewline = text4.lastIndexOf("\n");
@@ -11799,13 +11809,21 @@ function appendDecided(options) {
   return serializedOnPath(path13.resolve(journalPath), () => options.crossProcess === true ? withProcessAppendLock(journalPath, options.crossProcessTimeoutMs ?? 5e3, operation) : operation());
 }
 async function withProcessAppendLock(journalPath, timeoutMs, operation) {
-  const refuse4 = (reason) => new JournalAccessRefused(journalPath, reason);
+  try {
+    return await withProcessLock(`${journalPath}.append-lock`, timeoutMs, operation);
+  } catch (error) {
+    if (error instanceof ProcessLockRefused) throw new JournalAccessRefused(journalPath, error.reason);
+    throw error;
+  }
+}
+async function withProcessLock(lockPath, timeoutMs, operation) {
+  const refuse4 = (reason) => new ProcessLockRefused(lockPath, reason);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 6e4) throw refuse4("invalid cross-process append lock timeout");
   const deadline = performance.now() + timeoutMs;
   const checkDeadline = () => {
     if (performance.now() >= deadline) throw refuse4("cross-process append lock timed out");
   };
-  const directory2 = `${journalPath}.append-lock`;
+  const directory2 = lockPath;
   const id = `${process.pid}-${randomUUID4()}`;
   const marker = path13.join(directory2, `${id}.ticket`);
   const pending = path13.join(directory2, `${id}.pending`);
@@ -11890,7 +11908,7 @@ async function withProcessAppendLock(journalPath, timeoutMs, operation) {
     acquired = true;
     return await operation();
   } catch (error) {
-    if (acquired || error instanceof JournalAccessRefused) throw error;
+    if (acquired || error instanceof ProcessLockRefused) throw error;
     throw refuse4(describe4(error));
   } finally {
     if (registered) {
@@ -19624,6 +19642,7 @@ export {
   PROVIDER_POLICIES,
   PROVIDER_REVIEW_HANDOFF_SPEC,
   PROVIDER_REVIEW_RESULT_SPEC,
+  ProcessLockRefused,
   READ_ONLY_CAPABILITY_KINDS,
   RECEIPTED_SKILLS_ROOT,
   RECHECKED_VALUES,
@@ -19927,6 +19946,7 @@ export {
   verifyPortableEvidence,
   verifyProjection,
   withDeliverableIdentity,
+  withProcessLock,
   workflowStageBindingFor,
   writeAssertionProviderConfig
 };
