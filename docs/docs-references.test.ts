@@ -942,43 +942,60 @@ describe("the corrections the delivery runbook carries", () => {
    * The one correction on this page whose truth is conditional on the CLI, so
    * the one that must not be pinned by presence alone. It was hedged once — into
    * "whether `<command> --help` is safe depends on the build" — on the strength
-   * of a sibling delivery's fix that never merged, and the hedge is what an
+   * of a sibling delivery's fix that had not merged, and the hedge is what an
    * agent skims past on its way to running `record --help` mid-round. Held to
-   * the boundary and the command modules by agreement instead: the day one of
-   * these commands starts parsing its arguments, this row makes the page say so
-   * rather than leaving it warning about a hazard that is gone, and the day a
-   * fourth stops, the page has to name it.
+   * the boundary and the command modules by agreement instead, which is how this
+   * row earned its keep: the fix landed on this delivery's base mid-review, the
+   * row went red on the replay, and the page had to be re-stamped to the
+   * predicate the boundary now carries rather than left warning about a hazard
+   * that is gone. The day one of these commands starts parsing its arguments,
+   * the same thing happens again; the day a fourth stops, the page has to name
+   * it.
    */
   it("names the commands whose `--help` executes them, as the CLI behaves today", () => {
     const boundary = readFileSync(path.join(REPO_ROOT, "packages/cli/src/boundary.ts"), "utf8");
-    const branch = /descriptor\.name === "([a-z-]+)"[^;]*?"--help"/s.exec(boundary);
-    expect(branch, "the CLI boundary no longer carries a single per-command help branch").not.toBeNull();
-    statesInProse(`\`${branch![1]!} --help\``);
+    // The arity is the whole safety property: a help request is answered by the
+    // boundary only when `--help` is the entire argument list, so a page that
+    // said "`--help` is safe" without saying "alone" would be wrong in the one
+    // direction that costs a round.
+    const predicate = /args\.length === (\d+) && \(args\[0\] === "--help" \|\| args\[0\] === "-h"\)/.exec(boundary);
+    expect(predicate, "the CLI boundary no longer answers help from one arity-checked predicate").not.toBeNull();
+    expect(predicate![1], "the boundary's help predicate no longer requires a lone argument").toBe("1");
+    statesInProse("**exactly one argument**");
 
     const commands = readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands"))
       .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"));
+    // Anti-vacuity: a scan that stopped reading the directory would leave
+    // nothing to disagree, and the branch below would pass on an empty set.
+    expect(commands.length, "no command modules were read").toBeGreaterThan(5);
     const registered = new Set(COMMANDS.map((command) => command.name));
-    // A module that never mentions its arguments cannot be printing usage for
-    // one: `--help` reaches it as an ordinary invocation and it runs.
+    // A module that never mentions its arguments cannot be judging a call that
+    // carries one: `--help` beside another token reaches it as an ordinary
+    // invocation and it runs.
     const executes = commands
       .filter((entry) => !/args/.test(readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands", entry), "utf8")))
       .map((entry) => entry.replace(/\.ts$/, ""))
       .filter((name) => registered.has(name));
-    // Anti-vacuity: a scan that stopped reading the directory, or a rename that
-    // detached every module from the registry, would leave nothing to disagree.
-    expect(executes.length, "no command module was found to ignore its arguments").toBeGreaterThan(0);
 
-    const clause = /((?:`[a-z-]+\.ts`(?:, | and )?)+) never read their arguments at all/.exec(
-      textOf("docs/delivery-runbook.md").replace(/\s+/g, " "),
-    );
-    expect(clause, "docs/delivery-runbook.md no longer names the commands whose `--help` executes them").not.toBeNull();
-    const named = [...clause![1]!.matchAll(/`([a-z-]+)\.ts`/g)].map((match) => match[1]!);
-    expect(named.slice().sort(), "the runbook's `--help` warning is not the set of commands that ignore arguments").toEqual(
-      executes.slice().sort(),
-    );
-    // And the consequence, not only the list: a warning trimmed to its names
-    // stops saying why the reader should care.
-    statesInProse("writes a delivery record and dirties the worktree mid-round");
+    const prose = textOf("docs/delivery-runbook.md").replace(/\s+/g, " ");
+    const clause = /((?:`[a-z-]+\.ts`(?:, | and )?)+) never read their arguments at all/.exec(prose);
+    if (executes.length === 0) {
+      // Which is where this tree stands: every registered command judges its own
+      // argument list, so the page must not still be warning about the hazard,
+      // and must say what replaced it.
+      expect(clause, "no command module ignores its arguments, but the runbook still names some that do").toBeNull();
+      statesInProse("is a usage refusal at exit `2` rather than a delivery record");
+    } else {
+      expect(clause, "docs/delivery-runbook.md no longer names the commands whose `--help` executes them").not.toBeNull();
+      const named = [...clause![1]!.matchAll(/`([a-z-]+)\.ts`/g)].map((match) => match[1]!);
+      expect(named.slice().sort(), "the runbook's `--help` warning is not the set of commands that ignore arguments").toEqual(
+        executes.slice().sort(),
+      );
+    }
+    // And the consequence, not only the rule: a correction trimmed to its
+    // mechanism stops saying why the reader should care, and the hazard is what
+    // an older checkout still has.
+    statesInProse("a delivery record written and the worktree dirtied mid-round");
   });
 
   /**

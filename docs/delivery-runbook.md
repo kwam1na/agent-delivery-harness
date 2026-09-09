@@ -601,16 +601,20 @@ missing tracker is recorded and the loop proceeds.
 - **One run is current per worktree.** A second `run.started` is
   `run_already_current`; end the first, or `--force` (which records
   `displacedRunId`).
-- **`--help` executes `gate`, `record` and `check`.** Only two forms print usage:
-  `npm run harness -- --help` at the top level, and `prepare --help`, which is
-  the single per-command help branch the CLI boundary carries. Every other
-  command receives `--help` as an ordinary argument, and `gate.ts`, `record.ts`
-  and `check.ts` never read their arguments at all — so
-  `npm run harness -- record --help`
-  writes a delivery record and dirties the worktree mid-round, and `gate --help`
-  runs the gate. `verify` and `emit` reject it as an unknown flag. This is the
-  first move an agent makes on an unfamiliar command, so make it reading
-  `packages/cli/src/commands/<command>.ts` instead.
+- **`<command> --help` is answered read-only, and only when it stands alone.**
+  The boundary resolves the command first, then answers a help request —
+  **exactly one argument**, `--help` or `-h` — before it loads config, wires
+  anything, or observes the command, so `npm run harness -- record --help` prints
+  that command's usage and writes nothing. Any other token on the line stops it
+  being a help request, and every command then judges the call itself: the ones
+  that take no arguments refuse it, so `npm run harness -- record --help --json x`
+  is a usage refusal at exit `2` rather than a delivery record. At the top level
+  `npm run harness -- --help` prints the command listing and exits `0`, while a
+  line naming no command prints the same listing and exits `2`. **On a build
+  predating that fix**, `gate --help`, `record --help` and `check --help` reached
+  commands that read no arguments at all and simply ran — a delivery record
+  written and the worktree dirtied mid-round — so on an older checkout, read
+  `packages/cli/src/commands/<command>.ts` instead of asking it for help.
 - **A stale `REBASE_HEAD`** is left behind by a conflicted rebase concluded with
   `--continue`; git does not clean it up. Candidate capture ignores it — the
   `rebase-merge` and `rebase-apply` directories are the authoritative signals.
