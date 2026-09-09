@@ -2033,7 +2033,7 @@ describe("runs serve", () => {
     expect(shownWithout.out).not.toContain("no CLI gate completion in this journal");
   });
 
-  it("gives each run on one page its own timeline, rounds, notes, repository, and completeness", async () => {
+  it("gives each run on one page its own timeline, rounds, notes, and completeness", async () => {
     // Two repositories, both carrying a config, served TOGETHER — which is what
     // the separately-served rows above cannot do: with one run on the page,
     // rendering `runs[0]`'s readout under every heading is indistinguishable
@@ -2078,8 +2078,8 @@ describe("runs serve", () => {
     expect(barelyStartedBlock).not.toContain(note);
     expect(runOf(state, barelyStartedRunId).readout.note).toBeUndefined();
 
-    // The other three per-run blocks, and the repository line above them, each
-    // asserted on the block that owns it and denied on the block that does not.
+    // The other three per-run blocks, each asserted on the block that owns it
+    // and denied on the block that does not.
     // The two journals are deliberately unalike — one carries a gate, a closed
     // round, and no refusal; the other a single start and one refusal — so a
     // block rendered from the page's FIRST run reads wrong under one of the two
@@ -2102,13 +2102,14 @@ describe("runs serve", () => {
     expect(barelyStartedBlock).toContain("<td>not.a.kind</td>");
     expect(finishedBlock).not.toContain("<h3>refused appends</h3>");
 
-    // Its own repository path, asserted as the WHOLE paragraph: the page prints
-    // both roots above the first heading, and the finished block names its root
-    // again inside the config-presence note, so a bare containment check would
-    // hold on a block that had been handed the other run's path.
-    expect(finishedBlock).toContain(`<p class="meta">${escapedRoot(finished)}</p>`);
-    expect(barelyStartedBlock).toContain(`<p class="meta">${escapedRoot(barelyStarted)}</p>`);
-    expect(barelyStartedBlock).not.toContain(`<p class="meta">${escapedRoot(finished)}</p>`);
+    // There is no fourth block to bind: V26-1950 removed the per-run repository
+    // paragraph from the run block, and the only roots the page still prints —
+    // the `root — runsDir` pairs in the provenance details — are the SERVED
+    // repositories, every one of them under every run, so they are not a per-run
+    // surface and no mutation of them could be denied on the other block. The
+    // run's own root is still bound above, through the config-presence note in
+    // its readout: it names `finished`'s root under `finished`'s heading and is
+    // absent under the other's.
   });
 
   it("distinguishes a round that was never opened, exactly as runs show does", async () => {
