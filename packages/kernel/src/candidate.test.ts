@@ -507,6 +507,28 @@ describe("candidate capture refuses unprepared workspaces", () => {
     expect(result.blockers[0].summary).toContain("rebase");
   });
 
+  it("refuses a conflicted rebase run on the `--apply` backend", async () => {
+    const { work } = await preparedFixture();
+    await drive(work, ["checkout", "--quiet", "-b", "side"]);
+    await write(work, "src/app.ts", lines(10, "side"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "side"]);
+    await drive(work, ["checkout", "--quiet", "main"]);
+    await write(work, "src/app.ts", lines(10, "trunk"));
+    await drive(work, ["commit", "--no-gpg-sign", "-am", "trunk"]);
+    // The other backend writes the other directory, and it is the only signal
+    // left for this rebase: `REBASE_HEAD`, which git also writes here, is no
+    // longer read at all.
+    await drive(work, ["rebase", "--apply", "side"]).catch(() => undefined);
+    expect(await gitPathExists(work, "rebase-apply")).toBe(true);
+    expect(await gitPathExists(work, "rebase-merge")).toBe(false);
+
+    const result = await captureGitCandidate(captureOptions(work));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_merge_in_progress");
+    expect(result.blockers[0].summary).toContain("rebase");
+  });
+
   it("refuses a rebase interrupted with a clean worktree", async () => {
     const { work } = await preparedFixture();
     await drive(work, ["checkout", "--quiet", "-b", "side"]);
