@@ -12,6 +12,10 @@ delivery-harness save-context --json '{"contract":{"objective":"Ship the change"
 
 The command reads the installed workflow release from `.agent-skills/active.json` and records its archive identity, the runtime version, candidate/base identity, and current configuration binding. A failed candidate capture or invalid installation blocks the save. The contract is bounded to an objective, 1–32 acceptance criteria, and a finish line. Do not put credentials, transcripts, or shell commands in it. Saving again appends a new observation; it never changes a receipt or overwrites prior actions.
 
+`save-context` writes at the selected run's own writer version, which it reads from the run's first journal event, so a `run-event/2` run accepts the save and a legacy `run-event/1` run keeps writing v1. It never upgrades a run. On a v2 run the event ID is derived from the observation itself — `context-saved-<sha256 of the canonical kind and payload>` — so it is the stable retry key that version requires: an interrupted save repeated with the same contract, stage and candidate is the same event, retaining its first instant and sequence rather than appending a second, while any changed observation is a different ID and a new entry. Nothing has to be passed on the command line for this.
+
+A refused save is a typed blocker and nothing else: no event is appended, no prior entry is rewritten, and the command never reports success. The blocker carries the store's own rejection code, JSON pointer, and message — for example `malformed_member at /payload/contract/acceptanceCriteria` — so the offending member is named. Those three come from the store, never from the refused payload, so the diagnostic names the field without echoing its value.
+
 Before an authorized external operation, record a unique intent with enough reference information for the host to discover its outcome:
 
 ```sh

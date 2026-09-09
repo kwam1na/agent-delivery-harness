@@ -10,7 +10,7 @@
 import { execFile } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
-import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, readdir, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -420,6 +420,43 @@ describe("emit, the boundary wrap, and runs", () => {
     // allocator taking back what it created, not a start that stopped working.
     const runId = await startRun(dir);
     expect(await store.list()).toEqual([runId]);
+  });
+
+  it("leaves no journal behind when the pointer write is refused after the start was appended", async () => {
+    const dir = await initRepo();
+    const { store, runsDir } = await storeOf(dir);
+    const currentDir = path.join(runsDir, "current");
+    // The OTHER post-allocation refusal, and the one the append case cannot
+    // reach: the payload is admissible, so `run.started` is durable in a real
+    // journal before the exclusive pointer create is refused. A pointer
+    // directory this process may read but not write is the seam that produces
+    // that refusal without touching the product — the same failure a race for
+    // the worktree's pointer produces, arriving from the filesystem instead.
+    await mkdir(currentDir, { recursive: true, mode: 0o700 });
+    await chmod(currentDir, 0o500);
+    try {
+      const refused = await emit(dir, ["run.started"], {
+        host: "vitest",
+        workflow: { releaseId: "test-release", profile: "linear" },
+      });
+      expect(refused.code).toBe(EXIT_POLICY);
+      expect(refused.err).toContain("run_pointer_refused");
+      // The journal the append filled is taken back with it: no run listed,
+      // and no file of any size left under `runs/` for one.
+      expect(await store.list()).toEqual([]);
+      expect((await readdir(runsDir)).filter((entry) => entry.endsWith(".jsonl"))).toEqual([]);
+      const listed = await cli(dir, ["runs", "list"]);
+      expect(listed.code, listed.err).toBe(EXIT_OK);
+      expect(listed.out).toContain("across 0 run(s)");
+    } finally {
+      await chmod(currentDir, 0o700);
+    }
+
+    // And a start whose pointer is writable again still allocates and points.
+    const runId = await startRun(dir);
+    expect(await store.list()).toEqual([runId]);
+    const current = await store.current((await storeOf(dir)).worktreeKey);
+    expect(current.ok && current.runId).toBe(runId);
   });
 
   it("stops appending once the run has ended, and starts cleanly afterwards", async () => {

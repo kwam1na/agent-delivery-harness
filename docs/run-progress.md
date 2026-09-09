@@ -18,6 +18,14 @@ payload is refused. Start a new linked run when upgrading, naming the old ID in
 the v2 `run.started` payload's `predecessorRunId`; retain the original history.
 New readers accept both versions. Old readers may refuse v2 and must not erase it.
 
+The product's own writers follow the same rule from inside. Command completion
+reporting and [`save-context`](ordinary-resume.md) read the selected run's
+version from its first journal event and write at it, supplying an event ID
+when that version is v2; neither upgrades a run and neither downgrades one. An
+internal writer that needs a retry key derives it from the observation rather
+than inventing one per invocation, so repeating an interrupted write appends
+nothing new while a changed observation is a new entry.
+
 ## Activities and reports
 
 The closed payload definitions live in the

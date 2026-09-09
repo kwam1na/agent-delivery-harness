@@ -15,7 +15,7 @@ const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 const contract = { objective: "Ship the change", acceptanceCriteria: ["Checks pass"], finishLine: "merge-ready" };
 
-async function fixture() {
+async function fixture(options: { readonly version?: "1" | "2" } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "ordinary-resume-")); dirs.push(dir);
   const git = async (...args: string[]) => (await exec("git", args, { cwd: dir })).stdout.trim();
   await git("init", "-q"); await git("config", "user.name", "Test"); await git("config", "user.email", "test@example.invalid");
@@ -31,8 +31,18 @@ async function fixture() {
     loadConfig: async () => config, artifacts: createArtifactsPort({ runRootBase: path.join(dir, ".git/artifacts") }),
   };
   const run = async (...args: string[]) => { output.length = 0; errors.length = 0; return runCli(args, runtime); };
-  await run("emit", "run.started", "--json", JSON.stringify({ host: "codex", workflow: { releaseId: "test", profile: "linear" } }));
-  return { dir, git, run, output, errors, changePolicy: () => { config = defineHarnessConfig({ ...config, activationThreshold: 200 }); } };
+  const started = { host: "codex", workflow: { releaseId: "test", profile: "linear" } };
+  await run("emit", "run.started", ...(options.version === "2" ? ["--version", "2", "--event-id", "start-1"] : []), "--json", JSON.stringify(started));
+  /** The run's journal as the store reads it back — never a projection of it. */
+  const journal = async () => {
+    const surface = await resolveRunSurface(dir); if (!surface.ok) throw new Error(surface.reason);
+    const current = await surface.surface.store.current(surface.surface.worktreeKey);
+    if (!current.ok || current.runId === undefined) throw new Error("no current run");
+    const read = await surface.surface.store.read(current.runId);
+    if (!read.ok) throw new Error(`journal unreadable: ${JSON.stringify(read.rejections)}`);
+    return read.events;
+  };
+  return { dir, git, run, output, errors, journal, changePolicy: () => { config = defineHarnessConfig({ ...config, activationThreshold: 200 }); } };
 }
 
 describe("ordinary save and resume", () => {
@@ -115,4 +125,63 @@ it("refuses contradictory observed outcomes", async () => {
   expect(await f.run("emit", "action.observed", "--json", JSON.stringify({ actionId: "a1", outcome: "succeeded", reference: "pr1" }))).toBe(0);
   expect(await f.run("resume")).toBe(1);
   expect(f.errors.join("\n")).toContain("resume_action_unreconciled");
+});
+
+describe("the writer version a save-context observation is written at", () => {
+  it("writes the selected run's version, so a run-event/2 journal accepts the save and resume reads it back", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "work" })), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.version).toBe("run-event/2");
+    // The retry key is derived from the observation itself, so the same save
+    // has the same id wherever it is repeated from.
+    expect(saved[0]!.eventId).toMatch(/^context-saved-[0-9a-f]{64}$/);
+    expect(await f.run("resume"), f.errors.join("\n")).toBe(0);
+    expect(f.output.join("\n")).toContain('"stage":"work"');
+  });
+
+  it("keeps a legacy run at run-event/1, where an id-free save appends every time", async () => {
+    const f = await fixture();
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "work" })), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "work" })), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(2);
+    expect(saved.map(event => event.version)).toEqual(["run-event/1", "run-event/1"]);
+    expect(saved.every(event => event.eventId === undefined)).toBe(true);
+    expect(await f.run("resume"), f.errors.join("\n")).toBe(0);
+  });
+
+  it("is idempotent on an exact v2 retry and distinguishes a changed observation", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const first = await f.journal();
+    // The same observation, saved again: the same event, instant and sequence.
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    expect(await f.journal()).toEqual(first);
+    // A different stage is a different observation, so it is a different id.
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "review" })), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+  });
+
+  it.each(["1", "2"] as const)("leaves a v%s journal unchanged when the store refuses the context, and names the rejection", async version => {
+    const f = await fixture({ version });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const before = await f.journal();
+    // An empty acceptance-criteria list is refused by the bounded contract,
+    // which is a refusal the command cannot see until the store answers.
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract: { ...contract, acceptanceCriteria: [] }, stage: "work" }))).toBe(1);
+    const reported = f.errors.join("\n");
+    expect(reported).toContain("resume_context_invalid");
+    expect(reported).toContain("malformed_member");
+    expect(reported).toContain("/payload/contract/acceptanceCriteria");
+    // No false success, and no rewritten history.
+    expect(await f.journal()).toEqual(before);
+  });
 });

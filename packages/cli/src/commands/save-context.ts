@@ -1,5 +1,5 @@
 import { buildRunEvent } from "../run-surface.ts";
-import { installedRelease, policyDigest, recoveryBlocker, recoveryRun } from "../ordinary-context.ts";
+import { installedRelease, ordinaryEventWriter, policyDigest, recoveryBlocker, recoveryRun, rejectionDetails } from "../ordinary-context.ts";
 import type { CommandDescriptor } from "../boundary.ts";
 
 const USAGE = "Usage: delivery-harness save-context --json '{\"contract\":{\"objective\":\"...\",\"acceptanceCriteria\":[\"...\"],\"finishLine\":\"merge-ready\"},\"stage\":\"work\"}'";
@@ -30,8 +30,18 @@ export const saveContextCommand: CommandDescriptor = {
       candidateBinding: { deliverableDigest: candidate.deliverable.digest, identity: candidate.deliverable.identity,
         baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId },
       policyDigest: policyDigest(context), release };
-    const appended = await run.surface.store.append(run.runId, buildRunEvent({ runId: run.runId, commonDir: run.surface.commonDir, kind: "context.saved", role: "executor", payload }));
-    if (!appended.ok) return { kind: "blocked", blockers: [recoveryBlocker("resume_context_invalid", "Context was refused by the bounded run-event contract; inspect contract, stage, and secret-free inputs.")] };
+    // The run's own writer version, never this command's: a v2 journal admits
+    // no v1 event, and a v2 event needs the retry key the writer derives.
+    const writer = ordinaryEventWriter(run.version, "context.saved", payload);
+    const appended = await run.surface.store.append(
+      run.runId,
+      buildRunEvent({ runId: run.runId, commonDir: run.surface.commonDir, kind: "context.saved", role: "executor", payload, ...writer }),
+      // An exact retry of one save is one observation, at its first instant.
+      { reuseExistingTimestamp: true },
+    );
+    if (!appended.ok) return { kind: "blocked", blockers: [recoveryBlocker("resume_context_invalid",
+      "Context was refused by the bounded run-event contract; inspect contract, stage, and secret-free inputs.",
+      `run ${run.runId}: ${rejectionDetails(appended.rejections)}`)] };
     return { kind: "ok", summary: `saved ordinary context for ${run.runId}; stage is an observation, not evidence` };
   },
 };
