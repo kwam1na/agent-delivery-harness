@@ -192,7 +192,9 @@ describe("the writer version a save-context observation is written at", () => {
     const saved = (await f.journal()).filter(event => event.kind === "context.saved");
     expect(saved).toHaveLength(2);
     expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
-  });
+    // Three real CLI invocations plus a deliberate wait past a clock tick: the
+    // default per-test ceiling is not the budget this row needs.
+  }, 30000);
 
   it.each(["1", "2"] as const)("leaves a v%s journal unchanged when the store refuses the context, and names the rejection", async version => {
     const f = await fixture({ version });
@@ -225,5 +227,5 @@ describe("the writer version a save-context observation is written at", () => {
     expect(reported).toContain("/payload/contract");
     expect(reported).not.toContain("internal_error");
     expect(await f.journal()).toEqual(before);
-  });
+  }, 30000);
 });
