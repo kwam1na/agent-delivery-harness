@@ -1,14 +1,16 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyDeliveryRecordRetention } from "./record-retention.ts";
 
 const roots: string[] = [];
+const children: ChildProcessWithoutNullStreams[] = [];
 
 afterEach(async () => {
+  for (const child of children.splice(0)) if (child.exitCode === null) child.kill("SIGKILL");
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -51,6 +53,32 @@ async function retain(rootDir: string, scope: string, id: string, keepSuperseded
 function commit(rootDir: string, message: string): void {
   git(rootDir, "add", "delivery/records");
   git(rootDir, "commit", "--quiet", "-m", message);
+}
+
+function retainingProcess(rootDir: string, scope: string, id: string, keepSuperseded: number) {
+  const child = spawn(process.execPath, [
+    "--import",
+    import.meta.resolve("tsx"),
+    path.join(import.meta.dirname, "../test-fixtures/record-retention-process.ts"),
+    rootDir,
+    scope,
+    id,
+    String(keepSuperseded),
+  ]);
+  children.push(child);
+  let output = "";
+  let error = "";
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+  child.stdout.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+    if (output.includes("entered\n")) markEntered();
+  });
+  child.stderr.on("data", (chunk: Buffer) => { error += chunk.toString(); });
+  const done = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null; readonly output: string; readonly error: string }>(
+    (resolve) => child.once("close", (code, signal) => resolve({ code, signal, output, error })),
+  );
+  return { child, entered, done, release: () => child.stdin.write("release\n") };
 }
 
 describe("same-delivery tracked record retention", () => {
@@ -133,6 +161,63 @@ describe("same-delivery tracked record retention", () => {
     const outcomes = await Promise.all([first, second]);
     expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
     expect(outcomes.find((outcome) => !outcome.ok)).toMatchObject({ code: "retention_ownership_ambiguous" });
+  });
+
+  it("recovers a killed lock owner and completes the interrupted retention decision", { timeout: 15_000 }, async () => {
+    const root = await repository();
+    const first = await retain(root, "delivery-one", "a", 0);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    commit(root, "record a");
+
+    const secondPath = path.join(root, recordPath("b"));
+    const recordsDirectory = path.dirname(secondPath);
+    const originalMode = (await stat(recordsDirectory)).mode & 0o777;
+    const stranded = await applyDeliveryRecordRetention({
+      rootDir: root,
+      storageNamespace: "delivery-harness/",
+      scope: "delivery-one",
+      keepSuperseded: 0,
+      recordBasePath: "delivery/records/record.json",
+      current: { relativePath: recordPath("b"), deliverableDigest: "b".repeat(64), bytes: recordBytes("b") },
+      writeCurrent: async () => {
+        await writeFile(secondPath, recordBytes("b"));
+        await chmod(recordsDirectory, 0o500);
+      },
+    });
+    await chmod(recordsDirectory, originalMode);
+    expect(stranded).toMatchObject({ ok: false, code: "retention_cleanup_failed" });
+    const interruptedLedger = JSON.parse(await readFile(first.ledgerPath, "utf8")) as { pendingPrune: Array<{ relativePath: string }> };
+    expect(interruptedLedger.pendingPrune.map((entry) => entry.relativePath)).toEqual([recordPath("a")]);
+    commit(root, "record b");
+
+    const interrupted = retainingProcess(root, "delivery-one", "c", 0);
+    await interrupted.entered;
+    expect(existsSync(path.join(root, recordPath("a")))).toBe(false);
+    expect(existsSync(path.join(root, recordPath("b")))).toBe(true);
+    interrupted.child.kill("SIGKILL");
+    expect((await interrupted.done).signal).toBe("SIGKILL");
+    expect(existsSync(path.join(root, recordPath("c")))).toBe(false);
+
+    expect((await retain(root, "delivery-one", "c", 0)).ok).toBe(true);
+    expect(existsSync(path.join(root, recordPath("b")))).toBe(false);
+    expect(await readFile(path.join(root, recordPath("c")), "utf8")).toBe(recordBytes("c"));
+    expect(await readdir(path.join(path.dirname(first.ledgerPath), ".ownership.lock"))).toEqual([]);
+  });
+
+  it("times out behind a live process owner without stealing its lock", { timeout: 15_000 }, async () => {
+    const root = await repository();
+    const first = retainingProcess(root, "delivery-one", "a", 0);
+    await first.entered;
+
+    expect(await retain(root, "delivery-two", "b", 0)).toMatchObject({ ok: false, code: "retention_lock_unavailable" });
+    expect(first.child.exitCode).toBeNull();
+    expect(existsSync(path.join(root, recordPath("b")))).toBe(false);
+
+    first.release();
+    expect((await first.done).code).toBe(0);
+    expect(await readFile(path.join(root, recordPath("a")), "utf8")).toBe(recordBytes("a"));
+    expect((await retain(root, "delivery-two", "b", 0)).ok).toBe(true);
   });
 
   it("cancels an interrupted pending prune when that record becomes current again", async () => {

@@ -762,6 +762,7 @@ export {
   type JournalStore,
   type MaintenanceJournalStore,
 } from "./checkpoint/journal-store.ts";
+export { ProcessLockRefused, withProcessLock } from "./checkpoint/append-only-file.ts";
 export {
   RECHECKED_VALUES,
   evaluateCanonicalRecheck,

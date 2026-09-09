@@ -48,6 +48,19 @@ export class JournalAccessRefused extends Error {
   }
 }
 
+/** A local process lock could not be acquired without weakening exclusion. */
+export class ProcessLockRefused extends Error {
+  readonly lockPath: string;
+  readonly reason: string;
+
+  constructor(lockPath: string, reason: string) {
+    super(`${lockPath}: ${reason}`);
+    this.name = "ProcessLockRefused";
+    this.lockPath = lockPath;
+    this.reason = reason;
+  }
+}
+
 export interface JournalOpenDiscipline {
   /** Extra flags OR-ed into every open of this journal. */
   readonly extraFlags?: number;
@@ -233,13 +246,27 @@ export function appendDecided<Accepted, Rejected>(
  * PID namespace are required; this is not a distributed/network-filesystem lock.
  */
 async function withProcessAppendLock<T>(journalPath: string, timeoutMs: number, operation: () => Promise<T>): Promise<T> {
-  const refuse = (reason: string) => new JournalAccessRefused(journalPath, reason);
+  try {
+    return await withProcessLock(`${journalPath}.append-lock`, timeoutMs, operation);
+  } catch (error) {
+    if (error instanceof ProcessLockRefused) throw new JournalAccessRefused(journalPath, error.reason);
+    throw error;
+  }
+}
+
+/**
+ * Runs an operation under the shared local-process bakery lock. The directory
+ * is a stable container; each contender owns only its unique PID ticket, so a
+ * positively dead owner can be removed without stealing a live owner's lock.
+ */
+export async function withProcessLock<T>(lockPath: string, timeoutMs: number, operation: () => Promise<T>): Promise<T> {
+  const refuse = (reason: string) => new ProcessLockRefused(lockPath, reason);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 60_000) throw refuse("invalid cross-process append lock timeout");
   const deadline = performance.now() + timeoutMs;
   const checkDeadline = () => {
     if (performance.now() >= deadline) throw refuse("cross-process append lock timed out");
   };
-  const directory = `${journalPath}.append-lock`;
+  const directory = lockPath;
   const id = `${process.pid}-${randomUUID()}`;
   const marker = path.join(directory, `${id}.ticket`);
   const pending = path.join(directory, `${id}.pending`);
@@ -309,7 +336,7 @@ async function withProcessAppendLock<T>(journalPath: string, timeoutMs: number, 
     acquired = true;
     return await operation();
   } catch (error) {
-    if (acquired || error instanceof JournalAccessRefused) throw error;
+    if (acquired || error instanceof ProcessLockRefused) throw error;
     throw refuse(describe(error));
   } finally {
     if (registered) {
