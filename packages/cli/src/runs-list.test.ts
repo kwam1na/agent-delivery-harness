@@ -451,10 +451,17 @@ describe("the human runs listing", () => {
     expect(bounded.out).toContain(all[0]!);
     expect(bounded.out).not.toContain(all[1]!);
     expect(bounded.out).toContain("showing 1 of 2 run(s) (--limit 1)");
-    // The total line counts the SELECTED runs, not the shown ones: a bounded
-    // listing that said "across 1 run(s)" over "showing 1 of 2" would contradict
-    // itself, and only the "showing" line is checked above.
-    expect(bounded.out).toContain("across 2 run(s)");
+    // BOTH HALVES of the total line describe the SELECTED runs, not the shown
+    // ones: a bounded listing that said "total <one run's bytes> across 1 run(s)"
+    // over "showing 1 of 2" would contradict itself. Every other byte-pinned
+    // human listing in this file is unbounded and unfiltered, where shown and
+    // selected are the same rows, so this is the only place either half of the
+    // line is separable from the other.
+    const rows = rowsOf(await listJson(dir));
+    const everyRunsBytes = rows.reduce((sum, row) => sum + row.bytes, 0);
+    const shownBytes = rows.find((row) => row.runId === all[0])!.bytes;
+    expect(everyRunsBytes).toBeGreaterThan(shownBytes);
+    expect(bounded.out).toContain(`total ${everyRunsBytes} bytes across 2 run(s)`);
 
     const whole = await cli(dir, ["runs", "list", "--limit", "2"]);
     expect(whole.out).not.toContain("showing");
