@@ -1,49 +1,10 @@
-// packages/cli/src/main.ts
-import { realpathSync } from "node:fs";
-import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
-
 // packages/cli/src/commands/check.ts
-import path from "node:path";
+import path2 from "node:path";
 import { resolveRecordStorage, BlockedError } from "./kernel.mjs";
-var PROBE_FILE = ".delivery-harness-write-probe";
-var checkCommand = {
-  name: "check",
-  sourceId: "delivery-harness.cli.check",
-  summary: "Confirm the config loads and the evidence store is usable.",
-  async run(context) {
-    try {
-      const storage = await resolveRecordStorage(context.rootDir, { storageNamespace: context.config.storageNamespace });
-      const probe = path.join(storage.storageDir, PROBE_FILE);
-      await context.artifacts.writeTextFile(probe, "probe\n", { mode: 384 });
-      await context.artifacts.removeFile(probe);
-      return {
-        kind: "ok",
-        summary: [
-          `ok: gate ${context.config.gateId}`,
-          `  ${context.config.obligations.length} obligation(s), ${context.config.providers.length} provider(s)`,
-          `  store ${storage.storageDir} (writable)`,
-          `  delivery record path ${context.config.deliveryRecordPath} (base movement: ${context.config.deliveryRecordVerification.baseMovement})`
-        ].join("\n")
-      };
-    } catch (error) {
-      if (error instanceof BlockedError) {
-        return { kind: "blocked", blockers: [...error.blockers] };
-      }
-      throw error;
-    }
-  }
-};
-
-// packages/cli/src/commands/emit.ts
-import {
-  RUN_STORE_ID,
-  reduceToProviderId
-} from "./kernel.mjs";
 
 // packages/cli/src/run-surface.ts
 import { lstatSync } from "node:fs";
-import path2 from "node:path";
+import path from "node:path";
 import {
   createBlocker,
   createRunStore,
@@ -59,10 +20,10 @@ var RUN_STORE_OVERRIDE = "DELIVERY_HARNESS_RUN_STORE";
 function storeRootFor(commonDir, override) {
   const named = override?.trim() ?? "";
   if (named.length === 0) return { ok: true, root: commonDir };
-  if (!path2.isAbsolute(named)) {
+  if (!path.isAbsolute(named)) {
     return { ok: false, reason: `${RUN_STORE_OVERRIDE} must name an absolute directory` };
   }
-  return { ok: true, root: path2.join(named, sha256Hex(commonDir)) };
+  return { ok: true, root: path.join(named, sha256Hex(commonDir)) };
 }
 async function resolveRunSurface(cwd) {
   const location = await resolveRunStoreLocation({
@@ -135,17 +96,21 @@ var ABSENT = { status: "absent", missing: [], attestation: "self" };
 async function resolveRunJournalRow(input) {
   const resolved = await resolveRunSurface(input.cwd);
   if (!resolved.ok) return ABSENT;
-  const match = await resolved.surface.store.findByCandidateTreeSha(input.treeSha);
+  const acceptedTrees = [.../* @__PURE__ */ new Set([input.treeSha, ...input.reviewedCandidateTreeShas ?? []])];
+  const matches = await Promise.all(acceptedTrees.map((treeSha) => resolved.surface.store.findByCandidateTreeSha(treeSha)));
+  const match = matches.find((entry) => entry !== void 0);
   if (match === void 0) return ABSENT;
   const read = await resolved.surface.store.read(match.runId);
   if (!read.ok) return ABSENT;
-  const evaluation = evaluateRunJournal(read.events, input.treeSha, input.mandatedLensIds);
+  const evaluation = evaluateRunJournal(read.events, input.treeSha, input.mandatedLensIds, acceptedTrees.slice(1));
+  const alsoMatching = [...new Set(matches.flatMap((entry) => entry === void 0 ? [] : [entry.runId, ...entry.alsoMatching]))].filter((runId) => runId !== match.runId);
   return {
     runId: match.runId,
-    ...match.alsoMatching.length === 0 ? {} : { alsoMatching: match.alsoMatching },
+    ...alsoMatching.length === 0 ? {} : { alsoMatching },
     status: evaluation.status,
     missing: evaluation.missing,
     ...evaluation.violations.length === 0 ? {} : { violations: evaluation.violations },
+    ...acceptedTrees.length === 1 ? {} : { recordTreeSha: input.treeSha, reviewedCandidateTreeShas: acceptedTrees.slice(1) },
     attestation: "self"
   };
 }
@@ -154,6 +119,10 @@ function runJournalRows(row) {
   if (row.runId !== void 0) rows.push(`    run: ${oneLine(row.runId, 128)}`);
   if (row.alsoMatching !== void 0 && row.alsoMatching.length > 0) {
     rows.push(`    also matching: ${row.alsoMatching.map((id) => oneLine(id, 128)).join(", ")}`);
+  }
+  if (row.recordTreeSha !== void 0 && row.reviewedCandidateTreeShas !== void 0) {
+    rows.push(`    record candidate: ${oneLine(row.recordTreeSha, 64)}`);
+    rows.push(`    reviewed candidate: ${row.reviewedCandidateTreeShas.map((tree) => oneLine(tree, 64)).join(", ")} (verified review-neutral projection)`);
   }
   rows.push(`    missing: ${row.missing.length === 0 ? "(none)" : row.missing.map((entry) => oneLine(entry, 64)).join(", ")}`);
   if (row.violations !== void 0 && row.violations.length > 0) {
@@ -172,13 +141,53 @@ function runSurfaceBlocker(input) {
 }
 function harnessConfigPresentAt(rootDir) {
   try {
-    return lstatSync(path2.join(rootDir, "harness.config.ts")).isFile();
+    return lstatSync(path.join(rootDir, "harness.config.ts")).isFile();
   } catch {
     return false;
   }
 }
 
+// packages/cli/src/commands/check.ts
+var PROBE_FILE = ".delivery-harness-write-probe";
+var checkCommand = {
+  name: "check",
+  sourceId: "delivery-harness.cli.check",
+  summary: "Confirm the config loads and the evidence store is usable.",
+  usage: "Usage: delivery-harness check\nTakes no arguments.",
+  async run(context) {
+    const unexpected = context.args[0];
+    if (unexpected !== void 0) {
+      return { kind: "usage", message: `check takes no arguments, and ${oneLine(unexpected, 64)} is one.
+${checkCommand.usage}` };
+    }
+    try {
+      const storage = await resolveRecordStorage(context.rootDir, { storageNamespace: context.config.storageNamespace });
+      const probe = path2.join(storage.storageDir, PROBE_FILE);
+      await context.artifacts.writeTextFile(probe, "probe\n", { mode: 384 });
+      await context.artifacts.removeFile(probe);
+      return {
+        kind: "ok",
+        summary: [
+          `ok: gate ${context.config.gateId}`,
+          `  ${context.config.obligations.length} obligation(s), ${context.config.providers.length} provider(s)`,
+          `  store ${storage.storageDir} (writable)`,
+          `  delivery record path ${context.config.deliveryRecordPath} (base movement: ${context.config.deliveryRecordVerification.baseMovement})`
+        ].join("\n")
+      };
+    } catch (error) {
+      if (error instanceof BlockedError) {
+        return { kind: "blocked", blockers: [...error.blockers] };
+      }
+      throw error;
+    }
+  }
+};
+
 // packages/cli/src/commands/emit.ts
+import {
+  RUN_STORE_ID,
+  reduceToProviderId
+} from "./kernel.mjs";
 var USAGE = "Usage: delivery-harness emit <kind> [--run <id>] [--json <payload>] [--force] [--version 1|2] [--event-id <id>]";
 function parseArgs(args) {
   let kind;
@@ -256,6 +265,7 @@ var emitCommand = {
   name: "emit",
   sourceId: "delivery-harness.cli.emit",
   summary: "Append one run event to the current delivery run's journal.",
+  usage: USAGE,
   configFree: true,
   async run(context) {
     const parsed = parseArgs(context.args);
@@ -355,7 +365,7 @@ ${USAGE}` };
             details: `run ${runId}: ${first === void 0 ? "the store refused the append" : `${first.code} at ${oneLine(first.pointer, 64) || "/"}: ${oneLine(first.message, 200)}`}`,
             remediation: {
               id: "correct-the-event",
-              summary: "Correct the kind or the payload against the run-event/1 contract and emit again."
+              summary: `Correct the kind or the payload against the ${version} contract and emit again.`
             }
           })
         ]
@@ -425,7 +435,7 @@ async function startRun(surface, force, supplied, version, eventId) {
           details: `run ${runId}: ${first === void 0 ? "the store refused the append" : `${first.code} at ${oneLine(first.pointer, 64) || "/"}: ${oneLine(first.message, 200)}`}`,
           remediation: {
             id: "correct-the-event",
-            summary: "Correct the payload against the run-event/1 contract and emit again."
+            summary: `Correct the payload against the ${version} contract and emit again.`
           }
         })
       ]
@@ -503,7 +513,7 @@ ${result.stderr}`.slice(-4e3)}`);
   const allocation = await context.artifacts.allocateRunRoot({ providerId: provider.id, runId });
   if (!allocation.ok) return fail("check_artifact_unavailable", "Cannot allocate the declared check evidence root.");
   const snapshots = await captureCheckOutputSnapshots(context.rootDir, check.outputs ?? []);
-  if (snapshots === void 0 || digestCanonical(snapshots.map(({ path: path15, sha256 }) => ({ path: path15, sha256 }))) !== binding.outputsDigest) return fail("check_output_missing", "Declared outputs changed before evidence retention.");
+  if (snapshots === void 0 || digestCanonical(snapshots.map(({ path: path16, sha256 }) => ({ path: path16, sha256 }))) !== binding.outputsDigest) return fail("check_output_missing", "Declared outputs changed before evidence retention.");
   const outputArtifacts = [];
   for (const [index, output] of snapshots.entries()) {
     const contents = JSON.stringify({ path: output.path, base64: output.base64 });
@@ -706,12 +716,17 @@ async function wireRepo(rootDir, config) {
   const projectActivation = (candidate) => evaluateCandidateActivation({ rootDir, candidate, config });
   return { rootDir, workspaceId: storage.workspaceId, captureCandidate, projectActivation, storageOptions };
 }
-var USAGE2 = (commands) => [
-  "Usage: delivery-harness <command> [options]",
-  "",
-  "Commands:",
-  ...commands.map((command) => `  ${command.name.padEnd(16)}${command.summary}`)
-].join("\n");
+var NAME_GAP = 2;
+var USAGE2 = (commands) => {
+  const column = Math.max(0, ...commands.map((command) => command.name.length)) + NAME_GAP;
+  return [
+    "Usage: delivery-harness <command> [options]",
+    "",
+    "Commands:",
+    ...commands.map((command) => `  ${command.name.padEnd(column)}${command.summary}`)
+  ].join("\n");
+};
+var isHelpRequest = (args) => args.length === 1 && (args[0] === "--help" || args[0] === "-h");
 var COMPLETION_WRAPPED_COMMANDS = [
   "check",
   "prepare",
@@ -737,12 +752,16 @@ ${USAGE2(commands)}
 `);
     return EXIT_USAGE;
   }
+  if (isHelpRequest(args)) {
+    runtime.stdout(`${descriptor.usage}
+`);
+    return EXIT_OK;
+  }
   if (isConfigFreeCommand(descriptor)) {
     return runConfigFreeCommand(descriptor, args, runtime);
   }
-  const prepareHelp = descriptor.name === "prepare" && args.length === 1 && ["--help", "-h"].includes(args[0]);
   const startedAt = Date.now();
-  const observation = !prepareHelp && COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name) ? await beginCommandObservation(runtime.cwd, descriptor.name) : void 0;
+  const observation = COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name) ? await beginCommandObservation(runtime.cwd, descriptor.name) : void 0;
   let digest;
   const code = await runConfiguredCommand(descriptor, args, runtime, (value2) => {
     digest = value2;
@@ -1020,7 +1039,13 @@ var gateCommand = {
   name: "gate",
   sourceId: "delivery-harness.cli.gate",
   summary: "Evaluate the delivery gate for the current candidate.",
+  usage: "Usage: delivery-harness gate\nTakes no arguments; a waiver is offered only under a real TTY.",
   async run(context) {
+    const unexpected = context.args[0];
+    if (unexpected !== void 0) {
+      return { kind: "usage", message: `gate takes no arguments, and ${oneLine(unexpected, 64)} is one.
+${gateCommand.usage}` };
+    }
     const result = await runProviderBackedAdmission(context, { allowPrompt: true, includeInjectedLiveResults: true });
     if (result.admitted) {
       const waiverNote = result.waiver === "accepted" ? ` (waived: ${result.waivedObligationIds.join(", ")})` : "";
@@ -1125,6 +1150,8 @@ var maintainCommand = {
   name: "maintain",
   sourceId: SOURCE_ID,
   summary: "Maintain the product installation (update, rollback, trust-state pin/revoke/unrevoke/high-water-mark).",
+  usage: `Usage: delivery-harness maintain <operation> [options]
+Operations: ${MAINTAIN_OPERATIONS.join(" | ")}`,
   async run(context) {
     const [operation, ...rest] = context.args;
     if (operation === void 0) {
@@ -1349,6 +1376,8 @@ var managedCommand = {
   name: "managed",
   sourceId: SOURCE_ID2,
   summary: "Drive the managed delivery's next checkpoint (status, stages, sensor, review, admission, record, finish).",
+  usage: `Usage: delivery-harness managed <operation> [options]
+Operations: ${MANAGED_OPERATIONS.join(" | ")}`,
   async run(context) {
     const [operation, ...rest] = context.args;
     if (operation === void 0) {
@@ -1572,18 +1601,18 @@ import {
   revokePreparationAttempt,
   publishPreparationReceipt
 } from "./kernel.mjs";
+var USAGE3 = "Usage: delivery-harness prepare [--refresh-record-neutral]";
 var prepareCommand = {
   name: "prepare",
   sourceId: "delivery-harness.cli.prepare",
   summary: "Run preparation checks; --refresh-record-neutral permits proven artifact-only receipt refresh.",
+  // The text prepare has always answered `--help` with, unchanged; the
+  // boundary is what prints it now, for every command rather than this one.
+  usage: `${USAGE3}
+Ordinary prepare always runs mechanical checks. The refresh flag reuses prior success only when strict validation, policy, wiring and base are unchanged; otherwise it runs the checks.`,
   async run(context) {
-    const usage = "Usage: delivery-harness prepare [--refresh-record-neutral]";
-    if (context.args.length === 1 && ["--help", "-h"].includes(context.args[0])) {
-      return { kind: "ok", summary: `${usage}
-Ordinary prepare always runs mechanical checks. The refresh flag reuses prior success only when strict validation, policy, wiring and base are unchanged; otherwise it runs the checks.` };
-    }
     if (context.args.length > 1 || context.args.length === 1 && context.args[0] !== "--refresh-record-neutral") {
-      return { kind: "usage", message: usage };
+      return { kind: "usage", message: USAGE3 };
     }
     const refreshRecordNeutral = context.args[0] === "--refresh-record-neutral";
     const wiring = await context.wire();
@@ -1704,12 +1733,291 @@ import {
   deliveryRecordPathFor,
   discoverRecords
 } from "./kernel.mjs";
+import path8 from "node:path";
+
+// packages/cli/src/record-retention.ts
+import { createHash, randomUUID as randomUUID4 } from "node:crypto";
+import { execFile as execFile3 } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
+import { chmod, lstat, mkdir, open, readFile as readFile3, readdir as readdir2, rename, unlink } from "node:fs/promises";
 import path7 from "node:path";
+import { promisify } from "node:util";
+import {
+  ProcessLockRefused,
+  deriveDeliveryRecordPath,
+  resolveRecordStorage as resolveRecordStorage3,
+  sha256Hex as sha256Hex3,
+  withProcessLock
+} from "./kernel.mjs";
+var execFileAsync = promisify(execFile3);
+var SCOPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+var DIGEST = /^[a-f0-9]{64}$/;
+var LEDGER_VERSION = "delivery-record-retention/1";
+var RETENTION_LEAF = "delivery-record-retention";
+var failure = (code, detail) => ({ ok: false, code, detail });
+var scopeDigest = (scope) => createHash("sha256").update(scope, "utf8").digest("hex");
+function isRecord(value2) {
+  return typeof value2 === "object" && value2 !== null && !Array.isArray(value2);
+}
+function receipt(value2, recordBasePath) {
+  if (!isRecord(value2) || Object.keys(value2).sort().join(",") !== "deliverableDigest,relativePath,sha256") return void 0;
+  const relativePath = value2["relativePath"];
+  const deliverableDigest = value2["deliverableDigest"];
+  const sha256 = value2["sha256"];
+  if (typeof relativePath !== "string" || typeof deliverableDigest !== "string" || !DIGEST.test(deliverableDigest) || typeof sha256 !== "string" || !DIGEST.test(sha256) || deriveDeliveryRecordPath(recordBasePath, deliverableDigest) !== relativePath) return void 0;
+  return { relativePath, deliverableDigest, sha256 };
+}
+function parseLedger(value2, expectedName) {
+  if (!isRecord(value2) || Object.keys(value2).sort().join(",") !== "owned,pendingPrune,recordBasePath,scope,version" || value2["version"] !== LEDGER_VERSION || typeof value2["scope"] !== "string" || !SCOPE.test(value2["scope"]) || typeof value2["recordBasePath"] !== "string" || !Array.isArray(value2["owned"]) || !Array.isArray(value2["pendingPrune"]) || `${scopeDigest(value2["scope"])}.json` !== expectedName) return void 0;
+  const owned = value2["owned"].map((entry) => receipt(entry, value2["recordBasePath"]));
+  const pendingPrune = value2["pendingPrune"].map((entry) => receipt(entry, value2["recordBasePath"]));
+  if (owned.some((entry) => entry === void 0) || pendingPrune.some((entry) => entry === void 0)) return void 0;
+  const paths = [...owned, ...pendingPrune].map((entry) => entry.relativePath);
+  if (new Set(paths).size !== paths.length) return void 0;
+  return {
+    version: LEDGER_VERSION,
+    scope: value2["scope"],
+    recordBasePath: value2["recordBasePath"],
+    owned,
+    pendingPrune
+  };
+}
+async function readLedgers(storageDir) {
+  const ledgers = /* @__PURE__ */ new Map();
+  for (const name of await readdir2(storageDir).catch((error) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  })) {
+    if (!name.endsWith(".json")) continue;
+    const ledgerPath = path7.join(storageDir, name);
+    const stats = await lstat(ledgerPath).catch(() => void 0);
+    if (stats === void 0 || !stats.isFile() || stats.isSymbolicLink() || (stats.mode & 63) !== 0) {
+      return failure("retention_ledger_unsafe", `${ledgerPath} is not an owner-only regular file`);
+    }
+    let value2;
+    try {
+      value2 = JSON.parse(await readFile3(ledgerPath, "utf8"));
+    } catch {
+      return failure("retention_ledger_invalid", `${ledgerPath} is not valid JSON`);
+    }
+    const parsed = parseLedger(value2, name);
+    if (parsed === void 0) return failure("retention_ledger_invalid", `${ledgerPath} has an unsupported or inconsistent shape`);
+    ledgers.set(parsed.scope, parsed);
+  }
+  const owners = /* @__PURE__ */ new Map();
+  for (const ledger of ledgers.values()) {
+    for (const entry of [...ledger.owned, ...ledger.pendingPrune]) {
+      const prior = owners.get(entry.relativePath);
+      if (prior !== void 0 && prior !== ledger.scope) {
+        return failure("retention_ownership_ambiguous", `${entry.relativePath} is claimed by ${prior} and ${ledger.scope}`);
+      }
+      owners.set(entry.relativePath, ledger.scope);
+    }
+  }
+  return { ok: true, ledgers };
+}
+async function writeLedger(ledgerPath, ledger) {
+  await mkdir(path7.dirname(ledgerPath), { recursive: true, mode: 448 });
+  await chmod(path7.dirname(ledgerPath), 448);
+  const temporary = `${ledgerPath}.tmp-${randomUUID4()}`;
+  const handle = await open(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 384);
+  try {
+    await handle.writeFile(`${JSON.stringify(ledger)}
+`, "utf8");
+    await handle.sync();
+    await handle.chmod(384);
+  } finally {
+    await handle.close();
+  }
+  await rename(temporary, ledgerPath);
+}
+async function verifyWorkingRecord(rootDir, entry) {
+  const absolute = path7.join(rootDir, entry.relativePath);
+  const stats = await lstat(absolute).catch((error) => error.code === "ENOENT" ? void 0 : Promise.reject(error));
+  if (stats === void 0) return failure("retention_owned_record_changed", `${entry.relativePath} is missing`);
+  if (!stats.isFile() || stats.isSymbolicLink()) return failure("retention_owned_record_unsafe", `${entry.relativePath} is not a regular file`);
+  if (sha256Hex3(await readFile3(absolute)) !== entry.sha256) {
+    return failure("retention_owned_record_changed", `${entry.relativePath} no longer matches its ownership receipt`);
+  }
+  return { ok: true };
+}
+async function gitCarriesExactRecord(rootDir, entry) {
+  try {
+    const { stdout: listing } = await execFileAsync("git", ["ls-tree", "HEAD", "--", entry.relativePath], { cwd: rootDir, encoding: "utf8" });
+    if (!listing.startsWith("100644 blob ") || !listing.endsWith(`	${entry.relativePath}
+`)) return false;
+    const { stdout } = await execFileAsync("git", ["show", `HEAD:${entry.relativePath}`], { cwd: rootDir, encoding: "buffer", maxBuffer: 20 * 1024 * 1024 });
+    return sha256Hex3(stdout) === entry.sha256;
+  } catch {
+    return false;
+  }
+}
+async function applyDeliveryRecordRetention(input) {
+  if (!SCOPE.test(input.scope)) return failure("retention_scope_invalid", "retention scope must be a plain 1-128 character key");
+  if (!Number.isSafeInteger(input.keepSuperseded) || input.keepSuperseded < 0 || input.keepSuperseded > 100) {
+    return failure("retention_bound_invalid", "keepSuperseded must be an integer from 0 through 100");
+  }
+  if (!DIGEST.test(input.current.deliverableDigest) || deriveDeliveryRecordPath(input.recordBasePath, input.current.deliverableDigest) !== input.current.relativePath) {
+    return failure("retention_ledger_invalid", "the current path is not the configured per-digest record path");
+  }
+  const storage = await resolveRecordStorage3(input.rootDir, { storageNamespace: input.storageNamespace, leaf: RETENTION_LEAF });
+  const ledgerPath = path7.join(storage.storageDir, `${scopeDigest(input.scope)}.json`);
+  const lockPath = path7.join(storage.storageDir, ".ownership.lock");
+  await mkdir(storage.storageDir, { recursive: true, mode: 448 });
+  try {
+    return await withProcessLock(lockPath, 5e3, async () => {
+      const loaded = await readLedgers(storage.storageDir);
+      if (!loaded.ok) return loaded;
+      const existing = loaded.ledgers.get(input.scope);
+      if (existing !== void 0 && existing.recordBasePath !== input.recordBasePath) {
+        return failure("retention_ledger_invalid", `retention scope ${input.scope} was created for a different delivery record path`);
+      }
+      let ledger = existing ?? {
+        version: LEDGER_VERSION,
+        scope: input.scope,
+        recordBasePath: input.recordBasePath,
+        owned: [],
+        pendingPrune: []
+      };
+      const currentSha = sha256Hex3(input.current.bytes);
+      const currentReceipt = {
+        relativePath: input.current.relativePath,
+        deliverableDigest: input.current.deliverableDigest,
+        sha256: currentSha
+      };
+      const returningCurrent = ledger.pendingPrune.find((entry) => entry.relativePath === currentReceipt.relativePath);
+      if (returningCurrent !== void 0) {
+        if (returningCurrent.sha256 !== currentReceipt.sha256 || returningCurrent.deliverableDigest !== currentReceipt.deliverableDigest) {
+          return failure("retention_owned_record_changed", `${currentReceipt.relativePath} conflicts with its pending ownership receipt`);
+        }
+        ledger = {
+          ...ledger,
+          owned: [...ledger.owned, returningCurrent],
+          pendingPrune: ledger.pendingPrune.filter((entry) => entry.relativePath !== currentReceipt.relativePath)
+        };
+        await writeLedger(ledgerPath, ledger);
+      }
+      for (const pending of ledger.pendingPrune) {
+        const absolute = path7.join(input.rootDir, pending.relativePath);
+        const present = await lstat(absolute).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error));
+        if (present) {
+          const verified = await verifyWorkingRecord(input.rootDir, pending);
+          if (!verified.ok) return verified;
+          if (!await gitCarriesExactRecord(input.rootDir, pending)) {
+            return failure("retention_history_missing", `${pending.relativePath} is not preserved byte-for-byte at HEAD`);
+          }
+          try {
+            await unlink(absolute);
+          } catch (error) {
+            return failure("retention_cleanup_failed", `could not remove ${pending.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
+      if (ledger.pendingPrune.length > 0) {
+        ledger = { ...ledger, pendingPrune: [] };
+        await writeLedger(ledgerPath, ledger);
+      }
+      const currentIndex = ledger.owned.findIndex((entry) => entry.relativePath === currentReceipt.relativePath);
+      if (currentIndex >= 0 && (ledger.owned[currentIndex].sha256 !== currentSha || ledger.owned[currentIndex].deliverableDigest !== currentReceipt.deliverableDigest)) {
+        return failure("retention_owned_record_changed", `${currentReceipt.relativePath} conflicts with its ownership receipt`);
+      }
+      for (const other of loaded.ledgers.values()) {
+        if (other.scope !== input.scope && [...other.owned, ...other.pendingPrune].some((entry) => entry.relativePath === currentReceipt.relativePath)) {
+          return failure("retention_ownership_ambiguous", `${currentReceipt.relativePath} belongs to retention scope ${other.scope}`);
+        }
+      }
+      const currentStats = await lstat(path7.join(input.rootDir, currentReceipt.relativePath)).catch((error) => error.code === "ENOENT" ? void 0 : Promise.reject(error));
+      if (currentIndex < 0 && currentStats !== void 0) {
+        return failure("retention_path_unowned", `${currentReceipt.relativePath} existed before retention scope ${input.scope} owned it`);
+      }
+      for (const entry of ledger.owned) {
+        if (entry.relativePath === currentReceipt.relativePath && currentStats === void 0) continue;
+        const verified = await verifyWorkingRecord(input.rootDir, entry);
+        if (!verified.ok) return verified;
+      }
+      const ordered = [
+        ...ledger.owned.filter((entry) => entry.relativePath !== currentReceipt.relativePath),
+        currentReceipt
+      ];
+      const retainCount = input.keepSuperseded + 1;
+      const pendingPrune = ordered.slice(0, Math.max(0, ordered.length - retainCount));
+      for (const entry of pendingPrune) {
+        if (!await gitCarriesExactRecord(input.rootDir, entry)) {
+          return failure("retention_history_missing", `${entry.relativePath} is not preserved byte-for-byte at HEAD`);
+        }
+      }
+      ledger = { ...ledger, owned: ordered, pendingPrune: [] };
+      await writeLedger(ledgerPath, ledger);
+      if (currentStats === void 0) {
+        try {
+          await input.writeCurrent();
+        } catch (error) {
+          return failure("retention_write_failed", error instanceof Error ? error.message : String(error));
+        }
+      }
+      const verifiedCurrent = await verifyWorkingRecord(input.rootDir, currentReceipt);
+      if (!verifiedCurrent.ok) return verifiedCurrent;
+      if (pendingPrune.length > 0) {
+        const kept = ordered.slice(pendingPrune.length);
+        ledger = { ...ledger, owned: kept, pendingPrune };
+        await writeLedger(ledgerPath, ledger);
+        for (const entry of pendingPrune) {
+          try {
+            await unlink(path7.join(input.rootDir, entry.relativePath));
+          } catch (error) {
+            return failure("retention_cleanup_failed", `could not remove ${entry.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        ledger = { ...ledger, pendingPrune: [] };
+        await writeLedger(ledgerPath, ledger);
+      }
+      return { ok: true, pruned: pendingPrune.map((entry) => entry.relativePath), ledgerPath };
+    });
+  } catch (error) {
+    if (error instanceof ProcessLockRefused) {
+      return failure("retention_lock_unavailable", `retention scope ${input.scope} is already being updated: ${error.reason}`);
+    }
+    throw error;
+  }
+}
+
+// packages/cli/src/commands/record.ts
+function parseRetentionOptions(args) {
+  if (args.length === 0) return void 0;
+  let scope;
+  let keepSuperseded;
+  for (let index = 0; index < args.length; index += 2) {
+    const flag3 = args[index];
+    const value2 = args[index + 1];
+    if (value2 === void 0) return `${flag3 ?? "record option"} requires a value`;
+    if (flag3 === "--retention-scope" && scope === void 0) scope = value2;
+    else if (flag3 === "--keep-superseded" && keepSuperseded === void 0) {
+      if (!/^\d+$/.test(value2)) return "--keep-superseded must be an integer from 0 through 100";
+      keepSuperseded = Number(value2);
+    } else return `${oneLine(flag3 ?? "record option", 64)} is not a valid record retention option`;
+  }
+  if (scope === void 0 || keepSuperseded === void 0) {
+    return "--retention-scope and --keep-superseded must be supplied together";
+  }
+  if (!Number.isSafeInteger(keepSuperseded) || keepSuperseded > 100) {
+    return "--keep-superseded must be an integer from 0 through 100";
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(scope)) {
+    return "--retention-scope must be a plain 1-128 character delivery key";
+  }
+  return { scope, keepSuperseded };
+}
 var recordCommand = {
   name: "record",
   sourceId: "delivery-harness.cli.record",
   summary: "Write the tracked delivery record for an admitted gate.",
+  usage: "Usage: delivery-harness record [--retention-scope <delivery-key> --keep-superseded <0-100>]\nRetention is opt-in; run gate first if a waiver is needed.",
   async run(context) {
+    const retention = parseRetentionOptions(context.args);
+    if (typeof retention === "string") {
+      return { kind: "usage", message: `${retention}.
+${recordCommand.usage}` };
+    }
     const wiring = await context.wire();
     const admission = await runProviderBackedAdmission(context, { allowPrompt: false, includeInjectedLiveResults: false });
     if (!admission.admitted || admission.decision === void 0) {
@@ -1769,9 +2077,49 @@ var recordCommand = {
     );
     if (!checked.ok) return { kind: "blocked", blockers: [...checked.blockers] };
     const relativePath = deliveryRecordPathFor(context.config, decision.candidate.deliverable.digest);
-    const absolutePath = path7.join(context.rootDir, relativePath);
-    await context.artifacts.writeTextFile(absolutePath, deliveryRecordBytes(built.record));
-    return { kind: "ok", summary: `recorded ${relativePath}` };
+    const absolutePath = path8.join(context.rootDir, relativePath);
+    const bytes = deliveryRecordBytes(built.record);
+    if (retention === void 0) {
+      await context.artifacts.writeTextFile(absolutePath, bytes);
+      return { kind: "ok", summary: `recorded ${relativePath}` };
+    }
+    const retained = await applyDeliveryRecordRetention({
+      rootDir: context.rootDir,
+      storageNamespace: context.config.storageNamespace,
+      scope: retention.scope,
+      keepSuperseded: retention.keepSuperseded,
+      recordBasePath: context.config.deliveryRecordPath,
+      current: {
+        relativePath,
+        deliverableDigest: decision.candidate.deliverable.digest,
+        bytes
+      },
+      writeCurrent: () => context.artifacts.writeTextFile(absolutePath, bytes)
+    });
+    if (!retained.ok) {
+      return {
+        kind: "blocked",
+        blockers: [
+          commandBlocker({
+            code: retained.code,
+            sourceId: "delivery-harness.cli.record",
+            summary: "Tracked delivery-record retention did not complete.",
+            details: retained.detail,
+            remediations: [
+              {
+                id: "repair-record-retention",
+                kind: "manual_action",
+                summary: "Preserve the exact owned record bytes in Git, repair the named ownership conflict, then retry record with the same scope and bound."
+              }
+            ]
+          })
+        ]
+      };
+    }
+    return {
+      kind: "ok",
+      summary: `recorded ${relativePath}${retained.pruned.length === 0 ? "" : `; pruned Git-preserved ${retained.pruned.join(", ")}`}`
+    };
   }
 };
 
@@ -1779,9 +2127,9 @@ var recordCommand = {
 import { evaluatePreparationReceipt as evaluatePreparationReceipt3 } from "./kernel.mjs";
 
 // packages/cli/src/review-evidence.ts
-import { randomUUID as randomUUID4 } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import path8 from "node:path";
+import { randomUUID as randomUUID5 } from "node:crypto";
+import { mkdir as mkdir2, writeFile } from "node:fs/promises";
+import path9 from "node:path";
 import {
   resolveReviewCharters,
   validateReviewedContext,
@@ -1795,10 +2143,12 @@ import {
   BlockedError as BlockedError3,
   digestCanonical as digestCanonical2,
   evaluatePreparationReceipt as evaluatePreparationReceipt2,
-  sha256Hex as sha256Hex3
+  sha256Hex as sha256Hex4,
+  REVIEW_GREEN_1,
+  REVIEW_GREEN_2
 } from "./kernel.mjs";
 import { validateReviewedContext as validateReviewedContext2, parseReviewOutcome as parseReviewOutcome2, deriveTelemetry as deriveTelemetry2, reviewerLists as reviewerLists2, REVIEWER_RESULTS } from "./kernel.mjs";
-var REVIEW_PAYLOAD_SPEC = "review.green/1";
+var REVIEW_PAYLOAD_SPECS = [REVIEW_GREEN_2, REVIEW_GREEN_1];
 var ENVELOPE_SPEC = "delivery-evidence/1";
 var EMITTER_VERSION = "1.0.0";
 var REVIEW_CONTEXT_SPEC = "review-context/1";
@@ -1812,8 +2162,8 @@ function manifestCandidate(captured) {
     workspaceId: captured.workspaceId
   };
 }
-async function buildReviewContext(rootDir, config, candidate, receipt) {
-  const inputs = await capturePortableEvidenceContext2(config, repositoryEvidenceReader2(rootDir, createArtifactsPort2()), receipt.preparationFingerprint);
+async function buildReviewContext(rootDir, config, candidate, receipt2) {
+  const inputs = await capturePortableEvidenceContext2(config, repositoryEvidenceReader2(rootDir, createArtifactsPort2()), receipt2.preparationFingerprint);
   const charters = inputs.reviewerCharters;
   if (charters.length === 0 || inputs.release === null) throw new OutcomeError("the compiled policy activates no review lens or installed release");
   const binding = {
@@ -1830,11 +2180,11 @@ async function buildReviewContext(rootDir, config, candidate, receipt) {
 }
 function resolveGateBinding(config) {
   const obligations = config.obligations.filter(
-    (obligation2) => obligation2.acceptedPayloadSpecs.includes(REVIEW_PAYLOAD_SPEC)
+    (obligation2) => REVIEW_PAYLOAD_SPECS.some((payloadSpec) => obligation2.acceptedPayloadSpecs.includes(payloadSpec))
   );
   if (obligations.length !== 1) {
     throw new OutcomeError(
-      `the gate declares ${obligations.length} obligations accepting ${REVIEW_PAYLOAD_SPEC}; this provider serves exactly one`
+      `the gate declares ${obligations.length} obligations accepting a supported review.green payload; this provider serves exactly one`
     );
   }
   const obligation = obligations[0];
@@ -1844,6 +2194,12 @@ function resolveGateBinding(config) {
     );
   }
   return { obligationId: obligation.id, providerId: obligation.providers[0] };
+}
+function resolveReviewPayloadSpec(config, obligationId) {
+  const obligation = config.obligations.find((entry) => entry.id === obligationId);
+  const payloadSpec = REVIEW_PAYLOAD_SPECS.find((candidate) => obligation?.acceptedPayloadSpecs.includes(candidate));
+  if (payloadSpec === void 0) throw new OutcomeError(`obligation ${obligationId} accepts no supported review.green payload`);
+  return payloadSpec;
 }
 async function emitReviewEvidence(context, original, document) {
   const { rootDir, config } = context;
@@ -1858,12 +2214,13 @@ async function emitReviewEvidence(context, original, document) {
   const charters = current.binding.charters.map((charter) => charter.reviewerId).sort();
   const outcome2 = parseReviewOutcome(document, charters);
   const binding = current.binding.gate;
+  const payloadSpec = resolveReviewPayloadSpec(config, binding.obligationId);
   const candidate = manifestCandidate(captured);
   const provider = {
     id: binding.providerId,
     version: EMITTER_VERSION,
     // One emitter run is one evaluated pass over this candidate.
-    runId: `r-${randomUUID4()}`,
+    runId: `r-${randomUUID5()}`,
     finalPassId: outcome2.finalPassId ?? "pass-1"
   };
   const reviewed = original;
@@ -1880,13 +2237,13 @@ async function emitReviewEvidence(context, original, document) {
   if (!allocation.ok) throw new OutcomeError(`the run root was refused: ${allocation.reason}`);
   const runRoot = allocation.runRoot.path;
   const lists = reviewerLists(charters, outcome2);
-  await mkdir(path8.join(runRoot, "reviewers"), { recursive: true });
+  await mkdir2(path9.join(runRoot, "reviewers"), { recursive: true });
   const artifacts = [];
   for (const [name, value2] of [["review-context", original], ["review-outcome", document]]) {
     const bytes = `${JSON.stringify(value2, null, 2)}
 `;
-    await writeFile(path8.join(runRoot, `${name}.json`), bytes, "utf8");
-    artifacts.push({ path: `${name}.json`, sha256: sha256Hex3(bytes), role: name });
+    await writeFile(path9.join(runRoot, `${name}.json`), bytes, "utf8");
+    artifacts.push({ path: `${name}.json`, sha256: sha256Hex4(bytes), role: name });
   }
   if (digestCanonical2(reviewed.binding.candidate) !== digestCanonical2(candidate)) {
     const bytes = `${JSON.stringify({
@@ -1899,8 +2256,8 @@ async function emitReviewEvidence(context, original, document) {
       reviewRoundAdded: false
     }, null, 2)}
 `;
-    await writeFile(path8.join(runRoot, "review-context-projection.json"), bytes, "utf8");
-    artifacts.push({ path: "review-context-projection.json", sha256: sha256Hex3(bytes), role: "review-context-projection" });
+    await writeFile(path9.join(runRoot, "review-context-projection.json"), bytes, "utf8");
+    artifacts.push({ path: "review-context-projection.json", sha256: sha256Hex4(bytes), role: "review-context-projection" });
   }
   for (const reviewerId of lists.approved) {
     const stamp = `${JSON.stringify(
@@ -1917,8 +2274,8 @@ async function emitReviewEvidence(context, original, document) {
     )}
 `;
     const relativePath = `reviewers/${reviewerId}.json`;
-    await writeFile(path8.join(runRoot, relativePath), stamp, "utf8");
-    artifacts.push({ path: relativePath, sha256: sha256Hex3(stamp), role: "reviewer-approval" });
+    await writeFile(path9.join(runRoot, relativePath), stamp, "utf8");
+    artifacts.push({ path: relativePath, sha256: sha256Hex4(stamp), role: "reviewer-approval" });
   }
   const manifest = {
     spec: ENVELOPE_SPEC,
@@ -1932,7 +2289,7 @@ async function emitReviewEvidence(context, original, document) {
     claims: [
       {
         obligation: binding.obligationId,
-        payloadSpec: REVIEW_PAYLOAD_SPEC,
+        payloadSpec,
         payload: {
           verdict: outcome2.verdict,
           finalized: true,
@@ -1949,20 +2306,23 @@ async function emitReviewEvidence(context, original, document) {
       }
     ]
   };
-  const manifestPath = path8.join(runRoot, "manifest.json");
+  const manifestPath = path9.join(runRoot, "manifest.json");
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}
 `, "utf8");
   return { manifestPath, runRoot };
 }
 
 // packages/cli/src/commands/review-context.ts
+var USAGE4 = "Usage: delivery-harness review-context [--json]";
 var reviewContextCommand = {
   name: "review-context",
   sourceId: "delivery-harness.cli.review-context",
   summary: "Show the reviewable-change context for the prepared candidate.",
+  usage: USAGE4,
   async run(context) {
     if (context.args.length > 0 && !(context.args.length === 1 && context.args[0] === "--json")) {
-      return { kind: "usage", message: "review-context accepts only --json." };
+      return { kind: "usage", message: `review-context accepts only --json.
+${USAGE4}` };
     }
     const wiring = await context.wire();
     const capture = await wiring.captureCandidate();
@@ -2026,12 +2386,13 @@ var reviewContextCommand = {
 };
 
 // packages/cli/src/commands/emit-review-evidence.ts
-import { readFile as readFile4 } from "node:fs/promises";
-import path9 from "node:path";
+import { readFile as readFile5 } from "node:fs/promises";
+import path10 from "node:path";
 var emitReviewEvidenceCommand = {
   name: "emit-review-evidence",
   sourceId: "delivery-harness.cli.emit-review-evidence",
   summary: "Bind concluded review outcomes to their original prepared context.",
+  usage: "Usage: delivery-harness emit-review-evidence --context <review-context.json>\nReads a review-outcome/1 document on stdin.",
   async run(context) {
     if (context.args.length !== 2 || context.args[0] !== "--context" || !context.args[1] || context.args[1].startsWith("-")) {
       return { kind: "usage", message: "emit-review-evidence requires --context <review-context.json> and a review-outcome/1 document on stdin." };
@@ -2039,7 +2400,7 @@ var emitReviewEvidenceCommand = {
     let original;
     let document;
     try {
-      original = JSON.parse(await readFile4(path9.resolve(context.rootDir, context.args[1]), "utf8"));
+      original = JSON.parse(await readFile5(path10.resolve(context.rootDir, context.args[1]), "utf8"));
       const raw = await context.readStdin?.() ?? "";
       if (!raw.trim()) return { kind: "usage", message: "The review-outcome/1 document is required on stdin." };
       document = JSON.parse(raw);
@@ -2063,12 +2424,12 @@ var emitReviewEvidenceCommand = {
 
 // packages/cli/src/run-view-record.ts
 import { realpath as realpath3 } from "node:fs/promises";
-import path11 from "node:path";
+import path12 from "node:path";
 
 // packages/cli/src/run-archive-commands.ts
 import { constants } from "node:fs";
-import { open, realpath as realpath2 } from "node:fs/promises";
-import path10 from "node:path";
+import { open as open2, realpath as realpath2 } from "node:fs/promises";
+import path11 from "node:path";
 import {
   createArtifactsPort as createArtifactsPort3,
   readRunArtifact,
@@ -2087,7 +2448,7 @@ import {
 // packages/cli/src/run-attachments.ts
 import {
   canonicalize,
-  sha256Hex as sha256Hex4,
+  sha256Hex as sha256Hex5,
   portableArtifactContents,
   applySecretDiscipline,
   MAX_PORTABLE_ARTIFACTS,
@@ -2131,7 +2492,7 @@ function validateRunAttachments(value2, events) {
       const observed = read.observations.get(metadata.digest);
       if (!observed || observed.base64 === void 0) return false;
       const bytes = Buffer.from(observed.base64, "base64");
-      if (bytes.length !== metadata.sizeBytes || sha256Hex4(bytes) !== metadata.digest)
+      if (bytes.length !== metadata.sizeBytes || sha256Hex5(bytes) !== metadata.digest)
         return false;
       let structured = null;
       try {
@@ -2391,16 +2752,16 @@ function buildRunExport(input) {
     } : {}
   };
 }
-var isRecord = (value2) => value2 !== null && typeof value2 === "object" && !Array.isArray(value2);
+var isRecord2 = (value2) => value2 !== null && typeof value2 === "object" && !Array.isArray(value2);
 function parseRunExport(text2) {
   const invalid = { ok: false, code: "run_export_invalid" };
   try {
     if (Buffer.byteLength(text2, "utf8") > MAX_PORTABLE_RECORD_BYTES)
       return invalid;
     const value2 = JSON.parse(text2);
-    if (!isRecord(value2) || !["delivery-run-export/1", "delivery-run-export/2"].includes(
+    if (!isRecord2(value2) || !["delivery-run-export/1", "delivery-run-export/2"].includes(
       String(value2["spec"])
-    ) || value2["labels"] !== READOUT_LABELS || typeof value2["runId"] !== "string" || value2["runId"].length > 128 || !RUN_STORE_ID2.test(value2["runId"]) || !Array.isArray(value2["events"]) || !Array.isArray(value2["refusedAppends"]) || !isRecord(value2["readout"]))
+    ) || value2["labels"] !== READOUT_LABELS || typeof value2["runId"] !== "string" || value2["runId"].length > 128 || !RUN_STORE_ID2.test(value2["runId"]) || !Array.isArray(value2["events"]) || !Array.isArray(value2["refusedAppends"]) || !isRecord2(value2["readout"]))
       return invalid;
     const v2 = value2["spec"] === "delivery-run-export/2";
     const hasAttachments = Object.prototype.hasOwnProperty.call(
@@ -2412,7 +2773,7 @@ function parseRunExport(text2) {
     if (Object.keys(value2).filter((key) => key !== "attachments").sort().join(",") !== (v2 ? "costs,events,labels,progress,readout,refusedAppends,runId,spec,summary" : "costs,events,labels,readout,refusedAppends,runId,spec,summary"))
       return invalid;
     for (const [index, event] of value2["events"].entries()) {
-      if (!validateRunEvent(event).ok || !isRecord(event) || event["runId"] !== value2["runId"] || event["seq"] !== index + 1 || event["version"] !== (v2 ? "run-event/2" : "run-event/1"))
+      if (!validateRunEvent(event).ok || !isRecord2(event) || event["runId"] !== value2["runId"] || event["seq"] !== index + 1 || event["version"] !== (v2 ? "run-event/2" : "run-event/1"))
         return invalid;
     }
     if (hasAttachments && !validateRunAttachments(
@@ -2551,7 +2912,7 @@ var blocked3 = (reason) => ({
   ]
 });
 async function readArchiveFile(file) {
-  const h = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const h = await open2(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat2 = await h.stat();
     if (!stat2.isFile() || stat2.size > MAX_PORTABLE_RECORD_BYTES3)
@@ -2573,23 +2934,23 @@ async function readArchiveFile(file) {
   }
 }
 async function resolvedDestination(file) {
-  let parent = path10.dirname(file);
-  const suffix = [path10.basename(file)];
+  let parent = path11.dirname(file);
+  const suffix = [path11.basename(file)];
   for (; ; ) {
     try {
-      return path10.join(await realpath2(parent), ...suffix);
+      return path11.join(await realpath2(parent), ...suffix);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      suffix.unshift(path10.basename(parent));
-      const next = path10.dirname(parent);
+      suffix.unshift(path11.basename(parent));
+      const next = path11.dirname(parent);
       if (next === parent) throw error;
       parent = next;
     }
   }
 }
 var within = (parent, child) => {
-  const relative = path10.relative(parent, child);
-  return relative === "" || !relative.startsWith("..") && !path10.isAbsolute(relative);
+  const relative = path11.relative(parent, child);
+  return relative === "" || !relative.startsWith("..") && !path11.isAbsolute(relative);
 };
 async function runArchiveCommand(context, command, args) {
   if (command === "export" && (args.length !== 3 || args[1] !== "--output"))
@@ -2605,7 +2966,7 @@ async function runArchiveCommand(context, command, args) {
   try {
     if (command === "archive") {
       const text2 = await readArchiveFile(
-        path10.resolve(context.rootDir, args[0])
+        path11.resolve(context.rootDir, args[0])
       );
       const parsed = parseRunExport(text2);
       if (!parsed.ok) return blocked3("archive invalid or unsupported");
@@ -2645,7 +3006,7 @@ async function runArchiveCommand(context, command, args) {
     });
     if (!archive.ok) return blocked3(archive.reason);
     const destination = await resolvedDestination(
-      path10.resolve(context.rootDir, args[2])
+      path11.resolve(context.rootDir, args[2])
     );
     if (within(await realpath2(resolved.surface.commonDir), destination) || within(await realpath2(resolved.surface.runsDir), destination))
       return blocked3(
@@ -2658,7 +3019,7 @@ async function runArchiveCommand(context, command, args) {
       JSON.stringify({
         spec: "run-archive-export/1",
         runId,
-        path: path10.resolve(context.rootDir, args[2]),
+        path: path11.resolve(context.rootDir, args[2]),
         sizeBytes: Buffer.byteLength(archive.text),
         authority: "observation"
       })
@@ -2679,7 +3040,7 @@ import {
 async function withRetainedRecord(view, root, relativePath) {
   if (relativePath === void 0 || view.historical) return view;
   const fields = [];
-  const add = (label, value2) => fields.push({ label, value: value2 });
+  const add = (label2, value2) => fields.push({ label: label2, value: value2 });
   add("Source", relativePath);
   add(
     "Applicability",
@@ -2695,7 +3056,7 @@ async function withRetainedRecord(view, root, relativePath) {
     if (isSafeRelativePath(relativePath)) {
       const resolvedRoot = await realpath3(root);
       const resolvedFile = await realpath3(
-        path11.join(resolvedRoot, relativePath)
+        path12.join(resolvedRoot, relativePath)
       );
       if (!isInsideResolved(resolvedRoot, resolvedFile))
         status = "outside_run_root";
@@ -2777,11 +3138,11 @@ async function withRetainedRecord(view, root, relativePath) {
 
 // packages/cli/src/run-view.ts
 var value = (v) => v === void 0 ? "Unreported" : typeof v === "string" ? v : JSON.stringify(v);
-var item = (id, label, fields, artifactId) => ({
+var item = (id, label2, fields, artifactId) => ({
   id,
-  label,
-  fields: Object.entries(fields).map(([label2, v]) => ({
-    label: label2,
+  label: label2,
+  fields: Object.entries(fields).map(([label3, v]) => ({
+    label: label3,
     value: value(v)
   })),
   ...artifactId === void 0 ? {} : { artifactId }
@@ -3078,8 +3439,8 @@ async function runViewCommand(context, args) {
       if (!section.items.length) context.write(`  ${section.empty}`);
       for (const item2 of section.items) {
         context.write(`  ${oneLine(item2.label)}`);
-        for (const field of item2.fields)
-          context.write(`    ${oneLine(field.label)}: ${oneLine(field.value, 8192)}`);
+        for (const field2 of item2.fields)
+          context.write(`    ${oneLine(field2.label)}: ${oneLine(field2.value, 8192)}`);
         if (item2.artifactId)
           context.write(
             `    Report: runs artifact ${oneLine(args[0])} ${oneLine(item2.artifactId)} --json`
@@ -3220,8 +3581,114 @@ async function runArtifactCommand(context, command, args) {
 
 // packages/cli/src/commands/runs.ts
 import { stat } from "node:fs/promises";
-import path12 from "node:path";
-import { evaluateRunJournal as evaluateRunJournal4 } from "./kernel.mjs";
+import path13 from "node:path";
+import { RUN_JOURNAL_STATUSES, evaluateRunJournal as evaluateRunJournal4 } from "./kernel.mjs";
+
+// packages/cli/src/run-server.ts
+import { createHash as createHash2 } from "node:crypto";
+
+// packages/cli/src/run-live.ts
+var RUN_LIVE_SCRIPT = String.raw`(() => {
+  const root = document.querySelector('main');
+  const toggle = document.querySelector('[data-live-toggle]');
+  const status = document.querySelector('[data-live-status]');
+  if (!root || !toggle || !status) return;
+  let paused = false;
+  let timer;
+  let interactingUntil = 0;
+  const interval = Number(root.dataset.pollSeconds) * 1000;
+  const interact = () => { interactingUntil = Date.now() + 1500; };
+  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    document.addEventListener(event, interact, { passive: true });
+  }
+  toggle.addEventListener('click', event => {
+    event.preventDefault();
+    paused = !paused;
+    toggle.textContent = paused ? 'Resume live updates' : 'Pause updates';
+    status.textContent = paused ? 'Updates paused' : 'Live';
+  });
+  // Preserve existing nodes wherever possible, including focused controls and
+  // native disclosure state. Stable keys keep newly inserted cards from taking
+  // the identity of an earlier card the operator is reading.
+  const key = node => node.nodeType === 1 ? node.id || node.getAttribute('data-key') : null;
+  function patch(current, next) {
+    if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) {
+      current.replaceWith(next.cloneNode(true));
+      return;
+    }
+    if (current.nodeType !== 1) {
+      if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+      return;
+    }
+    if (current.hasAttribute('data-live-controls')) return;
+    for (const attr of [...current.attributes]) {
+      if (current.tagName === 'DETAILS' && attr.name === 'open') continue;
+      if (!next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+    }
+    for (const attr of next.attributes) {
+      if (current.tagName !== 'DETAILS' || attr.name !== 'open') current.setAttribute(attr.name, attr.value);
+    }
+    const children = [...current.childNodes];
+    const used = new Set();
+    let cursor = current.firstChild;
+    for (const incoming of next.childNodes) {
+      const incomingKey = key(incoming);
+      const existing = incomingKey
+        ? children.find(child => !used.has(child) && key(child) === incomingKey)
+        : children.find(child => !used.has(child) && !key(child) && child.nodeType === incoming.nodeType && child.nodeName === incoming.nodeName);
+      if (existing) {
+        used.add(existing);
+        if (existing !== cursor) current.insertBefore(existing, cursor);
+        patch(existing, incoming);
+        cursor = existing.nextSibling;
+      } else {
+        const added = incoming.cloneNode(true);
+        current.insertBefore(added, cursor);
+      }
+    }
+    for (const child of children) if (!used.has(child)) child.remove();
+  }
+  const busy = () => Date.now() < interactingUntil || !window.getSelection()?.isCollapsed;
+  async function poll() {
+    if (paused || document.hidden || busy()) {
+      timer = setTimeout(poll, interval);
+      return;
+    }
+    try {
+      const response = await fetch(location.pathname, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw Error('read');
+      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const next = page.querySelector('main');
+      if (!next) throw Error('read');
+      if (paused || document.hidden || busy()) { timer = setTimeout(poll, interval); return; }
+      const focused = document.activeElement;
+      if (focused && focused !== document.body && !focused.closest('[data-live-controls]')) {
+        const context = focused.closest('[id], [data-key]');
+        const replacement = context && [...next.querySelectorAll('[id], [data-key]')].find(element => key(element) === key(context));
+        // A completed attempt may move into collapsed history. Keep the current
+        // reading snapshot until focus leaves it, rather than removing the
+        // focused control or presenting a stale duplicate as current work.
+        if (!replacement || context.closest('section')?.id !== replacement.closest('section')?.id) {
+          status.textContent = 'New update ready · Finish reading to apply';
+          timer = setTimeout(poll, interval);
+          return;
+        }
+      }
+      const anchor = [...root.querySelectorAll('[id], [data-key]')].find(element => element.getBoundingClientRect().top >= 0 && element.getBoundingClientRect().top < window.innerHeight && element.getBoundingClientRect().height > 0);
+      const offset = anchor?.getBoundingClientRect().top;
+      const scroll = window.scrollY;
+      patch(root, next);
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+      if (anchor?.isConnected && offset !== undefined) window.scrollBy(0, anchor.getBoundingClientRect().top - offset);
+      else window.scrollTo(0, scroll);
+      status.textContent = next.dataset.live === 'true' ? 'Live' : 'Saved observations';
+      if (next.dataset.live !== 'true') { toggle.hidden = true; return; }
+    } catch { status.textContent = 'Update unavailable · Retrying'; }
+    timer = setTimeout(poll, interval);
+  }
+  timer = setTimeout(poll, interval);
+  window.addEventListener('pagehide', () => clearTimeout(timer), { once: true });
+})();`;
 
 // packages/cli/src/run-view-html.ts
 var escapeViewHtml = (value2) => value2.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -3240,31 +3707,107 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface);border
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 @media(prefers-reduced-transparency:reduce){.card,nav a,.labels{background:var(--surface);backdrop-filter:none}}
 @media(prefers-contrast:more){:root{--muted:var(--ink);--line:var(--ink)}a{text-decoration:underline}nav a{border-width:2px}}
+body{max-width:68rem;padding-top:2rem}main{min-width:0}.page-header{margin:2rem 0}.page-header h1{margin:.4rem 0 .75rem}.eyebrow{font-size:.75rem;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--muted);margin:0 0 .5rem}.toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:1rem;font-size:.8125rem;margin:1rem 0 2rem}.toolbar a{min-height:2.75rem;display:inline-flex;align-items:center}.toolbar .meta{margin-right:auto}.status{display:inline-flex;padding:.3rem .65rem;background:var(--wash);border-radius:2rem;font-size:.8125rem;font-weight:600}.run-list{display:grid;gap:.75rem}.run-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.75rem 2rem;background:var(--surface);border:1px solid var(--line);border-radius:1rem;padding:1.25rem 1.5rem}.run-row h3{font-size:1.125rem;margin:0}.run-row h3 a{display:inline-flex;align-items:center;min-height:2.75rem}.run-row p{margin:.25rem 0}.run-row .run-caption{grid-column:1/-1;font-size:.8125rem;color:var(--muted)}.now-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}.now-grid section{margin:0}.now-grid section h2{margin-top:.5rem}.now-grid .cards{grid-template-columns:1fr}.empty-note{margin:0;padding:1rem 0;font-size:.875rem}.supporting{margin-top:3rem}.supporting>summary{font-size:1rem;font-weight:600;color:var(--ink)}summary span{display:block;font-size:.8125rem;font-weight:400;color:var(--muted);margin:.25rem 0}.section-detail>section{margin-top:.5rem}.card{padding:1.25rem}.card h3{font-size:1rem;margin-bottom:.75rem}.card dl{display:grid;grid-template-columns:7rem minmax(0,1fr);gap:.35rem 1rem;margin:0}.card dt,.card dd{margin:0;font-size:.875rem}.card details{margin-bottom:0}.card details dl{display:block}.card details dt{margin-top:.75rem}.card details dd{margin-top:.2rem}.report-card{border-top:3px solid var(--line)}.report-link{font-weight:500;gap:.5rem}.notice{border-left:3px solid var(--line);padding:.75rem 1rem;background:var(--surface);border-radius:.25rem}.report-page{max-width:54rem}.report-document{background:var(--surface);border:1px solid var(--line);border-radius:1.25rem;padding:2.5rem}.report-document header h2{font-size:1.8rem;margin:.5rem 0 1rem}.report-document p{line-height:1.7;white-space:pre-wrap}.report-document pre{padding:0;border:0}.report-document section{margin:2rem 0}.report-document h3{font-size:1.2rem;line-height:1.4}.finding{border-top:1px solid var(--line);padding:1.75rem 0 .5rem}.finding h4{margin:1.5rem 0 .5rem}.count{font-size:.875rem;font-weight:400;color:var(--muted);margin-left:.5rem}.document-fields>dt{color:var(--ink);font-weight:600;font-size:.875rem;margin-top:1.5rem}.document-fields dd p{margin-top:.25rem}.document-list{padding-left:1.25rem}.document-list li{margin:.75rem 0}.report-tools{margin:1.5rem 0}.report-tools a{display:inline-flex;align-items:center;min-height:2.75rem}
+@media(max-width:600px){.now-grid{grid-template-columns:1fr;gap:.5rem}.run-row{padding:1rem;gap:.5rem}.run-row .status{align-self:start}.card dl{grid-template-columns:5.5rem minmax(0,1fr)}.card dt{margin-top:0}.report-document{padding:1.25rem}.page-header{margin:1.5rem 0}.toolbar{gap:.5rem 1rem}}
 `;
-var secondaryLabels = /* @__PURE__ */ new Set([
-  "Candidate",
-  "Attempt",
-  "Scope",
-  "Lifecycle",
-  "Origin"
+var field = (item2, label2) => item2.fields.find((f) => f.label === label2)?.value;
+var friendlyLabels = /* @__PURE__ */ new Map([
+  ["lens.outcome-correctness", "Outcome review"],
+  ["lens.adversarial-testing", "Testing review"],
+  ["review", "Review report"],
+  ["reduction", "Review summary"],
+  ["clarification", "Review clarification"],
+  ["partial-output", "Partial report"]
 ]);
+var friendly = (value2) => friendlyLabels.get(value2) ?? value2;
+var primaryLabels = {
+  waiting: ["Owner", "Human action required", "Next action", "Freshness"],
+  work: ["Owner", "State", "Freshness", "Next step"],
+  reviews: ["Round", "Owner", "State", "Verdict", "Freshness", "Next step"],
+  reports: ["Availability", "Reason"],
+  finish: ["State", "Owner"],
+  findings: ["State", "Severity", "Deferred issue"]
+};
 function fieldsHtml(fields) {
   return fields.map((f) => `<dt>${text(f.label)}</dt><dd>${text(f.value)}</dd>`).join("");
 }
-function cardFields(fields) {
-  const primary = fields.filter((f) => !secondaryLabels.has(f.label));
-  const provenance = fields.filter((f) => secondaryLabels.has(f.label));
-  return `<dl>${fieldsHtml(primary)}</dl>${provenance.length ? `<details><summary>Provenance and identifiers</summary><dl>${fieldsHtml(provenance)}</dl></details>` : ""}`;
+function card(item2, section, baseHref) {
+  const labels = primaryLabels[section];
+  const primary = item2.fields.filter((f) => labels ? labels.includes(f.label) && f.value !== "Unreported" && !(section === "reports" && f.label === "Availability" && f.value === "referenced") : true);
+  const supporting = item2.fields.filter((f) => !primary.includes(f));
+  const title = section === "reports" ? friendly(field(item2, "Lens") === "Unreported" ? item2.label : field(item2, "Lens") ?? item2.label) : section === "work" ? label(field(item2, "Phase") ?? "Delivery activity") : friendly(item2.label);
+  return `<article data-key="${text(item2.id)}" class="card ${section === "reports" ? "report-card" : ""}"><h3>${text(title)}</h3><dl>${fieldsHtml(primary)}</dl>${item2.artifactId === void 0 ? "" : `<a class="report-link" href="${text(baseHref)}/artifacts/${encodeURIComponent(item2.artifactId)}">Read report <span aria-hidden="true">\u2197</span></a>`}${supporting.length ? `<details data-key="support-${text(item2.id)}"><summary>Supporting details</summary><dl>${section === "work" ? `<dt>Activity</dt><dd>${text(item2.label)}</dd>` : ""}${fieldsHtml(supporting)}</dl></details>` : ""}</article>`;
+}
+var sectionTitles = { waiting: "Needs attention", work: "In progress", reviews: "Reviews", reports: "Review reports", finish: "Delivery milestones" };
+var emptyCopy = { waiting: "No waits reported.", reviews: "No current reviews reported.", reports: "Review reports will appear here when they are recorded.", finish: "Delivery milestones have not been reported." };
+function sectionHtml(section, baseHref) {
+  return `<section id="${text(section.id)}"><h2>${text(sectionTitles[section.id] ?? section.title)}</h2>${section.items.length ? `<div class="cards">${section.items.map((i) => card(i, section.id === "earlier-report-list" ? "reports" : section.id, baseHref)).join("")}</div>` : `<p class="empty-note">${text(emptyCopy[section.id] ?? section.empty)}</p>`}</section>`;
 }
 function renderOperationalView(view, baseHref) {
-  return `${view.historical ? '<p class="meta">Historical archive \u2014 observations retained at export.</p>' : ""}<details class="section-navigation"><summary>Browse reports, evidence and history</summary><nav aria-label="Run sections">${view.sections.map((s) => `<a href="#${text(s.id)}">${text(s.title)}</a>`).join("")}</nav></details>` + view.sections.map(
-    (s) => `<section id="${text(s.id)}"><h3>${text(s.title)}</h3>${s.items.length ? `<div class="cards">${s.items.map((i) => `<article class="card"><h4>${text(i.label)}</h4>${cardFields(i.fields)}${i.artifactId === void 0 ? "" : `<a href="${text(baseHref)}/artifacts/${encodeURIComponent(i.artifactId)}">Open retained report</a>`}</article>`).join("")}</div>` : `<p>${text(s.empty)}</p>`}</section>`
-  ).join("");
+  const sections = new Map(view.sections.map((s) => [s.id, s]));
+  const render = (id) => sections.has(id) ? sectionHtml(sections.get(id), baseHref) : "";
+  const reviews = sections.get("reviews");
+  const work = sections.get("work");
+  const currentReviews = reviews?.items.filter((i) => i.label !== "Declared review round" && field(i, "History") !== "Superseded attempt") ?? [];
+  const reviewIds = new Set(currentReviews.map((i) => i.id));
+  const reviewCards = currentReviews.map((i) => ({ ...i, fields: [...i.fields, ...work?.items.find((w) => w.id === i.id)?.fields.filter((f) => ["Freshness", "Next step"].includes(f.label)) ?? []] }));
+  if (work) sections.set("work", { ...work, items: work.items.filter((i) => !reviewIds.has(i.id)), empty: work.items.some((i) => reviewIds.has(i.id)) ? "Reviews are shown below." : work.empty });
+  const reports = sections.get("reports");
+  const currentReports = reports?.items.filter((i) => field(i, "History") === "Latest observed attempt") ?? [];
+  const earlierReports = reports?.items.filter((i) => !currentReports.includes(i)) ?? [];
+  const pastReviews = reviews?.items.filter((i) => !currentReviews.includes(i)) ?? [];
+  return `${view.historical ? '<p class="notice">Historical archive \xB7 Observations retained at export.</p>' : ""}
+    <div class="now-grid">${render("waiting")}${render("work")}</div>
+    ${sections.get("findings")?.items.length ? render("findings") : ""}
+    ${reviews ? sectionHtml({ ...reviews, items: reviewCards }, baseHref) : ""}
+    ${reports ? sectionHtml({ ...reports, items: currentReports }, baseHref) : ""}
+    ${earlierReports.length && reports ? `<details id="earlier-reports"><summary>Earlier reports <span>${earlierReports.length} reports from earlier attempts or incomplete references</span></summary>${sectionHtml({ ...reports, id: "earlier-report-list", title: "Earlier reports", items: earlierReports }, baseHref)}</details>` : ""}${render("finish")}
+    <details id="supporting-evidence" class="supporting"><summary>Evidence, cost and history<span>Supporting facts and earlier observations</span></summary>
+    ${pastReviews.length && reviews ? sectionHtml({ ...reviews, id: "review-history", title: "Earlier reviews and round details", items: pastReviews }, baseHref) : ""}
+    ${["evidence", "cost", "activity-history", "finding-history"].map((id) => `<details id="details-${id}" class="section-detail"><summary>${text(sections.get(id)?.title ?? id)} <span>${sections.get(id)?.items.length ?? 0} entries</span></summary>${render(id)}</details>`).join("")}
+    ${!sections.get("findings")?.items.length ? render("findings") : ""}</details>`;
+}
+var record3 = (value2) => typeof value2 === "object" && value2 !== null && !Array.isArray(value2);
+var label = (key) => key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ").replace(/^./, (c) => c.toUpperCase());
+function documentValue(value2, depth = 0) {
+  if (depth > 4) return '<p class="meta">Further detail is available in the original report.</p>';
+  if (Array.isArray(value2)) return value2.length ? `<ul class="document-list">${value2.slice(0, 40).map((v) => `<li>${documentValue(v, depth + 1)}</li>`).join("")}</ul>${value2.length > 40 ? '<p class="meta">Additional entries are available in the original report.</p>' : ""}` : '<p class="meta">None reported.</p>';
+  if (record3(value2)) return `<dl class="document-fields">${Object.entries(value2).slice(0, 40).map(([k, v]) => `<dt>${text(label(k))}</dt><dd>${documentValue(v, depth + 1)}</dd>`).join("")}</dl>${Object.keys(value2).length > 40 ? '<p class="meta">Additional fields are available in the original report.</p>' : ""}`;
+  return `<p>${text(value2 === null ? "Not reported" : String(value2))}</p>`;
+}
+function structuredReport(source) {
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return void 0;
+  }
+  if (!record3(parsed)) return void 0;
+  const result = parsed["outcome"] ?? parsed["verdict"] ?? parsed["decision"];
+  const findings = parsed["findings"];
+  const headline = result === "aligned" ? "Aligned" : result === "dissent" || result === "changes-requested" || result === "CHANGES_REQUESTED" ? "Changes requested" : typeof result === "string" ? result : "Report contents";
+  const summary = parsed["summary"] ?? parsed["assessment"];
+  const rest = Object.fromEntries(Object.entries(parsed).filter(([k]) => !["outcome", "verdict", "decision", "findings", "summary", "assessment"].includes(k)));
+  return `<article class="report-document"><header><p class="eyebrow">Reported result</p><h2>${text(headline)}</h2>${summary === void 0 ? "" : documentValue(summary)}</header>
+    ${Array.isArray(findings) ? `<section><h2>Findings <span class="count">${findings.length}</span></h2>${findings.length === 0 ? "<p>No findings reported in this document.</p>" : findings.slice(0, 40).map((finding, index) => {
+    if (!record3(finding)) return documentValue(finding);
+    const title = typeof finding["title"] === "string" ? finding["title"] : `Finding ${index + 1}`;
+    const why = finding["why_it_matters"] ?? finding["description"];
+    const fix = finding["suggested_fix"];
+    const extra = Object.fromEntries(Object.entries(finding).filter(([k]) => !["title", "severity", "why_it_matters", "description", "suggested_fix"].includes(k)));
+    return `<article class="finding"><p class="eyebrow">${text(typeof finding["severity"] === "string" ? finding["severity"] : "Severity unreported")}</p><h3>${text(title)}</h3>${why === void 0 ? "" : documentValue(why)}${fix === void 0 ? "" : `<h4>Recommended change</h4>${documentValue(fix)}`}<details><summary>Evidence and context</summary>${documentValue(extra)}</details></article>`;
+  }).join("")}${findings.length > 40 ? "<p>Additional findings are available in the original report.</p>" : ""}</section>` : findings === void 0 ? "" : `<section><h2>Findings</h2>${documentValue(findings)}</section>`}
+    <details><summary>Review context and supporting evidence</summary>${documentValue(rest)}</details></article>`;
 }
 function renderArtifactDetail(input) {
   const { result } = input;
   const m = result.ok ? result.metadata : input.metadata;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Retained report</title><style>body{font:16px/1.5 system-ui;margin:1.5rem}${OPERATIONAL_STYLE}</style></head><body><a href="${text(input.backHref)}#reports">Return to run</a><h1>Retained report</h1><p>Run ${text(input.runId)} \xB7 Artifact ${text(input.artifactId)}</p><p>Self-attested ${input.historical ? "historical archive" : "retained"} output; not admission evidence.</p>${m ? `<dl><dt>Lens</dt><dd>${text(m.lensId ?? "Unreported")}</dd><dt>Attempt</dt><dd>${text(m.attemptId)}</dd><dt>Candidate</dt><dd>${text(m.candidateTreeSha)}</dd><dt>Digest</dt><dd>${text(m.digest)}</dd><dt>Size</dt><dd>${m.sizeBytes} bytes</dd></dl>` : ""}${result.ok ? `<a href="${text(input.backHref)}/artifacts/${encodeURIComponent(input.artifactId)}/download">Download exact report bytes</a><pre>${escapeViewHtml(Buffer.from(result.base64, "base64").toString("utf8"))}</pre>` : `<p role="status">${text(result.code)}: ${text(result.reason)}</p>`}</body></html>`;
+  const source = result.ok ? Buffer.from(result.base64, "base64").toString("utf8") : "";
+  const document = result.ok ? structuredReport(source) : void 0;
+  const title = friendly(m?.lensId ?? "Review report");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${text(title)} \xB7 Delivery runs</title><style>${OPERATIONAL_STYLE}</style></head><body class="report-page"><main><a class="back" href="${text(input.backHref)}#reports">Return to run</a><header class="page-header"><p class="eyebrow">${input.historical ? "Historical archive" : "Retained report"}${m?.round === void 0 ? "" : ` \xB7 Round ${m.round}`}</p><h1>${text(title)}</h1><p class="meta">Reported review output; not approval evidence.</p></header>
+    ${result.ok ? `${document ?? `<article class="report-document"><h2>Report contents</h2><pre>${escapeViewHtml(source)}</pre></article>`}<div class="report-tools"><a href="${text(input.backHref)}/artifacts/${encodeURIComponent(input.artifactId)}/download">Download original report</a></div>${document ? `<details><summary>Original report source</summary><pre>${escapeViewHtml(source)}</pre></details>` : ""}` : `<section class="notice" role="status"><h2>Report unavailable</h2><p>${text(result.reason)}</p><p class="meta">${text(result.code)}</p></section>`}
+    <details><summary>Report details and provenance</summary><dl><dt>Run</dt><dd>${text(input.runId)}</dd><dt>Artifact</dt><dd>${text(input.artifactId)}</dd>${m ? `<dt>Lens</dt><dd>${text(m.lensId ?? "Unreported")}</dd><dt>Attempt</dt><dd>${text(m.attemptId)}</dd><dt>Candidate</dt><dd>${text(m.candidateTreeSha)}</dd><dt>Digest</dt><dd>${text(m.digest)}</dd><dt>Size</dt><dd>${m.sizeBytes} bytes</dd>` : ""}</dl></details></main></body></html>`;
 }
 
 // packages/cli/src/run-server.ts
@@ -3273,7 +3816,7 @@ import {
 } from "node:http";
 import {
   evaluateRunJournal as evaluateRunJournal3,
-  sha256Hex as sha256Hex5,
+  sha256Hex as sha256Hex6,
   readRunArtifact as readRunArtifact3,
   RUN_STORE_ID as RUN_STORE_ID3
 } from "./kernel.mjs";
@@ -3407,7 +3950,7 @@ async function readState(groups, pollSeconds, now, freshnessWindowMs, recordPath
             runId,
             repository: group.root,
             readable: false,
-            href: `/runs/${sha256Hex5(group.commonDir)}/${runId}`,
+            href: `/runs/${sha256Hex6(group.commonDir)}/${runId}`,
             live: false,
             summary: EMPTY_SUMMARY,
             readout: {
@@ -3437,7 +3980,7 @@ async function readState(groups, pollSeconds, now, freshnessWindowMs, recordPath
             group.root,
             recordPath
           ),
-          href: `/runs/${sha256Hex5(group.commonDir)}/${runId}`,
+          href: `/runs/${sha256Hex6(group.commonDir)}/${runId}`,
           readable: true,
           // Liveness is the pointer AND the absence of an end, never one alone:
           // a pointer left behind by a run that ended without clearing it must
@@ -3470,47 +4013,18 @@ function escapeHtml(value2) {
   return value2.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 var cell = (value2, maximum = 240) => escapeHtml(oneLine(value2, maximum));
-var RUNS_HEADER = [
-  "run",
-  "ticket",
-  "repository",
-  "duration",
-  "rounds",
-  "historical findings",
-  "gate",
-  "record",
-  "result",
-  "state"
-];
-function stateCell(run) {
-  if (!run.readable) return `<td class="open">unreadable</td>`;
-  if (run.live) return `<td class="live">selected / open</td>`;
-  return run.open ? `<td class="open">open</td>` : `<td class="ended">ended</td>`;
+function runStatus(run) {
+  if (!run.readable) return "Unable to read";
+  if (run.result !== void 0) return `Reported ${run.result}`;
+  return run.open ? "Open" : "Ended";
 }
-var written = (outcome2) => outcome2 === void 0 ? "\u2014" : `${cell(outcome2.outcome, 64)} <span class="meta">(${cell(outcome2.writer, 16)}-written)</span>`;
 function runsTable(state) {
-  const rows = state.runs.map(
-    (run) => [
-      "<tr>",
-      `<td><a href="${escapeHtml(run.href ?? "#")}">${cell(run.runId, 128)}</a></td>`,
-      `<td>${cell(run.ticket, 128) || "\u2014"}</td>`,
-      `<td>${cell(run.repository, 400)}</td>`,
-      `<td>${run.durationSeconds}s</td>`,
-      `<td>${run.rounds.closed}/${run.rounds.opened}</td>`,
-      `<td>P0 ${run.findings.P0} \xB7 P1 ${run.findings.P1} \xB7 P2 ${run.findings.P2} \xB7 P3 ${run.findings.P3}</td>`,
-      `<td>${written(run.gate)}</td>`,
-      `<td>${written(run.record)}</td>`,
-      `<td>${run.result === void 0 ? "\u2014" : cell(run.result, 64)}</td>`,
-      stateCell(run),
-      "</tr>"
-    ].join("")
-  );
-  return [
-    "<table>",
-    `<tr>${RUNS_HEADER.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr>`,
-    rows.length === 0 ? `<tr><td colspan="${RUNS_HEADER.length}">no runs in this store</td></tr>` : rows.join(""),
-    "</table>"
-  ].join("");
+  if (!state.runs.length) return '<section class="notice"><h2>No deliveries yet</h2><p>Runs will appear here when a delivery is recorded in a connected repository.</p></section>';
+  const rows = (runs) => `<div class="run-list">${runs.map((run) => `<article data-key="${escapeHtml(run.href ?? run.runId)}" class="run-row"><div><h3><a href="${escapeHtml(run.href ?? "#")}">${cell(run.ticket || run.runId, 128)}</a></h3><p class="meta">${cell(run.repository.split("/").filter(Boolean).at(-1) ?? run.repository, 128)}</p></div><div><span class="status">${cell(runStatus(run), 128)}</span></div><p class="run-caption">${run.readable ? `${run.rounds.closed} of ${run.rounds.opened} review rounds closed \xB7 Last reported ${cell(run.lastAt || "unknown", 32)}` : "Activity and results are unavailable."}</p></article>`).join("")}</div>`;
+  const ordered = [...state.runs].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  const open3 = ordered.filter((run) => run.open);
+  const ended = ordered.filter((run) => !run.open);
+  return `${open3.length ? `<section id="open-runs"><h2>Open deliveries <span class="count">${open3.length}</span></h2>${rows(open3.slice(0, 10))}${open3.length > 10 ? `<details id="older-open-runs"><summary>Earlier open deliveries <span>${open3.length - 10} runs</span></summary>${rows(open3.slice(10))}</details>` : ""}</section>` : ""}${ended.length ? `<section id="completed-runs"><h2>Recent deliveries</h2>${rows(ended.slice(0, 6))}${ended.length > 6 ? `<details id="older-ended-runs"><summary>Earlier deliveries <span>${ended.length - 6} runs</span></summary>${rows(ended.slice(6))}</details>` : ""}</section>` : ""}`;
 }
 function timelineTable(run) {
   const rows = run.timeline.map(
@@ -3574,34 +4088,30 @@ function readoutBlock(run) {
 }
 function renderPage(state) {
   const anyLive = state.runs.some((run) => run.live);
-  return [
-    '<!doctype html><html lang="en"><head><meta charset="utf-8">',
-    '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    anyLive ? `<meta http-equiv="refresh" content="${state.pollSeconds}">` : "",
-    "<title>delivery runs</title>",
-    `<style>${OPERATIONAL_STYLE}</style></head><body>`,
-    state.selected ? `<h1>${cell(state.runs[0]?.ticket || "Delivery run", 128)}</h1>` : "<h1>Delivery runs</h1>",
-    '<p class="meta">Reported observations only; not approval evidence.</p>',
-    "<details><summary>Run details and provenance</summary>",
-    `<p class="labels">${escapeHtml(READOUT_LABELS)}. Nothing here is read by admission, the gate, or the recorder.</p>`,
-    ...state.repositories.map(
-      (repository) => `<p class="meta">${cell(repository.root, 400)} \u2014 ${cell(repository.runsDir, 400)}</p>`
-    ),
-    anyLive ? `<p class="meta">refreshing every ${state.pollSeconds}s while a run is selected and open; execution is not inferred</p>` : '<p class="meta">no selected open run; this page does not refresh itself</p>',
-    "</details>",
-    state.selected ? '<p class="back"><a href="/">All runs</a></p>' : runsTable(state),
-    ...state.runs.map(
-      (run) => state.selected && !run.readable ? `<section aria-label="Run read error"><h2>Run journal unreadable</h2><p>The journal for ${cell(run.runId, 128)} could not be read. Activity, evidence and completeness are unavailable.</p></section>` : [
-        state.selected ? "" : `<h2>${cell(run.runId, 128)}</h2><p class="meta">${cell(run.repository, 400)}</p>`,
-        run.view === void 0 || !state.selected ? "" : renderOperationalView(run.view, run.href ?? ""),
-        roundsTable(run),
-        timelineTable(run),
-        notesTable(run),
-        readoutBlock(run)
-      ].join("")
-    ),
-    "</body></html>"
+  const refresh = anyLive;
+  const selected = state.selected ? state.runs[0] : void 0;
+  const base = selected?.href ?? "/";
+  const html = [
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
+    `<title>${selected ? cell(selected.ticket || "Delivery run", 128) : "Delivery runs"}</title><style>${OPERATIONAL_STYLE}</style></head><body><main data-live="${anyLive}" data-poll-seconds="${state.pollSeconds}">`,
+    selected ? '<a class="back" href="/">All runs</a>' : "",
+    `<header class="page-header"><p class="eyebrow">Delivery workspace</p><h1>${selected ? cell(selected.ticket || "Delivery run", 128) : "Delivery runs"}</h1>`,
+    selected ? `<span class="status">${cell(runStatus(selected), 128)}</span>` : '<p class="meta">Follow delivery progress and read the latest reviews.</p>',
+    '</header><div class="toolbar" data-live-controls>',
+    `<span class="meta" data-live-status>${refresh ? "Live" : "Saved observations"}</span>`,
+    `<a href="${escapeHtml(base)}">Refresh</a>`,
+    anyLive ? `<a data-live-toggle href="${escapeHtml(base)}">Pause updates</a>` : "",
+    "</div>",
+    selected ? !selected.readable ? `<section class="notice" aria-label="Run read error"><h2>Run journal unreadable</h2><p>The journal for ${cell(selected.runId, 128)} could not be read. Activity, evidence and completeness are unavailable.</p></section>` : selected.view ? renderOperationalView(selected.view, selected.href ?? "") : "" : runsTable(state),
+    selected?.readable ? `<details id="journal-details" class="supporting"><summary>Journal details<span>Recorded events, round accounting and completeness</span></summary>${roundsTable(selected)}${timelineTable(selected)}${notesTable(selected)}${readoutBlock(selected)}</details>` : "",
+    '<details id="view-provenance" class="view-provenance"><summary>About these observations</summary>',
+    `<p class="meta">Reported observations only; not approval evidence. ${escapeHtml(READOUT_LABELS)}. Nothing here is read by admission, the gate, or the recorder.</p>`,
+    ...state.repositories.map((repository) => `<p class="meta">${cell(repository.root, 400)} \u2014 ${cell(repository.runsDir, 400)}</p>`),
+    selected ? `<p class="meta">Run ${cell(selected.runId, 128)} \xB7 Last reported ${cell(selected.lastAt || "unknown", 32)}</p>` : "",
+    anyLive ? `<p class="meta">Live mode refreshes every ${state.pollSeconds}s while a run is selected and open; execution is not inferred.</p>` : '<p class="meta">No selected open run; this page does not refresh itself.</p>',
+    `</details></main>${refresh ? `<script>${RUN_LIVE_SCRIPT}</script>` : ""}</body></html>`
   ].join("").replace(/<table>/g, '<div class="table-scroll"><table>').replace(/<\/table>/g, "</table></div>");
+  return html;
 }
 var SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
@@ -3611,10 +4121,12 @@ var SECURITY_HEADERS = {
   // between loopback and loopback has any business holding one.
   "Cache-Control": "no-store"
 };
-function send(response, status, contentType, body) {
+var LIVE_CSP = RUN_SERVER_CSP.replace("script-src 'none'", `script-src 'sha256-${createHash2("sha256").update(RUN_LIVE_SCRIPT).digest("base64")}'`).replace("connect-src 'none'", "connect-src 'self'");
+function send(response, status, contentType, body, livePage = false) {
   response.writeHead(status, {
     ...SECURITY_HEADERS,
-    "Content-Type": contentType
+    "Content-Type": contentType,
+    ...livePage ? { "Content-Security-Policy": LIVE_CSP } : {}
   });
   response.end(body);
 }
@@ -3642,7 +4154,7 @@ async function startRunServer(input) {
     const parsed = parseRunExport(supplied.text);
     if (!parsed.ok)
       return { ok: false, reason: "archive invalid or unsupported" };
-    archives.set(sha256Hex5(supplied.text), {
+    archives.set(sha256Hex6(supplied.text), {
       ...supplied,
       archive: parsed.value
     });
@@ -3703,13 +4215,15 @@ async function startRunServer(input) {
             );
             return;
           }
-          const route = (request.url ?? "/").split("?")[0];
+          const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+          const route = requestUrl.pathname;
           if (route === "/") {
             send(
               response,
               200,
               "text/html; charset=utf-8",
-              renderPage(await state())
+              renderPage(await state()),
+              true
             );
             return;
           }
@@ -3729,7 +4243,7 @@ async function startRunServer(input) {
           if (match) {
             const base = `/${match[1]}`;
             const archive = match[4] ? archives.get(match[4]) : void 0;
-            const group = match[2] ? groups.find((g) => sha256Hex5(g.commonDir) === match[2]) : void 0;
+            const group = match[2] ? groups.find((g) => sha256Hex6(g.commonDir) === match[2]) : void 0;
             if (!archive && !group) {
               send(response, 404, "text/plain; charset=utf-8", "not found\n");
               return;
@@ -3781,7 +4295,8 @@ async function startRunServer(input) {
               response,
               200,
               "text/html; charset=utf-8",
-              renderPage({ ...full, runs: selected, selected: true })
+              renderPage({ ...full, runs: selected, selected: true }),
+              true
             );
             return;
           }
@@ -3826,9 +4341,9 @@ async function startRunServer(input) {
 }
 
 // packages/cli/src/commands/runs.ts
-var USAGE3 = [
+var USAGE5 = [
   "Usage: delivery-harness runs capabilities --json",
-  "Usage: delivery-harness runs list",
+  "       delivery-harness runs list [--json] [--limit <n>] [--status <status>] [--open|--ended]",
   "       delivery-harness runs show <run-id> [--json]",
   "       delivery-harness runs view <run-id> [--json] [--record <repository-relative-path>]",
   "       delivery-harness runs export <run-id> --output <file>",
@@ -3855,6 +4370,7 @@ var runsCommand = {
   name: "runs",
   sourceId: "delivery-harness.cli.runs",
   summary: "List, show, and serve the delivery runs this repository has recorded.",
+  usage: USAGE5,
   configFree: true,
   async run(context) {
     const [subcommand, ...rest] = context.args;
@@ -3868,53 +4384,147 @@ var runsCommand = {
     if (subcommand === "export" || subcommand === "archive") return runArchiveCommand(context, subcommand, rest);
     if (subcommand === "capture" || subcommand === "artifact") return runArtifactCommand(context, subcommand, rest);
     if (subcommand === void 0) return { kind: "usage", message: `runs needs a subcommand.
-${USAGE3}` };
+${USAGE5}` };
     if (subcommand !== "list" && subcommand !== "show" && subcommand !== "serve") {
       return { kind: "usage", message: `Unknown runs subcommand ${oneLine(subcommand, 64)}.
-${USAGE3}` };
+${USAGE5}` };
     }
     if (subcommand === "show" && rest[0] === void 0) {
       return { kind: "usage", message: `runs show needs a run id.
-${USAGE3}` };
+${USAGE5}` };
     }
     if (subcommand === "show" && (rest.length > 2 || rest[1] !== void 0 && rest[1] !== "--json")) {
       return { kind: "usage", message: `runs show accepts only a run id and optional --json.
-${USAGE3}` };
+${USAGE5}` };
     }
     if (subcommand === "serve") return serveRuns(context, rest);
+    const listArgs = subcommand === "list" ? parseListArgs(rest) : void 0;
+    if (listArgs !== void 0 && !listArgs.ok) return { kind: "usage", message: listArgs.message };
     const resolved = await resolveRunSurface(context.rootDir);
     if (!resolved.ok) return unresolvable(resolved.reason);
-    return subcommand === "list" ? listRuns(resolved.surface, context) : showRun(resolved.surface, context, rest[0], rest[1] === "--json");
+    if (listArgs !== void 0 && listArgs.ok) return listRuns(resolved.surface, context, listArgs.args);
+    return showRun(resolved.surface, context, rest[0], rest[1] === "--json");
   }
 };
+var RUN_LIST_UNREADABLE = "unreadable";
+var STATUS_NEVER_LISTED = "absent";
+var RUN_LIST_STATUSES = Object.freeze([
+  ...RUN_JOURNAL_STATUSES.filter((status) => status !== STATUS_NEVER_LISTED),
+  RUN_LIST_UNREADABLE
+]);
+var RUN_INVENTORY_SPEC = "run-inventory/1";
+function parseListArgs(args) {
+  const refuse = (reason) => ({ ok: false, message: `runs list: ${reason}.
+${USAGE5}` });
+  let json = false;
+  let limit;
+  let status;
+  let open3;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--json") {
+      if (json) return refuse("--json was given twice");
+      json = true;
+      continue;
+    }
+    if (token === "--open" || token === "--ended") {
+      if (open3 !== void 0) return refuse("use at most one of --open and --ended");
+      open3 = token === "--open";
+      continue;
+    }
+    if (token === "--limit" || token === "--status") {
+      const value2 = args[index + 1];
+      if (value2 === void 0) return refuse(`${token} needs a value`);
+      index += 1;
+      if (token === "--limit") {
+        if (limit !== void 0) return refuse("--limit was given twice");
+        if (!/^\d+$/.test(value2) || !Number.isSafeInteger(Number(value2)) || Number(value2) < 1) {
+          return refuse(`--limit needs a positive whole number, not ${oneLine(value2, 64)}`);
+        }
+        limit = Number(value2);
+        continue;
+      }
+      if (status !== void 0) return refuse("--status was given twice");
+      if (!RUN_LIST_STATUSES.includes(value2)) {
+        return refuse(`--status accepts ${RUN_LIST_STATUSES.join(", ")}, not ${oneLine(value2, 64)}`);
+      }
+      status = value2;
+      continue;
+    }
+    if (token.startsWith("--")) return refuse(`unknown flag ${oneLine(token, 64)}`);
+    return refuse("it takes no positional arguments");
+  }
+  return {
+    ok: true,
+    args: { json, ...limit === void 0 ? {} : { limit }, ...status === void 0 ? {} : { status }, ...open3 === void 0 ? {} : { open: open3 } }
+  };
+}
 async function sizeOf(runsDir, runId) {
   try {
-    return (await stat(path12.join(runsDir, `${runId}.jsonl`))).size;
+    return (await stat(path13.join(runsDir, `${runId}.jsonl`))).size;
   } catch {
     return 0;
   }
 }
-async function listRuns(surface, context) {
+async function inventoryOf(surface) {
   const runIds = await surface.store.list();
   const current = await surface.store.current(surface.worktreeKey);
   const currentRunId = current.ok ? current.runId : void 0;
-  const lines = [`runs in ${oneLine(surface.runsDir, 400)}`, `  (${READOUT_LABELS})`];
-  let total = 0;
+  const rows = [];
   for (const runId of runIds) {
-    const size = await sizeOf(surface.runsDir, runId);
-    total += size;
+    const bytes = await sizeOf(surface.runsDir, runId);
     const read = await surface.store.read(runId);
-    if (!read.ok) {
-      lines.push(`  ${runId}  unreadable  ${size} bytes`);
-      continue;
-    }
-    const evaluation = evaluateRunJournal4(read.events);
-    const open2 = !read.events.some((event) => event.kind === "run.ended");
-    lines.push(
-      `  ${runId}  ${evaluation.status}  ${open2 ? "open" : "ended"}${runId === currentRunId ? " current" : ""}  ${size} bytes`
+    rows.push(
+      read.ok ? {
+        runId,
+        status: evaluateRunJournal4(read.events).status,
+        open: !read.events.some((event) => event.kind === "run.ended"),
+        current: runId === currentRunId,
+        bytes
+      } : (
+        // Nothing was read, so nothing is claimed: an unreadable journal is
+        // not open, not current, and carries no completeness verdict.
+        { runId, status: RUN_LIST_UNREADABLE, open: false, current: false, bytes }
+      )
     );
   }
-  lines.push(`total ${total} bytes across ${runIds.length} run(s)`);
+  return { rows, currentRunId };
+}
+async function listRuns(surface, context, args) {
+  const { rows, currentRunId } = await inventoryOf(surface);
+  const selected = rows.filter(
+    (row) => (args.status === void 0 || row.status === args.status) && (args.open === void 0 || row.open === args.open)
+  );
+  const totalBytes = selected.reduce((sum, row) => sum + row.bytes, 0);
+  const shown = args.limit === void 0 ? selected : selected.slice(0, args.limit);
+  const truncated = shown.length < selected.length;
+  if (args.json) {
+    context.write(
+      JSON.stringify(
+        {
+          spec: RUN_INVENTORY_SPEC,
+          labels: READOUT_LABELS,
+          runsDir: surface.runsDir,
+          current: currentRunId ?? null,
+          runs: shown,
+          total: { count: selected.length, bytes: totalBytes },
+          returned: shown.length,
+          truncated
+        },
+        null,
+        2
+      )
+    );
+    return { kind: "ok" };
+  }
+  const lines = [`runs in ${oneLine(surface.runsDir, 400)}`, `  (${READOUT_LABELS})`];
+  for (const row of shown) {
+    lines.push(
+      row.status === RUN_LIST_UNREADABLE ? `  ${row.runId}  ${RUN_LIST_UNREADABLE}  ${row.bytes} bytes` : `  ${row.runId}  ${row.status}  ${row.open ? "open" : "ended"}${row.current ? " current" : ""}  ${row.bytes} bytes`
+    );
+  }
+  lines.push(`total ${totalBytes} bytes across ${selected.length} run(s)`);
+  if (truncated) lines.push(`showing ${shown.length} of ${selected.length} run(s) (--limit ${args.limit})`);
   for (const line of lines) context.write(line);
   return { kind: "ok" };
 }
@@ -3945,10 +4555,10 @@ async function showRun(surface, context, runId, json) {
     }), null, 2));
     return { kind: "ok" };
   }
-  const open2 = !events.some((event) => event.kind === "run.ended");
+  const open3 = !events.some((event) => event.kind === "run.ended");
   const current = await surface.store.current(surface.worktreeKey);
   const isCurrent = current.ok && current.runId === runId;
-  context.write(`run ${runId}  ${open2 ? "open" : "ended"}${isCurrent ? "  current in this worktree" : ""}`);
+  context.write(`run ${runId}  ${open3 ? "open" : "ended"}${isCurrent ? "  current in this worktree" : ""}`);
   context.write("  events:");
   for (const event of events) {
     context.write(`    ${event.seq}  ${event.at}  ${event.kind.padEnd(20)}  ${event.actor.role.padEnd(8)}  ${detailOf(event)}`);
@@ -3990,7 +4600,7 @@ function parseServeArgs(args, rootDir) {
     if (token === "--repo" || token === "--port" || token === "--archive" || token === "--freshness-seconds" || token === "--record") {
       const value2 = args[index + 1];
       if (value2 === void 0) return { ok: false, message: `${token} needs a value.
-${USAGE3}` };
+${USAGE5}` };
       index += 1;
       if (token === "--record") {
         if (recordPath !== void 0) return { ok: false, message: "Use one explicit record path" };
@@ -3998,7 +4608,7 @@ ${USAGE3}` };
         continue;
       }
       if (token === "--archive") {
-        archives.push(path12.resolve(rootDir, value2));
+        archives.push(path13.resolve(rootDir, value2));
         continue;
       }
       if (token === "--freshness-seconds") {
@@ -4007,28 +4617,28 @@ ${USAGE3}` };
         continue;
       }
       if (token === "--repo") {
-        repos.push(path12.resolve(rootDir, value2));
+        repos.push(path13.resolve(rootDir, value2));
         continue;
       }
       if (!/^\d{1,5}$/.test(value2)) return { ok: false, message: `--port needs a port number.
-${USAGE3}` };
+${USAGE5}` };
       const parsed = Number(value2);
       if (parsed > 65535) return { ok: false, message: `--port needs a port number.
-${USAGE3}` };
+${USAGE5}` };
       if (BROWSER_ELIDED_PORTS.includes(parsed)) {
         return {
           ok: false,
           message: `--port ${parsed} cannot be served: a browser omits a scheme's default port from the Host header, and this page answers only to the exact host:port it bound.
-${USAGE3}`
+${USAGE5}`
         };
       }
       port = parsed;
       continue;
     }
     if (token.startsWith("--")) return { ok: false, message: `Unknown flag ${oneLine(token, 64)}.
-${USAGE3}` };
+${USAGE5}` };
     return { ok: false, message: `runs serve takes no positional arguments.
-${USAGE3}` };
+${USAGE5}` };
   }
   return { ok: true, args: { repos: repos.length === 0 && archives.length === 0 ? [rootDir] : repos, archives, ...recordPath === void 0 ? {} : { recordPath }, ...freshnessWindowMs === void 0 ? {} : { freshnessWindowMs }, ...port === void 0 ? {} : { port } } };
 }
@@ -4037,7 +4647,7 @@ async function serveRuns(context, args) {
   if (!parsed.ok) return { kind: "usage", message: parsed.message };
   let archives;
   try {
-    archives = await Promise.all(parsed.args.archives.map(async (file) => ({ label: path12.basename(file), text: await readArchiveFile(file) })));
+    archives = await Promise.all(parsed.args.archives.map(async (file) => ({ label: path13.basename(file), text: await readArchiveFile(file) })));
   } catch {
     return unresolvable("An explicitly selected archive could not be read within its size limit.");
   }
@@ -4068,11 +4678,28 @@ function manifestPathFrom(args) {
   const positional = args.find((argument) => !argument.startsWith("-"));
   return positional;
 }
+function unknownFlagIn(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--manifest") {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) return token;
+  }
+  return void 0;
+}
 var submitEvidenceCommand = {
   name: "submit-evidence",
   sourceId: "delivery-harness.cli.submit-evidence",
   summary: "Validate a provider manifest and publish its evidence records.",
+  usage: "Usage: delivery-harness submit-evidence --manifest <path>",
   async run(context) {
+    const unknown = unknownFlagIn(context.args);
+    if (unknown !== void 0) {
+      return { kind: "usage", message: `Unknown flag ${oneLine(unknown, 64)}.
+${submitEvidenceCommand.usage}` };
+    }
     const manifestPath = manifestPathFrom(context.args);
     if (manifestPath === void 0 || manifestPath === "") {
       return { kind: "usage", message: "submit-evidence requires --manifest <path>." };
@@ -4084,7 +4711,7 @@ var submitEvidenceCommand = {
     );
     if (outcome2.status === "accepted") {
       const lines = outcome2.records.map(
-        (record3) => `  ${record3.obligationId}: ${record3.status} ${record3.recordId}`
+        (record4) => `  ${record4.obligationId}: ${record4.status} ${record4.recordId}`
       );
       return {
         kind: "ok",
@@ -4096,8 +4723,8 @@ var submitEvidenceCommand = {
 };
 
 // packages/cli/src/commands/verify.ts
-import { readFile as readFile5 } from "node:fs/promises";
-import path13 from "node:path";
+import { readFile as readFile6 } from "node:fs/promises";
+import path14 from "node:path";
 import {
   MAX_RUN_PROVIDER_ID,
   RUN_PROVIDER_ID,
@@ -4110,7 +4737,7 @@ import {
   capturePortableVerificationInputs as capturePortableVerificationInputs2,
   collectLiveProviderResults
 } from "./kernel.mjs";
-var USAGE4 = "Usage: delivery-harness verify [--require-run-journal] [--mandated-lens <id>]...";
+var USAGE6 = "Usage: delivery-harness verify [--require-run-journal] [--mandated-lens <id>]...";
 function parseArgs2(args) {
   let requireRunJournal = false;
   const mandatedLensIds = [];
@@ -4123,19 +4750,19 @@ function parseArgs2(args) {
     if (token === "--mandated-lens") {
       const value2 = args[index + 1];
       if (value2 === void 0) return { ok: false, message: `${token} needs a value.
-${USAGE4}` };
+${USAGE6}` };
       if (value2.length > MAX_RUN_PROVIDER_ID || !RUN_PROVIDER_ID.test(value2)) {
         return { ok: false, message: `${token} takes a bounded lens id, not ${oneLine(value2, 64)}.
-${USAGE4}` };
+${USAGE6}` };
       }
       mandatedLensIds.push(value2);
       index += 1;
       continue;
     }
     if (token.startsWith("-")) return { ok: false, message: `Unknown flag ${oneLine(token, 64)}.
-${USAGE4}` };
+${USAGE6}` };
     return { ok: false, message: `verify takes no positional arguments, and ${oneLine(token, 64)} is one.
-${USAGE4}` };
+${USAGE6}` };
   }
   return { ok: true, args: { requireRunJournal, mandatedLensIds } };
 }
@@ -4160,6 +4787,7 @@ var verifyCommand = {
   name: "verify",
   sourceId: "delivery-harness.cli.verify",
   summary: "Verify the tracked delivery record against the current candidate.",
+  usage: USAGE6,
   async run(context) {
     const parsedArgs = parseArgs2(context.args);
     if (!parsedArgs.ok) return { kind: "usage", message: parsedArgs.message };
@@ -4178,10 +4806,10 @@ var verifyCommand = {
       mergeBaseSha: capture.candidate.base.mergeBaseSha
     };
     const relativePath = deliveryRecordPathFor2(context.config, identity.deliverableDigest);
-    const absolutePath = path13.join(context.rootDir, relativePath);
+    const absolutePath = path14.join(context.rootDir, relativePath);
     let text2;
     try {
-      text2 = await readFile5(absolutePath, "utf8");
+      text2 = await readFile6(absolutePath, "utf8");
     } catch {
       return {
         kind: "blocked",
@@ -4221,11 +4849,6 @@ var verifyCommand = {
         candidateTreePaths.push(blob.exitCode === 0 ? { ...entry, symlinkTarget: blob.stdout } : entry);
       }
     }
-    const runJournal = await resolveRunJournalRow({
-      cwd: context.rootDir,
-      treeSha: parsed.record.candidateBinding.treeSha,
-      ...parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }
-    });
     const inputs = await capturePortableVerificationInputs2(context.rootDir, context.config, capture.candidate, parsed.record);
     const live = await collectLiveProviderResults({
       rootDir: context.rootDir,
@@ -4236,10 +4859,29 @@ var verifyCommand = {
       env: context.env,
       ...context.signal === void 0 ? {} : { signal: context.signal }
     });
-    const check = verifyDeliveryRecord2(context.config, parsed.record, identity, base, { candidateTreePaths, runJournal, ...inputs, liveResults: live.liveResults, executionContext: context.classifyContext() });
-    if (!check.ok) {
-      return { kind: "blocked", blockers: [...live.blockers, ...check.blockers] };
+    const verified = verifyDeliveryRecord2(
+      context.config,
+      parsed.record,
+      identity,
+      base,
+      { candidateTreePaths, ...inputs, liveResults: live.liveResults, executionContext: context.classifyContext() }
+    );
+    if (!verified.ok) {
+      return { kind: "blocked", blockers: [...live.blockers, ...verified.blockers] };
     }
+    const runJournal = await resolveRunJournalRow({
+      cwd: context.rootDir,
+      treeSha: parsed.record.candidateBinding.treeSha,
+      reviewedCandidateTreeShas: verified.reviewedCandidateTreeShas,
+      ...parsedArgs.args.mandatedLensIds.length === 0 ? {} : { mandatedLensIds: parsedArgs.args.mandatedLensIds }
+    });
+    const check = verifyDeliveryRecord2(
+      context.config,
+      parsed.record,
+      identity,
+      base,
+      { candidateTreePaths, runJournal, ...inputs, liveResults: live.liveResults, executionContext: context.classifyContext() }
+    );
     if (parsedArgs.args.requireRunJournal && runJournal.status !== "complete") {
       return { kind: "blocked", blockers: [runJournalBlocker(runJournal)] };
     }
@@ -4255,16 +4897,26 @@ var verifyCommand = {
 };
 
 // packages/cli/src/ordinary-context.ts
-import { readFile as readFile6 } from "node:fs/promises";
-import path14 from "node:path";
+import { readFile as readFile7 } from "node:fs/promises";
+import path15 from "node:path";
 import { HARNESS_VERSION, digestCanonical as digestCanonical4 } from "./kernel.mjs";
-function recoveryBlocker(code, summary) {
+function recoveryBlocker(code, summary, details) {
   return commandBlocker({
     code,
     sourceId: "delivery-harness.cli.resume",
     summary,
+    ...details === void 0 ? {} : { details },
     remediations: [{ id: "reconcile-delivery-context", kind: "manual_action", summary: "Inspect the saved context and actual workspace/external state with host tools; rerun preparation and gates where evidence is not current. Never replay an uncertain action automatically." }]
   });
+}
+function rejectionDetails(rejections) {
+  const first = rejections[0];
+  if (first === void 0) return "the store refused the append";
+  return `${oneLine(first.code, 64)} at ${oneLine(first.pointer, 128) || "/"}: ${oneLine(first.message, 200)}`;
+}
+function ordinaryEventWriter(version, kind, payload) {
+  if (version !== "run-event/2") return { version };
+  return { version, eventId: `${kind.replaceAll(".", "-")}-${digestCanonical4(payload)}` };
 }
 async function recoveryRun(rootDir, named) {
   const resolved = await resolveRunSurface(rootDir);
@@ -4273,11 +4925,11 @@ async function recoveryRun(rootDir, named) {
   const runId = named ?? (current.ok ? current.runId : void 0);
   if (!runId) return { ok: false, blocker: recoveryBlocker("resume_context_missing", "No current delivery run was found; start a run or name its existing id with --run.") };
   const read = await resolved.surface.store.read(runId);
-  if (!read.ok) return { ok: false, blocker: recoveryBlocker("resume_context_invalid", "The delivery journal is missing, corrupt, or inaccessible.") };
-  return { ok: true, surface: resolved.surface, runId, events: read.events };
+  if (!read.ok) return { ok: false, blocker: recoveryBlocker("resume_context_invalid", "The delivery journal is missing, corrupt, or inaccessible.", rejectionDetails(read.rejections)) };
+  return { ok: true, surface: resolved.surface, runId, events: read.events, version: read.events[0]?.version ?? "run-event/1" };
 }
 async function installedRelease(rootDir) {
-  const document = JSON.parse(await readFile6(path14.join(rootDir, ".agent-skills/active.json"), "utf8"));
+  const document = JSON.parse(await readFile7(path15.join(rootDir, ".agent-skills/active.json"), "utf8"));
   const release = document?.release;
   if (!release || typeof release.releaseId !== "string" || typeof release.profile !== "string" || typeof release.archiveSha256 !== "string" || !/^[0-9a-f]{64}$/.test(release.archiveSha256)) {
     throw new Error("Installed workflow release identity is missing or malformed.");
@@ -4309,12 +4961,14 @@ function reconciliationActions(events) {
 }
 
 // packages/cli/src/commands/save-context.ts
+var USAGE7 = `Usage: delivery-harness save-context --json '{"contract":{"objective":"...","acceptanceCriteria":["..."],"finishLine":"merge-ready"},"stage":"work"}'`;
 var saveContextCommand = {
   name: "save-context",
   sourceId: "delivery-harness.cli.save-context",
   summary: "Save a bounded delivery contract and stage observation in the current run.",
+  usage: USAGE7,
   async run(context) {
-    if (context.args.length !== 2 || context.args[0] !== "--json") return { kind: "usage", message: `Usage: delivery-harness save-context --json '{"contract":{"objective":"...","acceptanceCriteria":["..."],"finishLine":"merge-ready"},"stage":"work"}'` };
+    if (context.args.length !== 2 || context.args[0] !== "--json") return { kind: "usage", message: USAGE7 };
     let input;
     try {
       const value2 = JSON.parse(context.args[1]);
@@ -4337,8 +4991,8 @@ var saveContextCommand = {
     const candidate = capture.candidate;
     const payload = {
       spec: "ordinary-run-context/1",
-      contract: input.contract,
-      stage: input.stage,
+      ...input.contract === void 0 ? {} : { contract: input.contract },
+      ...input.stage === void 0 ? {} : { stage: input.stage },
       candidateTreeSha: candidate.treeSha,
       candidateBinding: {
         deliverableDigest: candidate.deliverable.digest,
@@ -4351,20 +5005,32 @@ var saveContextCommand = {
       policyDigest: policyDigest(context),
       release
     };
-    const appended = await run.surface.store.append(run.runId, buildRunEvent({ runId: run.runId, commonDir: run.surface.commonDir, kind: "context.saved", role: "executor", payload }));
-    if (!appended.ok) return { kind: "blocked", blockers: [recoveryBlocker("resume_context_invalid", "Context was refused by the bounded run-event contract; inspect contract, stage, and secret-free inputs.")] };
+    const writer = ordinaryEventWriter(run.version, "context.saved", payload);
+    const appended = await run.surface.store.append(
+      run.runId,
+      buildRunEvent({ runId: run.runId, commonDir: run.surface.commonDir, kind: "context.saved", role: "executor", payload, ...writer }),
+      // An exact retry of one save is one observation, at its first instant.
+      { reuseExistingTimestamp: true }
+    );
+    if (!appended.ok) return { kind: "blocked", blockers: [recoveryBlocker(
+      "resume_context_invalid",
+      "Context was refused by the bounded run-event contract; inspect contract, stage, and secret-free inputs.",
+      `run ${run.runId}: ${rejectionDetails(appended.rejections)}`
+    )] };
     return { kind: "ok", summary: `saved ordinary context for ${run.runId}; stage is an observation, not evidence` };
   }
 };
 
 // packages/cli/src/commands/resume.ts
 import { classifyCandidateDrift as classifyCandidateDrift3, digestCanonical as digestCanonical5, evaluatePreparationReceipt as evaluatePreparationReceipt4, runAdmission as runAdmission2 } from "./kernel.mjs";
+var USAGE8 = "Usage: delivery-harness resume [--run <run-id>]";
 var resumeCommand = {
   name: "resume",
   sourceId: "delivery-harness.cli.resume",
   summary: "Read saved ordinary context and recheck evidence without executing or replaying work.",
+  usage: USAGE8,
   async run(context) {
-    if (context.args.length !== 0 && (context.args.length !== 2 || context.args[0] !== "--run")) return { kind: "usage", message: "Usage: delivery-harness resume [--run <run-id>]" };
+    if (context.args.length !== 0 && (context.args.length !== 2 || context.args[0] !== "--run")) return { kind: "usage", message: USAGE8 };
     const run = await recoveryRun(context.rootDir, context.args[1]);
     if (!run.ok) return { kind: "blocked", blockers: [run.blocker] };
     const saved = [...run.events].reverse().find((event) => event.kind === "context.saved");
@@ -4424,6 +5090,7 @@ var resumeCommand = {
 };
 
 // packages/cli/src/index.ts
+var PACKAGE_NAME = "@agent-delivery-harness/cli";
 var COMMANDS = [
   prepareCommand,
   reviewContextCommand,
@@ -4443,112 +5110,35 @@ var COMMANDS = [
 function runCli(argv, runtime) {
   return runCliBoundary(argv, COMMANDS, runtime);
 }
-
-// packages/cli/src/main.ts
-function createWaiverPrompt(input, output) {
-  return (decision, obligationIds) => new Promise((resolve, reject) => {
-    const rl = createInterface({ input, output });
-    let settled = false;
-    const settle = (action) => {
-      if (settled) return;
-      settled = true;
-      action();
-    };
-    rl.on("SIGINT", () => {
-      settle(() => {
-        rl.close();
-        reject(new CliInterruption("Waiver prompt interrupted."));
-      });
-    });
-    rl.on("close", () => {
-      settle(() => resolve(false));
-    });
-    output.write(`Waiving covers ${obligationIds.length} obligation(s): ${obligationIds.join(", ")}.
-`);
-    output.write(`Candidate: ${decision.candidate.treeSha}. Approval covers only these findings under the current policy; live obligations require new approval each invocation.
-`);
-    for (const resolution of decision.resolutions) {
-      if (resolution.kind === "blocked" && obligationIds.includes(resolution.obligationId)) {
-        for (const blocker of resolution.blockers) output.write(`${resolution.obligationId}: [${blocker.code}] ${blocker.summary}
-`);
-      }
-    }
-    const finish = (value2) => settle(() => {
-      rl.close();
-      resolve(value2);
-    });
-    rl.question("Waive all of them? [y/N] ", (answer) => {
-      if (!/^\s*y(es)?\s*$/i.test(answer)) return finish(false);
-      rl.question("Author: ", (author) => {
-        if (!author.trim() || author.length > 256) return finish(false);
-        rl.question("Reason: ", (reason) => {
-          if (!reason.trim() || reason.length > 4096) return finish(false);
-          finish({ author: author.trim(), reason: reason.trim() });
-        });
-      });
-    });
-  });
-}
-var readlineWaiverPrompt = (decision, obligationIds) => createWaiverPrompt(process.stdin, process.stderr)(decision, obligationIds);
-function canonicalEntryPath(entryPath) {
-  try {
-    return realpathSync(entryPath);
-  } catch {
-    return entryPath;
-  }
-}
-function invokedDirectly(argvEntry, moduleHref) {
-  if (argvEntry === void 0) return false;
-  let modulePath;
-  try {
-    modulePath = fileURLToPath(moduleHref);
-  } catch {
-    return false;
-  }
-  return canonicalEntryPath(argvEntry) === canonicalEntryPath(modulePath);
-}
-function readStdinText(input) {
-  if (input.isTTY === true) return Promise.resolve("");
-  return new Promise((resolve) => {
-    let text2 = "";
-    input.setEncoding("utf8");
-    input.on("data", (chunk) => {
-      text2 += chunk;
-    });
-    input.once("error", () => resolve(text2));
-    input.once("end", () => resolve(text2));
-  });
-}
-function defaultRuntime() {
-  return {
-    cwd: process.cwd(),
-    env: process.env,
-    stdinIsTTY: process.stdin.isTTY === true,
-    stdoutIsTTY: process.stdout.isTTY === true,
-    stdout: (text2) => process.stdout.write(text2),
-    stderr: (text2) => process.stderr.write(text2),
-    promptForWaiver: readlineWaiverPrompt,
-    readStdin: () => readStdinText(process.stdin)
-  };
-}
-async function main(argv) {
-  return runCli(argv, defaultRuntime());
-}
-if (invokedDirectly(process.argv[1], import.meta.url)) {
-  process.exitCode = EXIT_POLICY;
-  main(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  }).catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}
-`);
-    process.exitCode = EXIT_POLICY;
-  });
-}
 export {
-  createWaiverPrompt,
-  defaultRuntime,
-  invokedDirectly,
-  main,
-  readStdinText,
-  readlineWaiverPrompt
+  COMMANDS,
+  COMPLETION_WRAPPED_COMMANDS,
+  CliInterruption,
+  EXIT_INTERRUPTED,
+  EXIT_OK,
+  EXIT_POLICY,
+  EXIT_USAGE,
+  PACKAGE_NAME,
+  buildRunExport,
+  checkCommand,
+  commandBlocker,
+  emitCommand,
+  emitReviewEvidenceCommand,
+  gateCommand,
+  importHarnessConfig,
+  isConfigFreeCommand,
+  maintainCommand,
+  managedCommand,
+  parseRunExport,
+  prepareCommand,
+  recordCommand,
+  resumeCommand,
+  reviewContextCommand,
+  runCli,
+  runCliBoundary,
+  runsCommand,
+  saveContextCommand,
+  submitEvidenceCommand,
+  verifyCommand,
+  wireRepo
 };

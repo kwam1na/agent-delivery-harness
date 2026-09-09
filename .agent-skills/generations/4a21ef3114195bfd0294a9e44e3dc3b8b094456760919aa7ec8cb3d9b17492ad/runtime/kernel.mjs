@@ -2109,8 +2109,9 @@ async function discoverRecords(rootDir, selector) {
 // packages/kernel/src/validator/codes.ts
 var DELIVERY_EVIDENCE_1 = "delivery-evidence/1";
 var REVIEW_GREEN_1 = "review.green/1";
+var REVIEW_GREEN_2 = "review.green/2";
 var SUPPORTED_ENVELOPE_SPECS = Object.freeze([DELIVERY_EVIDENCE_1]);
-var SUPPORTED_PAYLOAD_SPECS = Object.freeze([REVIEW_GREEN_1, "checks.passed/1"]);
+var SUPPORTED_PAYLOAD_SPECS = Object.freeze([REVIEW_GREEN_1, REVIEW_GREEN_2, "checks.passed/1"]);
 var CONFORMING_ATTESTATION_LEVEL = "self";
 var MANIFEST_RULE_IDS = [
   "GEN-1",
@@ -2356,14 +2357,22 @@ var FINDING_DISPOSITIONS = Object.freeze([
 ]);
 var SETTLED_DISPOSITIONS = Object.freeze(["resolved", "pre_existing", "deferred"]);
 var DEFERRABLE_SEVERITIES = Object.freeze(["P2", "P3"]);
+var V1_DEFERRABLE_SCOPES = Object.freeze(["expansion"]);
+var V2_DEFERRABLE_SCOPES = Object.freeze(["in_contract", "expansion"]);
 function reviewFindingCoherenceCodes(finding3) {
+  return reviewFindingCoherenceCodesForScopes(finding3, V1_DEFERRABLE_SCOPES);
+}
+function reviewFindingCoherenceCodesV2(finding3) {
+  return reviewFindingCoherenceCodesForScopes(finding3, V2_DEFERRABLE_SCOPES);
+}
+function reviewFindingCoherenceCodesForScopes(finding3, deferrableScopes) {
   const codes = [];
   if (finding3.blocking === true) codes.push("blocking_finding_present");
   if (finding3.actionable === true && !SETTLED_DISPOSITIONS.includes(finding3.disposition)) {
     codes.push("actionable_unresolved");
   }
   if (finding3.disposition === "deferred") {
-    const legal = finding3.actionable === true && finding3.blocking === false && DEFERRABLE_SEVERITIES.includes(finding3.severity) && finding3.scope === "expansion" && isNonEmptyString2(finding3.deferredIssueId) && DEFERRED_ISSUE_ID.test(finding3.deferredIssueId);
+    const legal = finding3.actionable === true && finding3.blocking === false && DEFERRABLE_SEVERITIES.includes(finding3.severity) && deferrableScopes.includes(finding3.scope) && isNonEmptyString2(finding3.deferredIssueId) && DEFERRED_ISSUE_ID.test(finding3.deferredIssueId);
     if (!legal) codes.push("illegal_deferral");
   } else if (finding3.deferredIssueId !== void 0) {
     codes.push("illegal_deferral");
@@ -2402,11 +2411,17 @@ var APPROVAL_CODES = {
   missing: { code: "approval_mismatch", rule: "RG-4" }
 };
 function validateReviewGreenClaim(input, collector) {
+  validateReviewGreenClaimWithScopes(input, collector, V1_DEFERRABLE_SCOPES);
+}
+function validateReviewGreenClaimV2(input, collector) {
+  validateReviewGreenClaimWithScopes(input, collector, V2_DEFERRABLE_SCOPES);
+}
+function validateReviewGreenClaimWithScopes(input, collector, deferrableScopes) {
   const { payload, at } = input;
   checkMembers(payload, at, PAYLOAD_MEMBERS, { unknown: GEN_1_UNKNOWN, missing: GEN_4_MISSING }, collector);
   checkVerdict(payload, at, collector);
   const selected = checkReviewers(payload, at, collector);
-  const findings2 = checkFindings(payload, at, collector);
+  const findings2 = checkFindings(payload, at, collector, deferrableScopes);
   checkApprovals(input, selected, collector);
   checkTelemetry(input, selected, findings2, collector);
 }
@@ -2472,7 +2487,7 @@ function readReviewerList(reviewers, name, at, collector) {
   });
   return entries;
 }
-function checkFindings(payload, at, collector) {
+function checkFindings(payload, at, collector, deferrableScopes) {
   const findings2 = member(payload, "findings");
   const findingsAt = pointer(at, "findings");
   if (!Array.isArray(findings2)) {
@@ -2518,7 +2533,10 @@ function checkFindings(payload, at, collector) {
     if (blocking !== void 0 && typeof blocking !== "boolean") {
       collector.emit("finding_invalid", "RG-5", pointer(findingAt, "blocking"), "blocking is not a boolean");
     }
-    const coherenceCodes = reviewFindingCoherenceCodes({ severity, scope, actionable, blocking, disposition, deferredIssueId: member(finding3, "deferredIssueId") });
+    const coherenceCodes = reviewFindingCoherenceCodesForScopes(
+      { severity, scope, actionable, blocking, disposition, deferredIssueId: member(finding3, "deferredIssueId") },
+      deferrableScopes
+    );
     if (coherenceCodes.includes("blocking_finding_present")) {
       collector.emit("blocking_finding_present", "RG-6", pointer(findingAt, "blocking"), "a blocking finding contradicts a green verdict");
     }
@@ -2531,7 +2549,7 @@ function checkFindings(payload, at, collector) {
         "illegal_deferral",
         "RG-7",
         disposition === "deferred" ? findingAt : pointer(findingAt, "deferredIssueId"),
-        disposition === "deferred" ? "deferral does not satisfy every condition deferral requires" : "a tracker id on a finding that was not deferred"
+        disposition === "deferred" ? `a deferral requires actionable true, blocking false, severity P2 or P3, scope ${deferrableScopes.join(" or ")}, and a tracked issue id` : "a tracker id on a finding that was not deferred"
       );
     }
     derived.push({ severity, disposition, deferredIssueId });
@@ -2613,7 +2631,12 @@ function checkTelemetry(input, selected, findings2, collector) {
   checkMembers(telemetry, at, TELEMETRY_MEMBERS, { unknown: GEN_1_UNKNOWN, missing: GEN_4_MISSING }, collector);
   const iterationCount = member(telemetry, "iterationCount");
   if (iterationCount !== input.runHistoryLength) {
-    collector.emit("iteration_count_mismatch", "RG-9", pointer(at, "iterationCount"), "iteration count disagrees with the number of run history entries");
+    collector.emit(
+      "iteration_count_mismatch",
+      "RG-9",
+      pointer(at, "iterationCount"),
+      `iterationCount is ${String(iterationCount)}, but runHistory contains ${input.runHistoryLength} entries`
+    );
   }
   const derivedCounts = { P0: 0, P1: 0, P2: 0, P3: 0 };
   for (const finding3 of findings2) {
@@ -3005,6 +3028,20 @@ function checkClaims(root, input) {
         collector
       );
     }
+    if (payloadSpecUsable && payloadSpec === REVIEW_GREEN_2 && isRecord2(payload)) {
+      validateReviewGreenClaimV2(
+        {
+          payload,
+          at: pointer(at, "payload"),
+          provider: input.providerIdentity,
+          candidate: member(root, "candidate"),
+          artifacts: input.artifacts,
+          artifactContents: context.artifactContents,
+          runHistoryLength: input.runHistoryLength
+        },
+        collector
+      );
+    }
   });
 }
 function checkPreparation(context, collector) {
@@ -3234,7 +3271,6 @@ function movedFields(before, after) {
 var IN_PROGRESS_STATES = [
   { gitPath: "rebase-merge", operation: "rebase" },
   { gitPath: "rebase-apply", operation: "rebase" },
-  { gitPath: "REBASE_HEAD", operation: "rebase" },
   { gitPath: "MERGE_HEAD", operation: "merge" },
   { gitPath: "CHERRY_PICK_HEAD", operation: "cherry-pick" },
   { gitPath: "REVERT_HEAD", operation: "revert" }
@@ -5368,7 +5404,7 @@ function verifyPortableEvidence(config, portable, binding2, expected, checkBindi
   if (!validation.ok) blockers.push(...validation.rejections.map((rejection) => portableBlocker(rejection.code, rejection.message)));
   else {
     for (const claim of validation.manifest.claims) {
-      if (claim.payloadSpec !== "review.green/1") continue;
+      if (claim.payloadSpec !== REVIEW_GREEN_1 && claim.payloadSpec !== REVIEW_GREEN_2) continue;
       if (expected.reviewerCharters.length > 0) blockers.push(...verifyOriginalReview(validation.manifest, claim, read.artifacts, expected));
       const reviewers = isRecord6(claim.payload["reviewers"]) ? claim.payload["reviewers"]["selected"] : void 0;
       if (!Array.isArray(reviewers) || expected.reviewerCharters.some((charter) => !reviewers.includes(charter.reviewerId))) {
@@ -6423,8 +6459,34 @@ function verifyDeliveryRecord(config, record2, recomputedIdentity, base, options
     relaxedDriftClasses,
     attestationLabel: ATTESTATION_LABEL,
     claims: record2.claims,
+    reviewedCandidateTreeShas: blockers.length === 0 ? projectedReviewTreeShas(record2) : [binding2.treeSha],
     ...options.runJournal === void 0 ? {} : { runJournal: options.runJournal }
   };
+}
+function projectedReviewTreeShas(record2) {
+  const trees = /* @__PURE__ */ new Set([record2.candidateBinding.treeSha]);
+  const evidence = record2.claims.flatMap((claim) => [
+    ...claim.evidence === void 0 ? [] : [claim.evidence],
+    ...claim.supportingEvidence ?? []
+  ]);
+  for (const entry3 of evidence) {
+    if (entry3.resolution.kind !== "evidence" || entry3.resolution.portable === void 0) continue;
+    const portable = entry3.resolution.portable;
+    const manifest = portable.manifest;
+    if (portable.context.reviewerCharters.length === 0 || !isRecord7(manifest) || !Array.isArray(manifest["artifacts"]) || !Array.isArray(manifest["claims"]) || !manifest["claims"].some((claim) => isRecord7(claim) && (claim["payloadSpec"] === "review.green/1" || claim["payloadSpec"] === "review.green/2"))) continue;
+    const contents = portableArtifactContents(portable.artifacts).artifacts;
+    for (const declared of manifest["artifacts"]) {
+      if (!isRecord7(declared) || declared["role"] !== "review-context-projection" || typeof declared["path"] !== "string") continue;
+      try {
+        const projection = JSON.parse(contents.get(declared["path"]) ?? "null");
+        if (!isRecord7(projection) || projection["spec"] !== "review-context-projection/1" || !isRecord7(projection["reviewedCandidate"]) || !isRecord7(projection["preparedCandidate"]) || projection["reviewRoundAdded"] !== false || projection["preparedCandidate"]["treeSha"] !== record2.candidateBinding.treeSha) continue;
+        const reviewedTreeSha = projection["reviewedCandidate"]["treeSha"];
+        if (typeof reviewedTreeSha === "string" && /^[a-f0-9]{40}$/.test(reviewedTreeSha)) trees.add(reviewedTreeSha);
+      } catch {
+      }
+    }
+  }
+  return [...trees];
 }
 function verifyRecordEvidence(config, record2, options) {
   const blockers = [];
@@ -11647,6 +11709,16 @@ var JournalAccessRefused = class extends Error {
     this.reason = reason;
   }
 };
+var ProcessLockRefused = class extends Error {
+  lockPath;
+  reason;
+  constructor(lockPath, reason) {
+    super(`${lockPath}: ${reason}`);
+    this.name = "ProcessLockRefused";
+    this.lockPath = lockPath;
+    this.reason = reason;
+  }
+};
 var EMPTY_RAW = { lines: [], terminatedByteLength: 0, interruptedTail: false };
 function splitTerminated(text4) {
   const lastNewline = text4.lastIndexOf("\n");
@@ -11737,13 +11809,21 @@ function appendDecided(options) {
   return serializedOnPath(path13.resolve(journalPath), () => options.crossProcess === true ? withProcessAppendLock(journalPath, options.crossProcessTimeoutMs ?? 5e3, operation) : operation());
 }
 async function withProcessAppendLock(journalPath, timeoutMs, operation) {
-  const refuse4 = (reason) => new JournalAccessRefused(journalPath, reason);
+  try {
+    return await withProcessLock(`${journalPath}.append-lock`, timeoutMs, operation);
+  } catch (error) {
+    if (error instanceof ProcessLockRefused) throw new JournalAccessRefused(journalPath, error.reason);
+    throw error;
+  }
+}
+async function withProcessLock(lockPath, timeoutMs, operation) {
+  const refuse4 = (reason) => new ProcessLockRefused(lockPath, reason);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 6e4) throw refuse4("invalid cross-process append lock timeout");
   const deadline = performance.now() + timeoutMs;
   const checkDeadline = () => {
     if (performance.now() >= deadline) throw refuse4("cross-process append lock timed out");
   };
-  const directory2 = `${journalPath}.append-lock`;
+  const directory2 = lockPath;
   const id = `${process.pid}-${randomUUID4()}`;
   const marker = path13.join(directory2, `${id}.ticket`);
   const pending = path13.join(directory2, `${id}.pending`);
@@ -11828,7 +11908,7 @@ async function withProcessAppendLock(journalPath, timeoutMs, operation) {
     acquired = true;
     return await operation();
   } catch (error) {
-    if (acquired || error instanceof JournalAccessRefused) throw error;
+    if (acquired || error instanceof ProcessLockRefused) throw error;
     throw refuse4(describe4(error));
   } finally {
     if (registered) {
@@ -12608,7 +12688,7 @@ function runJournalCarries(events, entry3) {
       return indexBy(events, entry3).length > 0;
   }
 }
-function evaluateRunJournal(events, treeSha2, mandatedLensIds) {
+function evaluateRunJournal(events, treeSha2, mandatedLensIds, reviewedTreeShas = []) {
   const missing = [];
   const violations = [];
   const boundToRecord = treeSha2 !== void 0;
@@ -12626,7 +12706,8 @@ function evaluateRunJournal(events, treeSha2, mandatedLensIds) {
   const openingGateCompletion = cliCompletion(events, "gate", first);
   const executorOnly = completions.length === 0;
   const { paired, inverted } = pairRounds(events);
-  const qualifying = paired.filter((entry3) => treeSha2 === void 0 || payloadOf(entry3.closed)["candidateTreeSha"] === treeSha2);
+  const acceptedTrees = new Set(treeSha2 === void 0 ? [] : [treeSha2, ...reviewedTreeShas]);
+  const qualifying = paired.filter((entry3) => treeSha2 === void 0 || acceptedTrees.has(String(payloadOf(entry3.closed)["candidateTreeSha"])));
   const requiredRound = first(
     qualifying.map((entry3) => ({ at: entry3.closedAt, event: entry3.closed })).sort((left, right) => left.at - right.at)
   );
@@ -17220,7 +17301,10 @@ ${run.stderr}`.trim().slice(0, 1900);
           "Complete a fresh native review run successfully."
         );
       }
-      const coherenceCodes = result2.findings.flatMap(reviewFindingCoherenceCodes);
+      const reviewPayloadSpec = config.obligations.find((obligation) => obligation.id === "review.green")?.acceptedPayloadSpecs.includes(REVIEW_GREEN_2) === true ? REVIEW_GREEN_2 : REVIEW_GREEN_1;
+      const coherenceCodes = result2.findings.flatMap(
+        reviewPayloadSpec === REVIEW_GREEN_2 ? reviewFindingCoherenceCodesV2 : reviewFindingCoherenceCodes
+      );
       const verdictCoherent = result2.verdict === "approved" ? coherenceCodes.length === 0 : result2.findings.length > 0;
       if (!verdictCoherent) {
         return refuseResult(
@@ -17572,7 +17656,7 @@ ${run.stderr}`.trim().slice(0, 1900);
         claims: [
           {
             obligation: "review.green",
-            payloadSpec: "review.green/1",
+            payloadSpec: config.obligations.find((obligation) => obligation.id === "review.green")?.acceptedPayloadSpecs.includes(REVIEW_GREEN_2) === true ? REVIEW_GREEN_2 : REVIEW_GREEN_1,
             payload: {
               verdict: "green",
               finalized: true,
@@ -19558,6 +19642,7 @@ export {
   PROVIDER_POLICIES,
   PROVIDER_REVIEW_HANDOFF_SPEC,
   PROVIDER_REVIEW_RESULT_SPEC,
+  ProcessLockRefused,
   READ_ONLY_CAPABILITY_KINDS,
   RECEIPTED_SKILLS_ROOT,
   RECHECKED_VALUES,
@@ -19573,6 +19658,7 @@ export {
   REVIEWER_ATTEMPT_SPEC,
   REVIEWER_RESULTS,
   REVIEW_GREEN_1,
+  REVIEW_GREEN_2,
   REVIEW_LENS_CATEGORIES,
   REVIEW_VERDICTS,
   RUN_ACTIVITY_STATES,
@@ -19860,6 +19946,7 @@ export {
   verifyPortableEvidence,
   verifyProjection,
   withDeliverableIdentity,
+  withProcessLock,
   workflowStageBindingFor,
   writeAssertionProviderConfig
 };

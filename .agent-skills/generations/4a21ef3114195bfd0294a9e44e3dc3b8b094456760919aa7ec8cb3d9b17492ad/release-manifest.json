@@ -1,5 +1,5 @@
 {
-  "contentSha256": "6a49a0f58a992a5f93cb394204b8b8392a2dd204afd88bfcd6fbc37fea132197",
+  "contentSha256": "49d85cc5b420f399933ec8e9e60c0f89ae619ed2062e8ecde6b0a25592c669a3",
   "entryPoint": "python -m agent_skills.validate --root .",
   "files": [
     {
@@ -105,7 +105,7 @@
     {
       "group": "linear",
       "path": "agent_skills/provider.py",
-      "sha256": "50666b6d8ff58860b8b814cd994d40584cb4c134381dbda5ee605ff71f3cfa4a"
+      "sha256": "97d9a6ad726b38d92fee65dc66036f5b6dd9748d0fd69206e526cd30b52c7998"
     },
     {
       "group": "linear",
@@ -115,7 +115,7 @@
     {
       "group": "linear",
       "path": "agent_skills/release.py",
-      "sha256": "e34ee7df59b756a79937a6d8b6a503338b966dd6f5fadf75b08a371873dccab1"
+      "sha256": "62564fe8fc4f7da9334246daf0c3f3c227da3aba4eff47178afd08e44a4b8f76"
     },
     {
       "group": "linear",
@@ -140,17 +140,17 @@
     {
       "group": "linear",
       "path": "agent_skills/workflows.py",
-      "sha256": "4cf78ad56abe46af60582e96b751555469552df3eb8f826e11efbd57cab0e269"
+      "sha256": "9b153caf85d4ab709fc17d8f050e53342984f31f1d69b459ff4259ccd742cc35"
     },
     {
       "group": "linear",
       "path": "catalog.json",
-      "sha256": "42ebb9debd1a244eb06ab70541d2b1421f0722edc73cd6442f439f13b02a30b5"
+      "sha256": "92ef8a91f3e479c69fc3f54b9ea5bafccc0cdb20d5bd897f48c36c0b73e8695a"
     },
     {
       "group": "linear",
       "path": "docs/agent-skills-provider.md",
-      "sha256": "e6e3c38fdbfccce28a0647436782a6cc2232bb8b02f3c9148aaff903a2f81fa9"
+      "sha256": "386304181e40d66121adac6e544edbc73d8ad9450913918ec48bbf1809a3df70"
     },
     {
       "group": "linear",
@@ -260,17 +260,17 @@
     {
       "group": "linear",
       "path": "profiles/core.json",
-      "sha256": "635450ec9c58d30ff2bf5e01ee042047ccd42cbf104f87bad66194ce800900dd"
+      "sha256": "ba39196542c696cf3d1103be17e66ba9d44137334b100d6636ee1e4bfaed5cf4"
     },
     {
       "group": "linear",
       "path": "profiles/linear.json",
-      "sha256": "c5a676e64291c1739a0a83b59e4f629bf9462fa010b2c1ed3cf95227f39f8fd3"
+      "sha256": "5ffd94c89d3f706e0bf607464548992858808d52361ff09422fcb65e932282fa"
     },
     {
       "group": "linear",
       "path": "provenance.lock.json",
-      "sha256": "4006f321e3445ac48efa51348b5fb619000c2de16b8f1eafae01ccf0e9f24e1c"
+      "sha256": "e202647c766c868563444e869bd0e54f347a6ce4ae84c1e282a42a40e8a528d7"
     },
     {
       "group": "linear",
@@ -290,27 +290,27 @@
     {
       "group": "linear",
       "path": "runtime/cli-api.d.mts",
-      "sha256": "1add52b57bb9df764dcdf3d9a077b8f3afc0ce401c2679350bca600f1d67251b"
+      "sha256": "463fd495446754844c7e9ce50b44fd8975dbf7a0e4b9b7656dbf580cd146aa61"
     },
     {
       "group": "linear",
       "path": "runtime/cli-api.mjs",
-      "sha256": "96192290b0f89c8ff37a93647d34f6ff8c1698a297b2295113f222accea4a002"
+      "sha256": "f95f503cd13a0fe2aac08e9e9434ff8397f32f5d3fec804c6e9b705b06edb756"
     },
     {
       "group": "linear",
       "path": "runtime/cli.mjs",
-      "sha256": "afa1104dff674792ad1c27b81d82fbbaa40735ff7869638fb03a1c2601da9619"
+      "sha256": "99a762f7bf004dd6071efe9347f0aa282e292531f8d668e8875183b084964fa2"
     },
     {
       "group": "linear",
       "path": "runtime/kernel.d.mts",
-      "sha256": "59e1cd91a06baa695dfb2522b2fb296bf182ee6795eb70f238b0a1b0ad8fbe39"
+      "sha256": "4a8565a0f7efd1fe5c7eac1fb6099975309831e04d426facd39bc5ab865a3588"
     },
     {
       "group": "linear",
       "path": "runtime/kernel.mjs",
-      "sha256": "0e73b1da99b5bf94ff814e0b94ac552a1b2030cef144b11f715dc737b50d5ecf"
+      "sha256": "de91c25337a47f2bee422131568f6b2e3ec6061f0a31f352058e3c7b4f71260b"
     },
     {
       "group": "linear",
@@ -325,7 +325,7 @@
     {
       "group": "linear",
       "path": "runtime/runtime.json",
-      "sha256": "9ae7a5e16bc6158be964ad888091d1aee1e8ddd7e0ed3ce13c475ebdc502485a"
+      "sha256": "6b5249342b2842b9a4433db4d17a0b81519867eae0c58f83c1c8205361f9b240"
     },
     {
       "group": "linear",
@@ -435,7 +435,7 @@
     {
       "group": "linear",
       "path": "skills/execute-work/references/run-observation-contract.md",
-      "sha256": "fc6f8406fc4569f603f6d2946817fd06c70388701517161fe6199549e60bbdb0"
+      "sha256": "a009b0f88c599df6a7c56210f06c1e7d48b1283e395f52f27bf0bf9ef41b5068"
     },
     {
       "group": "linear",
@@ -455,7 +455,7 @@
     {
       "group": "linear",
       "path": "skills/obtain-review/SKILL.md",
-      "sha256": "2c44c40a2dda85f88f0f5fa5d524bf0def188e1d8a6cebd859b8086eff323b38"
+      "sha256": "6b76f44234d5d3336225ffe1ad62f06a8a5a33885d9c933f5351af19c3817900"
     },
     {
       "group": "linear",
@@ -470,7 +470,7 @@
     {
       "group": "linear",
       "path": "skills/review-work/SKILL.md",
-      "sha256": "c02d563022cfbb08115edd94ee85b30e7fbaab756a6e31fae70f357c81880ec1"
+      "sha256": "9d4ef2b89a926445916f71da4105e8368447950916bc1d14083cb082c9f1559e"
     },
     {
       "group": "linear",
@@ -551,6 +551,16 @@
       "group": "linear",
       "path": "tests/test_diagnosis.py",
       "sha256": "653c02c5725a21ada2fa97b61b0f2cea2f65d77ffdad57542231d4cccc89a3e1"
+    },
+    {
+      "group": "linear",
+      "path": "tests/test_review_and_compounding.py",
+      "sha256": "fba292708c257fe2f323d75a03bea38db02f76fa60bf697ab1920dbe16ab5dea"
+    },
+    {
+      "group": "linear",
+      "path": "tests/test_review_base_reopening.py",
+      "sha256": "7ea1083b8a98d7c1d112078fdd21f5a7734a547c591a01c5824f2398650d30b4"
     },
     {
       "group": "linear",
@@ -686,15 +696,17 @@
         "tests/scenarios/core/tracker-capability.json",
         "tests/test_delivery_provider_rails_contract.py",
         "tests/test_diagnosis.py",
+        "tests/test_review_and_compounding.py",
+        "tests/test_review_base_reopening.py",
         "tests/test_review_orchestration.py",
         "tests/test_workflow_graph_contract.py",
         "validation-inventory.json",
         "workflows/delivery-v1.json"
       ],
-      "sha256": "6a49a0f58a992a5f93cb394204b8b8392a2dd204afd88bfcd6fbc37fea132197"
+      "sha256": "49d85cc5b420f399933ec8e9e60c0f89ae619ed2062e8ecde6b0a25592c669a3"
     }
   },
   "profile": "linear",
-  "releaseId": "linear-product-v1",
+  "releaseId": "linear-contract-alignment-v1",
   "schemaVersion": "agent-skills-release/1"
 }

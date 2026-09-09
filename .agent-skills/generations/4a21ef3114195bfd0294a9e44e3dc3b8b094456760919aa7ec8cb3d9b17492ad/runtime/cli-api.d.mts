@@ -78,6 +78,17 @@ interface CommandDescriptor {
     /** The blocker `source.id` this command stamps on failures it raises itself. */
     readonly sourceId: string;
     readonly summary: string;
+    /**
+     * What a lone `--help`/`-h` on this command is answered with, printed by the
+     * boundary before anything is loaded. It is the command's own text — its
+     * invocation form and, where the command has one, the sentence explaining
+     * what its flags decide. Most commands build their own usage errors from it
+     * too, but nothing enforces that: `emit-review-evidence`, `maintain`,
+     * `managed` and `submit-evidence`'s missing-manifest arm phrase theirs from
+     * separate literals, so this member is the help answer and not a
+     * single-authority claim over every usage message.
+     */
+    readonly usage: string;
     run(context: CommandContext): Promise<CommandResult>;
 }
 /**
@@ -112,6 +123,8 @@ interface ConfigFreeCommandDescriptor {
     readonly name: string;
     readonly sourceId: string;
     readonly summary: string;
+    /** As {@link CommandDescriptor.usage}: one help contract across both classes. */
+    readonly usage: string;
     /** The discriminator the boundary dispatches on, before any config load. */
     readonly configFree: true;
     run(context: ConfigFreeCommandContext): Promise<CommandResult>;
