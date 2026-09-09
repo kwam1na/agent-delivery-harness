@@ -2033,7 +2033,7 @@ describe("runs serve", () => {
     expect(shownWithout.out).not.toContain("no CLI gate completion in this journal");
   });
 
-  it("gives each run on one page its own timeline, rounds, notes, and completeness", async () => {
+  it("binds each served run's timeline, rounds, notes, completeness, and run-list card to that run", async () => {
     // Two repositories, both carrying a config, served TOGETHER — which is what
     // the separately-served rows above cannot do: with one run on the page,
     // rendering `runs[0]`'s readout under every heading is indistinguishable
@@ -2050,7 +2050,13 @@ describe("runs serve", () => {
     const refused = await emit(barelyStarted, ["not.a.kind"], { anything: true });
     expect(refused.code, refused.err).toBe(EXIT_POLICY);
 
-    const server = await serve([finished, barelyStarted]);
+    // `barelyStarted` is served FIRST deliberately. The config-presence note
+    // below is carried by `finished` alone, so a readout handed a fixed
+    // repository root instead of its own run's is answerable only in the
+    // direction where that fixed root is not the noted run's. Serving the
+    // noted run second makes the direction this delivery is about — the block
+    // reading the page's FIRST entry — the falsifiable one.
+    const server = await serve([barelyStarted, finished]);
     const { page, state } = await pageAndState(server);
     expect([...state.runs].map((run) => run.runId).sort()).toEqual([finishedRunId, barelyStartedRunId].sort());
     expect(runOf(state, finishedRunId).readout.status).toBe("complete-executor-only");
@@ -2102,14 +2108,40 @@ describe("runs serve", () => {
     expect(barelyStartedBlock).toContain("<td>not.a.kind</td>");
     expect(finishedBlock).not.toContain("<h3>refused appends</h3>");
 
-    // There is no fourth block to bind: V26-1950 removed the per-run repository
-    // paragraph from the run block, and the only roots the page still prints —
-    // the `root — runsDir` pairs in the provenance details — are the SERVED
-    // repositories, every one of them under every run, so they are not a per-run
-    // surface and no mutation of them could be denied on the other block. The
-    // run's own root is still bound above, through the config-presence note in
-    // its readout: it names `finished`'s root under `finished`'s heading and is
-    // absent under the other's.
+    // Its own repository. V26-1950 did not delete this fourth surface, it
+    // moved it: the run block's own `<p class="meta">` root is gone, and each
+    // run's repository is now the basename in that run's card in the run list
+    // on `/`. The `root — runsDir` pairs the page still prints under every
+    // run are the SERVED repositories, unfiltered by the selection, so they are
+    // not a per-run surface and no mutation of them could be denied on the
+    // other run.
+    //
+    // Splitting the index page on the cards' own `data-key` anchors is what
+    // makes the denial answerable: every card carries identical markup, so a
+    // containment check over the whole page holds just as well under a run list
+    // that hands every card the first run's repository. Verified in both
+    // directions: binding the cell to `state.runs[0]` and to
+    // `state.runs.at(-1)` are each RED here.
+    //
+    // The first-run read this answers is over the whole served set, not over
+    // one section's slice. `runsTable` splits the runs into an open and an
+    // ended section and maps each separately, and these two runs land one in
+    // each, so a cell bound to that local slice's first element is the run
+    // itself and mutating it changes nothing. Answering that one needs two runs
+    // in one section, which this row does not have and does not claim.
+    const cardOf = (runId: string): string => {
+      const anchor = `data-key="${escapeHtml(runOf(state, runId).href ?? runId)}"`;
+      const after = page.slice(page.indexOf(anchor) + anchor.length);
+      const next = after.indexOf('data-key="');
+      return next === -1 ? after : after.slice(0, next);
+    };
+    const basenameOf = (dir: string): string =>
+      escapeHtml(realpathSync(dir).split("/").filter(Boolean).at(-1) ?? "");
+    // The denial is only worth making because the two roots differ here.
+    expect(basenameOf(finished)).not.toBe(basenameOf(barelyStarted));
+    expect(cardOf(finishedRunId)).toContain(`<p class="meta">${basenameOf(finished)}</p>`);
+    expect(cardOf(barelyStartedRunId)).toContain(`<p class="meta">${basenameOf(barelyStarted)}</p>`);
+    expect(cardOf(barelyStartedRunId)).not.toContain(`<p class="meta">${basenameOf(finished)}</p>`);
   });
 
   it("distinguishes a round that was never opened, exactly as runs show does", async () => {
