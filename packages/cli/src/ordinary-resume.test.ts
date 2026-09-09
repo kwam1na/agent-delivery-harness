@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { createArtifactsPort, defineHarnessConfig } from "@agent-delivery-harness/kernel";
+import { createArtifactsPort, defineHarnessConfig, type RunEvent } from "@agent-delivery-harness/kernel";
 import adopterConfig from "../../../harness.config.ts";
 import { runCli, type CliRuntime } from "./index.ts";
 import { resolveRunSurface } from "./run-surface.ts";
+import { rejectionDetails } from "./ordinary-context.ts";
 import { costLabel } from "./run-projection.ts";
 
 const exec = promisify(execFile);
@@ -15,7 +16,21 @@ const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 const contract = { objective: "Ship the change", acceptanceCriteria: ["Checks pass"], finishLine: "merge-ready" };
 
-async function fixture() {
+/**
+ * The `context.saved` entries of a journal, read as the payload members this
+ * file asserts over. The store returns an opaque payload; naming the members
+ * here keeps every row's assertion about one term rather than about a cast.
+ */
+function contextsSaved(events: readonly RunEvent[]) {
+  return events.filter(event => event.kind === "context.saved")
+    .map(event => ({ eventId: event.eventId, payload: event.payload as {
+      readonly contract?: unknown; readonly stage?: unknown;
+      readonly candidateTreeSha: string; readonly candidateBinding: Record<string, string>;
+      readonly policyDigest: string; readonly release: unknown;
+    } }));
+}
+
+async function fixture(options: { readonly version?: "1" | "2" } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "ordinary-resume-")); dirs.push(dir);
   const git = async (...args: string[]) => (await exec("git", args, { cwd: dir })).stdout.trim();
   await git("init", "-q"); await git("config", "user.name", "Test"); await git("config", "user.email", "test@example.invalid");
@@ -31,8 +46,18 @@ async function fixture() {
     loadConfig: async () => config, artifacts: createArtifactsPort({ runRootBase: path.join(dir, ".git/artifacts") }),
   };
   const run = async (...args: string[]) => { output.length = 0; errors.length = 0; return runCli(args, runtime); };
-  await run("emit", "run.started", "--json", JSON.stringify({ host: "codex", workflow: { releaseId: "test", profile: "linear" } }));
-  return { dir, git, run, output, errors, changePolicy: () => { config = defineHarnessConfig({ ...config, activationThreshold: 200 }); } };
+  const started = { host: "codex", workflow: { releaseId: "test", profile: "linear" } };
+  await run("emit", "run.started", ...(options.version === "2" ? ["--version", "2", "--event-id", "start-1"] : []), "--json", JSON.stringify(started));
+  /** The run's journal as the store reads it back — never a projection of it. */
+  const journal = async () => {
+    const surface = await resolveRunSurface(dir); if (!surface.ok) throw new Error(surface.reason);
+    const current = await surface.surface.store.current(surface.surface.worktreeKey);
+    if (!current.ok || current.runId === undefined) throw new Error("no current run");
+    const read = await surface.surface.store.read(current.runId);
+    if (!read.ok) throw new Error(`journal unreadable: ${JSON.stringify(read.rejections)}`);
+    return read.events;
+  };
+  return { dir, git, run, output, errors, journal, changePolicy: () => { config = defineHarnessConfig({ ...config, activationThreshold: 200 }); } };
 }
 
 describe("ordinary save and resume", () => {
@@ -115,4 +140,266 @@ it("refuses contradictory observed outcomes", async () => {
   expect(await f.run("emit", "action.observed", "--json", JSON.stringify({ actionId: "a1", outcome: "succeeded", reference: "pr1" }))).toBe(0);
   expect(await f.run("resume")).toBe(1);
   expect(f.errors.join("\n")).toContain("resume_action_unreconciled");
+});
+
+describe("the rejection a refusal reports", () => {
+  it("says the store refused rather than inventing a location when no rejection was given", () => {
+    expect(rejectionDetails([])).toBe("the store refused the append");
+  });
+
+  it("keeps an empty pointer readable as the document root", () => {
+    expect(rejectionDetails([{ code: "malformed_member", pointer: "", message: "bad" }])).toBe("malformed_member at /: bad");
+  });
+
+  it("bounds each of the three parts, so a store answer cannot flood the blocker", () => {
+    const detail = rejectionDetails([{ code: "c".repeat(200), pointer: `/${"p".repeat(300)}`, message: "m".repeat(500) }]);
+    const [code, rest] = detail.split(" at ");
+    const [pointer, message] = rest!.split(": ");
+    expect(code).toHaveLength(64);
+    expect(pointer).toHaveLength(128);
+    expect(message).toHaveLength(200);
+    expect(detail.endsWith("\u2026")).toBe(true);
+  });
+});
+
+describe("the writer version a save-context observation is written at", () => {
+  it("writes the selected run's version, so a run-event/2 journal accepts the save and resume reads it back", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "work" })), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.version).toBe("run-event/2");
+    // The retry key is derived from the observation itself, so the same save
+    // has the same id wherever it is repeated from.
+    expect(saved[0]!.eventId).toMatch(/^context-saved-[0-9a-f]{64}$/);
+    expect(await f.run("resume"), f.errors.join("\n")).toBe(0);
+    expect(f.output.join("\n")).toContain('"stage":"work"');
+  });
+
+  it("keeps a legacy run at run-event/1, where an id-free save appends every time", async () => {
+    const f = await fixture();
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "work" })), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "work" })), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(2);
+    expect(saved.map(event => event.version)).toEqual(["run-event/1", "run-event/1"]);
+    expect(saved.every(event => event.eventId === undefined)).toBe(true);
+    expect(await f.run("resume"), f.errors.join("\n")).toBe(0);
+  });
+
+  it("is idempotent on an exact v2 retry and distinguishes a changed observation", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const first = await f.journal();
+    // Past a tick of the second-granular run instant, so the retry is proven
+    // to reuse the first save's instant rather than to coincide with it.
+    await new Promise(resolve => { setTimeout(resolve, 1200); });
+    // The same observation, saved again: the same event, instant and sequence.
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    expect(await f.journal()).toEqual(first);
+    // A different stage is a different observation, so it is a different id.
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "review" })), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    // Three real CLI invocations plus a deliberate wait past a clock tick: the
+    // default per-test ceiling is not the budget this row needs.
+  }, 30000);
+
+  it.each(["1", "2"] as const)("leaves a v%s journal unchanged when the store refuses the context, and names the rejection", async version => {
+    const f = await fixture({ version });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const before = await f.journal();
+    // An empty acceptance-criteria list is refused by the bounded contract,
+    // which is a refusal the command cannot see until the store answers.
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract: { ...contract, acceptanceCriteria: [] }, stage: "work" }))).toBe(1);
+    const reported = f.errors.join("\n");
+    expect(reported).toContain("resume_context_invalid");
+    expect(reported).toContain("malformed_member");
+    expect(reported).toContain("/payload/contract/acceptanceCriteria");
+    // The store's own words, not just its code and pointer: an operator who
+    // cannot read the rule has a location without a reason.
+    expect(reported).toContain("expected 1 to 32 bounded acceptance criteria");
+    // No false success, and no rewritten history.
+    expect(await f.journal()).toEqual(before);
+  });
+
+  // Both operator members are spread conditionally, so both are asked at both
+  // writer versions: a fix proven only for contract leaves stage unfalsified.
+  it.each([["1", "contract"], ["2", "contract"], ["1", "stage"], ["2", "stage"]] as const)(
+    "reports an omission on a v%s run as the missing member it is: %s", async (version, omitted) => {
+      const f = await fixture({ version });
+      expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+      const before = await f.journal();
+      // An omitted member must never reach the writer as a present undefined:
+      // deriving a v2 retry key over one is a crash, not a typed refusal.
+      const supplied = omitted === "contract" ? { stage: "work" } : { contract };
+      expect(await f.run("save-context", "--json", JSON.stringify(supplied))).toBe(1);
+      const reported = f.errors.join("\n");
+      expect(reported).toContain("resume_context_invalid");
+      expect(reported).toContain("missing_member");
+      expect(reported).toContain(`/payload/${omitted}`);
+      expect(reported).not.toContain("internal_error");
+      expect(await f.journal()).toEqual(before);
+    }, 30000);
+
+  it("saves the same contract and stage again as a new v2 observation once what it observed has changed", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // The retry key is derived from the whole observation, not from the two
+    // operator members, so the same contract and stage describe a different
+    // observation whenever anything the save reports has moved. Two such
+    // movements are asked here: the candidate the save is bound to, and the
+    // policy the save reports it was judged under. Each must produce a new id
+    // and a new entry rather than a refusal at /eventId. The candidate moves
+    // as tree and binding together here, which is what an operator committing
+    // work does; the rows below separate the halves, move the merge base alone,
+    // and move the installed release alone.
+    await writeFile(path.join(f.dir, "source.ts"), "export const value = 2;\n");
+    await f.git("add", ".");
+    await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "change the candidate");
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // Policy lives outside the candidate tree, so this moves the observation
+    // with candidateTreeSha and its binding held fixed: a key that digested
+    // only the candidate would refuse this save instead of recording it.
+    f.changePolicy();
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const saved = (await f.journal()).filter(event => event.kind === "context.saved");
+    expect(saved).toHaveLength(3);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(3);
+  }, 30000);
+
+  it("saves a revised contract at the same v2 stage as a new observation", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "work" })), f.errors.join("\n")).toBe(0);
+    // `contract` and `stage` are the two members an operator supplies, and a
+    // key proven only for `stage` leaves its twin free: revising an objective
+    // and re-saving at the same stage is an ordinary flow, so it must be a new
+    // id and a new entry rather than a refusal at /eventId.
+    const revised = { ...contract, objective: "Ship the change, objective revised in place" };
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract: revised, stage: "work" })), f.errors.join("\n")).toBe(0);
+    const saved = contextsSaved(await f.journal());
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    // Nothing but the contract moved: the stage and the whole candidate the
+    // save reports are the same in both entries.
+    expect(saved[0]!.payload.stage).toBe(saved[1]!.payload.stage);
+    expect(saved[0]!.payload.candidateTreeSha).toBe(saved[1]!.payload.candidateTreeSha);
+    expect(saved[0]!.payload.candidateBinding).toEqual(saved[1]!.payload.candidateBinding);
+  }, 30000);
+
+  it("saves again as a new v2 observation when only the base the candidate is bound to has advanced", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // An upstream branch advancing mid-delivery moves `baseTipSha` inside
+    // `candidateBinding` and nothing else: the upstream commit carries the
+    // candidate's own tree, so the tree sha, the deliverable digest, the merge
+    // base, both operator members, the policy and the release all stay put.
+    // The candidate-movement row above moves the tree and the binding
+    // together; this one moves the binding with the tree held fixed.
+    const tree = await f.git("rev-parse", "HEAD^{tree}");
+    const upstream = await f.git("commit-tree", tree, "-p", "origin/main", "-m", "unrelated upstream commit");
+    await f.git("update-ref", "refs/heads/origin/main", upstream);
+    expect(await f.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const saved = contextsSaved(await f.journal());
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    const binding = saved.map(event => event.payload.candidateBinding);
+    expect(saved[0]!.payload.candidateTreeSha).toBe(saved[1]!.payload.candidateTreeSha);
+    // Named rather than left as an inequality over the whole binding: a general
+    // assertion over six members is satisfied by whichever one happens to move.
+    expect(binding[0]!["baseTipSha"]).not.toBe(binding[1]!["baseTipSha"]);
+    expect(binding[0]!["deliverableDigest"]).toBe(binding[1]!["deliverableDigest"]);
+    expect(binding[0]!["mergeBaseSha"]).toBe(binding[1]!["mergeBaseSha"]);
+  }, 30000);
+
+  it("saves again as a new v2 observation when only the review-neutral part of the candidate tree has moved", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // A report written beside the work is review-neutral, so it is excluded
+    // from the deliverable digest while still moving the raw tree: this is the
+    // mirror of the row above, moving `candidateTreeSha` with the binding it
+    // is usually dragged along by held fixed.
+    await mkdir(path.join(f.dir, "docs/reports"), { recursive: true });
+    await writeFile(path.join(f.dir, "docs/reports/progress.md"), "# progress\n");
+    await f.git("add", ".");
+    await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "write a review-neutral report");
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const saved = contextsSaved(await f.journal());
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    expect(saved[0]!.payload.candidateTreeSha).not.toBe(saved[1]!.payload.candidateTreeSha);
+    expect(saved[0]!.payload.candidateBinding).toEqual(saved[1]!.payload.candidateBinding);
+  }, 30000);
+
+  it("saves again as a new v2 observation when only the merge base the candidate is replayed from has moved", async () => {
+    const f = await fixture({ version: "2" });
+    const tree = await f.git("rev-parse", "HEAD^{tree}");
+    const upstream = await f.git("commit-tree", tree, "-p", "origin/main", "-m", "unrelated upstream commit");
+    await f.git("update-ref", "refs/heads/origin/main", upstream);
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // A forced rebase replays the candidate onto the advanced base: the tree
+    // and the base tip are where they were, and only the merge base moves. It
+    // is this repository's most ordinary mid-delivery movement, and the row
+    // above cannot reach it — advancing the base past HEAD leaves the merge
+    // base at HEAD.
+    const replayed = await f.git("commit-tree", tree, "-p", upstream, "-m", "replayed onto the advanced base");
+    await f.git("reset", "--hard", "-q", replayed);
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    const saved = contextsSaved(await f.journal());
+    const binding = saved.map(event => event.payload.candidateBinding);
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(2);
+    expect(saved[0]!.payload.candidateTreeSha).toBe(saved[1]!.payload.candidateTreeSha);
+    expect(binding[0]!["baseTipSha"]).toBe(binding[1]!["baseTipSha"]);
+    expect(binding[0]!["deliverableDigest"]).toBe(binding[1]!["deliverableDigest"]);
+    expect(saved[0]!.payload.policyDigest).toBe(saved[1]!.payload.policyDigest);
+    expect(binding[0]!["mergeBaseSha"]).not.toBe(binding[1]!["mergeBaseSha"]);
+  }, 30000);
+
+  it("saves again as a new v2 observation when only the installed release has changed", async () => {
+    const f = await fixture({ version: "2" });
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    const payload = JSON.stringify({ contract, stage: "work" });
+    expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    // The installed release is read from the worktree, not from the candidate
+    // tree, so a harness upgrade that rewrites it in a workspace which does not
+    // track that path moves `release` alone: the candidate stays clean and
+    // captures identically. All three of its operator-visible members are moved
+    // in turn, so none of them rides on another.
+    await f.git("update-index", "--assume-unchanged", ".agent-skills/active.json");
+    const install = async (release: Record<string, string>) => {
+      await writeFile(path.join(f.dir, ".agent-skills/active.json"), JSON.stringify({ release }));
+      expect(await f.git("status", "--porcelain")).toBe("");
+      expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+      expect(await f.run("save-context", "--json", payload), f.errors.join("\n")).toBe(0);
+    };
+    await install({ releaseId: "next", profile: "linear", archiveSha256: "a".repeat(64) });
+    await install({ releaseId: "next", profile: "github", archiveSha256: "a".repeat(64) });
+    await install({ releaseId: "next", profile: "github", archiveSha256: "b".repeat(64) });
+    const saved = contextsSaved(await f.journal());
+    expect(saved).toHaveLength(4);
+    expect(new Set(saved.map(event => event.eventId)).size).toBe(4);
+    expect(new Set(saved.map(event => event.payload.candidateTreeSha)).size).toBe(1);
+    expect(new Set(saved.map(event => JSON.stringify(event.payload.candidateBinding))).size).toBe(1);
+    expect(new Set(saved.map(event => event.payload.policyDigest)).size).toBe(1);
+  }, 30000);
 });
