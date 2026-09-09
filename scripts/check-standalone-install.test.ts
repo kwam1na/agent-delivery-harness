@@ -13,13 +13,16 @@
  * load TypeScript at all, from reporting a clean sensor, the case list the CLI
  * probe walks, the environment it hands its children, and the run-store reader
  * that decides whether the run-surface cases actually wrote anything. Every one
- * of those is reachable without a subprocess, so all but one of these tests
- * spawn nothing. The exception is the last row, which drives the runner itself
- * over a one-package fixture: the CLI probe's guard is a decision the fast
- * suite can falsify, but the two lines that turn that decision into a reported
- * finding live inside the loop, and nothing else in `npm run check` reaches
- * them. One trivial `npm pack` and `npm install --offline` is what that row
- * costs, and it is the only thing that fails when the wiring is deleted.
+ * of those is reachable without a subprocess, so all but the last two of these
+ * tests spawn nothing. Those two drive the runner itself over a one-package
+ * fixture, because what they pin lives inside the run rather than in anything
+ * the run calls. The CLI probe's guard is a decision the fast suite can
+ * falsify, but the two lines that turn that decision into a reported finding
+ * live inside the loop, and nothing else in `npm run check` reaches them; one
+ * trivial `npm pack` and `npm install --offline` is what that row costs, and it
+ * is the only thing that fails when the wiring is deleted. The row after it
+ * pins the count the pack-failure return reports, which no pure row can reach
+ * either, and it costs one `npm pack` that fails — no install at all.
  */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -63,6 +66,13 @@ afterAll(() => {
 interface FixturePackage {
   readonly name: string;
   readonly dependencies?: Readonly<Record<string, string>>;
+  /**
+   * Leave `version` out of the manifest, which is the shortest thing `npm pack`
+   * refuses: it rejects on `Invalid package, must have name and version` before
+   * it reads a file, runs a script, or derives a tarball name, so a fixture
+   * that opts in fails to pack on every npm and every platform.
+   */
+  readonly withoutVersion?: boolean;
 }
 
 function makeFixture(packages: readonly FixturePackage[], options: { readonly withLoader?: boolean } = {}): string {
@@ -72,7 +82,8 @@ function makeFixture(packages: readonly FixturePackage[], options: { readonly wi
   for (const pkg of packages) {
     const pkgDir = path.join(dir, "packages", pkg.name.replace(/^@[^/]+\//u, ""));
     mkdirSync(pkgDir, { recursive: true });
-    const manifest: Record<string, unknown> = { name: pkg.name, version: "0.1.0" };
+    const manifest: Record<string, unknown> =
+      pkg.withoutVersion === true ? { name: pkg.name } : { name: pkg.name, version: "0.1.0" };
     if (pkg.dependencies !== undefined) manifest["dependencies"] = pkg.dependencies;
     writeFileSync(path.join(pkgDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   }
@@ -488,5 +499,45 @@ describe("the CLI probe's guard, through the runner", () => {
       expect(result.cliCasesCompleted).toBe(0);
     },
     60_000,
+  );
+});
+
+describe("the pack-failure return, through the runner", () => {
+  // The fourth return, and the last one whose reported counts nothing observes.
+  // It is taken while `findings` already holds a `pack-failed`, so the sensor
+  // exits non-zero either way and no mutation here can turn a red verdict
+  // green; what it can do is make `main()`'s summary line say `4 CLI smoke
+  // case(s) run` on a run that packed nothing and therefore installed nothing,
+  // and a summary that reports work the run never did is the same lie the
+  // guards above refuse one level up.
+  //
+  // The fixture is one package with no `version`, which `npm pack` refuses on
+  // its own manifest check — `Invalid package, must have name and version`,
+  // raised before it reads a file, runs a script, or derives a tarball name.
+  // That matters: a malformed package NAME does not refuse, it packs, because
+  // whether npm rejects one is a property of the npm build rather than of the
+  // manifest. A first attempt here named the package `@…/kernel/` and relied on
+  // the separator surviving into the tarball filename; it failed to pack on
+  // this machine's npm and packed cleanly on CI's, where the row then reported
+  // `install-failed` and went red. The missing member is the mechanism npm
+  // itself owns, so it holds on every npm and every platform, with no registry,
+  // no install and no network.
+  //
+  // Asserting the `pack-failed` finding is what keeps the row honest: a fixture
+  // that starts packing would fail loudly here rather than quietly assert a
+  // zero that some later return also produces.
+  it(
+    "reports no CLI smoke cases when the run packed nothing",
+    () => {
+      const dir = makeFixture([{ name: `${PACKAGE_SCOPE}/kernel`, withoutVersion: true }], { withLoader: true });
+      const result = runStandaloneInstallCheck({ root: dir });
+      expect(result.findings.map((finding) => [finding.rule, finding.subject])).toEqual([
+        ["pack-failed", `${PACKAGE_SCOPE}/kernel`],
+      ]);
+      // The count the summary line reports. Nothing was packed, so nothing was
+      // installed and no case could have run.
+      expect(result.cliCasesCompleted).toBe(0);
+    },
+    30_000,
   );
 });
