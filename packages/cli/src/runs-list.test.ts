@@ -245,9 +245,14 @@ describe("runs list bounds and filters", () => {
     // The bound cuts what is RETURNED, never what is counted: an agent that
     // read `total` off the returned rows could not tell it had been bounded.
     expect((inventory["total"] as { count: number }).count).toBe(3);
-    expect((inventory["total"] as { bytes: number }).bytes).toBeGreaterThan(
-      rowsOf(inventory).reduce((sum, row) => sum + row.bytes, 0) - 1,
-    );
+    // `total.bytes` is the bytes of every SELECTED run, so it is pinned against
+    // the unbounded listing's own sum and not against the rows that came back.
+    // A `>= sum(returned rows)` assertion would be vacuous: a total computed
+    // over the returned rows satisfies it exactly.
+    const returnedBytes = rowsOf(inventory).reduce((sum, row) => sum + row.bytes, 0);
+    const everyRunsBytes = rowsOf(await listJson(dir)).reduce((sum, row) => sum + row.bytes, 0);
+    expect(everyRunsBytes).toBeGreaterThan(returnedBytes);
+    expect((inventory["total"] as { bytes: number }).bytes).toBe(everyRunsBytes);
   });
 
   it("is not truncated when the limit is not reached", async () => {
@@ -335,7 +340,7 @@ describe("runs list bounds and filters", () => {
 
   it("reports an unreadable journal under the status the filter names", async () => {
     const dir = await initRepo();
-    await startRun(dir);
+    const runId = await startRun(dir);
     const { runsDir } = await surfaceOf(dir);
     const brokenId = `run-${"c".repeat(16)}`;
     await writeFile(path.join(runsDir, `${brokenId}.jsonl`), "not a journal line\n", "utf8");
@@ -343,9 +348,27 @@ describe("runs list bounds and filters", () => {
     const unreadable = await listJson(dir, ["--status", "unreadable"]);
     expect(idsOf(unreadable)).toEqual([brokenId]);
     expect(rowsOf(unreadable)[0]!.open).toBe(false);
-    // The human row for the same journal is the one this status is named after.
+
+    // The human row for the same journal is the one this status is named after,
+    // and it is PINNED BYTE-FOR-BYTE like the readable one below. A prefix
+    // assertion (`  <id>  unreadable  `) is satisfied by the readable renderer
+    // too, which would print `  <id>  unreadable  ended  <n> bytes` — the
+    // open/ended word is exactly what an unreadable journal cannot answer.
+    const inventory = await listJson(dir);
+    const bytesOf = (id: string): number => rowsOf(inventory).find((row) => row.runId === id)!.bytes;
+    const expectedRow = new Map([
+      [brokenId, `  ${brokenId}  unreadable  ${bytesOf(brokenId)} bytes\n`],
+      [runId, `  ${runId}  incomplete  open current  ${bytesOf(runId)} bytes\n`],
+    ]);
     const human = await cli(dir, ["runs", "list"]);
-    expect(human.out).toContain(`  ${brokenId}  unreadable  `);
+    expect(human.code, human.err).toBe(EXIT_OK);
+    expect(human.out).toBe(
+      `runs in ${runsDir}\n  (${READOUT_LABELS})\n` +
+        idsOf(inventory)
+          .map((id) => expectedRow.get(id)!)
+          .join("") +
+        `total ${bytesOf(brokenId) + bytesOf(runId)} bytes across 2 run(s)\n`,
+    );
   });
 });
 
@@ -428,6 +451,10 @@ describe("the human runs listing", () => {
     expect(bounded.out).toContain(all[0]!);
     expect(bounded.out).not.toContain(all[1]!);
     expect(bounded.out).toContain("showing 1 of 2 run(s) (--limit 1)");
+    // The total line counts the SELECTED runs, not the shown ones: a bounded
+    // listing that said "across 1 run(s)" over "showing 1 of 2" would contradict
+    // itself, and only the "showing" line is checked above.
+    expect(bounded.out).toContain("across 2 run(s)");
 
     const whole = await cli(dir, ["runs", "list", "--limit", "2"]);
     expect(whole.out).not.toContain("showing");
