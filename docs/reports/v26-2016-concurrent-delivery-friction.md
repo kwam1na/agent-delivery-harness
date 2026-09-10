@@ -16,6 +16,8 @@ Each epic may retain its own observations, but links to that same ticket.
 | Direct reply to sibling subagent rejected | V26-2016 | F2 here; host feedback, no issue |
 | Interrupted subagents require explicit discovery/resume | V26-2015 | `docs/reports/v26-2015-concurrent-delivery-friction.md` |
 | `save-context` refuses a dirty implementation candidate | V26-2014 | V26-1845; independently observed by V26-2015 too |
+| Node 23.5 triggers Vitest engine warning during install | V26-2014 | Peer host-environment log; installation succeeded here too |
+| Scenario inventory changes require fresh checked product projection | V26-2015 / V26-2014 coordination | Existing V26-1536; peer observed, no duplicate issue |
 | Shared release/install and final merge sequence | V26-2016 | F3/F4 here; no defect established |
 
 Peer confirmation and any later canonical issue links are recorded here before
@@ -49,6 +51,49 @@ existing issue remains canonical, not a new duplicate here.
   corresponding private-suite logs; preserve a bounded evidence report before
   scratch cleanup.
 
+### Enabling-fix iteration
+
+The first private-environment pair each ran 394 tests in about 209 seconds.
+Import failures disappeared, but three deterministic release/qualification
+identity assertions failed in each suite. The implementation had unnecessarily
+changed `docs/workflow-graph-v1.md`, which ships in the release. Reverting that
+edit restored the unchanged release surface; commit `6fe796b` also replaced an
+initial mock-only setup test with real isolated interpreter imports. A final
+concurrent pair is running. These three failures are attributed to the
+candidate edit, not counted as concurrency failures or product defects.
+
+**Final concurrent witness:** Both candidate worktrees at `6fe796b`, each using
+its own `.venv`, passed 394 tests with one skip. Durations were 230.255 and
+230.472 seconds; joint wall time was 231 seconds, both exit codes zero. Logs:
+`/tmp/v26-1764-final-suite-a.log` and `/tmp/v26-1764-final-suite-b.log`.
+Both peer orchestrators were cleared to run full suites in private environments.
+Independent review and merge of the enabling slice remain pending.
+
+**Shared pointer proof:** `/tmp/v26-1764-shared-editable-proof.log` records one
+environment's `__editable___agent_skills_corpus_0_1_0_finder.py` mapping changing
+from `/Users/kwamina/agent-skills-v26-1764/agent_skills` to
+`/private/tmp/agent-skills-v26-1764-peer/agent_skills` after the second editable
+install. This directly demonstrates the contamination mechanism, while still
+not proving it caused every historical intermittent failure. Registry validation
+reported zero findings and all 22 registry mutation sensors passed. Fresh core
+and linear archives were byte-identical to base builds with matching release
+IDs; this enabling change does not require a product reinstallation.
+
+**Review iteration:** Correctness aligned. Adversarial-testing round 1 filed
+`V26-1764-AT-1`: the committed test exercised `create_environment`, not the
+bootstrap's actual editable installation. Switching the pip executable back to
+the shared interpreter, or always creating an environment without pip, survived
+the narrow test. The author is adding bootstrap-level behavioral coverage;
+the finding remains open until the filing lens confirms closure. This is a
+candidate testing defect caught by required review, not a new friction ticket.
+
+**Review fix:** At `eb3418c`, the replacement regression invokes actual
+bootstrap twice with local editable-package and dependency-wheel fixtures under
+`PIP_NO_INDEX=1`. Adversarial-testing round 2 independently reran the control and
+both original mutations, reported alignment, and closed `V26-1764-AT-1` with no
+new findings or deferrals. Source reports and selected logs are retained under
+`/Users/kwamina/.codex/v26-2016-evidence/1764/`, beyond temporary scratch paths.
+
 ## F2: Cross-task messages cannot reply directly to another task's subagent
 
 - **Observed:** A V26-2014 subagent sent a helper-API coordination message with
@@ -73,6 +118,22 @@ existing issue remains canonical, not a new duplicate here.
   0.5.0 runtime, final qualification and installation, including Athena proof.
 - **Disposition:** Coordination dependency under observation. This entry does not
   claim a product failure or a completed release.
+
+**Observed coordination race:** Near-simultaneous proposals and acknowledgments
+assigned the consolidated producer merge first to V26-2014, then V26-2016, then
+back to V26-2014. No mutation occurred under either provisional assignment.
+An explicit final message to both peers settles ownership: V26-2014 integrates,
+reviews and merges the combined producer source; V26-2016 supplies signal source
+and the final 0.5.0 harness runtime, and owns final harness/Athena installation.
+All parties freeze one producer/runtime pair before final qualification. This
+is an observed weakness of message-only coordination, not evidence that the
+delivery product admitted conflicting operations.
+
+A later delayed V26-2015 proposal attempted another reversal after the two
+other roots had acknowledged V26-2014 ownership. The coordinator rejected that
+change and named the agreed decision `producer-owner-1`, asking for
+acknowledgment only. The named decision retains V26-2014 ownership. This is
+concrete message-ordering friction; no new issue was filed by any root.
 
 ## F4: Final admission must be serialized across moving bases
 
