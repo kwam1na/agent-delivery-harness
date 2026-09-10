@@ -76,8 +76,8 @@ the merge.
 
 **A run's writer version is fixed at `run.started` and cannot change.** If you
 are continuing someone else's delivery, read it before emitting anything — a
-version-1 run *refuses* `--event-id`, and its message ("Version 2 requires
---event-id; version 1 does not accept it") reads as the opposite advice:
+version-1 run refuses `--event-id` and identifies the run and the flag to drop;
+a version-2 run missing that flag asks for it:
 
 ```sh
 npm run --silent harness -- runs show <run-id> --json \
@@ -91,9 +91,11 @@ That payload takes `fork`, `choice` and an optional `cited`, so put the round
 you are continuing in `cited` — a member spelled `citation` is what draws
 `unknown_member`.
 
-Recovering the run id of a delivery you are resuming: `runs show` needs an id
-and `runs list` has no worktree attribution, so read it out of the journals by
-ticket instead.
+Recovering the run id of a delivery you are resuming: `runs show --json`
+resolves the invoking worktree's current run when the id is omitted. Use
+`runs list --json` for the inventory and its `current` pointer. If the run has
+ended or belongs to another worktree, pass its explicit id; searching retained
+journals by ticket is another way to find it.
 
 ```sh
 grep -l "V26-0000" "$(git rev-parse --git-common-dir)"/managed-delivery/runs/*.jsonl
@@ -146,7 +148,10 @@ DELIVERY_HARNESS_MAX_WORKERS=4 npm run check            # the gate
 
 `npm run check` is typecheck, the import-boundary sensor, the CLI-inventory
 sensor, then the suite. Time it: `gate.reported` wants `durationMs` and you
-cannot recover it afterwards. Not in `check`, and yours to run when you touch
+cannot recover it afterwards. Completeness requires that manual observation
+only when no CLI `command.completed` entries exist; the workflow still asks for
+the standalone check's timing because the CLI does not observe that process.
+Product commands already carry their own automatic duration. Not in `check`, and yours to run when you touch
 policy, packaging or the provider: `npm run sensor:policy`,
 `npm run sensor:standalone`, `npm run qualify:provider`.
 
@@ -575,8 +580,11 @@ in the loop where a round remains to absorb it.
 
 ```sh
 gh pr checks <n> --watch
-git -C "$REPO" fetch origin && git -C "$REPO" rev-parse origin/main   # must equal the record's baseTipSha
+git -C "$REPO" fetch origin && git -C "$REPO" rev-parse origin/main   # compare with candidateBinding.baseTipSha in the record
 ```
+
+`verify` prints `recorded base:` and `observed base:` with their refs and tip
+SHAs, so this comparison does not require reading the nested record by hand.
 
 `.agents/policy/repository-policy.json` grants the `merge-ready` finish line and
 `pr-creation` authority, and lists `merge` under `forbiddenAuthority`; the
@@ -586,7 +594,14 @@ at `merge-ready` with the pull request open.
 
 ```sh
 gh pr merge <n> --squash --delete-branch=false
+gh pr view <n> --json state,mergedAt,mergeCommit,url
 ```
+
+An empty successful merge response is not a reason to repeat the merge. Read
+the pull request and confirm `state` is `MERGED`, retaining `mergedAt` and
+`mergeCommit`. Before ending the run, record the reached finish line and that
+commit in a `decision.recorded` observation. Use the primary ticket in the PR
+title and enumerate the remaining delivered tickets on the `Linear:` line.
 
 Only once the merge is confirmed — and only in a delivery that was authorized to
 merge:
@@ -601,6 +616,14 @@ At `merge-ready` without that authority, emit the same `run.ended` payload —
 and there is no `note` — once the pull request is open and the hosted checks are
 green. Which finish line was reached is not expressible on this event; record it
 in a preceding `decision.recorded` if it needs to be in the journal.
+
+For that handoff, fetch and compare the base with the record's
+`candidateBinding.baseTipSha` immediately before ending the run. If the base
+moved under the `stale` policy, refresh the loop in the same open run first.
+After a confirmed merge, an own-merge base advance is expected: the old record
+is not an admission for the new base, and a stale verification does not undo the
+confirmed merge. Do not restart a completed delivery solely to refresh that
+historical record. An unrelated base move before merge still requires refresh.
 
 `run.ended` is terminal and clears the worktree pointer. Green hosted checks are
 not the finish line — a base move landing after `run.ended` forks one delivery
@@ -626,9 +649,9 @@ missing tracker is recorded and the loop proceeds.
   directory drifted out of the delivery worktree, not a lost run: the current
   run is resolved from a pointer keyed on the worktree. Fix the directory, or
   pass `--run <id>`.
-- **`runs show` needs the run id even when one is current**, and `runs show
-  --json` reads `--json` as the positional id and refuses with
-  `run_unresolvable`. When you are resuming a delivery, the journal at
+- **`runs show [<run-id>] [--json]` uses the current run when the id is omitted.**
+  With no current run, pass the id from `runs list --json` or start a run.
+  Unknown flags are usage errors rather than run ids. The journal at
   `$(git rev-parse --git-common-dir)/managed-delivery/runs/<run-id>.jsonl` is the
   direct answer to "what has already been emitted".
 - **One run is current per worktree.** A second `run.started` is

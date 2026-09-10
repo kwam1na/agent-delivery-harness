@@ -43,6 +43,9 @@ import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescript
 
 const USAGE = "Usage: delivery-harness emit <kind> [--run <id>] [--json <payload>] [--force] [--version 1|2] [--event-id <id>]";
 
+const PAYLOAD_USAGE =
+  "emit needs a JSON payload: use --json <payload>, or omit --json only when piping JSON to stdin until EOF.";
+
 interface ParsedArgs {
   readonly kind: string;
   readonly run?: string;
@@ -106,6 +109,18 @@ function parsePayload(text: string): unknown {
   }
 }
 
+async function suppliedPayload(context: ConfigFreeCommandContext, json: string | undefined): Promise<
+  { readonly ok: true; readonly payload: unknown } | { readonly ok: false; readonly message: string }
+> {
+  if (json !== undefined) return { ok: true, payload: parsePayload(json) };
+  if (context.stdinIsTTY === true) {
+    return { ok: false, message: `${PAYLOAD_USAGE}\nstdin is interactive, so emit will not wait for terminal EOF.\n${USAGE}` };
+  }
+  const text = await context.readStdin();
+  if (text.trim() === "") return { ok: false, message: `${PAYLOAD_USAGE}\n${USAGE}` };
+  return { ok: true, payload: parsePayload(text) };
+}
+
 const noRun = (details: string) =>
   runSurfaceBlocker({
     code: "run_unresolvable",
@@ -167,9 +182,16 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
     if (kind === "run.started") {
       const version = parsed.args.version ?? "run-event/1";
       if ((version === "run-event/2") !== (parsed.args.eventId !== undefined)) {
-        return { kind: "usage", message: `Version 2 requires --event-id; version 1 does not accept it.\n${USAGE}` };
+        return {
+          kind: "usage",
+          message: version === "run-event/2"
+            ? `run.started is creating a version 2 run; every emit needs --event-id.\n${USAGE}`
+            : `run.started is creating a version 1 run and does not accept --event-id; drop it.\n${USAGE}`,
+        };
       }
-      return startRun(surface, force, parsePayload(parsed.args.json ?? (await context.readStdin())), version, parsed.args.eventId);
+      const supplied = await suppliedPayload(context, parsed.args.json);
+      if (!supplied.ok) return { kind: "usage", message: supplied.message };
+      return startRun(surface, force, supplied.payload, version, parsed.args.eventId);
     }
 
     const runId = await resolveRun(store, surface, named);
@@ -193,9 +215,16 @@ export const emitCommand: ConfigFreeCommandDescriptor = {
       return { kind: "usage", message: "A run's writer version cannot change. End it and start an explicitly linked successor run." };
     }
     if ((version === "run-event/2") !== (parsed.args.eventId !== undefined)) {
-      return { kind: "usage", message: `Version 2 requires --event-id; version 1 does not accept it.\n${USAGE}` };
+      return {
+        kind: "usage",
+        message: version === "run-event/2"
+          ? `run ${runId} is version 2; every emit needs --event-id.\n${USAGE}`
+          : `run ${runId} is version 1 and does not accept --event-id; drop it, and drop the version-2 payload members roundId, bound, grace and reopensRoundId.\n${USAGE}`,
+      };
     }
-    const payload = parsePayload(parsed.args.json ?? (await context.readStdin()));
+    const supplied = await suppliedPayload(context, parsed.args.json);
+    if (!supplied.ok) return { kind: "usage", message: supplied.message };
+    const payload = supplied.payload;
     const event = buildRunEvent({ runId, commonDir: surface.commonDir, kind, role: "executor", payload, version,
       ...(parsed.args.eventId === undefined ? {} : { eventId: parsed.args.eventId }) });
 

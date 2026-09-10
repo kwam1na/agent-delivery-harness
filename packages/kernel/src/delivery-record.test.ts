@@ -800,6 +800,18 @@ describe("verifyDeliveryRecord", () => {
     expect(check.baseMovementRelaxed).toBe(false);
   });
 
+  it("explains own-merge reconciliation before suggesting a stale record be refreshed", () => {
+    const currentTip = "z".repeat(40);
+    const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, { ...FRESH_BASE, tipSha: currentTip });
+    const blocker = check.blockers.find(entry => entry.code === "base_tip_moved")!;
+    expect(check.ok).toBe(false);
+    expect(blocker.details).toContain(FRESH_BASE.tipSha);
+    expect(blocker.details).toContain(currentTip);
+    expect(blocker.remediations[0]!.summary).toContain("own confirmed merge");
+    expect(blocker.remediations[0]!.summary).toContain("no new delivery loop");
+    expect(blocker.remediations[0]!.summary).toContain("same run");
+  });
+
   it("stales on merge-base movement", () => {
     const check = verifyDeliveryRecord(makeConfig(), buildFreshRecord(), RECOMPUTED, { ...FRESH_BASE, mergeBaseSha: "z".repeat(40) });
     expect(check.ok).toBe(false);

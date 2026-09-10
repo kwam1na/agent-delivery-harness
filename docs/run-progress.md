@@ -18,6 +18,35 @@ payload is refused. Start a new linked run when upgrading, naming the old ID in
 the v2 `run.started` payload's `predecessorRunId`; retain the original history.
 New readers accept both versions. Old readers may refuse v2 and must not erase it.
 
+Discover a kind's accepted members before emitting it with
+`delivery-harness runs grammar <kind> --version 2 --json` (use `--version 1`
+for a legacy run). This read-only view derives members, requiredness and
+vocabularies from the validator's definitions. Validation still refuses unknown
+or missing members and identifies the accepted member set.
+
+An explicit `--json` payload never reads stdin. Omitting `--json` reads JSON
+from stdin until EOF:
+
+```sh
+npm run harness -- emit decision.recorded --event-id choice-1 --json '{"fork":"input","choice":"explicit JSON"}'
+printf '%s' '{"fork":"input","choice":"piped JSON"}' | npm run harness -- emit decision.recorded --event-id choice-2
+```
+
+Interactive terminal input without `--json` receives a usage diagnostic; pipe
+JSON or supply the flag. A closed empty pipe receives the missing-payload
+diagnostic after EOF. An open pipe intentionally waits for delayed input and
+EOF; it has no production timeout. Interrupt it with Ctrl-C when the producer
+will not finish. Embedding adapters must preserve those EOF and delayed-input
+semantics and supply terminal information when available. Diagnostics go to
+stderr, and absent or invalid input never appends a successful event.
+
+`run.ended` deliberately carries only `result` and `cost`; it does not carry
+`finishLine`, `mergeCommitSha` or `note`. Record the confirmed finish line and
+merge commit in `decision.recorded` before `run.ended`, using `choice` for the
+outcome and `cited` for the merge reference. These are observations, not merge
+authority. Keep the run open through the authorized finish line. Any continuation
+after the terminal event needs a linked successor run; retain both histories.
+
 The product's own writers follow the same rule from inside. Command completion
 reporting and [`save-context`](ordinary-resume.md) read the selected run's
 version from its first journal event and write at it, supplying an event ID
@@ -52,6 +81,19 @@ Review round identity is separate from attempt identity. V2 round events carry
 `reopensRoundId`. The workflow decides round accounting. A viewer does not count
 a clarification as another policy round on its own.
 
+Completeness pairs version-2 round events by `roundId`, so a base-move replay
+can keep the same round number without inheriting the earlier candidate's
+closure. The latest opening and latest close must form the same ordered pair,
+bound to the record's candidate or its verified reviewed tree. That close precedes the governing
+(last) gate, and the governing record follows that gate. Earlier valid attempts
+remain history; an inverted round remains a structural violation. Version 1
+retains numeric round pairing because it has no replay identity.
+
+A linked version-2 retry may observe an existing pull request before its first
+gate; `predecessorRunId` exempts only that PR chronology. It does not exempt any
+required event, current-round binding or gate/record ordering, and it cannot
+serve as evidence that a predecessor admitted this candidate.
+
 The shared projection retains all findings and separately selects the latest
 reported disposition of each current finding. These are reported findings,
 not an independent verdict. Absent structured findings remain unreported.
@@ -76,6 +118,13 @@ interrupted observation when the boundary returns. Concurrent invocations have
 separate IDs; a changed current-run pointer cannot move their completion to a
 different run. The existing `command.completed` retains the exact exit outcome,
 duration and successful digest. Preparation execution/reuse detail is separate.
+
+`gate.reported` is required by completeness only when the journal has no CLI
+`command.completed` entries. In that legacy executor-only fallback its ordering
+stands in for the CLI gate observation. A standalone `npm run check` still needs
+its own timed `gate.reported` observation under the workflow contract; the CLI
+does not observe that external process. The product's command duration is
+already recorded automatically and must not be duplicated as a manual gate.
 
 The native waiver prompt supplies an actual human wait and its scoped
 resolution. It does not change who may approve, and no approval is reusable

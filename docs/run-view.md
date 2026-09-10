@@ -116,6 +116,12 @@ its original binding. Missing, malformed, digest-mismatched and refused reads
 are explicit; no previous successful read is cached. Archives never consult a
 live repository record.
 
+Changed-entry and relevant-line figures are narration only in plain
+`review-context` output. `review-context --json` is the retained review binding
+document, not a machine-readable diff-stat report. Retain the plain output
+alongside that JSON when a review needs the figures; neither is a substitute for
+the candidate diff.
+
 Delivery records store no original verification timestamp, so that field is
 unavailable. Retained provider manifests may carry a digest-bound `recordedAt`;
 it is labeled **provider-reported recording time**, never verification time.

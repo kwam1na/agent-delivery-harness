@@ -112,7 +112,7 @@ export interface RunJournalEvaluation {
   /**
    * Whether a record's tree sha bound the round constraints. False means the
    * readout is unbound to a record and every rule phrased over the record's
-   * tree sha was evaluated over any paired round.
+   * tree sha was evaluated over the governing paired round without a tree filter.
    */
   readonly boundToRecord: boolean;
 }
@@ -203,15 +203,24 @@ interface Pairing {
   readonly inverted: boolean;
 }
 
+// A replay keeps its counted round number, but has a fresh v2 roundId. Both
+// fields must agree within a pair; legacy journals retain numeric pairing.
+function roundKey(event: RunEvent): unknown {
+  const payload = payloadOf(event);
+  return event.version === "run-event/2"
+    ? JSON.stringify([payload["roundId"], payload["round"]])
+    : payload["round"];
+}
+
 function pairRounds(events: readonly RunEvent[]): Pairing {
   const opened = indexBy(events, "review.round.opened");
   const closed = indexBy(events, "review.round.closed");
-  const rounds = new Set<unknown>([...opened, ...closed].map((entry) => payloadOf(entry.event)["round"]));
+  const rounds = new Set<unknown>([...opened, ...closed].map((entry) => roundKey(entry.event)));
   const paired: { round: unknown; openedAt: number; closedAt: number; closed: RunEvent }[] = [];
   let inverted = false;
   for (const round of rounds) {
-    const firstOpened = first(opened.filter((entry) => payloadOf(entry.event)["round"] === round));
-    const firstClosed = first(closed.filter((entry) => payloadOf(entry.event)["round"] === round));
+    const firstOpened = first(opened.filter((entry) => roundKey(entry.event) === round));
+    const firstClosed = first(closed.filter((entry) => roundKey(entry.event) === round));
     if (firstOpened === undefined || firstClosed === undefined) continue;
     if (firstClosed.at < firstOpened.at) {
       inverted = true;
@@ -222,6 +231,16 @@ function pairRounds(events: readonly RunEvent[]): Pairing {
   return { paired, inverted };
 }
 
+function governingRound(events: readonly RunEvent[], pairing = pairRounds(events)): Pairing["paired"][number] | undefined {
+  // Neither a new opening without a close nor an unmatched later close can
+  // borrow the earlier candidate's completed review. Historical rounds remain
+  // in the journal; only this pair can support the governing gate.
+  const latestOpened = last(indexBy(events, "review.round.opened"));
+  const latestClosed = last(indexBy(events, "review.round.closed"));
+  return latestOpened === undefined || latestClosed === undefined ? undefined :
+    pairing.paired.find(entry => entry.openedAt === latestOpened.at && entry.closedAt === latestClosed.at);
+}
+
 /**
  * Whether the journal carries one required entry, by that entry's own name.
  *
@@ -230,8 +249,8 @@ function pairRounds(events: readonly RunEvent[]): Pairing {
  * `present` row among them — answers from here too. Two entries are not plain
  * kind lookups: a completion counts only where the CLI wrote it, so an
  * executor's claim to have run a command is never read as the product's, and a
- * closed round counts only where it pairs with an open of the same number that
- * precedes it. Answering either of those twice is how a readout comes to name
+ * closed round counts only where the latest opening has its own later close.
+ * Answering either of those twice is how a readout comes to name
  * one entry as both present and missing.
  */
 export function runJournalCarries(events: readonly RunEvent[], entry: RunJournalRequiredEntry): boolean {
@@ -241,7 +260,7 @@ export function runJournalCarries(events: readonly RunEvent[], entry: RunJournal
     case REQUIRED.recordCompletion:
       return cliCompletion(events, "record") !== undefined;
     case REQUIRED.roundClosed:
-      return pairRounds(events).paired.length > 0;
+      return governingRound(events) !== undefined;
     default:
       return indexBy(events, entry).length > 0;
   }
@@ -272,13 +291,18 @@ export function evaluateRunJournal(
   const boundToRecord = treeSha !== undefined;
 
   const runStarted = first(indexBy(events, "run.started"));
+  // This is a linked attempt on an existing PR, not a claim that a prior gate
+  // admits the new candidate. Every current round/gate/record rule still runs.
+  const linkedRetry = runStarted?.event.version === "run-event/2" &&
+    typeof payloadOf(runStarted.event)["predecessorRunId"] === "string";
   const ticketRead = first(indexBy(events, "ticket.read"));
   const postureDeclared = first(indexBy(events, "posture.declared"));
   const lensSelected = first(indexBy(events, "lens.selected"));
   const roundsOpened = indexBy(events, "review.round.opened");
   const prOpened = first(indexBy(events, "pr.opened"));
   const runEnded = first(indexBy(events, "run.ended"));
-  const gateReported = first(indexBy(events, "gate.reported"));
+  const gateReported = last(indexBy(events, "gate.reported"));
+  const openingGateReported = first(indexBy(events, "gate.reported"));
   const completions = indexBy(events, "command.completed");
   const gateCompletion = cliCompletion(events, "gate");
   const recordCompletion = cliCompletion(events, "record");
@@ -298,12 +322,13 @@ export function evaluateRunJournal(
   /** No `command.completed` at all — an adopter that runs no product command. */
   const executorOnly = completions.length === 0;
 
-  const { paired, inverted } = pairRounds(events);
+  const pairing = pairRounds(events);
+  const { inverted } = pairing;
   const acceptedTrees = new Set(treeSha === undefined ? [] : [treeSha, ...reviewedTreeShas]);
-  const qualifying = paired.filter((entry) => treeSha === undefined || acceptedTrees.has(String(payloadOf(entry.closed)["candidateTreeSha"])));
-  const requiredRound = first(
-    qualifying.map((entry) => ({ at: entry.closedAt, event: entry.closed })).sort((left, right) => left.at - right.at),
-  );
+  const currentRound = governingRound(events, pairing);
+  const requiredRound = currentRound !== undefined &&
+    (treeSha === undefined || acceptedTrees.has(String(payloadOf(currentRound.closed)["candidateTreeSha"])))
+    ? currentRound : undefined;
 
   // ── Required entries ─────────────────────────────────────────────────────
   //
@@ -337,12 +362,12 @@ export function evaluateRunJournal(
   if (inverted) violations.push(VIOLATION.roundClosedBeforeOpened);
 
   if (gateCompletion !== undefined) {
-    const closedFirst = qualifying.some((entry) => entry.closedAt < gateCompletion.at);
+    const closedFirst = requiredRound !== undefined && requiredRound.closedAt < gateCompletion.at;
     if (!closedFirst) violations.push(VIOLATION.gateBeforeClosedRound);
     if (recordCompletion !== undefined && recordCompletion.at < gateCompletion.at) violations.push(VIOLATION.recordBeforeGate);
   }
 
-  if (openingGateCompletion !== undefined && prOpened !== undefined && prOpened.at < openingGateCompletion.at) {
+  if (!linkedRetry && openingGateCompletion !== undefined && prOpened !== undefined && prOpened.at < openingGateCompletion.at) {
     violations.push(VIOLATION.prBeforeGate);
   }
 
@@ -352,9 +377,11 @@ export function evaluateRunJournal(
   // completion: in a journal that has any CLI completion it carries no
   // ordering constraint and the CLI completion's constraints govern.
   if (executorOnly && gateReported !== undefined) {
-    const closedFirst = qualifying.some((entry) => entry.closedAt < gateReported.at);
+    const closedFirst = requiredRound !== undefined && requiredRound.closedAt < gateReported.at;
     if (!closedFirst) violations.push(VIOLATION.gateReportedBeforeClosedRound);
-    if (prOpened !== undefined && prOpened.at < gateReported.at) violations.push(VIOLATION.prBeforeGateReported);
+    if (!linkedRetry && openingGateReported !== undefined && prOpened !== undefined && prOpened.at < openingGateReported.at) {
+      violations.push(VIOLATION.prBeforeGateReported);
+    }
   }
 
   if (lensSelected !== undefined) {

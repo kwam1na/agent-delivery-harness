@@ -694,11 +694,11 @@ describe("emit, the boundary wrap, and runs", () => {
     await expect(lstat(path.join((await storeOf(dir)).runsDir, "notes", "run-deadbeefdeadbeef.jsonl"))).rejects.toThrow();
   });
 
-  it("rejects a missing kind, a missing subcommand, and an unknown flag as usage", async () => {
+  it("rejects missing command arguments as usage and an unresolved id-free show as policy", async () => {
     const dir = await initRepo();
     expect((await cli(dir, ["emit"])).code).toBe(EXIT_USAGE);
     expect((await cli(dir, ["runs"])).code).toBe(EXIT_USAGE);
-    expect((await cli(dir, ["runs", "show"])).code).toBe(EXIT_USAGE);
+    expect((await cli(dir, ["runs", "show"])).code).toBe(EXIT_POLICY);
     expect((await emit(dir, ["run.started", "--nope"], {})).code).toBe(EXIT_USAGE);
   });
 
@@ -1176,6 +1176,20 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(completions[0]).toMatchObject({ payload: { command: "record", outcome: "usage" } });
     expect(completions[0]!.payload["digest"]).toBeUndefined();
   }, 30_000);
+
+  it("retains distinct v2 completion event ids for separate wrapped invocations", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir, ["--version", "2", "--event-id", "completion-run-start"]);
+    expect((await cli(dir, ["check"])).code).toBe(EXIT_OK);
+    expect((await cli(dir, ["submit-evidence"])).code).toBe(EXIT_USAGE);
+    const completions = (await journalOf(dir, runId)).filter(event => event.kind === "command.completed");
+    expect(completions.map(event => event.payload["command"])).toEqual(["check", "submit-evidence"]);
+    expect(completions.map(event => event.payload["outcome"])).toEqual(["ok", "usage"]);
+    expect(completions.every(event => event.version === "run-event/2")).toBe(true);
+    const ids = completions.map(event => event.version === "run-event/2" ? event.eventId : undefined);
+    expect(ids.every(id => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(2);
+  });
 
   it("wraps only the commands on the completion allowlist", async () => {
     const dir = await initRepo();

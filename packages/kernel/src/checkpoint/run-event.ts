@@ -35,7 +35,7 @@
 
 import {
   MAX_FREE_TEXT,
-  checkClosed,
+  checkClosed as checkSpineClosed,
   createSpineCollector,
   isSpineRecord,
   spinePointer,
@@ -139,6 +139,38 @@ const malformed = (collector: SpineCollector, at: string, message: string): void
   collector.emit("malformed_member", at, message);
 };
 
+/** Closed vocabularies attached to the exact checks the validator executes. */
+const CHECK_VALUES = new WeakMap<MemberCheck, readonly string[]>();
+
+/**
+ * Applies the spine's closed-object validator while making its active table
+ * discoverable in a refusal. This wrapper is deliberately local to run events:
+ * their hand-authored payloads are an operator surface, while the other spine
+ * families are consumed as typed documents rather than composed at the CLI.
+ */
+function checkRunClosed(
+  value: unknown,
+  at: string,
+  rules: readonly MemberRule[],
+  collector: SpineCollector,
+): ReturnType<typeof checkSpineClosed> {
+  const accepted = rules.map(rule => rule.name).join(", ");
+  return checkSpineClosed(value, at, rules, {
+    emit(code, pointer, message) {
+      const relative = pointer.startsWith(`${at}/`) ? pointer.slice(at.length + 1) : "";
+      const directMember = relative !== "" && !relative.includes("/");
+      collector.emit(
+        code,
+        pointer,
+        directMember && (code === "unknown_member" || code === "missing_member")
+          ? `${message}; accepted members: ${accepted}`
+          : message,
+      );
+    },
+    verdict: () => collector.verdict(),
+  });
+}
+
 const boundedString =
   (maximum: number, what: string): MemberCheck =>
   (value, at, collector) => {
@@ -155,13 +187,17 @@ const patterned =
     }
   };
 
-const oneOf =
-  (values: readonly string[]): MemberCheck =>
-  (value, at, collector) => {
+const oneOf = (values: readonly string[]): MemberCheck => {
+  const check: MemberCheck = (value, at, collector) => {
     if (typeof value !== "string" || !values.includes(value)) {
-      malformed(collector, at, `expected one of ${values.join(", ")}`);
+      const encoded = at.split("/").at(-1) ?? "member";
+      const member = encoded.replaceAll("~1", "/").replaceAll("~0", "~");
+      malformed(collector, at, `${member} accepts only: ${values.join(", ")}`);
     }
   };
+  CHECK_VALUES.set(check, values);
+  return check;
+};
 
 const runStoreId = patterned(RUN_STORE_ID, 128, "a run id matching the run-store charset");
 const ticketId = patterned(RUN_TICKET, 128, "a ticket identity matching the kernel run-id charset");
@@ -239,18 +275,18 @@ const cost: MemberCheck = (value, at, collector) => {
   // Legacy measured entries stay readable. Unknown coverage carries no numeric
   // total: zero would claim a measurement the host did not make.
   if (isSpineRecord(value) && value["coverage"] === "unreported") {
-    checkClosed(value, at, [
+    checkRunClosed(value, at, [
       { name: "coverage", check: oneOf(["unreported"]) },
       { name: "reportedBy", check: label },
     ], collector);
   } else {
-    checkClosed(value, at, [...COST_MEMBERS, { name: "coverage", check: oneOf(["complete", "partial"]), required: false }], collector);
+    checkRunClosed(value, at, [...COST_MEMBERS, { name: "coverage", check: oneOf(["complete", "partial"]), required: false }], collector);
   }
 };
 
 const digest = patterned(/^[0-9a-f]{64}$/, 64, "a sha256 digest");
 const contract: MemberCheck = (value, at, collector) => {
-  checkClosed(value, at, [
+  checkRunClosed(value, at, [
     { name: "objective", check: freeText },
     { name: "finishLine", check: label },
     { name: "acceptanceCriteria", check: (items, pointer, c) => {
@@ -271,7 +307,7 @@ const FINDINGS_MEMBERS: readonly MemberRule[] = [
 ];
 
 const findings: MemberCheck = (value, at, collector) => {
-  checkClosed(value, at, FINDINGS_MEMBERS, collector);
+  checkRunClosed(value, at, FINDINGS_MEMBERS, collector);
 };
 
 const WORKFLOW_MEMBERS: readonly MemberRule[] = [
@@ -280,7 +316,7 @@ const WORKFLOW_MEMBERS: readonly MemberRule[] = [
 ];
 
 const workflow: MemberCheck = (value, at, collector) => {
-  checkClosed(value, at, WORKFLOW_MEMBERS, collector);
+  checkRunClosed(value, at, WORKFLOW_MEMBERS, collector);
 };
 
 // ── Payload tables ─────────────────────────────────────────────────────────
@@ -291,7 +327,7 @@ const PAYLOAD_MEMBERS: Readonly<Record<(typeof RUN_EVENT_KINDS_V1)[number], read
     { name: "contract", check: contract },
     { name: "stage", check: label },
     { name: "candidateTreeSha", check: treeSha },
-    { name: "candidateBinding", check: (value, at, c) => void checkClosed(value, at, [
+    { name: "candidateBinding", check: (value, at, c) => void checkRunClosed(value, at, [
       { name: "deliverableDigest", check: digest },
       { name: "identity", check: label },
       { name: "baseRef", check: label },
@@ -300,7 +336,7 @@ const PAYLOAD_MEMBERS: Readonly<Record<(typeof RUN_EVENT_KINDS_V1)[number], read
       { name: "workspaceId", check: label },
     ], c) },
     { name: "policyDigest", check: digest },
-    { name: "release", check: (value, at, c) => void checkClosed(value, at, [
+    { name: "release", check: (value, at, c) => void checkRunClosed(value, at, [
       { name: "runtimeVersion", check: label },
       { name: "releaseId", check: label },
       { name: "profile", check: label },
@@ -444,6 +480,43 @@ const V2_PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> 
     { name: "owner", check: label }, { name: "reason", check: freeText, required: false }],
 };
 
+export const RUN_EVENT_PAYLOAD_GRAMMAR_SPEC = "run-event-payload-grammar/1";
+
+export interface RunEventPayloadMemberGrammar {
+  readonly name: string;
+  readonly required: boolean;
+  readonly values?: readonly string[];
+}
+
+export interface RunEventPayloadGrammar {
+  readonly spec: typeof RUN_EVENT_PAYLOAD_GRAMMAR_SPEC;
+  readonly version: RunEventVersion;
+  readonly kind: RunEventKind;
+  readonly members: readonly RunEventPayloadMemberGrammar[];
+}
+
+/**
+ * Describes the exact top-level payload table the validator selects. Enum
+ * values come from the same `oneOf` check instance, so this read surface cannot
+ * drift into a second remembered vocabulary.
+ */
+export function describeRunEventPayload(kind: string, version: RunEventVersion): RunEventPayloadGrammar | undefined {
+  if (!isRunEventKind(kind)) return undefined;
+  if (version === RUN_EVENT_SPEC && !(RUN_EVENT_KINDS_V1 as readonly string[]).includes(kind)) return undefined;
+  const rules = version === RUN_EVENT_SPEC_V2
+    ? V2_PAYLOAD_MEMBERS[kind]
+    : PAYLOAD_MEMBERS[kind as (typeof RUN_EVENT_KINDS_V1)[number]];
+  return {
+    spec: RUN_EVENT_PAYLOAD_GRAMMAR_SPEC,
+    version,
+    kind,
+    members: rules.map(rule => {
+      const values = CHECK_VALUES.get(rule.check);
+      return { name: rule.name, required: rule.required !== false, ...(values === undefined ? {} : { values: [...values] }) };
+    }),
+  };
+}
+
 /** The kinds whose payload owns each envelope-mirrored member. */
 const MIRRORED_MEMBERS = Object.freeze(["ticket", "candidateTreeSha"] as const);
 
@@ -466,9 +539,9 @@ function envelopeMembers(withSeq: boolean, v2: boolean): readonly MemberRule[] {
     { name: "runId", check: runStoreId },
     ...(withSeq ? [{ name: "seq", check: positiveInt }] : []),
     { name: "at", check: instant },
-    { name: "repo", check: (value, at, collector) => void checkClosed(value, at, REPO_MEMBERS, collector) },
+    { name: "repo", check: (value, at, collector) => void checkRunClosed(value, at, REPO_MEMBERS, collector) },
     { name: "kind", check: oneOf(RUN_EVENT_KINDS) },
-    { name: "actor", check: (value, at, collector) => void checkClosed(value, at, ACTOR_MEMBERS, collector) },
+    { name: "actor", check: (value, at, collector) => void checkRunClosed(value, at, ACTOR_MEMBERS, collector) },
     { name: "ticket", check: ticketId, required: false },
     { name: "candidateTreeSha", check: treeSha, required: false },
     { name: "attestation", check: oneOf(["self"]) },
@@ -533,9 +606,9 @@ export function validateRunEvent(value: unknown, options: { readonly seqAssigned
     return collector.verdict();
   }
 
-  checkClosed(value, "", envelopeMembers(withSeq, v2), collector);
+  checkRunClosed(value, "", envelopeMembers(withSeq, v2), collector);
   const payload = value["payload"];
-  checkClosed(payload, "/payload", v2 ? V2_PAYLOAD_MEMBERS[kind] : PAYLOAD_MEMBERS[kind as (typeof RUN_EVENT_KINDS_V1)[number]], collector);
+  checkRunClosed(payload, "/payload", v2 ? V2_PAYLOAD_MEMBERS[kind] : PAYLOAD_MEMBERS[kind as (typeof RUN_EVENT_KINDS_V1)[number]], collector);
   if (v2 && isSpineRecord(payload)) {
     if (payload["lensId"] !== undefined && (payload["roundId"] === undefined || payload["round"] === undefined)) {
       collector.emit("unsupported_combination", "/payload/lensId", "a review lens requires roundId and round");

@@ -172,6 +172,8 @@ export interface CommandDescriptor {
 export interface ConfigFreeCommandContext {
   readonly rootDir: string;
   readonly env: EnvSnapshot;
+  /** Whether omitted payload input would read from an interactive terminal. */
+  readonly stdinIsTTY?: boolean;
   /** Positional and flag arguments after the command name. */
   readonly args: readonly string[];
   /** The payload channel: everything on stdin, when a command reads one. */
@@ -434,6 +436,7 @@ async function runConfigFreeCommand(
     const result = await descriptor.run({
       rootDir: runtime.cwd,
       env: runtime.env,
+      stdinIsTTY: runtime.stdinIsTTY,
       args,
       readStdin: runtime.readStdin ?? (async () => ""),
       write: (text) => runtime.stdout(`${text}\n`),

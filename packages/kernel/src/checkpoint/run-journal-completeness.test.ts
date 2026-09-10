@@ -19,7 +19,7 @@ import {
   type RunJournalRequiredEntry,
   type RunJournalViolation,
 } from "./run-journal-completeness.ts";
-import { runPrimaryTicket, type RunEvent, type RunEventKind } from "./run-event.ts";
+import { runPrimaryTicket, validateRunEvent, type RunEvent, type RunEventKind } from "./run-event.ts";
 
 const TREE = "a".repeat(40);
 const OTHER_TREE = "b".repeat(40);
@@ -30,16 +30,19 @@ interface Step {
   readonly kind: RunEventKind;
   readonly payload: Record<string, unknown>;
   readonly cli?: true;
+  readonly version?: "run-event/2";
 }
 
-const journal = (steps: readonly Step[]): readonly RunEvent[] =>
-  steps.map((step, index) => {
-    const payload = step.payload;
+const journal = (steps: readonly Step[]): readonly RunEvent[] => {
+  const version = steps.some(step => step.version === "run-event/2") ? "run-event/2" : "run-event/1";
+  return steps.map((step, index) => {
+    const payload = version === "run-event/2" && (step.kind === "review.round.opened" || step.kind === "review.round.closed")
+      ? { roundId: `round-${step.payload["round"]}`, ...step.payload } : step.payload;
     const mirrored: Record<string, unknown> = {};
     if (typeof payload["ticket"] === "string") mirrored["ticket"] = payload["ticket"];
     if (typeof payload["candidateTreeSha"] === "string") mirrored["candidateTreeSha"] = payload["candidateTreeSha"];
     return {
-      version: "run-event/1",
+      version,
       runId: "run-0001",
       seq: index + 1,
       at: "2026-09-02T10:00:00Z",
@@ -51,6 +54,7 @@ const journal = (steps: readonly Step[]): readonly RunEvent[] =>
       payload,
     } as RunEvent;
   });
+};
 
 const started: Step = {
   kind: "run.started",
@@ -113,6 +117,103 @@ const without = (steps: readonly Step[], predicate: (step: Step) => boolean): re
 
 const isCompletion = (command: string) => (step: Step) =>
   step.kind === "command.completed" && step.payload["command"] === command;
+
+const v2Round = (step: Step, roundId: string, reopensRoundId?: string): Step => ({
+  ...step,
+  version: "run-event/2",
+  payload: { ...step.payload, roundId, ...(reopensRoundId === undefined ? {} : { reopensRoundId }) },
+});
+
+describe("retry and base-move replay completeness", () => {
+  const retry: Step = { ...started, version: "run-event/2", payload: { ...started.payload, predecessorRunId: "run-previous" } };
+
+  it.each([[1, 2], [2, 1]])("requires matching counted numbers for the same v2 round id (%i to %i)", (opening, closing) => {
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(opening), "same-round-id"), v2Round(closed(closing), "same-round-id"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]).map((entry, index) => ({ ...entry, eventId: `number-consistency-${index}` }));
+    for (const entry of events) expect(validateRunEvent(entry)).toEqual({ ok: true });
+    const result = evaluateRunJournal(events, TREE, MANDATED);
+    expect(result.status).toBe("incomplete");
+    expect(result.missing).toContain("review.round.closed");
+    expect(result.violations).toContain("gate-before-closed-round");
+
+    const matched = events.map(entry => entry.kind === "review.round.closed"
+      ? { ...entry, payload: { ...entry.payload, round: opening } } : entry);
+    expect(evaluateRunJournal(matched, TREE, MANDATED).status).toBe("complete");
+  });
+
+  it("retains an existing PR on a linked retry without requiring its opening after this attempt's gate", () => {
+    const steps = [retry, ticketRead, posture, lenses(), prOpened, opened(1), closed(1), completed("gate"), completed("record"), ended];
+    expect(evaluateRunJournal(journal(steps), TREE, MANDATED).status).toBe("complete");
+    expect(evaluateRunJournal(journal([started, ...steps.slice(1)]), TREE, MANDATED).violations).toEqual(["pr-before-gate"]);
+    expect(evaluateRunJournal(journal(without(steps, step => step.kind === "pr.opened")), TREE, MANDATED).missing).toContain("pr.opened");
+  });
+
+  it("applies the retry exemption to executor-only PR chronology, retaining gate ordering", () => {
+    const steps = [retry, ticketRead, posture, lenses(), prOpened, opened(1), closed(1), gateReported, ended];
+    expect(evaluateRunJournal(journal(steps), TREE, MANDATED).status).toBe("complete-executor-only");
+    expect(evaluateRunJournal(journal([started, ...steps.slice(1)]), TREE, MANDATED).violations).toEqual(["pr-before-gate-reported"]);
+  });
+
+  it("pairs a v2 reopened round by roundId and judges the final gate on its refreshed candidate", () => {
+    const replay = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1, OTHER_TREE), "round-original"), v2Round(closed(1, OTHER_TREE), "round-original"),
+      completed("gate"), completed("record"), prOpened,
+      completed("gate"),
+      v2Round(opened(1), "round-replay", "round-original"), v2Round(closed(1), "round-replay"),
+      completed("gate"), completed("record"), ended,
+    ]);
+    expect(evaluateRunJournal(replay, TREE, MANDATED)).toEqual({ status: "complete", missing: [], violations: [], boundToRecord: true });
+    expect(replay.filter(event => event.kind === "review.round.closed")).toHaveLength(2);
+  });
+
+  it("does not let a historical matching round hide a final round closed after the governing gate", () => {
+    const events = journal([started, ticketRead, posture, lenses(), opened(1), closed(1), completed("gate"), prOpened,
+      opened(2), completed("gate"), closed(2), completed("record"), ended]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["gate-before-closed-round"]);
+  });
+
+  it("does not let a historical matching candidate hide a final round bound to a different tree", () => {
+    const events = journal([started, ticketRead, posture, lenses(), opened(1), closed(1), completed("gate"), prOpened,
+      opened(2, OTHER_TREE), closed(2, OTHER_TREE), completed("gate"), completed("record"), ended]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toContain("round-not-bound-to-record");
+    expect(evaluateRunJournal(events, TREE, MANDATED).status).toBe("incomplete");
+  });
+
+  it("does not borrow an earlier close for an unfinished current v2 round with the same number", () => {
+    const events = journal([started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-original"), v2Round(closed(1), "round-original"), completed("gate"), prOpened,
+      v2Round(opened(1), "round-replay", "round-original"), completed("gate"), completed("record"), ended]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).missing).toContain("review.round.closed");
+    expect(evaluateRunJournal(events, TREE, MANDATED).status).toBe("incomplete");
+  });
+
+  it("does not pair different v2 round ids that happen to share a round number", () => {
+    const events = journal([started, ticketRead, posture, lenses(), v2Round(opened(1), "round-open"),
+      v2Round(closed(1), "round-other"), completed("gate"), completed("record"), prOpened, ended]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).missing).toContain("review.round.closed");
+  });
+
+  it("does not borrow a historical opening for a later unmatched close", () => {
+    const events = journal([started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-original"), v2Round(closed(1), "round-original"), completed("gate"), prOpened,
+      v2Round(closed(1), "round-unopened"), completed("gate"), completed("record"), ended]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).missing).toContain("review.round.closed");
+    expect(evaluateRunJournal(events, TREE, MANDATED).status).toBe("incomplete");
+  });
+
+  it("uses the final executor gate and current round while keeping the opening PR gate", () => {
+    const events = journal([started, ticketRead, posture, lenses(), opened(1, OTHER_TREE), closed(1, OTHER_TREE),
+      gateReported, prOpened, gateReported, opened(2), closed(2), gateReported, ended]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).status).toBe("complete-executor-only");
+    const lateClose = journal([started, ticketRead, posture, lenses(), opened(1), closed(1), gateReported, prOpened,
+      opened(2), gateReported, closed(2), ended]);
+    expect(evaluateRunJournal(lateClose, TREE, MANDATED).violations).toEqual(["gate-reported-before-closed-round"]);
+  });
+});
 
 describe("the closed identifier sets", () => {
   it("names exactly the ordering constraints the completeness rule states, in a fixed order", () => {
@@ -481,7 +582,7 @@ describe("one reject vector per violation identifier", () => {
       evaluateRunJournal(journal([started, ticketRead, lenses(), opened(1), posture, closed(1), completed("gate"), completed("record"), prOpened, ended])),
     "round-closed-before-opened": () =>
       evaluateRunJournal(
-        journal([started, ticketRead, posture, lenses(), opened(1), closed(1), closed(2), opened(2), completed("gate"), completed("record"), prOpened, ended]),
+        journal([started, ticketRead, posture, lenses(), closed(1), opened(1), opened(2), closed(2), completed("gate"), completed("record"), prOpened, ended]),
       ),
     "gate-before-closed-round": () =>
       evaluateRunJournal(journal([started, ticketRead, posture, lenses(), opened(1), completed("gate"), closed(1), completed("record"), prOpened, ended])),
