@@ -277,12 +277,17 @@ describe("the complete and executor-only readings", () => {
   });
 
   it("does not apply gate.reported ordering to a journal governed by CLI completions", () => {
-    const mixed = journal([
+    const reportedAfterPr = journal([
       ...COMPLETE.slice(0, -1),
       gateReported,
       ended,
     ]);
-    expect(evaluateRunJournal(mixed, TREE, MANDATED).violations).toEqual([]);
+    const reportedBeforeClose = journal([
+      started, ticketRead, posture, lenses(), opened(1), gateReported, closed(1),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(reportedAfterPr, TREE, MANDATED).violations).toEqual([]);
+    expect(evaluateRunJournal(reportedBeforeClose, TREE, MANDATED).violations).toEqual([]);
   });
 
   it("refuses executor-only status to a journal that has any CLI completion", () => {
