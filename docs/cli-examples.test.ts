@@ -64,6 +64,11 @@ it.each(["'x; delivery-harness deploy'", '"x; delivery-harness deploy"', "x\\; d
   },
 );
 
+it("treats a backslash as literal inside a single-quoted argument", () => {
+  expect(harnessInvocations("delivery-harness record --retention-scope 'x\\' ; delivery-harness deploy"))
+    .toEqual([{ command: "record", flags: ["--retention-scope"] }, { command: "deploy", flags: [] }]);
+});
+
 it("enumerates a continued Python command after a shell operator", () => {
   expect(harnessInvocations("delivery-harness prepare && \\\n python3 -B /repo/.agent-skills/current --root /repo harness runs list --json"))
     .toEqual([{ command: "prepare", flags: [] }, { command: "runs", subcommand: "list", flags: ["--json"] }]);
@@ -72,4 +77,8 @@ it("enumerates a continued Python command after a shell operator", () => {
 it("does not turn shell comment text into a later invocation", () => {
   expect(harnessInvocations("delivery-harness prepare # explanation; delivery-harness deploy"))
     .toEqual([{ command: "prepare", flags: [] }]);
+});
+
+it("does not read an invocation from a comment at the start of a line", () => {
+  expect(harnessInvocations("# delivery-harness deploy")).toEqual([]);
 });

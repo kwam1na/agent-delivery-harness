@@ -1229,7 +1229,7 @@ describe("the corrections the delivery runbook carries", () => {
       }
     } finally { selected.mockRestore(); release.mockRestore(); }
     statesInProse("**`save-context` writes at the run's own event version.**");
-    expect(textOf("docs/delivery-runbook.md")).not.toContain("**`save-context` is refused on a version-2 run.**");
+    expect(textOf("docs/delivery-runbook.md").replace(/\s+/g, " ")).not.toContain("**`save-context` is refused on a version-2 run.**");
     statesInProse("it appends on a version-2 run as well as a version-1 one");
     statesInProse("On a version-2 run the event id it derives is the canonical digest of the observation");
     statesInProse("the same save twice appends once");

@@ -105,3 +105,25 @@ cases, so the supplier named a final freeze at cae1379. V26-2014 replaced the
 provisional bytes before its full gate or second round began and acknowledged
 that exact freeze. The handoff ordering cost one repeated focused check; it did
 not invalidate a completed gate or consume another review round.
+
+The second review closed the token, default-spawn and unreadable-receipt
+findings. Both lenses retained the obsolete-headline finding because its repair
+had omitted the former whitespace normalization. Newline, CRLF, tab and repeated
+space probes now fail with that normalization restored. The testing lens also
+found two unpinned shared-parser branches; V26-2016 owns their focused witnesses
+under existing V26-2007. No duplicate ticket was created.
+
+Reusing a review activity for round two exposed a caller binding error: the new
+attempt must name its predecessor and retain that supersedesAttemptId on every
+state update. Two refused observations were corrected with their stable event
+identifiers before reviewer dispatch. Both peers acknowledged V26-2014 as the
+canonical friction owner. This records successful enforcement and caller
+friction; it does not claim an admission or product failure.
+
+In-app run UI dogfood showed both unresolved findings and readable captured
+reports with the explicit observation-not-approval boundary. Initially root had
+not emitted its current peer wait or delivery milestones, so neither appeared.
+After factual activity, agent-wait and milestone events were emitted, the page
+correctly said no human action was required and showed the remaining merge and
+tracker finish steps. V26-2015 independently observed the same milestone caller
+omission; this corroborates its record rather than opening another product issue.
