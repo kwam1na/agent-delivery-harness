@@ -189,6 +189,7 @@ describe("the append discipline", () => {
     // this position for exactly the reason it refuses the other; no mutation
     // separates the two orderings, which is why both need a row.
     const displacing = { seq: 99, ...event(runId, "posture.declared", { posture: "test-first" }) };
+    expect(Object.keys(displacing).indexOf("seq")).toBeLessThan(Object.keys(displacing).indexOf("runId"));
     const outcome = await store.append(runId, displacing as unknown as RunEventInput);
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
@@ -275,6 +276,22 @@ describe("the append discipline", () => {
     ]);
   });
 
+  it("refuses a durable journal line whose admissible envelope members include a malformed at", async () => {
+    const { store, runsDir } = freshStore();
+    const runId = await allocated(store);
+    await store.append(runId, startedFor(runId));
+    const journalPath = path.join(runsDir, `${runId}.jsonl`);
+    const stray = { ...event(runId, "posture.declared", { posture: "test-first" }), seq: 2, at: "not-an-instant" };
+    writeFileSync(journalPath, `${readFileSync(journalPath, "utf8")}${JSON.stringify(stray)}\n`, { mode: 0o600 });
+
+    const read = await store.read(runId);
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([
+      ["malformed_member", "/1/at"],
+    ]);
+  });
+
   it("rejects a second run.started and any append after run.ended", async () => {
     const { store } = freshStore();
     const runId = await allocated(store);
@@ -282,6 +299,9 @@ describe("the append discipline", () => {
     const second = await store.append(runId, startedFor(runId));
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.rejections[0]?.code).toBe("invalid_transition");
+    expect(await store.readNotes(runId)).toEqual([
+      { kind: "run.started", code: "invalid_transition", at: "2026-09-02T10:00:00Z" },
+    ]);
 
     expect((await store.append(runId, event(runId, "run.ended", { result: "complete", cost: COST }))).ok).toBe(true);
     const after = await store.append(runId, event(runId, "posture.declared", { posture: "test-first" }));
@@ -472,6 +492,9 @@ describe("the fstat discipline on every opened descriptor", () => {
     const outcome = await store.append(runId, startedFor(runId));
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.rejections[0]?.code).toBe("access_refused");
+    expect(await store.readNotes(runId)).toEqual([
+      { kind: "run.started", code: "access_refused", at: "2026-09-02T10:00:00Z" },
+    ]);
     expect(readFileSync(planted, "utf8")).toBe("");
     expect((await store.read(runId)).ok).toBe(false);
   });
