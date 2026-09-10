@@ -50,7 +50,7 @@ import * as ordinaryContext from "../packages/cli/src/ordinary-context.ts";
 import { saveContextCommand } from "../packages/cli/src/commands/save-context.ts";
 import { qualificationInputs } from "../scripts/qualify-agent-skills-provider.ts";
 import { RESOLUTION_OUTCOMES } from "../packages/kernel/src/evaluator.ts";
-import { commandFlags, harnessInvocations, runSubcommands } from "./cli-examples.ts";
+import { commandFlags, flagsIn, harnessInvocations, runSubcommands } from "./cli-examples.ts";
 import harnessConfig from "../harness.config.ts";
 import {
   parseReviewOutcome,
@@ -683,7 +683,8 @@ describe("the rules the documentation states in prose", () => {
     // authoritative with the whole suite green. Every `harness -- <command>`
     // the page writes is checked against the command modules that exist.
     const runbook = textOf("docs/delivery-runbook.md");
-    const invoked = [...runbook.matchAll(/harness -- ([a-z][a-z-]*)/g)].map((match) => match[1]!);
+    const invoked = harnessInvocations(runbook).map(invocation => invocation.command)
+      .filter(command => command !== "--help"); // Global help is not a command name.
     // Anti-vacuity from both ends, for the same reason the link scan has it: a
     // regex that stops matching would satisfy the loop below with nothing in
     // it, and a partial harvest would satisfy a bare floor.
@@ -1228,6 +1229,7 @@ describe("the corrections the delivery runbook carries", () => {
       }
     } finally { selected.mockRestore(); release.mockRestore(); }
     statesInProse("**`save-context` writes at the run's own event version.**");
+    expect(textOf("docs/delivery-runbook.md")).not.toContain("**`save-context` is refused on a version-2 run.**");
     statesInProse("it appends on a version-2 run as well as a version-1 one");
     statesInProse("On a version-2 run the event id it derives is the canonical digest of the observation");
     statesInProse("the same save twice appends once");
@@ -1394,15 +1396,23 @@ describe("the runbook's computed operating contract", () => {
     }
     const knownFlags = commandFlags(COMMANDS);
     const invocations = harnessInvocations(runbook);
+    const inline = quoted(runbook.replace(/```[\s\S]*?```/g, " "));
+    const inlineInvocations = inline.filter(value => /^(?:verify|emit|runs)(?:\s|$)/.test(value))
+      .flatMap(value => harnessInvocations(`delivery-harness ${value}`));
+    // These spans illustrate grep, generic flag syntax, or diff markers rather
+    // than naming harness options. Keep exceptions on the complete example.
+    const otherExamples = new Set(["--include='*.ts'", "--flag value", "--flag=value", "--- a/path", "--- /dev/null", "---", "----"]);
+    const standaloneFlags = inline.filter(value => value.startsWith("--") && !otherExamples.has(value)).flatMap(flagsIn);
     expect(invocations.length).toBeGreaterThan(10);
-    const flags = new Set([...invocations.flatMap(invocation => invocation.flags),
-      ...[...runbook.matchAll(/`(?:verify|emit|runs) ([^`]+)`/g)].flatMap(match => [...match[1]!.matchAll(/--[a-z][a-z-]*/g)].map(flag => flag[0])),
-      ...[...runbook.replace(/```[\s\S]*?```/g, " ").matchAll(/`(--[a-z][a-z-]*)`/g)].map(match => match[1]!)
-        .filter(flag => !["--continue", "--name-status"].includes(flag))]);
+    const flags = new Set([...invocations, ...inlineInvocations].flatMap(invocation => invocation.flags)
+      // Git flags and Vitest's separately checked option.
+      .concat(standaloneFlags.filter(flag => !["--continue", "--name-status", "--testTimeout"].includes(flag))));
     expect(flags.size).toBeGreaterThanOrEqual(8);
     expect([...flags].filter(flag => !knownFlags.has(flag))).toEqual([]);
     const registered = runSubcommands(COMMANDS);
-    const named = [...runbook.matchAll(/(?:harness -- |`)runs ([a-z-]+)/g)].map(match => match[1]!);
+    const named = [...invocations, ...inlineInvocations]
+      .filter(invocation => invocation.command === "runs" && invocation.subcommand !== undefined)
+      .map(invocation => invocation.subcommand!);
     expect(new Set(named).size).toBeGreaterThanOrEqual(3);
     expect(named.filter(name => !registered.has(name))).toEqual([]);
     const members = new Set([...Object.keys(harnessConfig), ...Object.keys(policy())]);
@@ -1410,11 +1420,11 @@ describe("the runbook's computed operating contract", () => {
     expect(claimed.length).toBeGreaterThanOrEqual(5);
     for (const name of claimed) expect(members.has(name) || name in (harnessConfig.deliveryRecordVerification ?? {}), `unknown config/policy member ${name}`).toBe(true);
     // Vitest's public declaration is the local source for its differently-cased flag.
-    const timeout = /`(--test\w+)`/.exec(runbook);
+    const timeout = standaloneFlags.find(flag => flag === "--testTimeout");
     if (timeout) {
       const chunks = readdirSync(path.join(REPO_ROOT, "node_modules/vitest/dist/chunks")).filter(name => name.startsWith("cac.") && name.endsWith(".js"));
       expect(chunks.length).toBeGreaterThan(0);
-      expect(chunks.some(name => textOf(`node_modules/vitest/dist/chunks/${name}`).includes(timeout[1]!.slice(2)))).toBe(true);
+      expect(chunks.some(name => textOf(`node_modules/vitest/dist/chunks/${name}`).includes(timeout.slice(2)))).toBe(true);
     }
   });
 

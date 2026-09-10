@@ -40,6 +40,26 @@ describe("installed generation integrity", () => {
     expect(await checkInstalledGenerationIntegrity(root)).toEqual([]);
   });
 
+  it.each(["missing receipt", "invalid JSON", "invalid receipt shape", "non-link pointer"])(
+    "reports unreadable installation inputs: %s", async (failure) => {
+      const { root } = await fixture();
+      const receipt = path.join(root, ".agent-skills", "active.json");
+      const pointer = path.join(root, ".agent-skills", "current");
+      if (failure === "missing receipt") await rm(receipt);
+      else if (failure === "invalid JSON") await writeFile(receipt, "{", "utf8");
+      else if (failure === "invalid receipt shape") await writeFile(receipt, "{}", "utf8");
+      else {
+        await rm(pointer);
+        await writeFile(pointer, "not a symlink", "utf8");
+      }
+
+      expect(await checkInstalledGenerationIntegrity(root)).toEqual([{
+        code: "installed_generation_receipt_unreadable",
+        message: expect.stringContaining(".agent-skills/active.json or .agent-skills/current is unreadable"),
+      }]);
+    },
+  );
+
   it("reports a changed installed byte and names the manifest path", async () => {
     const { root, generationDir } = await fixture();
     await writeFile(path.join(generationDir, "skills", "plan-work", "SKILL.md"), "# Corrupted\n", "utf8");

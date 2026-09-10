@@ -458,6 +458,72 @@ describe("the CLI case loop through its spawn boundary", () => {
     });
   });
 
+  it("hands filtered and relocated environments through the real default spawn", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "dh-standalone-spawn-boundary-"));
+    cleanups.push(root);
+    const repoDir = path.join(root, "repo");
+    const decoyDir = path.join(root, "decoy");
+    const decoyGitDir = path.join(decoyDir, ".git");
+    mkdirSync(repoDir, { recursive: true });
+    mkdirSync(decoyGitDir, { recursive: true });
+    const entry = path.join(root, "print-child-env.mjs");
+    const loader = path.join(root, "loader.mjs");
+    writeFileSync(loader, "", "utf8");
+    writeFileSync(
+      entry,
+      `process.stdout.write(JSON.stringify({
+  witness: process.env.STANDALONE_SPAWN_BOUNDARY_WITNESS ?? null,
+  gitDir: process.env.GIT_DIR ?? null,
+  gitCommonDir: process.env.GIT_COMMON_DIR ?? null,
+  gitIndexFile: process.env.GIT_INDEX_FILE ?? null,
+  runStore: process.env.${RUN_STORE_OVERRIDE} ?? null,
+}));\n`,
+      "utf8",
+    );
+    const sharedExpectations = [
+      '"witness":"preserved-by-child-environment"',
+      '"gitIndexFile":null',
+      '"runStore":null',
+    ];
+    const realSpawnCases: readonly CliSmokeCase[] = [
+      {
+        args: ["plain"],
+        exitCode: 0,
+        expected: [...sharedExpectations, '"gitDir":null', '"gitCommonDir":null'],
+      },
+      {
+        args: ["relocated"],
+        exitCode: 0,
+        expected: [
+          ...sharedExpectations,
+          `"gitDir":${JSON.stringify(decoyGitDir)}`,
+          `"gitCommonDir":${JSON.stringify(decoyGitDir)}`,
+        ],
+        underRelocatedGit: true,
+      },
+    ];
+
+    const result = runCliSmokeCases({
+      entry,
+      loader,
+      repoDir,
+      decoyDir,
+      sourceEnv: {
+        STANDALONE_SPAWN_BOUNDARY_WITNESS: "preserved-by-child-environment",
+        GIT_DIR: "/ambient/git-dir",
+        GIT_COMMON_DIR: "/ambient/git-common-dir",
+        GIT_INDEX_FILE: "/ambient/git-index",
+        [RUN_STORE_OVERRIDE]: "/ambient/run-store",
+      },
+      smokeCases: realSpawnCases,
+      resolveGitCommonDir: (_repoDir, env) => env["GIT_COMMON_DIR"],
+      decoyHoldsRunStore: () => false,
+    });
+
+    expect(result.findings).toEqual([]);
+    expect(result.casesCompleted).toBe(realSpawnCases.length);
+  });
+
   it("reports a relocation control that did not resolve the decoy", () => {
     const result = runCliSmokeCases({
       entry: "/installed/cli.ts",

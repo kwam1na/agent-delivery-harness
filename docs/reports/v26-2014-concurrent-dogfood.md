@@ -88,3 +88,20 @@ The runtime refused that observation with `invalid_transition`; retrying the
 refused event with the original exact scope succeeded. This was transcription
 friction and successful enforcement, recorded without a new product issue. The
 original wait binding and scope must be retained together for resolution.
+
+The first independent review round found four causes: incomplete downstream
+token parsing, a removed obsolete-command guard, an unobserved default spawn
+environment, and an unpinned unreadable generation receipt. Repairs remain under
+the existing acceptance tickets, including V26-1593 for the receipt witness.
+V26-2016 also found compound commands missed by the shared parser under V26-2007
+and supplied its helper and focused tests. V26-2014 integrated that dependency
+before verification rather than duplicating the parser or creating another issue.
+The documentation, real child-process environment, and receipt mutations now
+fail their focused sensors; originating reviewers still decide closure.
+
+The shared helper was first supplied before the supplier completed its mutation
+followthrough. That followthrough exposed escaped-separator and shell-comment
+cases, so the supplier named a final freeze at cae1379. V26-2014 replaced the
+provisional bytes before its full gate or second round began and acknowledged
+that exact freeze. The handoff ordering cost one repeated focused check; it did
+not invalidate a completed gate or consume another review round.

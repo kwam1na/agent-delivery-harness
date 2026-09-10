@@ -35,3 +35,41 @@ describe("documented CLI tokens", () => {
     },
   );
 });
+
+it("recognizes installed Python launcher commands without a bare-harness prose match", () => {
+  expect(harnessInvocations("python3 -B /repo/.agent-skills/current --root /repo harness runs show2 <id> --json"))
+    .toEqual([{ command: "runs", subcommand: "show2", flags: ["--json"] }]);
+  expect(harnessInvocations("python -B product.zip --root /repo harness prepare --invented2"))
+    .toEqual([{ command: "prepare", flags: ["--invented2"] }]);
+  expect(harnessInvocations("The harness prepares candidates.")).toEqual([]);
+});
+
+it.each([";", "&&", "||", "|", "&"])("enumerates both commands separated by %s", separator => {
+  expect(harnessInvocations(`delivery-harness review-context --json ${separator} npm run harness -- runs list`))
+    .toEqual([
+      { command: "review-context", flags: ["--json"] },
+      { command: "runs", subcommand: "list", flags: [] },
+    ]);
+});
+
+it("retains an invalid later command for registry refusal", () => {
+  expect(harnessInvocations("delivery-harness prepare; delivery-harness deploy"))
+    .toEqual([{ command: "prepare", flags: [] }, { command: "deploy", flags: [] }]);
+});
+
+it.each(["'x; delivery-harness deploy'", '"x; delivery-harness deploy"', "x\\; delivery-harness deploy"])(
+  "keeps quoted or escaped separators in argument text: %s", argument => {
+    expect(harnessInvocations(`delivery-harness record --retention-scope ${argument}; delivery-harness verify`))
+      .toEqual([{ command: "record", flags: ["--retention-scope"] }, { command: "verify", flags: [] }]);
+  },
+);
+
+it("enumerates a continued Python command after a shell operator", () => {
+  expect(harnessInvocations("delivery-harness prepare && \\\n python3 -B /repo/.agent-skills/current --root /repo harness runs list --json"))
+    .toEqual([{ command: "prepare", flags: [] }, { command: "runs", subcommand: "list", flags: ["--json"] }]);
+});
+
+it("does not turn shell comment text into a later invocation", () => {
+  expect(harnessInvocations("delivery-harness prepare # explanation; delivery-harness deploy"))
+    .toEqual([{ command: "prepare", flags: [] }]);
+});
