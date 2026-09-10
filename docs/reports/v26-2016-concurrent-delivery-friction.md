@@ -266,3 +266,15 @@ The grouped repair is test-only. Independent isolated controls prove all three i
 A peer's shorthand evidence-directory name was initially expanded to an incorrect absolute path by this executor. The harmless failed lookup was corrected before the reviewer used it; verified V26-2015 report paths begin `/Users/kwamina/.codex/v26-2015-evidence/`. Future handoffs carry exact absolute paths. No product issue was created for this caller mistake.
 
 PR 135's remaining hosted jobs subsequently completed successfully; all six checks passed. Its recorded in-progress status at merge remains accurate history. The billing observation remains specific to producer PR 67.
+
+### Final source and artifact handoff
+
+R3 aligned at `3a6ec7f8938afd6f8dd3e881d18ef7ddcaf7996f`, with 148 files / 3,355 tests passing in 392,695 ms. The originating testing lens explicitly closed AT1–AT6 after nine exact mutation kills and twelve matched passing controls. No findings or deferred work remained in that review. Existing ticket reclosure follows the merged repair; earlier peer history remains intact.
+
+The three 0.5.0 runtime profiles were built once from that source and every component hash verified. V26-2014 composed and qualified the products under `producer-owner-1`; V26-2015 alone ran the runtime-bearing provider qualification. V26-2016 alone ran the core and Linear supplier-source installation sensors: both passed (4,656 ms / 4,512 ms), including exact rebuilt runtime closure, both host exposures, installed check/prepare/context, and missing-review refusal. No competing artifact or qualification collection was started.
+
+The recorded final-product wait lasted 11 minutes 42 seconds (11:39:36–11:51:18 UTC), including our sensor work and the producer's offline/native qualification. Final Linear qualification passed seven scenarios and 39 assertions; 15 native events, both disposable entities canceled and freshly read, and the posted receipt read back exactly. The immutable Linear ZIP SHA-256 is `e63b1f2bb5516d55445aa7050f2a9366b05abdb9d8584bdeed4119abb5440578`. Harness installation reports product ready; Athena adoption proceeds from those same bytes while producer promotion/review continues.
+
+Additional caller friction stayed within F8: an unmatched zsh report glob, an incorrect source-schema path lookup, and a capture request missing its mandatory report descriptor all failed before dependent writes. Corrected captures retained the same stable IDs and used the supported partial-output role. The run has no refused appends. V26-2014 acknowledged the existing class; no duplicate issue was created.
+
+V26-2014 also corrected a suspected producer-journal defect by checking the source: executor-only runs are supported and do not require invented harness admission events. Both peers retained that corrected interpretation under V26-2014's canonical note. No false product defect or follow-up ticket was filed.

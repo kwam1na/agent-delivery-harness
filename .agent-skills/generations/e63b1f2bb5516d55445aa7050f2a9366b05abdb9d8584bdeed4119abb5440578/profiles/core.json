@@ -1,0 +1,31 @@
+{
+  "description": "Minimal tracker-neutral delivery posture. Review acquisition supports native subagents without Python helpers and exact content-based base-move reopening. Declared delivery-product gates, recovery and honest cost coverage remain host-native. Terminal handoffs retain the bound review release identity and any mid-review install. Shared v2 run observations retain selected structured output through compatible runtime capture. Coherent round briefs separate bounded delivery from unbounded planning; candidate checkouts and shared resources are isolated explicitly.",
+  "expectedFiles": [
+    "skills/compound-delivery-kernel/SKILL.md",
+    "skills/compound-learning/SKILL.md",
+    "skills/deliver-work/SKILL.md",
+    "skills/deliver-work/agents/openai.yaml",
+    "skills/deliver-work/references/capability-contract.md",
+    "skills/diagnose-work/SKILL.md",
+    "skills/execute-work/SKILL.md",
+    "skills/execute-work/references/run-observation-contract.md",
+    "skills/execute-work/scripts/report_observation.py",
+    "skills/obtain-review/SKILL.md",
+    "skills/obtain-review/references/round-brief-template.md",
+    "skills/plan-work/SKILL.md",
+    "skills/review-work/SKILL.md"
+  ],
+  "id": "core",
+  "includes": [],
+  "members": [
+    "compound-delivery-kernel",
+    "compound-learning",
+    "deliver-work",
+    "diagnose-work",
+    "execute-work",
+    "obtain-review",
+    "plan-work",
+    "review-work"
+  ],
+  "schemaVersion": "agent-skills-profile/1"
+}
