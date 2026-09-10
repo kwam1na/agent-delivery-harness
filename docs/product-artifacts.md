@@ -196,3 +196,9 @@ adjudications are never manufactured or rewritten by installation.
 This adoption batch advances the shared runtime/package baseline to `0.3.0`
 for the additive admission command and policy/bootstrap interfaces. It does not
 change historical artifacts or publish packages to npm.
+
+The V26-2011 batch advances that baseline to `0.4.0` for the additive public
+preparation observation type and optional version-2 command completion detail.
+Version-1 journals keep their frozen shape; absence of the field remains unknown.
+The archive and runtime digests, rather than the version label alone, identify
+the qualified bytes an adopter installs.

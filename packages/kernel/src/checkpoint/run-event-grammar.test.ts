@@ -86,6 +86,7 @@ describe("run-event payload grammar discovery", () => {
   });
 
   const nestedTables = [
+    { kind: "command.completed", member: "preparation", value: { checks: "executed", reason: "ordinary" }, members: ["checks", "reason"], required: "checks" },
     { kind: "run.started", member: "workflow", value: { releaseId: "test", profile: "core" }, members: ["releaseId", "profile"], required: "releaseId" },
     { kind: "run.ended", member: "cost", value: { unit: "usd", total: 1, reportedBy: "host" }, members: ["unit", "total", "reportedBy", "coverage"], required: "reportedBy" },
     { kind: "run.ended", member: "cost", value: { coverage: "unreported", reportedBy: "host" }, members: ["coverage", "reportedBy"], required: "reportedBy" },

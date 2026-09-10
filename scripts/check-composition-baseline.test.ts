@@ -114,7 +114,7 @@ describe("locally executable assertions", () => {
     // Preserve the historical composition artifact. This qualified adoption
     // release advances every existing package together, without adding one.
     expect(new Set(Object.values(recorded))).toEqual(new Set(["0.2.0"]));
-    expect(actual).toEqual(Object.fromEntries(Object.keys(recorded).map((name) => [name, "0.3.0"])));
+    expect(actual).toEqual(Object.fromEntries(Object.keys(recorded).map((name) => [name, "0.4.0"])));
   });
 
   it("the CLI surface retains the recorded loop plus composite admission", () => {

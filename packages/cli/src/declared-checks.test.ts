@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createArtifactsPort, defineHarnessConfig, receiptFileName, resolveReceiptStorage, type HarnessConfigInput } from "@agent-delivery-harness/kernel";
 import adopterConfig from "../../../harness.config.ts";
 import { runCli, type CliRuntime } from "./index.ts";
+import { resolveRunSurface } from "./run-surface.ts";
 
 // Scheduling barrier after the real evaluation: no receipt or result is mocked.
 const refreshPause = vi.hoisted(() => ({
@@ -66,6 +67,19 @@ async function fixture(command: readonly string[], outputs: string[] = [], timeo
   return { dir, git, run, out, err, runtime, config, input, setConfig: (value: HarnessConfigInput) => { config = defineHarnessConfig(value); } };
 }
 
+async function observePreparations(f: Awaited<ReturnType<typeof fixture>>) {
+  expect(await f.run("emit", "run.started", "--version", "2", "--event-id", "start", "--json",
+    JSON.stringify({ host: "codex", workflow: { releaseId: "fixture", profile: "core" } }))).toBe(0);
+  const resolved = await resolveRunSurface(f.dir); if (!resolved.ok) throw Error(resolved.reason);
+  const { store, worktreeKey } = resolved.surface;
+  const current = await store.current(worktreeKey); if (!current.ok || !current.runId) throw Error("missing run");
+  const runId = current.runId;
+  return async () => {
+    const result = await store.read(runId); if (!result.ok) throw Error("invalid journal");
+    return result.events.filter(event => event.kind === "command.completed" && event.payload["command"] === "prepare");
+  };
+}
+
 describe("declared deterministic check providers", () => {
   it.each([false, true])("does not republish success after an overlapping ordinary prepare (failed: %s)", async failed => {
     const f = await fixture([process.execPath, "-e", ""]);
@@ -76,6 +90,7 @@ describe("declared deterministic check providers", () => {
     refreshPause.resume = new Promise<void>(resolve => { resume = resolve; });
     refreshPause.reached = reached;
     refreshPause.enabled = true;
+    const completions = await observePreparations(f);
     const refresh = runCli(["prepare", "--refresh-record-neutral"], f.runtime);
     try {
       await paused;
@@ -86,6 +101,8 @@ describe("declared deterministic check providers", () => {
       resume();
     }
     expect(await refresh).toBe(1);
+    expect((await completions()).at(-1)?.payload).toMatchObject({ outcome: "policy" });
+    expect((await completions()).at(-1)?.payload["preparation"]).toBeUndefined();
     expect(await runCli(["review-context"], f.runtime)).toBe(failed ? 1 : 0);
     expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("xx");
   }, 30_000);
@@ -100,6 +117,7 @@ describe("declared deterministic check providers", () => {
     refreshPause.resume = new Promise<void>(resolve => { resume = resolve; });
     refreshPause.reached = reached;
     refreshPause.enabled = true;
+    const completions = await observePreparations(f);
     const refresh = runCli(["prepare", "--refresh-record-neutral"], f.runtime);
     try {
       await paused;
@@ -110,6 +128,9 @@ describe("declared deterministic check providers", () => {
       resume();
     }
     expect(await refresh).toBe(1);
+    expect((await completions()).map(event => [event.payload["outcome"], event.payload["preparation"]])).toEqual([
+      ["interrupted", undefined], ["policy", undefined],
+    ]);
     expect(await f.run("review-context")).toBe(1);
     expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("x");
   }, 30_000);
@@ -123,6 +144,7 @@ describe("declared deterministic check providers", () => {
     publicationPause.reached = reached;
     publicationPause.enabled = true;
     const controller = new AbortController();
+    const completions = await observePreparations(f);
     const preparing = runCli(["prepare"], { ...f.runtime, signal: controller.signal });
     try {
       await paused;
@@ -133,8 +155,37 @@ describe("declared deterministic check providers", () => {
       resume();
     }
     expect(await preparing).toBe(130);
+    expect((await completions()).at(-1)?.payload).toMatchObject({ outcome: "interrupted" });
+    expect((await completions()).at(-1)?.payload["preparation"]).toBeUndefined();
     expect(await f.run("review-context")).toBe(newerSuccess ? 0 : 1);
     expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe(newerSuccess ? "xx" : "x");
+  }, 30_000);
+
+  it("records fallback execution when wiring changes after a reusable receipt was evaluated", async () => {
+    const f = await fixture([process.execPath, "-e", ""]);
+    await writeFile(path.join(f.dir, ".git/wiring"), "first");
+    f.setConfig({ ...f.config, preparationWiringPaths: ["harness.config.ts", ".git/wiring"],
+      preparationCommands: [{ id: "mechanical", command: [process.execPath, "-e", "require('fs').appendFileSync('.git/mechanical','x')"], timeoutMs: 5000 }] });
+    const completions = await observePreparations(f);
+    expect(await f.run("prepare")).toBe(0);
+    let reached!: () => void, resume!: () => void;
+    const paused = new Promise<void>(resolve => { reached = resolve; });
+    refreshPause.resume = new Promise<void>(resolve => { resume = resolve; });
+    refreshPause.reached = reached;
+    refreshPause.enabled = true;
+    const refresh = runCli(["prepare", "--refresh-record-neutral"], f.runtime);
+    try {
+      await paused;
+      // Ignored wiring changes the fingerprint without changing the captured tree.
+      await writeFile(path.join(f.dir, ".git/wiring"), "second");
+    } finally {
+      refreshPause.enabled = false;
+      resume();
+    }
+    expect(await refresh, f.err.join("\n")).toBe(0);
+    expect(await readFile(path.join(f.dir, ".git/mechanical"), "utf8")).toBe("xx");
+    expect((await completions()).at(-1)?.payload["preparation"]).toEqual({ checks: "executed", reason: "preparation-fingerprint-changed" });
+    expect(await f.run("review-context")).toBe(0);
   }, 30_000);
 
   it("legacy receipts rerun mechanics before first explicit refresh", async () => {

@@ -117,7 +117,22 @@ candidate captured before execution and a matching completed, failed or
 interrupted observation when the boundary returns. Concurrent invocations have
 separate IDs; a changed current-run pointer cannot move their completion to a
 different run. The existing `command.completed` retains the exact exit outcome,
-duration and successful digest. Preparation execution/reuse detail is separate.
+duration and successful digest. A successful v2 `prepare` completion also carries
+`payload.preparation`, the product's actual check decision:
+
+| `checks` | `reason` | Observed decision |
+| --- | --- | --- |
+| `executed` | `ordinary` | Ordinary preparation ran its configured checks. |
+| `executed` | `receipt-not-reusable` | Refresh had no reusable owned receipt and ran the checks. |
+| `executed` | `preparation-fingerprint-changed` | Wiring changed after receipt evaluation, so refresh ran the checks. |
+| `reused` | `validation-equivalent` | The prior owned success proved strict validation projection, base, policy and wiring unchanged. |
+
+The optional field is introduced in runtime 0.4.0 and survives run export and
+archive transport. It is absent on failed or interrupted commands and on legacy
+records, including v1 completions; absence means unknown, never executed or
+reused. Consumers read the latest CLI `prepare` completion's field and outcome
+directly. Neither requested flags nor an earlier successful completion supply a
+missing decision. This observation does not grant receipt validity or admission.
 
 `gate.reported` is required by completeness only when the journal has no CLI
 `command.completed` entries. In that legacy executor-only fallback its ordering

@@ -821,6 +821,7 @@ export {
   validateRunEventInput,
   type RunActorRole,
   type RunCommandOutcome,
+  type RunPreparationObservation,
   type RunEvent,
   type RunEventActor,
   type RunEventInput,
