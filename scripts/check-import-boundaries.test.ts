@@ -124,6 +124,8 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     `import { writeFile } from "node:fs/promises";\nexport const emit = (p: string, v: string): Promise<void> => writeFile(p, v);\n`,
   "packages/kernel/src/host/exec-port.ts":
     `import { execFile } from "node:child_process";\nexport const run = (cmd: string): void => void execFile(cmd, []);\n`,
+  "packages/kernel/src/host/entry.ts":
+    `import { realpathSync } from "node:fs";\nexport const entry = (p: string): string => realpathSync(p);\n`,
   "packages/kernel/src/facade/managed-delivery.ts":
     `import { readFile } from "node:fs/promises";\nexport const readJournal = (p: string): Promise<string> => readFile(p, "utf8");\n`,
 
@@ -707,6 +709,20 @@ describe("rule e — GEN-5 time ban", () => {
       { "packages/kernel/src/substrate/installer.ts": `export const install = (): number => Date.now();\n` },
       "packages/kernel/src/substrate/installer.ts",
     );
+  });
+
+  it("rejects a clock read in the fs-bearing host entry guard without classifying it as d1 or d2", () => {
+    const findings = expectFalsified(
+      "e-time-ban",
+      {
+        "packages/kernel/src/host/entry.ts":
+          `import { realpathSync } from "node:fs";\n` +
+          `export const entry = (p: string): string => realpathSync(p) + Date.now();\n`,
+      },
+      "packages/kernel/src/host/entry.ts",
+    );
+    expect(rules(findings)).not.toContain("d1-kernel-purity");
+    expect(rules(findings)).not.toContain("d2-no-adhoc-fs");
   });
 
   it("rejects a `.recordedAt` member read in a decision path", () => {

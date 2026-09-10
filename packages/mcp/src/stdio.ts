@@ -337,10 +337,11 @@ export async function handleRpcMessage(message: unknown, host: ToolHostRuntime, 
   const params = message["params"];
 
   // SHAPE DECIDES, NOT THE METHOD NAME. Notifications — `initialized`,
-  // cancellation, progress — are accepted and ignored: this server keeps no
-  // handshake gate and starts no work a client can cancel. A message carrying
-  // an id is a request whatever it is named, so an id-bearing
-  // `notifications/initialized` falls through to normal dispatch and is
+  // cancellation, progress — produce no response in this dispatcher. The stdio
+  // loop intercepts a well-formed cancellation first so it can suppress active
+  // responses and queued work; other transports may provide their own request
+  // lifecycle. A message carrying an id is a request whatever it is named, so
+  // an id-bearing `notifications/initialized` falls through to normal dispatch and is
   // answered there. Special-casing the name above this check is what used to
   // swallow it and leave the client waiting.
   if (isNotification(message)) return null;
