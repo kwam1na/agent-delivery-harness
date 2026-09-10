@@ -78,19 +78,23 @@ unbounded listing printed first. Nothing in this surface re-orders it.
 **Bounds and filters.** `--limit <n>` takes a positive whole number; `0`, a
 negative, a fraction, a non-number and a missing value are usage errors (exit 2)
 that print nothing on stdout. `--status <status>` selects one status, and
-`--open` / `--ended` select on whether the run has a `run.ended` — at most one
-of the two. Filters are applied before the bound, so a bound is a bound on the
-answer rather than on how far the store was read. A filter nothing matches is an
-empty inventory with a zero total, never the unfiltered listing.
+`--open` / `--ended` select readable journals by whether the run has a
+`run.ended` — at most one of the two. An unreadable journal is excluded from
+both lifecycle filters because its ended state cannot be observed. Filters are
+applied before the bound, so a bound is a bound on the answer rather than on how
+far the store was read. A filter nothing matches is an empty inventory with a
+zero total, never the unfiltered listing.
 
 `--status` accepts exactly the statuses a row can carry: `complete`,
 `complete-executor-only`, `incomplete`, and `unreadable` — the last being the
-listing's own label for a journal it could not read, for which nothing was
-evaluated and nothing is claimed. The completeness vocabulary's fourth member,
-`absent`, means "no journal bound this candidate" and is refused here rather
-than accepted: an inventory of the journals that exist can never report it, and
-a selector that selects nothing whatever the store holds would read as "no such
-runs" instead of "that question cannot be asked here".
+listing's own label for a journal it could not read, for which no lifecycle or
+completeness state is claimed. Its row still reports the independently readable
+worktree pointer and on-disk byte size; the human row deliberately adds no
+`current`, `open`, or `ended` token. The completeness vocabulary's fourth
+member, `absent`, means "no journal bound this candidate" and is refused here
+rather than accepted: an inventory of the journals that exist can never report
+it, and a selector that selects nothing whatever the store holds would read as
+"no such runs" instead of "that question cannot be asked here".
 
 Every flag above applies to the human listing too. With no flags at all the
 human listing is unchanged.

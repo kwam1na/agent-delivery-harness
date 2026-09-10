@@ -369,9 +369,9 @@ async function inventoryOf(
             current: runId === currentRunId,
             bytes,
           }
-        : // Nothing was read, so nothing is claimed: an unreadable journal is
-          // not open, not current, and carries no completeness verdict.
-          { runId, status: RUN_LIST_UNREADABLE, open: false, current: false, bytes },
+        : // Nothing was read, so no lifecycle or completeness state is claimed.
+          // The worktree pointer and on-disk size are independent readable facts.
+          { runId, status: RUN_LIST_UNREADABLE, open: false, current: runId === currentRunId, bytes },
     );
   }
   return { rows, currentRunId };
@@ -393,7 +393,9 @@ async function inventoryOf(
 async function listRuns(surface: RunSurface, context: ConfigFreeCommandContext, args: ListArgs): Promise<CommandResult> {
   const { rows, currentRunId } = await inventoryOf(surface);
   const selected = rows.filter(
-    (row) => (args.status === undefined || row.status === args.status) && (args.open === undefined || row.open === args.open),
+    (row) =>
+      (args.status === undefined || row.status === args.status) &&
+      (args.open === undefined || (row.status !== RUN_LIST_UNREADABLE && row.open === args.open)),
   );
   const totalBytes = selected.reduce((sum, row) => sum + row.bytes, 0);
   const shown = args.limit === undefined ? selected : selected.slice(0, args.limit);

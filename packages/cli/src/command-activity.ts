@@ -1,13 +1,13 @@
 /** Best-effort CLI observations. No caller uses these results for admission. */
 import { randomUUID } from "node:crypto";
-import type { RunEventKind, WaiverPrompt } from "@agent-delivery-harness/kernel";
+import type { RunEventKind, RunPreparationObservation, WaiverPrompt } from "@agent-delivery-harness/kernel";
 import { buildRunEvent, resolveRunSurface } from "./run-surface.ts";
 
 export interface CommandObservation {
   readonly needsCandidate: boolean;
   start(candidateTreeSha: string): Promise<void>;
   prompt(prompt: WaiverPrompt): WaiverPrompt;
-  finish(exitCode: number, durationMs: number, digest?: string): Promise<void>;
+  finish(exitCode: number, durationMs: number, digest?: string, preparation?: RunPreparationObservation): Promise<void>;
 }
 const absent: CommandObservation = { needsCandidate: false, start: async () => {}, prompt: prompt => prompt, finish: async () => {} };
 function outcome(code: number) { return code === 0 ? "ok" : code === 2 ? "usage" : code === 130 ? "interrupted" : "policy"; }
@@ -64,10 +64,11 @@ export async function beginCommandObservation(cwd: string, command: string): Pro
           }
         };
       },
-      async finish(code, durationMs, digest) {
+      async finish(code, durationMs, digest, preparation) {
         await activity(code === 0 ? "completed" : code === 130 ? "interrupted" : "failed", `Command returned ${outcome(code)} (exit ${code}); continue the declared delivery workflow.`);
         await emit("command.completed", {command,outcome:outcome(code),durationMs,
-          ...(code === 0 && digest !== undefined ? {digest} : {})});
+          ...(code === 0 && digest !== undefined ? {digest} : {}),
+          ...(version === "run-event/2" && command === "prepare" && code === 0 && preparation !== undefined ? {preparation} : {})});
       },
     };
   } catch { return absent; }

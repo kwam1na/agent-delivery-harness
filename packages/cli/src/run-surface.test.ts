@@ -275,7 +275,7 @@ async function executorOnlyRun(
   rationale = "the shipped pair",
   // The ticket and the reported result are parameters so two such runs can be
   // served side by side and still be told apart in the run list.
-  identity: { readonly ticket?: string; readonly result?: string } = {},
+  identity: { readonly ticket?: string; readonly result?: string; readonly rounds?: 1 | 2 } = {},
 ): Promise<string> {
   const ticket = identity.ticket ?? "V26-1549";
   const result = identity.result ?? "complete";
@@ -298,6 +298,21 @@ async function executorOnlyRun(
         cost: { unit: "usd", total: 0, reportedBy: "vitest" },
       },
     ],
+    ...(identity.rounds === 2
+      ? ([
+          ["review.round.opened", { round: 2, candidateTreeSha: OTHER_TREE_SHA, lenses: ["lens.adversarial-testing"] }],
+          [
+            "review.round.closed",
+            {
+              round: 2,
+              candidateTreeSha: OTHER_TREE_SHA,
+              outcome: "aligned",
+              findings: { P0: 0, P1: 0, P2: 0, P3: 0 },
+              cost: { unit: "usd", total: 0, reportedBy: "vitest" },
+            },
+          ],
+        ] as const)
+      : []),
     ["gate.reported", { command: "npm run check", outcome: "pass", durationMs: 5 }],
     ["pr.opened", { url: "https://example.invalid/pr/1", candidateTreeSha: TREE_SHA }],
     ["run.ended", { result, cost: { unit: "usd", total: 0, reportedBy: "vitest" } }],
@@ -1786,6 +1801,9 @@ describe("runs serve", () => {
     expect(page).toContain(runId);
     expect(page).toContain("https://example.invalid/pr/1555");
     expect(page).toContain("test-first");
+    expect(page).toContain(
+      `<p class="meta">Reported observations only; not approval evidence. ${READOUT_LABELS}. Nothing here is read by admission, the gate, or the recorder.</p>`,
+    );
   });
 
   it("shows a live-appended event on the next poll and stops polling once the run ends", async () => {
@@ -1806,6 +1824,9 @@ describe("runs serve", () => {
     expect(live.page).not.toContain('http-equiv="refresh"');
     expect(live.page).toContain('<script>');
     expect(live.page).toContain('data-poll-seconds="1"');
+    expect(live.page).toContain(
+      '<p class="meta">Live mode refreshes every 1s while a run is selected and open; execution is not inferred.</p>',
+    );
     expect(live.page).not.toContain("branch name");
 
     const decided = await emit(dir, ["decision.recorded"], { fork: "branch name", choice: "ticket branch" });
@@ -1834,9 +1855,9 @@ describe("runs serve", () => {
     const dir = await initRepo();
     await startRun(dir);
 
-    // The other live row serves `pollSeconds: 1`. This one names no interval,
-    // so the page renders the constant the server declares — and a renderer
-    // that spelled either number into the markup fails one of the two.
+    // The other live row serves and asserts `pollSeconds: 1`. This one names no
+    // interval, so both the live controls and their prose are pinned at two
+    // different values; spelling either value into the renderer fails one row.
     expect(DEFAULT_POLL_SECONDS, "the two live rows must not assert the same interval").not.toBe(1);
 
     const { page, state } = await pageAndState(await serve([dir]));
@@ -1924,6 +1945,10 @@ describe("runs serve", () => {
     cleanups.push(other);
     await git(dir, "worktree", "add", "--quiet", "-b", "grouped", other);
 
+    // One run is started in each named worktree. The run started in the
+    // worktree named SECOND proves the pointer scan reaches past its first key;
+    // the first run is the mirror that proves it does not read only the last.
+    const firstRunId = await startRun(dir);
     // The run is started in the worktree named SECOND, so the pointer that
     // makes it live is not the group's first: a server that read one pointer
     // per store would render this run open and never live.
@@ -1937,6 +1962,7 @@ describe("runs serve", () => {
     // Named on its own, the first worktree holds no pointer at this run. That
     // is the control: whatever makes the run live below came from the other.
     const alone = await pageAndState(await serve([dir]));
+    expect(runOf(alone.state, firstRunId).live).toBe(true);
     expect(runOf(alone.state, runId).live).toBe(false);
 
     const { page, state } = await pageAndState(await serve([dir, other]));
@@ -1947,11 +1973,14 @@ describe("runs serve", () => {
     expect(state.repositories[0]?.worktreeKeys).toEqual([first.worktreeKey, second.worktreeKey]);
     expect(state.repositories[0]?.root).toBe(realpathSync(dir));
 
-    // Two worktrees, one store: the run is served once, not once per key.
+    // Two worktrees, one store: each run is served once, not once per key.
+    expect(state.runs.filter((run) => run.runId === firstRunId)).toHaveLength(1);
     expect(state.runs.filter((run) => run.runId === runId)).toHaveLength(1);
+    expect(page.split(`>${firstRunId}</a>`).length - 1).toBe(1);
     expect(page.split(`>${runId}</a>`).length - 1).toBe(1);
 
-    // And it is live, which only the second worktree's pointer can say.
+    // Both are live, which requires reading both ends of the ordered key set.
+    expect(runOf(state, firstRunId).live).toBe(true);
     expect(runOf(state, runId).live).toBe(true);
     expect(page).toContain('data-live="true"');
   });
@@ -2019,7 +2048,7 @@ describe("runs serve", () => {
     // branch would answer `POST /` with the whole rendered run store while a
     // loop that only ever asked for `/api/runs` stayed green.
     for (const route of ["/", "/api/runs", "/nothing-here"]) {
-      for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]) {
         const at = `${method} ${route}`;
         const response = await httpRequest(`${server.url}${route}`, { host }, method);
         expect(response.status, at).toBe(405);
@@ -2168,6 +2197,10 @@ describe("runs serve", () => {
     const finishedRunId = await executorOnlyRun(finished);
     const barelyStarted = await initRepo();
     const barelyStartedRunId = await startRun(barelyStarted);
+    // `lastAt` is second-granularity. Crossing a second boundary makes the two
+    // ended cards' stamps observably different without depending on scheduler
+    // timing, so a section-local fixed stamp cannot pass by coincidence.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     // A THIRD repository, carrying a journal shaped like `finished`'s. It exists for two
     // directions one open run and one ended run cannot answer:
     //   - the run list splits into an open and an ended section and maps each
@@ -2184,6 +2217,7 @@ describe("runs serve", () => {
     const alsoFinishedRunId = await executorOnlyRun(alsoFinished, "the shipped pair", {
       ticket: "V26-1801",
       result: "partial",
+      rounds: 2,
     });
     // One refused append, against the barely-started run alone. Notes are the
     // fourth per-run block, and with NEITHER run carrying one the block is
@@ -2207,6 +2241,9 @@ describe("runs serve", () => {
     expect(runOf(state, finishedRunId).readout.status).toBe("complete-executor-only");
     expect(runOf(state, alsoFinishedRunId).readout.status).toBe("complete-executor-only");
     expect(runOf(state, barelyStartedRunId).readout.status).toBe("incomplete");
+    expect(runOf(state, finishedRunId).rounds).toEqual({ opened: 1, closed: 1 });
+    expect(runOf(state, alsoFinishedRunId).rounds).toEqual({ opened: 2, closed: 2 });
+    expect(runOf(state, finishedRunId).lastAt).not.toBe(runOf(state, alsoFinishedRunId).lastAt);
 
     // Each heading is followed by ITS run's completeness, not the page's first.
     const finishedBlock = (await pageAndState(server, finishedRunId)).page;
@@ -2309,25 +2346,29 @@ describe("runs serve", () => {
     expect(cardOf(barelyStartedRunId)).not.toContain(">V26-1549</a>");
     expect(cardOf(alsoFinishedRunId)).not.toContain(">V26-1549</a>");
     expect(cardOf(finishedRunId)).not.toContain(">V26-1801</a>");
+    const hrefOf = (runId: string): string => escapeHtml(runOf(state, runId).href!);
+    expect(cardOf(finishedRunId)).toContain(`<a href="${hrefOf(finishedRunId)}"`);
+    expect(cardOf(alsoFinishedRunId)).toContain(`<a href="${hrefOf(alsoFinishedRunId)}"`);
+    expect(cardOf(barelyStartedRunId)).toContain(`<a href="${hrefOf(barelyStartedRunId)}"`);
+    expect(cardOf(finishedRunId)).not.toContain(`<a href="${hrefOf(alsoFinishedRunId)}"`);
+    expect(cardOf(alsoFinishedRunId)).not.toContain(`<a href="${hrefOf(finishedRunId)}"`);
     expect(cardOf(finishedRunId)).toContain('<span class="status">Reported complete</span>');
     expect(cardOf(alsoFinishedRunId)).toContain('<span class="status">Reported partial</span>');
     expect(cardOf(barelyStartedRunId)).toContain('<span class="status">Open</span>');
     expect(cardOf(barelyStartedRunId)).not.toContain("Reported complete");
     expect(cardOf(alsoFinishedRunId)).not.toContain("Reported complete");
     expect(cardOf(finishedRunId)).not.toContain("Reported partial");
-    // Each card's own last-reported stamp, which also denies the literal the
-    // empty case renders. It does NOT separate one card's stamp from another's:
-    // these journals are written milliseconds apart and the stamp is spelled to
-    // the second, so a cell handed the page's first stamp usually prints the
-    // same text. That direction belongs to V26-1841 with the caption below.
-    expect(cardOf(finishedRunId)).toContain(`Last reported ${runOf(state, finishedRunId).lastAt}`);
+    // Each card's own caption. The two ended cards differ in both the round
+    // count and last-reported stamp, so a caption bound to the section's first
+    // run is answerable in either direction.
+    expect(cardOf(finishedRunId)).toContain(`1 of 1 review rounds closed · Last reported ${runOf(state, finishedRunId).lastAt}`);
+    expect(cardOf(alsoFinishedRunId)).toContain(`2 of 2 review rounds closed · Last reported ${runOf(state, alsoFinishedRunId).lastAt}`);
+    expect(cardOf(finishedRunId)).not.toContain(`Last reported ${runOf(state, alsoFinishedRunId).lastAt}`);
+    expect(cardOf(alsoFinishedRunId)).not.toContain(`Last reported ${runOf(state, finishedRunId).lastAt}`);
     expect(cardOf(barelyStartedRunId)).toContain(`Last reported ${runOf(state, barelyStartedRunId).lastAt}`);
     expect(cardOf(barelyStartedRunId)).not.toContain("Last reported unknown");
-    // The rounds caption stays unbound in the same way: every served journal
-    // here closes every round it opens, so `closed of opened` and
-    // `opened of closed` render the same page. Distinguishing them needs a run
-    // with a round left open, which this row does not have — V26-1841 carries it.
-    expect(cardOf(finishedRunId)).toContain("1 of 1 review rounds closed");
+    expect(cardOf(finishedRunId)).not.toContain("2 of 2 review rounds closed");
+    expect(cardOf(alsoFinishedRunId)).not.toContain("1 of 1 review rounds closed");
     expect(cardOf(barelyStartedRunId)).toContain("0 of 0 review rounds closed");
   });
 
@@ -2350,20 +2391,33 @@ describe("runs serve", () => {
     ).toBe(EXIT_OK);
     expect((await emit(dir, ["review.round.closed"], closed(1))).code).toBe(EXIT_OK);
     expect((await emit(dir, ["review.round.closed"], closed(2))).code).toBe(EXIT_OK);
+    expect(
+      (await emit(dir, ["review.round.opened"], { round: 3, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code,
+    ).toBe(EXIT_OK);
 
     const { page, state } = await pageAndState(await serve([dir]), runId);
     const rounds = runOf(state, runId).roundDetail;
-    expect(rounds.map((round) => round.round)).toEqual(["1", "2"]);
+    expect(rounds.map((round) => round.round)).toEqual(["1", "2", "3"]);
     expect(rounds[0]).toMatchObject({ opened: true, lenses: '["lens.outcome-correctness"]' });
     // An empty lenses cell is what an operator reads as "opened, carrying no
     // lens" — the one reading the page must not offer for a round that was
     // never opened at all.
     expect(rounds[1]).toMatchObject({ opened: false, lenses: "never opened" });
+    expect(rounds[2]).toMatchObject({ opened: true, lenses: '["lens.outcome-correctness"]' });
 
     // The rounds table's own cells, in order, so the assertion cannot be
     // satisfied by the words appearing anywhere else on the page.
     expect(page).toContain(`<td>1</td><td>${TREE_SHA}</td><td>[&quot;lens.outcome-correctness&quot;]</td>`);
     expect(page).toContain(`<td>2</td><td>${TREE_SHA}</td><td>never opened</td>`);
+    const roundsBlock = page.slice(page.indexOf("<h3>rounds</h3>"), page.indexOf("<h3>timeline</h3>"));
+    const pageRound = (round: number): string => {
+      const start = roundsBlock.indexOf(`<tr><td>${round}</td>`);
+      const end = roundsBlock.indexOf("</tr>", start);
+      return start === -1 || end === -1 ? "" : roundsBlock.slice(start, end + "</tr>".length);
+    };
+    expect(pageRound(1)).not.toContain("never opened");
+    expect(pageRound(3)).toContain("<td>open</td>");
+    expect(pageRound(3)).not.toContain("never opened");
 
     // And the terminal says the same words over the same journal.
     const shown = await cli(dir, ["runs", "show", runId]);
@@ -2374,7 +2428,7 @@ describe("runs serve", () => {
     const lines = shown.out.split("\n");
     const header = lines.findIndex((line) => line.trim() === "rounds:");
     expect(header, shown.out).toBeGreaterThan(-1);
-    const rows = lines.slice(header + 1, header + 3);
+    const rows = lines.slice(header + 1, header + 4);
     // The lens CELL, whole, not a substring of the row. `lenses never opened`
     // contains `never opened` too, so a substring check leaves the terminal
     // free to prefix the words the page prints bare — one journal answering
@@ -2382,11 +2436,16 @@ describe("runs serve", () => {
     // is the divergence the shared projection exists to close.
     expect(cellsOf(rows[0]!)[2]).toBe('lenses ["lens.outcome-correctness"]');
     expect(cellsOf(rows[1]!)[2]).toBe("never opened");
+    expect(rows[1]).toBe(
+      `    round 2  candidate ${TREE_SHA}  never opened  aligned findings {"P0":0,"P1":0,"P2":0,"P3":0} cost 0 usd`,
+    );
+    expect(cellsOf(rows[2]!)[3]).toBe("open");
     // The cell assertions bind one column. This one binds the WHOLE row of the
     // round that did open, because the words may not appear anywhere on it: a
     // surface that grew a second cell carrying them would say `never opened`
     // about an opened round while the page, over the same journal, does not.
     expect(rows[0]).not.toContain("never opened");
+    expect(rows[2]).not.toContain("never opened");
   });
 
   it("labels a CLI-written gate completion as the CLI's", async () => {
@@ -2633,6 +2692,17 @@ describe("the runs serve command", () => {
     });
     expect(served.code, served.err).toBe(EXIT_OK);
     expect(lines.join("")).toContain(`http://127.0.0.1:${port}`);
+
+    // A fixed boundary-adjacent port proves the refusal list did not silently
+    // grow. The random free port above cannot catch a parser that rejects 8080.
+    const boundaryController = new AbortController();
+    const boundary = await cli(dir, ["runs", "serve", "--port", "8080"], {
+      signal: boundaryController.signal,
+      stdout: (text: string) => {
+        if (text.includes("http://127.0.0.1:8080")) boundaryController.abort();
+      },
+    });
+    expect(boundary.code, boundary.err).toBe(EXIT_OK);
   });
 
   it("blocks on a --repo path that is not a repository", async () => {

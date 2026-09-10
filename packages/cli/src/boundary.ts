@@ -52,6 +52,7 @@ import {
   type LiveProviderResult,
   type NonEmptyTuple,
   type ReviewActivationProjection,
+  type RunPreparationObservation,
   type WaiverPrompt,
 } from "@agent-delivery-harness/kernel";
 import {
@@ -88,7 +89,7 @@ export class CliInterruption extends Error {
  * the typed blockers to render; `usage` is an argument or invocation error.
  */
 export type CommandResult =
-  | { readonly kind: "ok"; readonly summary?: string; readonly digest?: string }
+  | { readonly kind: "ok"; readonly summary?: string; readonly digest?: string; readonly preparation?: RunPreparationObservation }
   | { readonly kind: "blocked"; readonly blockers: readonly Blocker[] }
   | { readonly kind: "usage"; readonly message: string };
 
@@ -420,9 +421,9 @@ export async function runCliBoundary(
   const startedAt = Date.now();
   const observation = COMPLETION_WRAPPED_COMMANDS.includes(descriptor.name)
     ? await beginCommandObservation(runtime.cwd, descriptor.name) : undefined;
-  let digest: string | undefined;
-  const code = await runConfiguredCommand(descriptor, args, runtime, value => { digest = value; }, observation);
-  await observation?.finish(code, Date.now() - startedAt, digest);
+  let completed: Extract<CommandResult, { kind: "ok" }> | undefined;
+  const code = await runConfiguredCommand(descriptor, args, runtime, value => { completed = value; }, observation);
+  await observation?.finish(code, Date.now() - startedAt, completed?.digest, completed?.preparation);
   return code;
 }
 
@@ -475,7 +476,7 @@ async function runConfiguredCommand(
   descriptor: CommandDescriptor,
   args: readonly string[],
   runtime: CliRuntime,
-  observeDigest: (digest: string | undefined) => void,
+  observeSuccess: (result: Extract<CommandResult, { kind: "ok" }>) => void,
   observation?: CommandObservation,
 ): Promise<number> {
   const loadConfig = runtime.loadConfig ?? importHarnessConfig;
@@ -586,7 +587,7 @@ async function runConfiguredCommand(
     const result = await descriptor.run(context);
     if (runtime.signal?.aborted) throw new CliInterruption();
     if (result.kind === "ok") {
-      observeDigest(result.digest);
+      observeSuccess(result);
       if (result.summary !== undefined && result.summary !== "") runtime.stdout(`${result.summary}\n`);
       return EXIT_OK;
     }

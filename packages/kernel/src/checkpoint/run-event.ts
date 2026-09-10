@@ -96,6 +96,11 @@ export type RunActorRole = (typeof RUN_ACTOR_ROLES)[number];
 export const RUN_COMMAND_OUTCOMES = Object.freeze(["ok", "policy", "usage", "interrupted"] as const);
 export type RunCommandOutcome = (typeof RUN_COMMAND_OUTCOMES)[number];
 
+/** Successful prepare's actual check decision; absence means unreported. */
+export type RunPreparationObservation =
+  | { readonly checks: "executed"; readonly reason: "ordinary" | "receipt-not-reusable" | "preparation-fingerprint-changed" }
+  | { readonly checks: "reused"; readonly reason: "validation-equivalent" };
+
 /** An adopter whose gate is not a product command reports one of these instead. */
 export const RUN_GATE_REPORTED_OUTCOMES = Object.freeze(["pass", "fail", "blocked", "interrupted"] as const);
 
@@ -319,6 +324,15 @@ const workflow: MemberCheck = (value, at, collector) => {
   checkRunClosed(value, at, WORKFLOW_MEMBERS, collector);
 };
 
+const preparation: MemberCheck = (value, at, collector) => {
+  checkClosed(value, at, [
+    { name: "checks", check: oneOf(["executed", "reused"]) },
+    { name: "reason", check: oneOf(isSpineRecord(value) && value["checks"] === "reused"
+      ? ["validation-equivalent"]
+      : ["ordinary", "receipt-not-reusable", "preparation-fingerprint-changed"]) },
+  ], collector);
+};
+
 // ── Payload tables ─────────────────────────────────────────────────────────
 
 const PAYLOAD_MEMBERS: Readonly<Record<(typeof RUN_EVENT_KINDS_V1)[number], readonly MemberRule[]>> = Object.freeze({
@@ -438,6 +452,7 @@ const roundBinding: readonly MemberRule[] = [
 ];
 const V2_PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly MemberRule[]>> = {
   ...PAYLOAD_MEMBERS,
+  "command.completed": [...PAYLOAD_MEMBERS["command.completed"], { name: "preparation", check: preparation, required: false }],
   "run.started": [...PAYLOAD_MEMBERS["run.started"], { name: "predecessorRunId", check: runStoreId, required: false }],
   "review.round.opened": [...PAYLOAD_MEMBERS["review.round.opened"],
     { name: "roundId", check: runStoreId }, { name: "bound", check: positiveInt, required: false },
@@ -610,6 +625,10 @@ export function validateRunEvent(value: unknown, options: { readonly seqAssigned
   const payload = value["payload"];
   checkRunClosed(payload, "/payload", v2 ? V2_PAYLOAD_MEMBERS[kind] : PAYLOAD_MEMBERS[kind as (typeof RUN_EVENT_KINDS_V1)[number]], collector);
   if (v2 && isSpineRecord(payload)) {
+    if (kind === "command.completed" && payload["preparation"] !== undefined &&
+        (payload["command"] !== "prepare" || payload["outcome"] !== "ok")) {
+      collector.emit("unsupported_combination", "/payload/preparation", "a preparation observation requires a successful prepare completion");
+    }
     if (payload["lensId"] !== undefined && (payload["roundId"] === undefined || payload["round"] === undefined)) {
       collector.emit("unsupported_combination", "/payload/lensId", "a review lens requires roundId and round");
     }

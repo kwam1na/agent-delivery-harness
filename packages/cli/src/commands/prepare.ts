@@ -15,6 +15,7 @@ import {
   invalidatePreparationReceipt,
   revokePreparationAttempt,
   publishPreparationReceipt,
+  type RunPreparationObservation,
 } from "@agent-delivery-harness/kernel";
 import { CliInterruption, type CommandContext, type CommandDescriptor, type CommandResult } from "../boundary.ts";
 
@@ -61,6 +62,10 @@ export const prepareCommand: CommandDescriptor = {
       }
       const fingerprint = await computePreparationFingerprint(context.rootDir, context.config, wiring.storageOptions);
       const reusable = reusableFingerprint === fingerprint;
+      const preparation: RunPreparationObservation = reusable
+        ? { checks: "reused", reason: "validation-equivalent" }
+        : { checks: "executed", reason: !refreshRecordNeutral ? "ordinary"
+          : retainedAttemptId === undefined ? "receipt-not-reusable" : "preparation-fingerprint-changed" };
       if (!reusable && retainedAttemptId !== undefined) {
         attemptId = await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
         ownedAttemptId = attemptId;
@@ -119,6 +124,7 @@ export const prepareCommand: CommandDescriptor = {
       // value `review-context` reports as `candidate tree`.
       return {
         kind: "ok",
+        preparation,
         summary: [
           `prepared ${context.config.gateId}: tree ${capture.candidate.treeSha} (${capture.candidate.mode}); receipt ${published.path}`,
           `  treeSha ${capture.candidate.treeSha}`,

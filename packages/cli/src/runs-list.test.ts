@@ -278,6 +278,14 @@ describe("runs list bounds and filters", () => {
     expect(idsOf(incomplete)).toEqual([first]);
     expect(incomplete["total"]).toMatchObject({ count: 1 });
 
+    const rows = rowsOf(await listJson(dir));
+    const statusBytes = rowsOf(incomplete).reduce((sum, row) => sum + row.bytes, 0);
+    const everyRunsBytes = rows.reduce((sum, row) => sum + row.bytes, 0);
+    expect(everyRunsBytes).toBeGreaterThan(statusBytes);
+    const humanIncomplete = await cli(dir, ["runs", "list", "--status", "incomplete"]);
+    expect(humanIncomplete.code, humanIncomplete.err).toBe(EXIT_OK);
+    expect(humanIncomplete.out).toContain(`total ${statusBytes} bytes across 1 run(s)`);
+
     const executorOnly = await listJson(dir, ["--status", "complete-executor-only"]);
     expect(idsOf(executorOnly)).toEqual([second]);
 
@@ -338,16 +346,35 @@ describe("runs list bounds and filters", () => {
     expect([...RUN_LIST_STATUSES]).not.toContain("absent");
   });
 
-  it("reports an unreadable journal under the status the filter names", async () => {
+  it("reports unreadable journals without classifying them as open or ended", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
     const { runsDir } = await surfaceOf(dir);
     const brokenId = `run-${"c".repeat(16)}`;
-    await writeFile(path.join(runsDir, `${brokenId}.jsonl`), "not a journal line\n", "utf8");
+    const currentBroken = "current journal is broken\n";
+    const nonCurrentBroken = "not a journal line\n";
+    await writeFile(path.join(runsDir, `${runId}.jsonl`), currentBroken, "utf8");
+    await writeFile(path.join(runsDir, `${brokenId}.jsonl`), nonCurrentBroken, "utf8");
 
     const unreadable = await listJson(dir, ["--status", "unreadable"]);
-    expect(idsOf(unreadable)).toEqual([brokenId]);
-    expect(rowsOf(unreadable)[0]!.open).toBe(false);
+    expect(idsOf(unreadable)).toEqual([brokenId, runId].sort());
+    expect(unreadable["current"]).toBe(runId);
+    const unreadableById = new Map(rowsOf(unreadable).map((row) => [row.runId, row]));
+    expect(unreadableById.get(runId)).toMatchObject({
+      open: false,
+      current: true,
+      bytes: Buffer.byteLength(currentBroken),
+    });
+    expect(unreadableById.get(brokenId)).toMatchObject({
+      open: false,
+      current: false,
+      bytes: Buffer.byteLength(nonCurrentBroken),
+    });
+
+    // An unreadable journal has no observable `run.ended`, so neither lifecycle
+    // selector may claim it. Its status remains directly selectable instead.
+    expect(idsOf(await listJson(dir, ["--open"]))).toEqual([]);
+    expect(idsOf(await listJson(dir, ["--ended"]))).toEqual([]);
 
     // The human row for the same journal is the one this status is named after,
     // and it is PINNED BYTE-FOR-BYTE like the readable one below. A prefix
@@ -358,7 +385,7 @@ describe("runs list bounds and filters", () => {
     const bytesOf = (id: string): number => rowsOf(inventory).find((row) => row.runId === id)!.bytes;
     const expectedRow = new Map([
       [brokenId, `  ${brokenId}  unreadable  ${bytesOf(brokenId)} bytes\n`],
-      [runId, `  ${runId}  incomplete  open current  ${bytesOf(runId)} bytes\n`],
+      [runId, `  ${runId}  unreadable  ${bytesOf(runId)} bytes\n`],
     ]);
     const human = await cli(dir, ["runs", "list"]);
     expect(human.code, human.err).toBe(EXIT_OK);
@@ -373,23 +400,26 @@ describe("runs list bounds and filters", () => {
 });
 
 describe("runs list argument validation", () => {
-  const invalid: readonly (readonly [string, readonly string[]])[] = [
-    ["a zero limit", ["--limit", "0"]],
-    ["a negative limit", ["--limit", "-1"]],
-    ["a fractional limit", ["--limit", "1.5"]],
-    ["a non-numeric limit", ["--limit", "many"]],
-    ["a limit with no value", ["--limit"]],
-    ["a repeated limit", ["--limit", "1", "--limit", "2"]],
-    ["an unknown status", ["--status", "nearly-complete"]],
-    ["the status the inventory can never print", ["--status", "absent"]],
-    ["a status with no value", ["--status"]],
-    ["a repeated status", ["--status", "incomplete", "--status", "complete"]],
-    ["both open and ended", ["--open", "--ended"]],
-    ["an unknown flag", ["--everything"]],
-    ["a positional argument", ["extra"]],
+  const invalid: readonly (readonly [string, readonly string[], string])[] = [
+    ["a zero limit", ["--limit", "0"], "--limit needs a positive whole number, not 0"],
+    ["a negative limit", ["--limit", "-1"], "--limit needs a positive whole number, not -1"],
+    ["a fractional limit", ["--limit", "1.5"], "--limit needs a positive whole number, not 1.5"],
+    ["a non-numeric limit", ["--limit", "many"], "--limit needs a positive whole number, not many"],
+    ["a limit past the safe-integer range", ["--limit", "9007199254740993"], "--limit needs a positive whole number, not 9007199254740993"],
+    ["a limit with no value", ["--limit"], "--limit needs a value"],
+    ["a repeated limit", ["--limit", "1", "--limit", "2"], "--limit was given twice"],
+    ["an unknown status", ["--status", "nearly-complete"], "--status accepts complete, complete-executor-only, incomplete, unreadable, not nearly-complete"],
+    ["the status the inventory can never print", ["--status", "absent"], "--status accepts complete, complete-executor-only, incomplete, unreadable, not absent"],
+    ["a status with no value", ["--status"], "--status needs a value"],
+    ["a repeated status", ["--status", "incomplete", "--status", "complete"], "--status was given twice"],
+    ["a repeated --json", ["--json", "--json"], "--json was given twice"],
+    ["a repeated --open", ["--open", "--open"], "use at most one of --open and --ended"],
+    ["both open and ended", ["--open", "--ended"], "use at most one of --open and --ended"],
+    ["an unknown flag", ["--everything"], "unknown flag --everything"],
+    ["a positional argument", ["extra"], "it takes no positional arguments"],
   ];
 
-  for (const [label, argv] of invalid) {
+  for (const [label, argv, reason] of invalid) {
     it(`refuses ${label} without printing an inventory`, async () => {
       const dir = await initRepo();
       await startRun(dir);
@@ -399,10 +429,22 @@ describe("runs list argument validation", () => {
         // A usage error prints NOTHING on stdout: a consumer piping this into
         // a parser must never receive a partial or unbounded inventory.
         expect(listed.out).toBe("");
-        expect(listed.err).toContain("runs list");
+        expect(listed.err).toContain(`runs list: ${reason}`);
+        expect(listed.err).toContain(
+          "delivery-harness runs list [--json] [--limit <n>] [--status <status>] [--open|--ended]",
+        );
       }
     });
   }
+
+  it("reports invalid arguments before attempting to resolve the run store", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-runs-list-no-repo-"));
+    cleanups.push(dir);
+    const listed = await cli(dir, ["runs", "list", "--limit", "0"]);
+    expect(listed.code).toBe(EXIT_USAGE);
+    expect(listed.out).toBe("");
+    expect(listed.err).toContain("runs list: --limit needs a positive whole number, not 0");
+  });
 
   it("accepts the flags in either order and in combination", async () => {
     const dir = await initRepo();
@@ -455,8 +497,9 @@ describe("the human runs listing", () => {
     // ones: a bounded listing that said "total <one run's bytes> across 1 run(s)"
     // over "showing 1 of 2" would contradict itself. Every other byte-pinned
     // human listing in this file is unbounded and unfiltered, where shown and
-    // selected are the same rows, so this is the only place either half of the
-    // line is separable from the other.
+    // selected are the same rows. This is the only place the BOUND alone
+    // separates them; the filtered-and-bounded case below separates all three
+    // figures.
     const rows = rowsOf(await listJson(dir));
     const everyRunsBytes = rows.reduce((sum, row) => sum + row.bytes, 0);
     const shownBytes = rows.find((row) => row.runId === all[0])!.bytes;
@@ -479,9 +522,8 @@ describe("the human runs listing", () => {
     expect(listed.out).not.toContain(ended);
     // "totals only what it selected" is this test's own name, and both halves of
     // the total line make that claim. The BOUND axis is pinned above; this is the
-    // FILTER axis, and it is the only place either half of the line is separable
-    // from the filter — every other byte-pinned human listing in this file is
-    // unfiltered, where the selected rows are all the rows.
+    // FILTER axis alone. The filtered-and-bounded case below pins both axes
+    // together and separates shown, selected, and all-store bytes.
     const rows = rowsOf(await listJson(dir));
     const openBytes = rows.find((row) => row.runId === open)!.bytes;
     const everyRunsBytes = rows.reduce((sum, row) => sum + row.bytes, 0);
