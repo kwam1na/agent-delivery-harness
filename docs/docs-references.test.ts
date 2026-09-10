@@ -3,12 +3,11 @@
  * counts they state.
  *
  * WHY THIS EXISTS. `docs-examples.test.ts` executes the getting-started
- * walkthrough, so no command or flag on that page can drift from the CLI. It
- * reads nothing else. Every other documentation claim in this repository —
- * every relative link in `README.md` and the top-level guides, and every
- * computable number they quote — was unguarded: a link could name a file that
- * does not exist, and a count could say eighty-nine while the kit carried
- * ninety, with the whole suite green. This suite closes both.
+ * walkthrough and checks commands, flags and subcommands in an explicit guide
+ * inventory. This suite checks other documentation claims: relative links in
+ * `README.md` and the top-level guides, and the computable numbers they quote.
+ * A link naming a missing file or a stale conformance-vector count must fail
+ * even when every documented CLI invocation is valid.
  *
  * THE ABSENCE-ASSERTION TRAP, AND WHY THE GUARDS BELOW ARE NOT DECORATION.
  * "Every documented path exists" is a claim over a set, and a claim over a set
@@ -676,12 +675,9 @@ describe("the rules the documentation states in prose", () => {
   });
 
   it("invokes only harness commands, npm scripts and run-event kinds that exist", () => {
-    // The runbook is a page of commands a fresh agent copies verbatim, and
-    // nothing else in this tree executes it — `docs-examples.test.ts` reads
-    // `getting-started.md` and no other page. So an invented command, a
-    // renamed one, or one deleted from the CLI would sit there looking
-    // authoritative with the whole suite green. Every `harness -- <command>`
-    // the page writes is checked against the command modules that exist.
+    // The runbook is a page of commands a fresh agent copies verbatim.
+    // docs-examples.test.ts checks its harness registry tokens; this row also
+    // covers its npm scripts and run-event kinds without executing the workflow.
     const runbook = textOf("docs/delivery-runbook.md");
     const invoked = harnessInvocations(runbook).map(invocation => invocation.command)
       .filter(command => command !== "--help"); // Global help is not a command name.
