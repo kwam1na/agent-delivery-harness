@@ -16,18 +16,14 @@
  *       names the previous one would let a receipt survive the upgrade that is
  *       supposed to invalidate it. `packages/kernel/src/preparation.ts` states
  *       the lockstep rule; this check is what makes forgetting it a red run.
- *   license-coherence — the `LICENSE` file exists at the root, is the
- *       Functional Source License 1.1, declares `FSL-1.1-ALv2` as its own
- *       abbreviation, and every manifest's `license` field (root and packages)
- *       says the same. A tarball whose manifest disagrees with the license
- *       text it ships under is a legal statement nobody made, and a licence
- *       text that abbreviates itself differently from what the registry will
- *       be told is that same disagreement one step removed. And the PACK
- *       SHAPE is checked, not assumed: what `npm pack --dry-run --json`
- *       reports for each package must include `LICENSE` and `NOTICE`, because
- *       npm auto-includes a license only from the PACKAGE directory — a root
- *       LICENSE alone produces five license-less tarballs while every static
- *       check reports clean, which is exactly the gap this rule closes.
+ *   license-coherence — the root `LICENSE` is byte-for-byte the adopted
+ *       Functional Source License 1.1 ALv2 text, every manifest and the README
+ *       state its identifier, and NOTICE names the same copyright holder. Each
+ *       package copy must equal its root source. The PACK SHAPE is checked too:
+ *       what `npm pack --dry-run --json` reports for each package must include
+ *       `LICENSE` and `NOTICE`, because npm auto-includes a license only from
+ *       the PACKAGE directory — a root LICENSE alone produces five
+ *       license-less tarballs while every manifest check reports clean.
  *   dependency-closure — every sibling package a package's PUBLISHED files
  *       import is declared in that package's `dependencies`, pinned to the
  *       lockstep version. Inside the workspace npm symlinks the siblings, so an
@@ -47,19 +43,18 @@
  *       manifest MUST stay private: it is the workspace shell, and a root that
  *       lost the flag is one `npm publish` away from shipping the whole
  *       repository as a package nobody declared.
- *   provenance-repository — every publishable package declares a `repository`
- *       with a non-empty `url`. npm REFUSES `--provenance` for a package whose
- *       manifest names no repository, and `.github/workflows/publish.yml`
- *       publishes all five with that flag, one step at a time in dependency
- *       order. So a dropped `repository` field is not a documentation lapse: it
- *       is a release that publishes the packages before it and then stops,
- *       stranding the rest at a version npm will never accept again. Nothing
- *       else in the tree reads the field, which is exactly why it needs a rule.
+ *   provenance-repository — every publishable package's repository URL resolves
+ *       to the repository registered by the publish workflow as its trusted
+ *       publisher. npm REFUSES `--provenance` when those identities disagree,
+ *       and `.github/workflows/publish.yml` publishes all five one step at a
+ *       time in dependency order. One wrong or absent field can therefore
+ *       strand the packages published before it at an unrepeatable version.
  *
  * Anti-vacuity: a workspace that yields zero packages passes every per-package
  * check vacuously, so an empty package set is itself a finding.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,32 +85,11 @@ export interface ReleaseFinding {
 /** The license this repository is released under. */
 export const EXPECTED_LICENSE_ID = "FSL-1.1-ALv2";
 
-/**
- * Phrases the LICENSE file must carry to be the verbatim Functional Source
- * License 1.1 text rather than a stub that merely names it. The first names
- * the license, the next two are the two clauses that make it what it is —
- * the competing-use restriction and the Apache-2.0 conversion — so a LICENSE
- * that keeps the title while losing either one is a finding rather than a pass.
- *
- * The conversion marker quotes the grant itself rather than its `Grant of
- * Future License` heading, which the steward's MIT-future template carries
- * word for word: a heading pins the section, not what the section converts to,
- * and `FSL-1.1-MIT` swapped in under an `FSL-1.1-ALv2` manifest is
- * exactly the mismatch this rule exists to refuse.
- *
- * The last marker is the identifier itself, which the FSL text declares under
- * its own `Abbreviation` heading. Without it the rule pins only the manifests'
- * half of the coherence it claims: the licence text could go on declaring one
- * abbreviation while every manifest published another, which is precisely the
- * divergence this repository has just spent a delivery removing. Both halves
- * read `EXPECTED_LICENSE_ID`, so the identifier moves in one edit or not at all.
- */
-export const LICENSE_TEXT_MARKERS: readonly string[] = [
-  "Functional Source License, Version 1.1",
-  "A Permitted Purpose is any purpose other than a Competing Use",
-  "the Apache License, Version 2.0 that is effective on the second anniversary",
-  EXPECTED_LICENSE_ID,
-];
+/** SHA-256 of the canonical FSL 1.1 ALv2 text this repository adopted. */
+export const CANONICAL_LICENSE_SHA256 = "02ed546806a3298b12c633742eb2fd354821d5dc9a5ee4384d4ae8196737a83f";
+
+/** Repository identity trusted by npm provenance for every published package. */
+export const EXPECTED_REPOSITORY_IDENTITY = "github.com/kwam1na/agent-delivery-harness";
 
 /**
  * Files every published tarball must carry. The FSL's Redistribution clause
@@ -177,6 +151,47 @@ interface Manifest {
    * one that is a non-empty string. Absent for every other shape.
    */
   readonly repositoryUrl: string | undefined;
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function copyrightHolder(text: string): string | undefined {
+  const line = text.match(/^Copyright(?: \(c\)| ©)?(?: \d{4}(?:-\d{4})?)?\s+(.+?)\s*$/mu);
+  return line?.[1];
+}
+
+function readmeLicenseIdentifiers(text: string): readonly string[] {
+  const lines = text.split(/\r?\n/u);
+  const heading = lines.findIndex((line) => /^## License\s*$/u.test(line));
+  if (heading < 0) return [];
+  const nextHeading = lines.findIndex((line, index) => index > heading && /^##\s/u.test(line));
+  const section = lines.slice(heading + 1, nextHeading < 0 ? undefined : nextHeading);
+  const declaration = section.find((line) => line.trim() !== "");
+  const declared = declaration?.match(/`([^`]+)`/u)?.[1];
+  const fslIdentifiers = section.join("\n").match(/\bFSL-[A-Za-z0-9.-]+\b/gu) ?? [];
+  return [...new Set([...(declared === undefined ? [] : [declared]), ...fslIdentifiers])];
+}
+
+function repositoryIdentity(repositoryUrl: string): string | undefined {
+  const trimmed = repositoryUrl.trim().replace(/^git\+/u, "");
+  const ssh = trimmed.match(/^git@([^:]+):(.+)$/u);
+  if (ssh !== null) return `${ssh[1]!.toLowerCase()}/${ssh[2]!.replace(/\.git$/u, "").replace(/^\/+|\/+$/gu, "").toLowerCase()}`;
+  try {
+    const parsed = new URL(trimmed);
+    const repositoryPath = parsed.pathname.replace(/\.git$/u, "").replace(/^\/+|\/+$/gu, "");
+    return repositoryPath === "" ? undefined : `${parsed.hostname.toLowerCase()}/${repositoryPath.toLowerCase()}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function trustedPublisherRepositoryIdentity(workflow: string): string | undefined {
+  const repository = workflow.match(
+    /#\s+`([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)` and `\.github\/workflows\/publish\.yml`\s*\n#\s+registered as its trusted publisher/u,
+  )?.[1];
+  return repository === undefined ? undefined : `github.com/${repository.toLowerCase()}`;
 }
 
 function readManifest(root: string, relativePath: string, findings: ReleaseFinding[]): Manifest | undefined {
@@ -400,20 +415,70 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
     }
   }
 
-  // license-coherence
+  // license-coherence: one canonical root text, copied byte-for-byte into each
+  // package. The digest pins the complete terms including the Abbreviation
+  // declaration, so a second marker or section guard would only mask mutants.
   const licensePath = path.join(root, "LICENSE");
+  let licenseText: string | undefined;
   if (!existsSync(licensePath)) {
     findings.push({ rule: "license-coherence", file: "LICENSE", message: "LICENSE file is missing at the repository root" });
   } else {
-    const text = readFileSync(licensePath, "utf8");
-    for (const marker of LICENSE_TEXT_MARKERS) {
-      if (!text.includes(marker)) {
-        findings.push({
-          rule: "license-coherence",
-          file: "LICENSE",
-          message: `LICENSE does not carry the ${EXPECTED_LICENSE_ID} marker ${JSON.stringify(marker)}`,
-        });
-      }
+    licenseText = readFileSync(licensePath, "utf8");
+    const actualDigest = sha256(licenseText);
+    if (actualDigest !== CANONICAL_LICENSE_SHA256) {
+      findings.push({
+        rule: "license-coherence",
+        file: "LICENSE",
+        message: `LICENSE is not the canonical FSL 1.1 ALv2 text: SHA-256 is ${actualDigest}, expected ${CANONICAL_LICENSE_SHA256}`,
+      });
+    }
+  }
+
+  const noticePath = path.join(root, "NOTICE");
+  let noticeText: string | undefined;
+  if (!existsSync(noticePath)) {
+    findings.push({ rule: "license-coherence", file: "NOTICE", message: "NOTICE file is missing at the repository root" });
+  } else {
+    noticeText = readFileSync(noticePath, "utf8");
+    const licenseHolder = licenseText === undefined ? undefined : copyrightHolder(licenseText);
+    const noticeHolder = copyrightHolder(noticeText);
+    if (licenseHolder !== undefined && noticeHolder !== licenseHolder) {
+      findings.push({
+        rule: "license-coherence",
+        file: "NOTICE",
+        message: `NOTICE copyright holder is ${JSON.stringify(noticeHolder)}, not the LICENSE holder ${JSON.stringify(licenseHolder)}`,
+      });
+    }
+  }
+
+  const readmePath = path.join(root, "README.md");
+  if (existsSync(readmePath)) {
+    const divergent = readmeLicenseIdentifiers(readFileSync(readmePath, "utf8")).filter((id) => id !== EXPECTED_LICENSE_ID);
+    if (divergent.length > 0) {
+      findings.push({
+        rule: "license-coherence",
+        file: "README.md",
+        message: `License section states ${divergent.map((id) => JSON.stringify(id)).join(", ")}, not ${JSON.stringify(EXPECTED_LICENSE_ID)}`,
+      });
+    }
+  }
+
+  const publishWorkflowRel = ".github/workflows/publish.yml";
+  const publishWorkflowPath = path.join(root, publishWorkflowRel);
+  if (!existsSync(publishWorkflowPath)) {
+    findings.push({
+      rule: "provenance-repository",
+      file: publishWorkflowRel,
+      message: "publish workflow is missing, so its trusted publisher repository cannot be reconciled",
+    });
+  } else {
+    const publisherIdentity = trustedPublisherRepositoryIdentity(readFileSync(publishWorkflowPath, "utf8"));
+    if (publisherIdentity !== EXPECTED_REPOSITORY_IDENTITY) {
+      findings.push({
+        rule: "provenance-repository",
+        file: publishWorkflowRel,
+        message: `trusted publisher repository is ${JSON.stringify(publisherIdentity)}, not ${EXPECTED_REPOSITORY_IDENTITY}`,
+      });
     }
   }
   for (const manifest of [rootManifest, ...packages]) {
@@ -441,6 +506,19 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
   const packagesByPath = new Map(packages.map((pkg) => [pkg.path, pkg]));
   for (const manifestRel of packageManifests) {
     const packageDir = path.join(root, path.dirname(manifestRel));
+    for (const [required, rootText] of [["LICENSE", licenseText], ["NOTICE", noticeText]] as const) {
+      const packageFile = path.join(packageDir, required);
+      if (rootText !== undefined && existsSync(packageFile)) {
+        const packageText = readFileSync(packageFile, "utf8");
+        if (packageText !== rootText) {
+          findings.push({
+            rule: "license-coherence",
+            file: path.posix.join(path.dirname(manifestRel), required),
+            message: `${required} bytes do not match the canonical repository-root copy`,
+          });
+        }
+      }
+    }
     let packed: readonly string[];
     try {
       packed = packFiles(packageDir);
@@ -496,6 +574,14 @@ export function runReleaseChecks(input: ReleaseCheckInput): ReleaseCheckResult {
         rule: "provenance-repository",
         file: pkg.path,
         message: `${pkg.name} declares no \`repository\` with a non-empty \`url\`; \`npm publish --provenance\` refuses such a package, and the publish workflow runs one package per step, so the packages before it in dependency order would already be on the registry at a version that can never be republished`,
+      });
+    } else {
+      const actualIdentity = repositoryIdentity(pkg.repositoryUrl);
+      if (actualIdentity === EXPECTED_REPOSITORY_IDENTITY) continue;
+      findings.push({
+        rule: "provenance-repository",
+        file: pkg.path,
+        message: `${pkg.name} repository resolves to ${JSON.stringify(actualIdentity)}, not the trusted publisher ${EXPECTED_REPOSITORY_IDENTITY}`,
       });
     }
   }

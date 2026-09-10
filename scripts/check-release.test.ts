@@ -12,13 +12,18 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   EXPECTED_LICENSE_ID,
-  LICENSE_TEXT_MARKERS,
+  EXPECTED_REPOSITORY_IDENTITY,
   REQUIRED_PACK_FILES,
   formatReleaseFindings,
   repoRootFromHere,
   runReleaseChecks,
   type ReleaseFinding,
 } from "./check-release.ts";
+
+const REPOSITORY_ROOT = repoRootFromHere();
+const CANONICAL_LICENSE = readFileSync(path.join(REPOSITORY_ROOT, "LICENSE"), "utf8");
+const CANONICAL_NOTICE = readFileSync(path.join(REPOSITORY_ROOT, "NOTICE"), "utf8");
+const CANONICAL_REPOSITORY_URL = `git+https://${EXPECTED_REPOSITORY_IDENTITY}.git`;
 
 const cleanups: string[] = [];
 afterAll(() => {
@@ -28,7 +33,12 @@ afterAll(() => {
   }
 });
 
-const LICENSE_STUB = `${LICENSE_TEXT_MARKERS.join("\n")}\n`;
+const LICENSE_MARKER_STUB = [
+  "Functional Source License, Version 1.1",
+  "A Permitted Purpose is any purpose other than a Competing Use",
+  "the Apache License, Version 2.0 that is effective on the second anniversary",
+  EXPECTED_LICENSE_ID,
+].join("\n");
 
 /**
  * A canned green pack shape for fixture runs, so the rules under test fail for
@@ -46,6 +56,9 @@ interface FixtureOptions {
   readonly rootLicense?: string | undefined;
   readonly rootPrivate?: boolean;
   readonly license?: string | false;
+  readonly notice?: string | false;
+  readonly readmeLicenseIds?: readonly string[];
+  readonly publishRepository?: string | false;
   readonly packages?: readonly {
     readonly name: string;
     readonly version?: string;
@@ -56,6 +69,8 @@ interface FixtureOptions {
      * default writes the object form every real manifest in this workspace uses.
      */
     readonly repository?: string | false;
+    readonly licenseText?: string;
+    readonly noticeText?: string;
     readonly dependencies?: Readonly<Record<string, string>>;
     /** Body of the package's published `src/index.ts`. */
     readonly source?: string;
@@ -67,6 +82,8 @@ interface FixtureOptions {
 function makeFixture(options: FixtureOptions = {}): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), "dh-release-"));
   cleanups.push(dir);
+  const rootLicenseText = options.license === false ? CANONICAL_LICENSE : (options.license ?? CANONICAL_LICENSE);
+  const rootNoticeText = options.notice === false ? CANONICAL_NOTICE : (options.notice ?? CANONICAL_NOTICE);
   const rootManifest: Record<string, unknown> = {
     name: "fixture-root",
     version: options.rootVersion ?? "1.2.3",
@@ -77,7 +94,19 @@ function makeFixture(options: FixtureOptions = {}): string {
   writeFileSync(path.join(dir, "package.json"), `${JSON.stringify(rootManifest, null, 2)}\n`, "utf8");
 
   if (options.license !== false) {
-    writeFileSync(path.join(dir, "LICENSE"), options.license ?? LICENSE_STUB, "utf8");
+    writeFileSync(path.join(dir, "LICENSE"), options.license ?? CANONICAL_LICENSE, "utf8");
+  }
+  if (options.notice !== false) writeFileSync(path.join(dir, "NOTICE"), options.notice ?? CANONICAL_NOTICE, "utf8");
+  const readmeLicenseIds = options.readmeLicenseIds ?? [EXPECTED_LICENSE_ID];
+  writeFileSync(path.join(dir, "README.md"), `# Fixture\n\n## License\n\n${readmeLicenseIds.map((id) => `\`${id}\``).join("\n")}\n`, "utf8");
+  if (options.publishRepository !== false) {
+    mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
+    const publisher = options.publishRepository ?? EXPECTED_REPOSITORY_IDENTITY.replace(/^github\.com\//u, "");
+    writeFileSync(
+      path.join(dir, ".github", "workflows", "publish.yml"),
+      `# \`${publisher}\` and \`.github/workflows/publish.yml\`\n# registered as its trusted publisher on npmjs.com.\nname: Publish\n`,
+      "utf8",
+    );
   }
 
   const packages = options.packages ?? [
@@ -92,10 +121,12 @@ function makeFixture(options: FixtureOptions = {}): string {
     if (pkg.isPrivate === true) manifest["private"] = true;
     if (pkg.repository !== false) {
       manifest["repository"] =
-        pkg.repository ?? { type: "git", url: "git+https://example.invalid/fixture.git", directory: `packages/${pkg.name.replace(/^@[^/]+\//u, "")}` };
+        pkg.repository ?? { type: "git", url: CANONICAL_REPOSITORY_URL, directory: `packages/${pkg.name.replace(/^@[^/]+\//u, "")}` };
     }
     if (pkg.dependencies !== undefined) manifest["dependencies"] = pkg.dependencies;
     writeFileSync(path.join(pkgDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    writeFileSync(path.join(pkgDir, "LICENSE"), pkg.licenseText ?? rootLicenseText, "utf8");
+    writeFileSync(path.join(pkgDir, "NOTICE"), pkg.noticeText ?? rootNoticeText, "utf8");
 
     // The published source the dependency-closure rule parses. STUB_PACK reports
     // `src/index.ts`, so it has to actually exist: the rule reads the packed
@@ -199,22 +230,64 @@ describe("license-coherence", () => {
   it("flags a LICENSE that names the license but is not its text", () => {
     const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, license: "Functional Source License, Version 1.1\n" });
     const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
-    expect(rulesOf(result.findings)).toEqual(["license-coherence", "license-coherence", "license-coherence"]);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
   });
 
-  // The mutation that reinstates the divergence V26-1643 shipped: the licence
-  // text goes on declaring one abbreviation while every manifest publishes
-  // another. It is the whole FSL text, so the clause markers pass; only the
-  // identifier marker stands between it and a clean release run.
-  it("flags a LICENSE whose declared abbreviation is not the id the manifests carry", () => {
-    const dir = makeFixture({
-      rootLicense: EXPECTED_LICENSE_ID,
-      license: `${LICENSE_TEXT_MARKERS.filter((marker) => marker !== EXPECTED_LICENSE_ID).join("\n")}\nFSL-1.1-Apache-2.0\n`,
-    });
-    const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
+  it("flags the former marker stub even when all package copies agree with it", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, license: LICENSE_MARKER_STUB });
+    const result = runFixture(dir);
     expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
     expect(result.findings[0]!.file).toBe("LICENSE");
-    expect(result.findings[0]!.message).toContain(JSON.stringify(EXPECTED_LICENSE_ID));
+    expect(result.findings[0]!.message).toContain("canonical FSL 1.1 ALv2 text");
+  });
+
+  it("flags a coordinated NOTICE rewrite whose holder disagrees with the LICENSE", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, notice: "delivery-harness\nCopyright Some Other Party\n" });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("NOTICE");
+    expect(result.findings[0]!.message).toContain("Kwamina Essuah Mensah");
+  });
+
+  // Retaining the expected id in a comment used to satisfy the whole-file
+  // marker check even while the Abbreviation section stated another id. The
+  // canonical digest pins the declaration and the rest of the terms together.
+  it("flags a LICENSE whose declared abbreviation is not the id the manifests carry", () => {
+    const displaced = CANONICAL_LICENSE.replace(`\n${EXPECTED_LICENSE_ID}\n`, "\nFSL-1.1-Apache-2.0\n") +
+      `\n<!-- ${EXPECTED_LICENSE_ID} -->\n`;
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      license: displaced,
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("LICENSE");
+  });
+
+  it("flags one package LICENSE copy that diverges from the canonical root bytes", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", licenseText: CANONICAL_LICENSE.replace(EXPECTED_LICENSE_ID, "FSL-1.1-Apache-2.0") },
+        { name: "@fixture/b" },
+      ],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("packages/a/LICENSE");
+  });
+
+  it("flags one package NOTICE copy that diverges from the root bytes", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", noticeText: `${CANONICAL_NOTICE}\nUnrelated attribution\n` },
+        { name: "@fixture/b" },
+      ],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("packages/a/NOTICE");
   });
 
   it("flags a manifest left behind at the superseded Apache-2.0 id", () => {
@@ -271,6 +344,33 @@ describe("license-coherence", () => {
     const result = runReleaseChecks({ root: dir, harnessVersion: "1.2.3", packFiles: STUB_PACK });
     expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
     expect(result.findings[0]!.file).toBe("package.json");
+  });
+});
+
+describe("README license agreement", () => {
+  it("flags a license identifier that disagrees with the manifests", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, readmeLicenseIds: ["FSL-1.1-Apache-2.0"] });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("README.md");
+    expect(result.findings[0]!.message).toContain(JSON.stringify(EXPECTED_LICENSE_ID));
+  });
+
+  it("flags a contradictory identifier added later in the License section", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      readmeLicenseIds: [EXPECTED_LICENSE_ID, "FSL-1.1-Apache-2.0"],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("README.md");
+  });
+
+  it("flags a non-FSL replacement in the declaration without requiring the License section itself", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, readmeLicenseIds: ["Apache-2.0"] });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("README.md");
   });
 });
 
@@ -418,12 +518,33 @@ describe("provenance-repository", () => {
     expect(result.findings[0]!.file).toBe("packages/a/package.json");
   });
 
+  it("flags a repository URL that names a different source repository", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", repository: "git+https://github.com/someone-else/not-this-repo.git" },
+        { name: "@fixture/b" },
+      ],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["provenance-repository"]);
+    expect(result.findings[0]!.file).toBe("packages/a/package.json");
+    expect(result.findings[0]!.message).toContain("kwam1na/agent-delivery-harness");
+  });
+
+  it("flags drift from the repository registered in the publish workflow", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, publishRepository: "someone-else/not-this-repo" });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["provenance-repository"]);
+    expect(result.findings[0]!.file).toBe(".github/workflows/publish.yml");
+  });
+
   // The allow side, pinned in both accepted shapes: a rule that fired on
   // everything would satisfy the two falsifications above for free.
   it("accepts the shorthand string form as well as the object form", () => {
     const dir = makeFixture({
       rootLicense: EXPECTED_LICENSE_ID,
-      packages: [{ name: "@fixture/a", repository: "git+https://example.invalid/fixture.git" }, { name: "@fixture/b" }],
+      packages: [{ name: "@fixture/a", repository: CANONICAL_REPOSITORY_URL }, { name: "@fixture/b" }],
     });
     expect(runFixture(dir).findings).toEqual([]);
   });

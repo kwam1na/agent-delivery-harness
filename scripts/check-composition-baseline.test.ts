@@ -102,6 +102,10 @@ describe("composition baseline document", () => {
 describe("locally executable assertions", () => {
   it("harness package identities match the workspace, with no third-party runtime dependency", () => {
     const recorded = baseline.repositories.agentDeliveryHarness.packages;
+    const statement = byId.get("harness-package-identities").statement;
+    const statedVersion = /\bat (\d+\.\d+\.\d+(?:-[\w.-]+)?)(?=\s|$)/u.exec(statement)?.[1];
+    expect(statedVersion, "package identity statement must declare its recorded version").toBeDefined();
+    expect(new Set(Object.values(recorded))).toEqual(new Set([statedVersion]));
     const actual: Record<string, string> = {};
     const entries = readdirSync(path.join(repoRoot, "packages"), { withFileTypes: true });
     for (const entry of entries.filter((candidate) => candidate.isDirectory())) {

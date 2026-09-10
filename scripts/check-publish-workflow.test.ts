@@ -46,15 +46,17 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const WORKFLOW_PATH = ".github/workflows/publish.yml";
 const workflow = readFileSync(path.join(repoRoot, WORKFLOW_PATH), "utf8");
 const workflowLines = workflow.split("\n");
+const publishHelper = readFileSync(path.join(repoRoot, "scripts/publish-workspace-if-missing.ts"), "utf8");
 
 /** The five packages, in the order the workflow must publish them. */
 const DEPENDENCY_ORDER = ["kernel", "conformance", "cli", "action", "mcp"] as const;
 
 /**
- * The `run:` steps that actually publish — not the header prose, which names
- * `npm publish --dry-run` when it explains what `release.yml` does instead.
+ * The `run:` steps that make the per-package publish decision. The helper owns
+ * the actual npm command so it can skip exact versions on a rerun.
  */
-const publishRunLines = (): readonly string[] => workflowLines.filter((line) => /^\s*run: npm publish\b/u.test(line));
+const publishRunLines = (): readonly string[] =>
+  workflowLines.filter((line) => /^\s*run: node --import tsx scripts\/publish-workspace-if-missing\.ts\b/u.test(line));
 
 const cleanups: string[] = [];
 afterAll(() => {
@@ -174,14 +176,31 @@ describe("the step that runs the guard", () => {
     expect(workflow).toContain('node "${RUNNER_TEMP}/version-equality.mjs" "${tag_version}"');
     expect(workflow).toContain('if node "${RUNNER_TEMP}/version-equality.mjs" "${tag_version}-refusal-probe"');
     expect(workflow).toContain("the guard is broken");
+    expect(workflow).toMatch(
+      /if node "\$\{RUNNER_TEMP\}\/version-equality\.mjs" "\$\{tag_version\}-refusal-probe"[^;]*; then\s+echo [^\n]+\s+exit 1\s+fi/su,
+    );
   });
 
   it("runs the repository gate before any package is published", () => {
     const gateAt = workflowLines.findIndex((line) => /^\s*run: npm run check\s*$/u.test(line));
-    const firstPublishAt = workflowLines.findIndex((line) => /^\s*run: npm publish\b/u.test(line));
+    const firstPublishAt = workflowLines.findIndex((line) =>
+      /^\s*run: node --import tsx scripts\/publish-workspace-if-missing\.ts\b/u.test(line),
+    );
     expect(gateAt, "no `run: npm run check` step").toBeGreaterThan(-1);
     expect(firstPublishAt, "no publish step").toBeGreaterThan(-1);
     expect(gateAt).toBeLessThan(firstPublishAt);
+  });
+
+  it("checks the tag commit against the repository's actual default branch before publishing", () => {
+    expect(workflow).toContain("DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}");
+    const ancestorAt = workflowLines.findIndex((line) =>
+      line.includes('scripts/check-publish-ancestor.ts "${GITHUB_SHA}" "${DEFAULT_BRANCH}"'),
+    );
+    const firstPublishAt = workflowLines.findIndex((line) =>
+      /^\s*run: node --import tsx scripts\/publish-workspace-if-missing\.ts\b/u.test(line),
+    );
+    expect(ancestorAt, "no default-branch ancestor check").toBeGreaterThan(-1);
+    expect(ancestorAt).toBeLessThan(firstPublishAt);
   });
 });
 
@@ -202,10 +221,9 @@ describe("the publish workflow's stated policy", () => {
   it("publishes every package with provenance and public access", () => {
     const publishLines = publishRunLines();
     expect(publishLines).toHaveLength(DEPENDENCY_ORDER.length);
-    for (const line of publishLines) {
-      expect(line, line.trim()).toContain("--provenance");
-      expect(line, line.trim()).toContain("--access public");
-    }
+    expect(publishHelper).toMatch(
+      /\["publish", "--provenance", "--access", "public", "--workspace", packageName\]/u,
+    );
   });
 
   it("grants the job id-token: write, which is what authenticates the publish", () => {

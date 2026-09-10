@@ -310,6 +310,12 @@ export interface HarnessConfig {
   readonly agentEnvSignals: readonly string[];
   readonly ciPolicies: readonly CiPolicy[];
   readonly ciPolicyEnvKey: string;
+  /**
+   * An explicitly empty list supports minimal consumers with no repository
+   * wiring to fingerprint. Their preparation fingerprint binds the harness
+   * version and any preparation commands, but no repository file contents;
+   * file-wiring-change and missing-path checks are inapplicable.
+   */
   readonly preparationWiringPaths: readonly string[];
   readonly preparationCommands?: readonly PreparationCommand[];
   readonly additionalReviewLenses?: readonly AdditionalReviewLens[];
@@ -339,6 +345,7 @@ export const CONFIG_FINDING_CODES = [
   "config_missing_member",
   "config_invalid_member",
   "config_duplicate_id",
+  "config_code_collision",
   // References
   "config_dangling_provider",
   "config_dangling_ci_policy",
@@ -1031,6 +1038,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     input["preparationWiringPaths"] === undefined
       ? undefined
       : readStringArray(findings, "preparationWiringPaths", input["preparationWiringPaths"], { path: true, describe: "a repo-relative path" });
+  if (preparationWiringPaths !== undefined) checkDuplicateIds(findings, "preparationWiringPaths", preparationWiringPaths);
   const additionalReviewLenses = input["additionalReviewLenses"] === undefined ? undefined : readAdditionalReviewLenses(findings, input["additionalReviewLenses"]);
 
   let preparationCommands: PreparationCommand[] | undefined;
@@ -1288,6 +1296,19 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
   checkDuplicateIds(findings, "ciPolicies", config.ciPolicies.map((policy) => policy.id));
   checkDuplicateIds(findings, "sensitivePaths", config.sensitivePaths.map((group) => group.id));
 
+  for (const member of ["acceptedEnvelopeSpecs", "identityVersions", "agentEnvSignals"] as const) {
+    checkDuplicateIds(findings, member, config[member]);
+  }
+  for (const [index, provider] of config.providers.entries()) {
+    const member = `providers[${index}].findingCodes`;
+    checkDuplicateIds(findings, member, provider.findingCodes);
+    for (const code of provider.findingCodes) {
+      if ((GATE_STRUCTURAL_FINDING_CODES as readonly string[]).includes(code)) {
+        findings.add("config_code_collision", member, `${JSON.stringify(code)} is reserved by the structural finding registry`);
+      }
+    }
+  }
+
   // A gate with no obligations admits everything, which is the one outcome this
   // harness exists to make impossible.
   if (config.obligations.length === 0) {
@@ -1332,6 +1353,8 @@ function checkInvariants(findings: FindingList, config: HarnessConfig): void {
       );
     }
     checkDuplicateIds(findings, `${at}.acceptedPayloadSpecs`, obligation.acceptedPayloadSpecs);
+    checkDuplicateIds(findings, `${at}.waivableCodes`, obligation.waivableCodes);
+    checkDuplicateIds(findings, `${at}.nonWaivableCodes`, obligation.nonWaivableCodes);
 
     // The waiver flag and the resolution kinds are two statements of one policy.
     const waivedAllowed = obligation.allowedResolutionKinds.includes("waived");

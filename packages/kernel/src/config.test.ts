@@ -1004,6 +1004,48 @@ describe("matchesNeutralSet", () => {
   });
 });
 
+describe("string-list and code-universe invariants", () => {
+  it.each(["acceptedEnvelopeSpecs", "identityVersions", "preparationWiringPaths", "agentEnvSignals"] as const)("rejects duplicate %s entries", (member) => {
+    const input = validInput();
+    input[member].push(input[member][0]!);
+    const blockers = expectOnly(input, "config_duplicate_id");
+    expect(blockers[0]!.summary).toContain(member);
+  });
+
+  it("rejects repeated wiring paths before additional lens paths are deduplicated", () => {
+    const input = validInput();
+    input.preparationWiringPaths.push(input.preparationWiringPaths[0]!);
+    expectOnly({ ...input, additionalReviewLenses: [] }, "config_duplicate_id");
+  });
+
+  it("rejects duplicate provider finding codes", () => {
+    const input = validInput();
+    input.providers[0]!.findingCodes.push(PROVIDER_CODE);
+    expectOnly(input, "config_duplicate_id");
+  });
+
+  it.each(["waivableCodes", "nonWaivableCodes"] as const)("rejects duplicate %s entries", (member) => {
+    const input = validInput();
+    const codes: string[] = input.obligations[0]![member];
+    codes.push(codes[0]!);
+    expectOnly(input, "config_duplicate_id");
+  });
+
+  it.each(GATE_STRUCTURAL_FINDING_CODES)("rejects provider code %s colliding with the structural registry", (code) => {
+    const input = validInput();
+    input.providers[0]!.findingCodes.push(code);
+    expectOnly(input, "config_code_collision");
+  });
+
+  it("accepts an explicit empty preparation wiring set for minimal consumers", () => {
+    const input = validInput();
+    input.preparationWiringPaths = [];
+    const result = validateHarnessConfig(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.config.preparationWiringPaths).toEqual([]);
+  });
+});
+
 // ── Table completeness ─────────────────────────────────────────────────────
 
 describe("the falsification table", () => {
