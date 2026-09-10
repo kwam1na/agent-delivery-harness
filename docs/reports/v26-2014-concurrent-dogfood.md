@@ -48,7 +48,10 @@ issue. The provisional qualifier finished before its pause message arrived:
 core 12 scenarios/102 assertions and Linear 7 scenarios/39 assertions passed;
 disposable V26-2030 and V26-2031 were confirmed canceled. Those qualifications
 remain bound only to the provisional artifacts and will not be reused for
-changed consolidated bytes.
+changed consolidated bytes. Qualification began before the cross-epic source set
+was fully agreed, so this requalification cost was avoidable orchestration
+overhead. Final live collection will wait for one explicit source/artifact freeze,
+as the existing batch-release guidance already requires.
 
 A parent self-check found a trailing missing `--manifest` value regression after
 the initial harness batch was frozen. Test-first rows were added and repaired;
