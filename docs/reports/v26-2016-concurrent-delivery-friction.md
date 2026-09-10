@@ -247,3 +247,22 @@ The primary harness wait, like the Athena wait, began directly in `waiting`; its
 V26-2014 owns the corroborated inventory-label ambiguity: all shared-common-directory runs show the viewer's configured repository path label, while ticket headings distinguish them. No duplicate issue was created. V26-2015 owns the final runtime-bearing core-product provider qualification; it is separate from its already-earned workflow-only provider record.
 
 The first integrated gate at `7665cec` passed 3,345 of 3,346 tests but failed the runbook prose-path floor: the rewritten coverage paragraph had dropped the explicit `docs/getting-started.md` path (26 versus required 27). Restoring the useful path fixes the candidate without weakening the sensor. This is a deterministic integration finding under V26-2007, not a concurrency failure or new issue. Exact failed gate duration: 395,406 ms; retained as `harness-integrated-check-1.json` and `.log`.
+
+### Independent review of the combined tree
+
+The repaired integrated gate passed 148 files and 3,346 tests at `3de8c8f` (399,860 ms). R2 outcome correctness aligned after 447 focused tests. R2 testing explicitly closed original AT1/AT2, then found additional mutation-evidence gaps in peer source carried by the full tree delta. These are independent review findings, not demonstrated incidents in the shipped implementation.
+
+| Finding | Required follow-through | Canonical tracking and ownership |
+| --- | --- | --- |
+| AT3 P2 | Missing-file and escaped-entry refusal fixtures | Existing V26-1593; V26-2016 repair and reclosure, V26-2014 prior history retained |
+| AT4 P0 under the testing charter | First-valid/later-corrupted multi-file receipt fixture | Same V26-1593; no duplicate ticket |
+| AT5 P2 | Missing root NOTICE and publish-workflow fixtures | Existing V26-1646 and V26-1630; V26-2016 repair, V26-2015 tracker reopening/reclosure |
+| AT6 P2 | Legacy/custom-token neutral symlink/gitlink compatibility | Existing V26-1905; V26-2016 repair and reclosure, V26-2014 prior history retained |
+
+The three orchestrators agreed one implementation owner for every row. Existing tickets were reopened with append-only context; earlier PR 134/135 and their original review reports were preserved. All follow-through stays in this run before final runtime freeze and merge. The R2 journal's AT5 event names primary V26-1646 because its schema has one deferredIssueId; the captured report and reduction retain both canonical ticket references.
+
+The grouped repair is test-only. Independent isolated controls prove all three integrity plants fail their new rows (69-test clean/no-op/restored controls), both release omission plants fail individually, and the identity-token plant fails all four new compatibility rows (74-test clean/no-op/restored controls). Exact reports are `at3-integrity-fix.md` and `at5-at6-fix.md` in the evidence directory. Originating reviewer closure still requires R3.
+
+A peer's shorthand evidence-directory name was initially expanded to an incorrect absolute path by this executor. The harmless failed lookup was corrected before the reviewer used it; verified V26-2015 report paths begin `/Users/kwamina/.codex/v26-2015-evidence/`. Future handoffs carry exact absolute paths. No product issue was created for this caller mistake.
+
+PR 135's remaining hosted jobs subsequently completed successfully; all six checks passed. Its recorded in-progress status at merge remains accurate history. The billing observation remains specific to producer PR 67.
