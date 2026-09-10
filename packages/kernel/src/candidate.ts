@@ -343,6 +343,16 @@ async function observe(
 
   const indexTree = await git(["write-tree"]);
   if (indexTree.exitCode !== 0) {
+    if (/index\.lock['"]?: File exists/i.test(indexTree.stderr)) {
+      return blocked(config, "candidate_repository_unreadable", "Git could not acquire the index lock", indexTree.stderr, [
+        {
+          id: "retry-index-lock",
+          kind: "manual_action",
+          summary: "Retry after the other Git operation finishes. If the lock persists, inspect the owning process before removing a stale lock.",
+        },
+        INSPECT_STATUS,
+      ]);
+    }
     return blocked(config, "candidate_repository_unreadable", "the index does not define a tree", indexTree.stderr, [
       {
         id: "repair-index",

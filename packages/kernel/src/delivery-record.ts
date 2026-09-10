@@ -463,13 +463,19 @@ export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
   for (const field of BINDING_FIELDS) {
     if (!isNonEmptyString(binding[field])) return malformed(`candidateBinding is missing ${field}`);
   }
+  if (parsed["identityToken"] !== binding["identityToken"]) {
+    return malformed("identityToken disagrees with candidateBinding.identityToken");
+  }
 
   const claims = parsed["claims"];
   if (!Array.isArray(claims)) return malformed("claims must be an array");
+  const obligationIds = new Set<string>();
   for (const claim of claims) {
     if (!isRecord(claim) || !isNonEmptyString(claim["obligationId"]) || !isNonEmptyString(claim["outcome"])) {
       return malformed("a claim is missing its obligation id or outcome");
     }
+    if (obligationIds.has(claim["obligationId"])) return malformed("claims repeat an obligation id");
+    obligationIds.add(claim["obligationId"]);
     // An outcome is the vocabulary the verifier reasons about, not free-form
     // text. A committed record is editable, so a value outside the resolution
     // universe — `rubber_stamped`, or anything else invented — has to be a

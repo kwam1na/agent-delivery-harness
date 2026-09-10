@@ -13,6 +13,7 @@ import { existsSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   BlockedError,
@@ -1396,6 +1397,46 @@ describe("error paths", () => {
 // ── Concurrency ──────────────────────────────────────────────────────────────
 
 describe("concurrent record writes", () => {
+  it("eight record processes report index contention and a retry succeeds after release", { timeout: 120000 }, async () => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const artifacts = await makeArtifacts();
+    const { runtime } = makeRuntime(dir, config, artifacts);
+    expect(await runCli(["prepare"], runtime)).toBe(EXIT_OK);
+    const manifest = await buildAcceptSubmission(dir, config, artifacts);
+    expect(await runCli(["submit-evidence", "--manifest", manifest], runtime)).toBe(EXIT_OK);
+    const cliUrl = new URL("./index.ts", import.meta.url).href;
+    const runner = path.join(dir, ".git", "record-witness.mjs");
+    await writeFile(runner, `import { runCli } from ${JSON.stringify(cliUrl)};
+process.exitCode = await runCli(["record"], {
+  cwd: process.cwd(), env: {}, stdinIsTTY: false, stdoutIsTTY: false,
+  stdout: text => process.stdout.write(text), stderr: text => process.stderr.write(text),
+  loadConfig: async () => (${JSON.stringify(config)})
+});`);
+    const lock = path.join(dir, ".git", "index.lock");
+    await writeFile(lock, "held by the test until every child has answered\n");
+    try {
+      const loader = pathToFileURL(fileURLToPath(import.meta.resolve("tsx"))).href;
+      const results = await Promise.all(Array.from({ length: 8 }, async () => {
+        try {
+          const result = await run(process.execPath, ["--import", loader, runner], { cwd: dir, timeout: 30000 });
+          return { ...result, code: 0 };
+        } catch (error) {
+          return error as { stdout: string; stderr: string; code: number };
+        }
+      }));
+      for (const result of results) {
+        expect(result.code).toBe(EXIT_POLICY);
+        expect(result.stderr).toContain("candidate_repository_unreadable");
+        expect(result.stderr).toContain("Retry after the other Git operation finishes");
+        expect(result.stderr).not.toContain("Repair the index");
+      }
+    } finally {
+      await rm(lock, { force: true });
+    }
+    expect(await runCli(["record"], runtime)).toBe(EXIT_OK);
+  });
+
   it("two branches each write a record and both files coexist and parse", { timeout: 120000 }, async () => {
     const dir = await initRepo();
     const config = makeConfig();

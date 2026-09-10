@@ -261,13 +261,14 @@ function redactSecrets(value: string): string {
       // with no END, and the body is just as sensitive.
       .replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----/gi, "[REDACTED PRIVATE KEY]")
       .replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*/gi, "[REDACTED PRIVATE KEY]")
-      // Unambiguous provider prefixes: no context needed, no false positives.
+      // Unambiguous provider prefixes need no word boundary: identifiers can
+      // be glued to either side of a credential in a hostile diagnostic.
       .replace(
-        /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprse]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})\b/g,
+        /(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprse]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})/g,
         "[REDACTED]",
       )
-      .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED]")
-      .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/g, "[REDACTED]")
+      .replace(/(?:AKIA|ASIA)[0-9A-Z]{16}/g, "[REDACTED]")
+      .replace(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/g, "[REDACTED]")
       .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, "$1[REDACTED]")
       // The separator admits line breaks, not just spaces. Sanitization redacts
       // *before* it collapses whitespace, so `token\n<credential>` would

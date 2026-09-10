@@ -551,11 +551,11 @@ describe("discovery", () => {
     expect(found.quarantined[0]?.path).toBe(published.path);
   });
 
-  it("redacts a credential planted in a stored record before reporting it", async () => {
+  it.each(["", "token_", "x"])("redacts a credential planted in a stored record after %s", async (prefix) => {
     const storageRoot = tempStorageRoot("redaction");
     const published = await publishRecord(storageRoot, EVIDENCE, { storageRoot });
     const token = `ghp_${"A".repeat(30)}`;
-    writeFileSync(published.path, JSON.stringify({ ...published.record, schemaVersion: token }));
+    writeFileSync(published.path, JSON.stringify({ ...published.record, schemaVersion: `${prefix}${token}` }));
 
     const found = await discoverRecords(storageRoot, { ...selector, storageRoot });
 

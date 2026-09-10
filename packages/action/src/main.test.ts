@@ -557,6 +557,21 @@ describe("the failure-class table", () => {
     expect(codesOf(result.blockers)).toContain("delivery_record_malformed");
   });
 
+  it.each(["identity", "claims"])("rejects committed %s tampering as a malformed record", TIMEOUT, async (field) => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    const record = await buildRecord(dir, config, digest);
+    const tampered = field === "identity"
+      ? { ...record, identityToken: "bogus/v9" }
+      : { ...record, claims: [record.claims[0], { ...record.claims[0], outcome: "not_applicable" }] };
+    await commitRecord(dir, config, digest, `${JSON.stringify(tampered)}\n`);
+    const { runtime } = await driveRuntime(dir, { config });
+    const result = await runAction(runtime);
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("delivery_record_malformed");
+  });
+
   it("fails closed when the configuration cannot be loaded", TIMEOUT, async () => {
     const dir = await initRepo();
     const { runtime } = await driveRuntime(dir, {
