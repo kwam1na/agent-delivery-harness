@@ -95,14 +95,14 @@
 #       - uses: actions/setup-node@v4
 #         with:
 #           node-version: "22"
-#       - uses: ./packages/action
+#       - uses: kwam1na/agent-delivery-harness/packages/action@<full-reviewed-commit-sha>
 # ```
 #
-# The first `actions/checkout` is not optional and is not the same one this
-# action performs internally: GitHub resolves a *local* action reference
-# (`uses: ./…`) from the workspace on disk, so without a checkout the workflow
-# fails before this action is ever loaded. The action then re-checks-out the
-# head by sha itself, which is what pins what gets verified.
+# The first checkout establishes the consumer workspace. For a local action
+# reference (`uses: ./packages/action`), it also makes the action resolvable.
+# For a pinned remote reference, GitHub downloads the Action repository outside
+# that workspace; the consumer does not check out or install the harness itself.
+# This action then checks out the PR head by sha, which pins what gets verified.
 #
 # Two more things that are easy to get wrong:
 #
@@ -113,12 +113,13 @@
 #     the merge is documentation, not a gate.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# HOW THIS ACTION RESOLVES ITS OWN CODE, AND THE v1 BOUNDARY
+# HOW THIS ACTION RESOLVES ITS OWN CODE
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # The harness ships as TypeScript source and imports
-# `@agent-delivery-harness/kernel` by package name. That name resolves only
-# through an npm workspace install, and the internal `actions/checkout` below
+# `@agent-delivery-harness/kernel` by package name. Its loader resolves that name
+# to this Action checkout's kernel, including imports from consumer config.
+# The internal `actions/checkout` below
 # runs with `clean` at its default — which deletes an untracked `node_modules`,
 # including one a caller installed before calling this action. So the verify
 # step installs the harness workspace itself.
@@ -145,15 +146,13 @@
 # the mitigation (pinning the action to a ref from the base rather than from the
 # head) belongs to the self-hosting workflow, not here.
 #
-# PUBLISHED FORM — A KNOWN v1 BOUNDARY. Referencing this action as
-# `owner/repo/packages/action@ref` does not work today, and the step says so
-# rather than failing with a module-resolution stack: the published action is
-# fetched on its own, with no workspace root above it to install, and even with
-# one, Node refuses to strip types from files under `node_modules`
-# (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). Both are fixed the same way —
-# by shipping a compiled, dependency-inlined bundle — and bundling is release
-# mechanics, which the release unit owns. Until then the supported form is the
-# self-hosted one.
+# PINNED REMOTE FORM. With `owner/repo/packages/action@<full-commit-sha>`, GitHub
+# downloads the Action repository separately from the consumer workspace. The
+# same root walk finds its package.json, and the loader resolves the kernel to
+# real source paths in that pinned checkout, outside node_modules. Consumer
+# config therefore needs no harness checkout or package symlink of its own.
+# The complete repository is required; copying only packages/action is not a
+# supported distribution. See docs/getting-started.md for pin and bump guidance.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # ATTESTATION HONESTY
@@ -195,6 +194,9 @@ inputs:
     default: "0"
 
 outputs:
+  hosted-checks:
+    description: 'Owner policy posture: required, exempted, or blocked when verification failed.'
+    value: ${{ steps.verify.outputs.hosted-checks }}
   verified:
     description: "`true` when the check passed."
     value: ${{ steps.verify.outputs.verified }}
@@ -259,7 +261,7 @@ runs:
           # The published-action shape. Say so in the harness's own voice: an
           # operator who gets ERR_MODULE_NOT_FOUND here learns nothing, while
           # this names the boundary and the supported form.
-          message="delivery-harness: this action runs from TypeScript source and needs its own npm workspace root above ${DELIVERY_HARNESS_ACTION_PATH}, which does not exist. The published-action form is not supported in v1 (it also hits ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING); use the self-hosted form, 'uses: ./packages/action', from a checkout of the harness repository."
+          message="delivery-harness: this action runs from TypeScript source and needs its own npm workspace root above ${DELIVERY_HARNESS_ACTION_PATH}, which does not exist. Keep the complete pinned Action repository with its workspace and sibling kernel; use 'kwam1na/agent-delivery-harness/packages/action@<full-commit-sha>' or the self-hosted 'uses: ./packages/action'."
           printf '%s\n' "${message}" >&2
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             # The attestation label, spelled out because the module that owns it
@@ -299,4 +301,4 @@ runs:
           node_flags="--experimental-strip-types ${node_flags}"
         fi
         # shellcheck disable=SC2086
-        node ${node_flags} "${DELIVERY_HARNESS_ACTION_PATH}/src/main.ts"
+        node ${node_flags} --import "${DELIVERY_HARNESS_ACTION_PATH}/src/bootstrap.mjs" "${DELIVERY_HARNESS_ACTION_PATH}/src/main.ts"

@@ -38,6 +38,35 @@ describe("the repository policy document grammar", () => {
     expect(codesOf(document)).toEqual([]);
   });
 
+  it("accepts an owner-declared hosted-check requirement with a bounded exemption", () => {
+    expect(codesOf(policyDocumentFixture({
+      hostedChecks: {
+        required: true,
+        exemptions: [{
+          scope: { repositoryId: "adopter-repo", baseRef: "origin/main" },
+          reason: "The hosted runner is unavailable while billing is repaired.",
+          grantedBy: "repository-owner@example.com",
+          until: "2026-09-12T00:00:00Z",
+        }],
+      },
+    }))).toEqual([]);
+  });
+
+  it("does not offer a policy spelling that disables hosted checks", () => {
+    expect(codesOf(policyDocumentFixture({ hostedChecks: { required: false, exemptions: [] } }))).toContain("malformed_member");
+  });
+
+  it("rejects incomplete, malformed, and open-ended hosted-check exemptions", () => {
+    const malformed = [
+      { scope: { repositoryId: "adopter-repo", baseRef: "origin/main" }, reason: "incident", until: "2026-09-12T00:00:00Z" },
+      { scope: { repositoryId: "adopter-repo", baseRef: "origin/main" }, reason: "incident", grantedBy: "owner", until: "forever" },
+      { scope: { repositoryId: "adopter-repo", baseRef: "origin/main", path: ".github/workflows" }, reason: "incident", grantedBy: "owner", until: "2026-09-12T00:00:00Z" },
+    ];
+    for (const exemption of malformed) {
+      expect(codesOf(policyDocumentFixture({ hostedChecks: { required: true, exemptions: [exemption] } }))).not.toEqual([]);
+    }
+  });
+
   it("rejects a non-object and an unsupported spec token", () => {
     expect(codesOf("policy")).toContain("not_an_object");
     expect(codesOf(policyDocumentFixture({ spec: "repository-policy-document/2" }))).toContain("unsupported_spec");

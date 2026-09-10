@@ -10,7 +10,7 @@
  * behind. An unresolvable or unwritable store is a typed block, never a crash.
  */
 import path from "node:path";
-import { resolveRecordStorage, BlockedError } from "@agent-delivery-harness/kernel";
+import { deliveryRecordPathFor, resolveRecordStorage, BlockedError } from "@agent-delivery-harness/kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { oneLine } from "../run-surface.ts";
 
@@ -32,13 +32,18 @@ export const checkCommand: CommandDescriptor = {
       const probe = path.join(storage.storageDir, PROBE_FILE);
       await context.artifacts.writeTextFile(probe, "probe\n", { mode: 0o600 });
       await context.artifacts.removeFile(probe);
+      const recordPath = deliveryRecordPathFor(context.config, "<deliverableDigest>");
+      const baseMovement = context.config.deliveryRecordVerification.baseMovement === "stale"
+        ? "base movement stale: verification refuses base-ref, base-tip, or merge-base drift; admit again against the current base"
+        : "base movement allow: verification may accept base drift and names every relaxed drift class";
       return {
         kind: "ok",
         summary: [
           `ok: gate ${context.config.gateId}`,
           `  ${context.config.obligations.length} obligation(s), ${context.config.providers.length} provider(s)`,
           `  store ${storage.storageDir} (writable)`,
-          `  delivery record path ${context.config.deliveryRecordPath} (base movement: ${context.config.deliveryRecordVerification.baseMovement})`,
+          `  delivery record path ${recordPath}`,
+          `  ${baseMovement}`,
         ].join("\n"),
       };
     } catch (error) {

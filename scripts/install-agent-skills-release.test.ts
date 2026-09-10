@@ -15,6 +15,10 @@ it("takes distributed artifact paths and refuses source-build or ambiguous input
   expect(parseInstallArgs(["--archive", "release.zip", "--metadata", "release.json"])).toEqual({ archive: path.resolve("release.zip"), metadata: path.resolve("release.json") });
   for (const args of [[], ["--release-id", "old"], ["--archive", "a"], ["--archive", "a", "--archive", "b"], ["--archive", "a", "--metadata", ""]]) expect(() => parseInstallArgs(args)).toThrow(InstallError);
 });
+it("forwards an explicit first-policy bootstrap request without accepting duplicate flags", () => {
+  expect(parseInstallArgs(["--bootstrap-policy", "--archive", "release.zip", "--metadata", "release.json"])).toEqual({ archive: path.resolve("release.zip"), metadata: path.resolve("release.json"), bootstrapPolicy: true });
+  expect(() => parseInstallArgs(["--archive", "a", "--metadata", "b", "--bootstrap-policy", "--bootstrap-policy"])).toThrow(InstallError);
+});
 it("does not call a switched generation ready while policy reconciliation failed", () => {
   expect(() => checkInstalledStatus(status({ productReady: false }), expected)).toThrow(InstallError);
 });

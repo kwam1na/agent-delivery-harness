@@ -32,8 +32,10 @@ import {
 } from "./capabilities.ts";
 import {
   PORTABLE_MODEL_DRIVEN_STAGES,
+  isHostedChecksPolicy,
   validateRepositoryPolicyDocument,
   type CheckpointOverride,
+  type HostedChecksPolicy,
   type RepositoryPolicyDocument,
 } from "./document.ts";
 
@@ -56,6 +58,8 @@ export const POLICY_COMPILE_CODES = Object.freeze([
   "prose_only_authority",
   "privileged_credential_in_model_grant",
   "tracker_unavailable",
+  "hosted_check_exemption_repository_mismatch",
+  "duplicate_hosted_check_exemption_scope",
   "admission_obligation_unactivated",
   "policy_tamper",
 ] as const);
@@ -133,6 +137,7 @@ export interface CompiledPolicy {
   readonly approvals: readonly { readonly action: string; readonly approval: string }[];
   readonly tracker: "available" | "absent";
   readonly trackerAbsenceFallback: string;
+  readonly hostedChecks?: HostedChecksPolicy;
   readonly admission?: HarnessConfig;
 }
 
@@ -317,6 +322,32 @@ export function compileRepositoryPolicy(input: CompileRepositoryPolicyInput): Co
     );
   }
 
+  // ── Hosted-check posture ─────────────────────────────────────────────────
+  // Absence preserves the historical strict posture: hosted checks are still
+  // required and no exception exists. An exception is useful only when its
+  // enforceable repository scope names this document, and one scope has one
+  // declaration so selection cannot become last-write-wins.
+  const hostedChecks: HostedChecksPolicy = document.hostedChecks ?? { required: true, exemptions: [] };
+  const hostedScopes = new Set<string>();
+  hostedChecks.exemptions.forEach((exemption, index) => {
+    if (exemption.scope.repositoryId !== document.repositoryId) {
+      collector.emit(
+        "hosted_check_exemption_repository_mismatch",
+        `/document/hostedChecks/exemptions/${index}/scope/repositoryId`,
+        `hosted-check exemption scope ${exemption.scope.repositoryId} does not name policy repository ${document.repositoryId}`,
+      );
+    }
+    const key = `${exemption.scope.repositoryId}\u0000${exemption.scope.baseRef}`;
+    if (hostedScopes.has(key)) {
+      collector.emit(
+        "duplicate_hosted_check_exemption_scope",
+        `/document/hostedChecks/exemptions/${index}/scope`,
+        "one hosted-check scope has more than one exemption; selection must not depend on declaration order",
+      );
+    }
+    hostedScopes.add(key);
+  });
+
   // ── Checkpoint grant envelopes ───────────────────────────────────────────
   // The privileged credential set is not a naming convention: it is the
   // portable names PLUS every credential a privileged-kind adapter actually
@@ -414,6 +445,15 @@ export function compileRepositoryPolicy(input: CompileRepositoryPolicyInput): Co
     approvals: document.approvals.map((approval) => ({ ...approval })),
     tracker: trackerBound ? ("available" as const) : ("absent" as const),
     trackerAbsenceFallback: document.trackerAbsenceFallback,
+    ...(document.hostedChecks === undefined ? {} : {
+      hostedChecks: {
+        required: true as const,
+        exemptions: hostedChecks.exemptions.map((exemption) => ({
+          ...exemption,
+          scope: { ...exemption.scope },
+        })),
+      },
+    }),
     ...(admission === undefined ? {} : { admission }),
   };
   const compiled: CompiledPolicy = { ...compiledBody, compiledDigest: digestCanonical(compiledBody) };
@@ -448,7 +488,15 @@ export function verifyCompiledPolicy(value: unknown): PolicyVerdict {
   if (!snapshotVerdict.ok) {
     for (const rejection of snapshotVerdict.rejections) collector.emit(rejection.code, `/snapshot${rejection.pointer}`, rejection.message);
   }
+  if (record["hostedChecks"] !== undefined && !isHostedChecksPolicy(record["hostedChecks"])) {
+    collector.emit("malformed_member", "/hostedChecks", "the compiled hosted-check posture is malformed or attempts to disable hosted checks");
+  }
   return collector.verdict();
+}
+
+/** Missing hosted-check policy is the legacy strict posture. */
+export function effectiveHostedChecksPolicy(policy: Pick<CompiledPolicy, "hostedChecks">): HostedChecksPolicy {
+  return policy.hostedChecks ?? { required: true, exemptions: [] };
 }
 
 /**

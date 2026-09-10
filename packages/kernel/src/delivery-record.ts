@@ -47,6 +47,8 @@ import { canonicalize } from "./canonical.ts";
 import { digestCanonical } from "./digest.ts";
 import type { CandidateBinding } from "./candidate.types.ts";
 import type { EvidenceRecord, RecordCandidateBinding, WaiverResolution, PortableEvidenceContext, CheckBinding } from "./records.types.ts";
+import { effectiveHostedChecksPolicy, verifyCompiledPolicy, type CompiledPolicy } from "./policy/compile.ts";
+import { isHostedCheckExemption, isHostedCheckInstant, type HostedCheckExemption } from "./policy/document.ts";
 // TYPE ONLY, DELIBERATELY. The row is echoed, never evaluated, so this module
 // takes the shape and nothing that could read one.
 import type { RunJournalRow } from "./checkpoint/run-journal-completeness.ts";
@@ -179,6 +181,16 @@ export interface DeliveryRecordAttestation {
   readonly level: AttestationLevel;
 }
 
+/** The owner declaration projected into a candidate-bound tracked record. */
+export interface RecordedHostedCheckExemption extends HostedCheckExemption {
+  readonly policyDigest: string;
+}
+
+export interface DeliveryRecordHostedChecks {
+  readonly required: true;
+  readonly exemption?: RecordedHostedCheckExemption;
+}
+
 /**
  * The tracked `delivery-record/2` artifact. `workspaceId` is recorded for audit
  * but is deliberately *excluded* from verification: CI verifies from a different
@@ -194,6 +206,7 @@ export interface DeliveryRecord {
   readonly workspaceId: string;
   readonly attestation: DeliveryRecordAttestation;
   readonly context?: PortableEvidenceContext;
+  readonly hostedChecks?: DeliveryRecordHostedChecks;
   readonly integrityDigest?: string;
 }
 
@@ -205,11 +218,34 @@ export interface BuildDeliveryRecordInput {
   /** The evidence records backing the decision, used to stamp manifest digests. */
   readonly evidenceRecords: readonly EvidenceRecord[];
   readonly context?: PortableEvidenceContext;
+  /** Current compiled owner policy plus a boundary-supplied observation time. */
+  readonly compiledPolicy?: CompiledPolicy;
+  readonly observedAt?: string;
 }
 
 export type BuildDeliveryRecordResult =
   | { readonly ok: true; readonly record: DeliveryRecord }
   | { readonly ok: false; readonly blockers: NonEmptyTuple<Blocker> };
+
+function activeHostedCheckExemption(
+  compiledPolicy: CompiledPolicy,
+  binding: Pick<RecordCandidateBinding, "baseRef">,
+  observedAt: string | undefined,
+): { readonly ok: true; readonly exemption?: RecordedHostedCheckExemption } | { readonly ok: false; readonly blocker: Blocker } {
+  const structural = verifyCompiledPolicy(compiledPolicy);
+  if (!structural.ok) {
+    return { ok: false, blocker: drBlocker("hosted_check_policy_invalid", "The compiled hosted-check policy is malformed.") };
+  }
+  const policy = effectiveHostedChecksPolicy(compiledPolicy);
+  const scoped = policy.exemptions.find((entry) =>
+    entry.scope.repositoryId === compiledPolicy.snapshot.repositoryId && entry.scope.baseRef === binding.baseRef);
+  if (scoped === undefined) return { ok: true };
+  if (!isHostedCheckInstant(observedAt)) {
+    return { ok: false, blocker: drBlocker("hosted_check_time_missing", "An explicit current UTC instant is required to evaluate the hosted-check exemption.") };
+  }
+  if (observedAt >= scoped.until) return { ok: true };
+  return { ok: true, exemption: { ...scoped, scope: { ...scoped.scope }, policyDigest: compiledPolicy.compiledDigest } };
+}
 
 /** Maps the evaluator's candidate shape onto the record's flat binding. */
 export function bindingOf(candidate: CandidateBinding): RecordCandidateBinding {
@@ -303,6 +339,13 @@ export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliv
   }
   const distinctManifestDigests = claimedManifestDigests(claims);
 
+  let hostedChecks: DeliveryRecordHostedChecks | undefined;
+  if (input.compiledPolicy !== undefined) {
+    const active = activeHostedCheckExemption(input.compiledPolicy, bindingOf(decision.candidate), input.observedAt);
+    if (!active.ok) return { ok: false, blockers: [active.blocker] };
+    hostedChecks = { required: true, ...(active.exemption === undefined ? {} : { exemption: active.exemption }) };
+  }
+
   const record: DeliveryRecord = {
     version: DELIVERY_RECORD_VERSION,
     gateId: config.gateId,
@@ -313,6 +356,7 @@ export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliv
     workspaceId: decision.candidate.workspaceId,
     attestation: { level: V1_ATTESTATION_LEVEL },
     context,
+    ...(hostedChecks === undefined ? {} : { hostedChecks }),
   };
   const sealed = { ...record, integrityDigest: digestCanonical(record) };
   if (Buffer.byteLength(JSON.stringify(sealed)) > MAX_PORTABLE_RECORD_BYTES) return { ok: false, blockers: [portableBlocker("portable_record_oversized", "The portable record exceeds its size limit.")] };
@@ -384,6 +428,20 @@ function isAttributedWaiver(value: unknown): value is NonNullable<DeliveryRecord
     isRecord(candidate) && BINDING_FIELDS.every((field) => isNonEmptyString(candidate[field]));
 }
 
+function isRecordedHostedCheckExemption(value: unknown): value is RecordedHostedCheckExemption {
+  if (!isRecord(value)) return false;
+  const { policyDigest, ...exemption } = value;
+  return Object.keys(value).sort().join("\u0000") === ["grantedBy", "policyDigest", "reason", "scope", "until"].join("\u0000") &&
+    typeof policyDigest === "string" && /^[a-f0-9]{64}$/.test(policyDigest) && isHostedCheckExemption(exemption);
+}
+
+function isDeliveryRecordHostedChecks(value: unknown): value is DeliveryRecordHostedChecks {
+  if (!isRecord(value) || value["required"] !== true) return false;
+  const keys = Object.keys(value).sort().join("\u0000");
+  return (keys === "required" || keys === "exemption\u0000required") &&
+    (value["exemption"] === undefined || isRecordedHostedCheckExemption(value["exemption"]));
+}
+
 export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
   if (Buffer.byteLength(text) > MAX_PORTABLE_RECORD_BYTES) return malformed("the record exceeds the portable size limit");
   let parsed: unknown;
@@ -432,6 +490,10 @@ export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
 
   const manifestDigest = parsed["manifestDigest"];
   if (manifestDigest !== null && typeof manifestDigest !== "string") return malformed("manifestDigest must be a string or null");
+
+  if (parsed["hostedChecks"] !== undefined && !isDeliveryRecordHostedChecks(parsed["hostedChecks"])) {
+    return malformed("hostedChecks must keep checks required and carry only a complete attributed exemption");
+  }
 
   return { ok: true, record: parsed as unknown as DeliveryRecord };
 }
@@ -485,6 +547,10 @@ export interface DeliveryRecordCheck {
   readonly relaxedDriftClasses: readonly DeliveryRecordDriftClass[];
   readonly attestationLabel: string;
   readonly claims: readonly DeliveryRecordClaim[];
+  readonly hostedChecks: {
+    readonly status: "required" | "exempted";
+    readonly exemption?: RecordedHostedCheckExemption;
+  };
   /**
    * Raw trees whose review rounds the verified record actually carries. The
    * record tree is always present. An earlier tree appears only after the
@@ -544,6 +610,9 @@ export interface VerifyDeliveryRecordOptions {
    * own opt-in, never this core's.
    */
   readonly runJournal?: RunJournalRow;
+  /** Exact current owner policy and one boundary-observed instant. */
+  readonly compiledPolicy?: CompiledPolicy;
+  readonly observedAt?: string;
 }
 
 /**
@@ -699,6 +768,7 @@ export function verifyDeliveryRecord(
   const blockers: Blocker[] = [];
   const relaxedDriftClasses: DeliveryRecordDriftClass[] = [];
   const binding = record.candidateBinding;
+  let hostedChecks: DeliveryRecordCheck["hostedChecks"] = { status: "required" };
 
   if (record.version !== DELIVERY_RECORD_VERSION) {
     blockers.push(drBlocker("record_version_unsupported", `The record's version ${JSON.stringify(record.version)} is not ${DELIVERY_RECORD_VERSION}.`));
@@ -720,6 +790,47 @@ export function verifyDeliveryRecord(
     blockers.push(
       drBlocker("record_identity_token_unknown", `The record's identity token ${JSON.stringify(binding.identityToken)} is not accepted by this config.`),
     );
+  }
+
+  // A hosted-check exemption is a projection of owner policy, not a CLI grant.
+  // The current compiled policy and current time are supplied by the caller;
+  // this pure core never reads either from ambient process state. A missing
+  // legacy policy is strict, and can verify only a record with no exemption.
+  const recordedExemption = isDeliveryRecordHostedChecks(record.hostedChecks)
+    ? record.hostedChecks.exemption
+    : undefined;
+  if (record.hostedChecks !== undefined && !isDeliveryRecordHostedChecks(record.hostedChecks)) {
+    blockers.push(drBlocker("hosted_check_record_invalid", "The recorded hosted-check posture is malformed or disables required checks."));
+  } else if (options.compiledPolicy === undefined) {
+    if (recordedExemption !== undefined) {
+      blockers.push(drBlocker("hosted_check_exemption_unrecognized", "The record claims a hosted-check exemption without current compiled owner policy."));
+    }
+  } else {
+    const active = activeHostedCheckExemption(options.compiledPolicy, binding, options.observedAt);
+    if (!active.ok) {
+      blockers.push(active.blocker);
+    } else if (active.exemption === undefined) {
+      if (recordedExemption !== undefined) {
+        const declared = effectiveHostedChecksPolicy(options.compiledPolicy).exemptions.find((entry) =>
+          entry.scope.repositoryId === options.compiledPolicy!.snapshot.repositoryId && entry.scope.baseRef === binding.baseRef);
+        const exactPolicyDeclaration = declared !== undefined && recordedExemption.policyDigest === options.compiledPolicy.compiledDigest &&
+          digestCanonical(declared) === digestCanonical((({ policyDigest: _policyDigest, ...rest }) => rest)(recordedExemption));
+        blockers.push(drBlocker(
+          exactPolicyDeclaration && isHostedCheckInstant(options.observedAt) && options.observedAt >= recordedExemption.until
+            ? "hosted_check_exemption_expired"
+            : "hosted_check_exemption_unrecognized",
+          exactPolicyDeclaration
+            ? "The recorded hosted-check exemption has expired."
+            : "The recorded hosted-check exemption is not an exact current owner declaration for this repository and base ref.",
+        ));
+      }
+    } else if (recordedExemption === undefined) {
+      blockers.push(drBlocker("hosted_check_exemption_missing", "The record omits the active hosted-check exemption declared for this repository and base ref."));
+    } else if (digestCanonical(recordedExemption) !== digestCanonical(active.exemption)) {
+      blockers.push(drBlocker("hosted_check_exemption_unrecognized", "The recorded hosted-check exemption is not an exact current owner declaration for this repository and base ref."));
+    } else {
+      hostedChecks = { status: "exempted", exemption: recordedExemption };
+    }
   }
 
   // Deliverable identity: the record must describe the tree at the PR head. This
@@ -802,6 +913,7 @@ export function verifyDeliveryRecord(
     relaxedDriftClasses,
     attestationLabel: ATTESTATION_LABEL,
     claims: record.claims,
+    hostedChecks,
     reviewedCandidateTreeShas: blockers.length === 0 ? projectedReviewTreeShas(record) : [binding.treeSha],
     ...(options.runJournal === undefined ? {} : { runJournal: options.runJournal }),
   };

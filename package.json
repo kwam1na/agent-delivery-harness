@@ -1,6 +1,6 @@
 {
   "name": "delivery-harness",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Fail-closed merge admission for AI coding agents",
@@ -12,8 +12,10 @@
     "node": ">=22.6.0"
   },
   "scripts": {
+    "prepare": "node --import tsx scripts/build-kernel-types.ts",
+    "build:types": "node --import tsx scripts/build-kernel-types.ts",
     "harness": "node --import tsx packages/cli/src/main.ts",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.vendored.json",
+    "typecheck": "npm run build:types && tsc -p tsconfig.json && tsc -p tsconfig.vendored.json",
     "sensor": "node --import tsx scripts/check-import-boundaries.ts",
     "sensor:cli": "node --import tsx scripts/check-cli-inventory.ts",
     "sensor:standalone": "node --import tsx scripts/check-standalone-install.ts",

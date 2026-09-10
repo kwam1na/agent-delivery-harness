@@ -1,5 +1,5 @@
 /**
- * Delivery harness CLI: the fourteen-command operator surface.
+ * Delivery harness CLI: the fifteen-command operator surface.
  *
  * THE COMMAND REGISTRY. `COMMANDS` is the single source of truth for which
  * commands exist. Every command module under `commands/` must appear here, and
@@ -12,6 +12,7 @@
  * in `boundary.ts`; each command is a thin, testable unit behind it.
  */
 import { checkCommand } from "./commands/check.ts";
+import { admitCommand } from "./commands/admit.ts";
 import { emitCommand } from "./commands/emit.ts";
 import { gateCommand } from "./commands/gate.ts";
 import { maintainCommand } from "./commands/maintain.ts";
@@ -42,6 +43,7 @@ export { buildRunExport, parseRunExport, type DeliveryRunExport, type RunExportP
  * write the run store rather than anything a delivery decision depends on.
  */
 export const COMMANDS: readonly AnyCommandDescriptor[] = [
+  admitCommand,
   prepareCommand,
   reviewContextCommand,
   emitReviewEvidenceCommand,
@@ -81,6 +83,7 @@ export {
 } from "./boundary.ts";
 
 export { prepareCommand } from "./commands/prepare.ts";
+export { admitCommand } from "./commands/admit.ts";
 export { reviewContextCommand } from "./commands/review-context.ts";
 export { emitReviewEvidenceCommand } from "./commands/emit-review-evidence.ts";
 export { submitEvidenceCommand } from "./commands/submit-evidence.ts";

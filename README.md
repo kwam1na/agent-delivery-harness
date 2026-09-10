@@ -91,13 +91,14 @@ cannot drift from the tool.
 - **`@agent-delivery-harness/conformance`** — the 89-vector golden conformance
   kit (8 accept / 81 reject) and its table-driven generator, runnable in unit
   and integration modes.
-- **`@agent-delivery-harness/cli`** — the fourteen-command operator surface and
+- **`@agent-delivery-harness/cli`** — the fifteen-command operator surface and
   opt-in `delivery-provider-rails/1` stdio adapter:
-  `prepare`, `review-context`, `emit-review-evidence`, `submit-evidence`, `gate`, `record`, `verify`,
+  `admit`, `prepare`, `review-context`, `emit-review-evidence`, `submit-evidence`, `gate`, `record`, `verify`,
   `check`, `managed` (the managed-delivery facade's host-facing checkpoint and
   status surface), `maintain` (the installation-scoped maintenance lane:
   update, rollback, and trust-state pin/revoke/unrevoke/high-water-mark), and
-  the config-free run-surface pair `emit` and `runs` — `emit` appends one
+  the config-free run-surface pair `emit` and `runs`, plus the continuity pair
+  `save-context` and `resume` — `emit` appends one
   versioned event to the selected delivery run's journal. `runs list` and
   `runs show` read the journal — `runs list --json` gives the bounded
   `run-inventory/1` inventory, with `--limit`, `--status` and `--open`/`--ended`
@@ -196,7 +197,8 @@ filesystem port, and enforces the spec's GEN-5 clock ban in decision paths.
 `scripts/check-cli-inventory.ts` keeps every CLI command registered with the
 blocker contract. `scripts/check-release.ts` is the release-mechanics sensor:
 one version across the root manifest and every workspace package, the kernel's
-`HARNESS_VERSION` fingerprint constant in lockstep with that version, license
+`HARNESS_VERSION` fingerprint constant in lockstep with that version (see the
+[runtime version contract](docs/product-artifacts.md#runtime-versions-and-exact-artifact-identity)), license
 coherence — the root `LICENSE` carries the Functional Source License 1.1 text
 rather than a stub that names it, and every manifest's `license` field agrees,
 checked against the actual

@@ -150,6 +150,8 @@ describe("CLI_SMOKE_CASES", () => {
       expect(smoke.expected.length).toBeGreaterThan(0);
       expect(smoke.expected.every((needle) => typeof needle !== "string" || needle.trim() !== "")).toBe(true);
     }
+    const listing = CLI_SMOKE_CASES.find((smoke) => smoke.args.length === 1 && smoke.args[0] === "--help");
+    expect(listing?.expected).toContain("admit");
   });
 
   // The order is load-bearing three times over: the first `runs list` asserts

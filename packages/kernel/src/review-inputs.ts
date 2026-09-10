@@ -2,6 +2,7 @@
 import path from "node:path";
 import { sha256Hex } from "./digest.ts";
 import { PERSONA_MANIFEST_ENTRY, PERSONA_MANIFEST_SPEC } from "./policy/shipped-personas.ts";
+import { verifyCompiledPolicy, type CompiledPolicy } from "./policy/compile.ts";
 export const COMPILED_SNAPSHOT_FILE = ".agents/policy/compiled-snapshot.json";
 export const INSTALLED_ARCHIVE_DIR = ".agent-skills/current";
 export const CHARTER_EXTENSION = ".md";
@@ -17,6 +18,30 @@ async function readJsonFile(read: ReviewInputReader, filePath: string, role: str
   } catch (error) {
     throw new OutcomeError(`${role} is unreadable or not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/** Reads the optional compiled owner policy without turning absence into a grant. */
+export async function readCompiledRepositoryPolicy(read: ReviewInputReader): Promise<CompiledPolicy | null> {
+  const bytes = await read(COMPILED_SNAPSHOT_FILE);
+  if (bytes === null) return null;
+  let wrapper: unknown;
+  try {
+    wrapper = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    throw new ReviewInputError(`the compiled policy snapshot is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const compiled = isRecord(wrapper) ? wrapper["compiled"] : undefined;
+  // A legacy snapshot carries no hosted-check declaration. It remains the
+  // strict posture and needs no widening projection from this reader; several
+  // older consumers also retain only the review-lens subset needed by their
+  // evidence path. Validate the complete compiled policy only when it actually
+  // asks to carry a hosted-check exception surface.
+  if (!isRecord(compiled) || compiled["hostedChecks"] === undefined) return null;
+  const verdict = verifyCompiledPolicy(compiled);
+  if (!verdict.ok) {
+    throw new ReviewInputError(`the compiled policy snapshot is invalid: ${verdict.rejections.map((entry) => `${entry.pointer} [${entry.code}] ${entry.message}`).join("; ")}`);
+  }
+  return compiled as unknown as CompiledPolicy;
 }
 
 /** One activated lens, resolved to the charter bytes the installation carries. */

@@ -67,6 +67,23 @@ describe("the compiled snapshot", () => {
     const { compiledDigest, ...body } = compiled as unknown as Record<string, unknown>;
     expect(digestCanonical(body)).toBe(compiledDigest);
     expect(verifyCompiledPolicy(compiled).ok).toBe(true);
+    expect(compiled.hostedChecks).toBeUndefined();
+  });
+
+  it("binds owner-declared hosted-check exemptions into the compiled digest", () => {
+    const result = compile(policyDocumentFixture({ hostedChecks: {
+      required: true,
+      exemptions: [{
+        scope: { repositoryId: "adopter-repo", baseRef: "origin/main" },
+        reason: "Hosted runners are unavailable.",
+        grantedBy: "repository-owner@example.com",
+        until: "2026-09-12T00:00:00Z",
+      }],
+    } }));
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.hostedChecks?.exemptions).toHaveLength(1);
+    expect(verifyCompiledPolicy(result.compiled).ok).toBe(true);
   });
 
   it("emits one checkpoint execution grant per portable model-driven stage, each spine-valid", () => {
@@ -274,6 +291,22 @@ describe("the rejection corpus — every defect rejects before mutation", () => 
       name: "tracker declared blocking and absent",
       code: "tracker_unavailable",
       run: () => compile(policyDocumentFixture({ trackerAbsenceFallback: "block" })),
+    },
+    {
+      name: "hosted-check exemption names a different repository",
+      code: "hosted_check_exemption_repository_mismatch",
+      run: () => compile(policyDocumentFixture({ hostedChecks: { required: true, exemptions: [{
+        scope: { repositoryId: "another-repo", baseRef: "origin/main" },
+        reason: "incident", grantedBy: "owner", until: "2026-09-12T00:00:00Z",
+      }] } })),
+    },
+    {
+      name: "two hosted-check exemptions claim the same enforceable scope",
+      code: "duplicate_hosted_check_exemption_scope",
+      run: () => compile(policyDocumentFixture({ hostedChecks: { required: true, exemptions: [
+        { scope: { repositoryId: "adopter-repo", baseRef: "origin/main" }, reason: "first", grantedBy: "owner", until: "2026-09-12T00:00:00Z" },
+        { scope: { repositoryId: "adopter-repo", baseRef: "origin/main" }, reason: "second", grantedBy: "owner", until: "2026-09-13T00:00:00Z" },
+      ] } })),
     },
     {
       name: "malformed adapter descriptor in the set",

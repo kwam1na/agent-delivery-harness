@@ -3,9 +3,23 @@
 How one tracked item is delivered in **this** repository, from a fresh worktree
 to a merged pull request. It carries mechanics, not rules: the review bound, the
 grace round, how a deferral is tracked, and how a finding is resolved are the
-installed workflow's, read from the skills exposed under `.claude/skills`
-(`review-work`, `execute-work`, `obtain-review`). Read
-[`AGENTS.md`](../AGENTS.md) for which skill to use and
+installed workflow's. Read `review-work`, `execute-work`, and `obtain-review`
+through the invoking agent's own host exposure. `.agents/skills` is the default
+for Codex and other hosts; Claude Code uses `.claude/skills`:
+
+| Invoking host | Skill directory | Run host identity |
+| --- | --- | --- |
+| Codex and other hosts | `.agents/skills` | The actual host identity (`codex` for Codex) |
+| Claude Code | `.claude/skills` | `claude-code` |
+
+Resolve the relative exposure links from the delivery worktree. Use the same
+host directory for referenced skill files and round-brief templates; the
+installed generation is shared, but discovery belongs to the invoking host.
+In the commands below, set `DELIVERY_HOST` to the table's identity for the actual
+host and `DELIVERY_SKILLS` to its skill directory. Report costs under that same
+host identity. Do not copy another host's identity from a prior run.
+
+Read [`AGENTS.md`](../AGENTS.md) for which skill to use and
 [the agent guide](agent-guide.md) for what the repository's sensors hold.
 
 Every command below was run against this tree. Lines that could not be executed
@@ -47,7 +61,7 @@ npm run --silent harness -- runs capabilities --json
 # {"spec":"run-capabilities/1","writerVersions":["run-event/1","run-event/2"],"artifactCapture":true}
 
 npm run --silent harness -- emit run.started --version 2 --event-id start-1 \
-  --json '{"host":"claude-code","workflow":{"releaseId":"linear-product-v1","profile":"linear"}}'
+  --json "{\"host\":\"$DELIVERY_HOST\",\"workflow\":{\"releaseId\":\"linear-product-v1\",\"profile\":\"linear\"}}"
 # started run run-87d10e42776fc970
 ```
 
@@ -226,7 +240,7 @@ This repository mandates `lens.outcome-correctness` and
 `lens.adversarial-testing`. Where the harness supplies no lens runner,
 `obtain-review` has the host realize one by convention: one subagent per lens,
 no shared context, the filled round brief from
-`.agent-skills/current/skills/obtain-review/references/round-brief-template.md`
+`$DELIVERY_SKILLS/obtain-review/references/round-brief-template.md`
 in its prompt.
 
 | lens id | persona id | charter, verbatim into the brief |
@@ -317,12 +331,13 @@ npm run --silent harness -- emit review.round.opened --event-id r1-open \
   --json "{\"round\":1,\"roundId\":\"round-1\",\"bound\":4,\"candidateTreeSha\":\"$TREE\",\"lenses\":[\"lens.outcome-correctness\",\"lens.adversarial-testing\"]}"
 
 npm run --silent harness -- emit review.round.closed --event-id r1-close \
-  --json "{\"round\":1,\"roundId\":\"round-1\",\"candidateTreeSha\":\"$TREE\",\"outcome\":\"aligned\",\"findings\":{\"P0\":0,\"P1\":0,\"P2\":0,\"P3\":0},\"cost\":{\"unit\":\"subagent-tokens\",\"total\":152352,\"reportedBy\":\"claude-code\",\"coverage\":\"partial\"}}"
+  --json "{\"round\":1,\"roundId\":\"round-1\",\"candidateTreeSha\":\"$TREE\",\"outcome\":\"aligned\",\"findings\":{\"P0\":0,\"P1\":0,\"P2\":0,\"P3\":0},\"cost\":{\"unit\":\"subagent-tokens\",\"total\":152352,\"reportedBy\":\"$DELIVERY_HOST\",\"coverage\":\"partial\"}}"
 ```
 
 `outcome` is a free label; prior runs here use `aligned` and `unresolved`. When
 the host reports no cost, say so — `{"coverage":"unreported","reportedBy":
-"claude-code"}` — rather than writing a zero.
+"<actual-host-id>"}` — rather than writing a zero. Substitute the actual host
+identity selected above; the angle-bracket text is explanatory.
 
 A deferral's follow-up belongs in Linear project `agent delivery harness`, team
 `yaegars`, related to the delivering item and naming the deferral and the lens
@@ -578,7 +593,7 @@ merge:
 
 ```sh
 npm run --silent harness -- emit run.ended --event-id end-1 \
-  --json '{"result":"complete","cost":{"coverage":"unreported","reportedBy":"claude-code"}}'
+  --json "{\"result\":\"complete\",\"cost\":{\"coverage\":\"unreported\",\"reportedBy\":\"$DELIVERY_HOST\"}}"
 ```
 
 At `merge-ready` without that authority, emit the same `run.ended` payload —

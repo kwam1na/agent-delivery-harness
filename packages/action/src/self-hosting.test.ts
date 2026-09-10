@@ -13,7 +13,7 @@ import { withPortableEvidence } from "../fixtures/portable-record.ts";
  * not adapted, not overridden.
  */
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -180,6 +180,34 @@ async function driveRuntime(dir: string, options: { headSha?: string } = {}): Pr
 // ── Both directions, before the workflow exists ──────────────────────────────
 
 describe("simulated gate events under this repository's own configuration", () => {
+  it("runs the actual composite from a foreign Action installation and refuses a stale head", TIMEOUT, async () => {
+    const dir = await initRepo();
+    await writeAt(dir, "package.json", '{"type":"module"}');
+    await writeAt(dir, "harness.config.ts", await readFile(path.resolve("harness.config.ts"), "utf8"));
+    await commit(dir, "consumer configuration");
+    await commitFreshRecord(dir);
+    const installation = await mkdtemp(path.join(os.tmpdir(), "dh-foreign-action-"));
+    cleanups.push(installation);
+    await mkdir(path.join(installation, "packages"));
+    for (const name of ["action", "kernel"]) await cp(path.resolve("packages", name), path.join(installation, "packages", name), { recursive: true });
+    await writeFile(path.join(installation, "package.json"), '{"private":true,"type":"module","workspaces":["packages/*"]}');
+    await mkdir(path.join(installation, "node_modules/@agent-delivery-harness"), { recursive: true });
+    await symlink(path.join(installation, "packages/kernel"), path.join(installation, "node_modules/@agent-delivery-harness/kernel"));
+    const manifest = await readFile(path.join(installation, "packages/action/action.yml"), "utf8");
+    const body = manifest.slice(manifest.indexOf("      run: |") + "      run: |".length).trimStart().split("\n").map((line, index) => index === 0 ? line : line.replace(/^        /, "")).join("\n");
+    const script = path.join(installation, "verify.sh");
+    await writeFile(script, body);
+    const invoke = async () => {
+      const { runtime } = await driveRuntime(dir);
+      return run("bash", [script], { cwd: dir, env: { PATH: process.env["PATH"], ...runtime.env, DELIVERY_HARNESS_ACTION_PATH: path.join(installation, "packages/action"), GITHUB_WORKSPACE: dir, GITHUB_OUTPUT: path.join(installation, "outputs"), GITHUB_STEP_SUMMARY: path.join(installation, "summary") } });
+    };
+    const fresh = await invoke();
+    expect(fresh.stdout).toContain("delivery record verified against the pull request head");
+    await writeAt(dir, "src.txt", "unreviewed change");
+    await commit(dir, "stale the record");
+    await expect(invoke()).rejects.toMatchObject({ code: 1 });
+    expect(await readFile(path.join(installation, "summary"), "utf8")).toContain("deliverable_identity_changed");
+  });
   it("admits a fresh record on the pull request head", TIMEOUT, async () => {
     const dir = await initRepo();
     const { relativePath, digest } = await commitFreshRecord(dir);
