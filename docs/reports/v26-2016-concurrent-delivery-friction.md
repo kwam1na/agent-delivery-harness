@@ -202,3 +202,14 @@ journal correction preserves both the mistaken observation and the authoritative
 measurement rather than rewriting history. This was an operator transcription
 error; it did not affect the fail verdict or authorize admission. Subsequent gate
 observations are populated directly from the retained timing JSON.
+
+## F9: A worker planted one mutation in the shared worktree
+
+During V26-1402 fixture repair, the executor observed `host-entry` temporarily
+registered with no enforcement rules in the shared delivery worktree. The worker
+confirmed the plant, restored it after its narrow red check, and passed the
+restored control. No parent sensor or admission ran during the plant, and no
+contaminated result is claimed. This violated the intended isolated-mutation
+workflow; subsequent plants require a detached worktree. The actual location is
+retained in the worker report rather than described as isolated after the fact.
+The source repair was committed as `19a5878`; no new tracking issue was created.
