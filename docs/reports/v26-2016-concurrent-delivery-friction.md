@@ -187,3 +187,18 @@ produce typed diagnostics with only observed PID liveness. Native POSIX controls
 and targeted mutations pass. This implementation finding is resolved within
 existing V26-1911/1912, owned by V26-2016; no duplicate follow-up was created.
 Windows branches were modeled on macOS and are not claimed as native proof.
+
+## F8: Full-gate coverage found a fixture omitted by focused validation
+
+The first harness source gate ran 3,227 tests: 3,226 passed and the boundary
+sensor's clean-fixture row failed because the new host/entry protected class was
+not represented in that fixture. Focused entry behavior, typecheck and the live
+boundary scan had passed. Repair stays within V26-1402; no new issue is needed.
+This demonstrates the additional coverage supplied by the repository gate.
+
+The executor also transcribed that gate's duration incorrectly into one manual
+observation (402,000 ms). The timed process result measures 404,747 ms. A separate
+journal correction preserves both the mistaken observation and the authoritative
+measurement rather than rewriting history. This was an operator transcription
+error; it did not affect the fail verdict or authorize admission. Subsequent gate
+observations are populated directly from the retained timing JSON.
