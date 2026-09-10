@@ -126,7 +126,7 @@ change that touches policy or packaging.
 | `scripts/check-cli-inventory.ts` | Every module under `packages/cli/src/commands/` is registered, and every registration has a module. Empty registries and missing directories are findings, not passes. |
 | `scripts/check-release.ts` | One version across the root manifest and every workspace package, the kernel's version fingerprint in lockstep, license coherence checked against the real `npm pack` file list, and the publishability split. |
 | `scripts/policy-projection-check.ts` | This repository's own policy projection, its typed leaf adapters, the compiled snapshot, and a digest-pinned pre-cutover oracle, against the routing the repository actually performs. |
-| `docs/docs-examples.test.ts` | Executes the getting-started guide verbatim. Its `sh` blocks are one shell session; its `ts` blocks become files. Flag tokens must match the CLI's usage text in **both** directions. |
+| `docs/docs-examples.test.ts` | Inventories all top-level guides with shell fences. Executes getting-started verbatim; checks other guides' harness commands, flags and runs subcommands against the CLI registry. External tools and placeholder workflows are not executed. |
 | `docs/docs-references.test.ts` | Every relative link in the README and the top-level guides resolves, and every sentence stating one of the counts it registers — in every document it scans — carries the value the tree computes. A computable number it has no pattern for is unguarded; adding a pattern is how you close that. |
 
 ### Sensors that bite on a documentation-only change

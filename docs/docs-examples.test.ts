@@ -39,14 +39,28 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { COMMANDS } from "../packages/cli/src/index.ts";
+import { commandFlags, harnessInvocations, runSubcommands } from "./cli-examples.ts";
 import { ATTESTATION_LABEL } from "@agent-delivery-harness/kernel";
 
 const run = promisify(execFile);
 
 const DOCS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CHECKOUT_ROOT = path.resolve(DOCS_DIR, "..");
-const GUIDE_PATH = path.join(DOCS_DIR, "getting-started.md");
+// Every top-level guide with shell fences must explicitly choose its coverage.
+// Registry coverage checks harness invocations, not external tools or placeholders.
+const GUIDE_COVERAGE = [
+  { path: "docs/getting-started.md", mode: "execute" },
+  { path: "docs/delivery-record.md", mode: "registry" },
+  { path: "docs/delivery-runbook.md", mode: "registry" },
+  { path: "docs/managed-delivery.md", mode: "registry" },
+  { path: "docs/ordinary-resume.md", mode: "registry" },
+  { path: "docs/product-artifacts.md", mode: "registry" },
+  { path: "docs/provider-guide.md", mode: "registry" },
+  { path: "docs/run-progress.md", mode: "registry" },
+] as const;
+const isShell = (block: FencedBlock): boolean => ["sh", "bash", "shell"].includes(block.language);
 
 // ── Fence extraction ─────────────────────────────────────────────────────────
 
@@ -119,15 +133,40 @@ async function initFixtureRepo(env: NodeJS.ProcessEnv): Promise<string> {
 
 // ── The suite ────────────────────────────────────────────────────────────────
 
-let guide: string;
-let blocks: FencedBlock[];
+describe("guide coverage inventory", () => {
+  it("classifies every document with shell fences, including newly added guides", () => {
+    const scanned = ["AGENTS.md", "README.md", ...readdirSync(DOCS_DIR).filter(name => name.endsWith(".md")).map(name => `docs/${name}`)];
+    const runnable = scanned.filter(document => extractFencedBlocks(readFileSync(path.join(CHECKOUT_ROOT, document), "utf8")).some(isShell));
+    expect(runnable.sort()).toEqual(GUIDE_COVERAGE.map(entry => entry.path).sort());
+    expect(GUIDE_COVERAGE.filter(entry => entry.mode === "execute").map(entry => entry.path)).toContain("docs/getting-started.md");
+  });
 
-beforeAll(() => {
-  guide = readFileSync(GUIDE_PATH, "utf8");
-  blocks = extractFencedBlocks(guide);
+  it.each(GUIDE_COVERAGE)("checks $path harness commands, flags and runs subcommands against the registry", entry => {
+    const shell = extractFencedBlocks(readFileSync(path.join(CHECKOUT_ROOT, entry.path), "utf8")).filter(isShell).map(block => block.body).join("\n");
+    const invocations = harnessInvocations(shell.split("\n").filter(line => !/^\s*#/.test(line)).join("\n"));
+    // managed-delivery demonstrates an external qualification script, not the CLI.
+    // Still scan any harness invocations added there; docs-references checks its script path.
+    if (entry.path !== "docs/managed-delivery.md") {
+      expect(invocations.length, `${entry.path} must expose harness invocations`).toBeGreaterThan(0);
+    }
+    for (const invocation of invocations) {
+      const command = COMMANDS.find(command => command.name === invocation.command);
+      expect(command, `${entry.path}: unknown command ${invocation.command}`).toBeDefined();
+      if (command === undefined) continue;
+      const flags = commandFlags([command]);
+      for (const flag of invocation.flags) expect(flags.has(flag), `${entry.path}: ${invocation.command} has no ${flag}`).toBe(true);
+      if (invocation.command === "runs") expect(runSubcommands(COMMANDS).has(invocation.subcommand ?? ""), `${entry.path}: unknown runs subcommand`).toBe(true);
+    }
+  });
 });
 
-describe("the getting-started walkthrough", () => {
+describe.each(GUIDE_COVERAGE.filter(entry => entry.mode === "execute"))("$path walkthrough", entry => {
+  let guide: string;
+  let blocks: FencedBlock[];
+  beforeAll(() => {
+    guide = readFileSync(path.join(CHECKOUT_ROOT, entry.path), "utf8");
+    blocks = extractFencedBlocks(guide);
+  });
   it("carries the full CLI loop and the files the reader is told to create", () => {
     const shell = blocks.filter((block) => block.language === "sh");
     expect(shell.length, "the guide has executable sh blocks").toBeGreaterThan(0);
@@ -194,29 +233,10 @@ describe("the getting-started walkthrough", () => {
     expect(stdout).toContain("verified ");
     expect(stdout).toContain(ATTESTATION_LABEL);
 
-    // FLAG COUPLING, WITHOUT DUPLICATION. The CLI accepts a lone positional
-    // where a flag is optional; of the commands this walkthrough runs, only
-    // `submit-evidence` and `verify` parse their argv at all, and every flag
-    // `verify` takes is optional, so the walkthrough passes it none. Merely
-    // executing the walkthrough therefore survives a renamed flag on either
-    // side and an invented flag on the guide's part.
-    // The authority on what the flags are called is the CLI's own usage error:
-    // run `submit-evidence` with no arguments through the shim the walkthrough
-    // installed and collect the flags its message names. Compare as EXACT token
-    // sets, in BOTH directions — every usage-named flag must appear as a token
-    // on one of the guide's `delivery-harness` lines, and every flag token the
-    // guide passes to `delivery-harness` must be one the CLI named (for every
-    // other command the guide invokes, all of which it invokes without flags,
-    // that means their guide lines carry no flags at all). Substring
-    // containment would let `--manifest` hide inside
-    // `--manifest-file` and `--man` inside `--manifest`; token equality does
-    // not. Both sides are harvested under ONE shared grammar by whitespace
-    // tokenization — an unanchored regex over the usage text would truncate a
-    // `--manifest2` rename back to `--manifest` and silently match the stale
-    // guide. And the guide is tokenized after joining bash continuation lines
-    // the way bash joins them, so a flag on a `\`-continued line is still that
-    // command's flag. All data is derived at runtime from the guide and the
-    // CLI's own output — nothing is duplicated here.
+    // This legacy bidirectional coupling covers only submit-evidence's no-argument
+    // usage flags and this walkthrough's flag set. The inventory rows above
+    // independently validate every documented harness invocation per command;
+    // they do not require guides to demonstrate every optional CLI flag.
     const shim = path.join(repo, ".delivery-harness/bin/delivery-harness");
     const usage = await run(shim, ["submit-evidence"], { cwd: repo, env, timeout: 60_000 }).catch(
       (error: Error & { stdout?: string; stderr?: string; code?: number }) => error,
