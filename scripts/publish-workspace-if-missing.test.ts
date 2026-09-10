@@ -61,6 +61,16 @@ describe("publishing one workspace package idempotently", () => {
     },
   );
 
+  it.each([
+    { label: "no diagnostic output", stdout: "", stderr: "" },
+    { label: "an unrecognized diagnostic", stdout: "", stderr: "registry request failed for an unknown reason\n" },
+  ])("fails closed when npm view fails with $label", ({ stdout, stderr }) => {
+    const run = vi.fn<CommandRunner>(() => commandResult(1, stdout, stderr));
+
+    expect(() => publishWorkspaceIfMissing(PACKAGE, VERSION, run)).toThrow(/could not determine whether .* is published/su);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when npm view exits successfully with invalid JSON", () => {
     const run = vi.fn<CommandRunner>(() => commandResult(0, "service unavailable\n"));
 

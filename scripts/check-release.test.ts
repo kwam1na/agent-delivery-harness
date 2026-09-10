@@ -277,6 +277,19 @@ describe("license-coherence", () => {
     expect(result.findings[0]!.file).toBe("packages/a/LICENSE");
   });
 
+  it("flags one package NOTICE copy that diverges from the root bytes", () => {
+    const dir = makeFixture({
+      rootLicense: EXPECTED_LICENSE_ID,
+      packages: [
+        { name: "@fixture/a", noticeText: `${CANONICAL_NOTICE}\nUnrelated attribution\n` },
+        { name: "@fixture/b" },
+      ],
+    });
+    const result = runFixture(dir);
+    expect(rulesOf(result.findings)).toEqual(["license-coherence"]);
+    expect(result.findings[0]!.file).toBe("packages/a/NOTICE");
+  });
+
   it("flags a manifest left behind at the superseded Apache-2.0 id", () => {
     const dir = makeFixture({
       rootLicense: EXPECTED_LICENSE_ID,

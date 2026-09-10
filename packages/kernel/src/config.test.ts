@@ -1031,9 +1031,9 @@ describe("string-list and code-universe invariants", () => {
     expectOnly(input, "config_duplicate_id");
   });
 
-  it("rejects a provider code colliding with the structural registry", () => {
+  it.each(GATE_STRUCTURAL_FINDING_CODES)("rejects provider code %s colliding with the structural registry", (code) => {
     const input = validInput();
-    input.providers[0]!.findingCodes.push("stale_evidence");
+    input.providers[0]!.findingCodes.push(code);
     expectOnly(input, "config_code_collision");
   });
 

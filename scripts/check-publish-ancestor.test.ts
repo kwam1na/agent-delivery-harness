@@ -1,9 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -14,8 +13,13 @@ import {
 
 const TAG_COMMIT = "1111111111111111111111111111111111111111";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const helperPath = path.join(repoRoot, "scripts/check-publish-ancestor.ts");
-const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+
+function workflowAncestorCommand(): string {
+  const workflow = readFileSync(path.join(repoRoot, ".github/workflows/publish.yml"), "utf8");
+  const line = workflow.split("\n").find((candidate) => candidate.includes("scripts/check-publish-ancestor.ts"));
+  if (line === undefined || !line.includes("run: ")) throw new Error("publish workflow has no ancestor run command");
+  return line.slice(line.indexOf("run: ") + "run: ".length);
+}
 
 function gitResult(status: number, stdout = "", stderr = ""): GitCommandResult {
   return { status, stdout, stderr };
@@ -69,6 +73,19 @@ describe("the publish tag ancestor guard", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("fails closed when merge-base cannot determine ancestry", () => {
+    const run = vi
+      .fn<GitCommandRunner>()
+      .mockReturnValueOnce(gitResult(0))
+      .mockReturnValueOnce(gitResult(0))
+      .mockReturnValueOnce(gitResult(128, "", "fatal: invalid commit object"));
+
+    expect(() => requirePublishCommitOnDefaultBranch(TAG_COMMIT, "main", run)).toThrow(
+      /could not verify tag commit .* against main.*invalid commit object/su,
+    );
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
   it("fails closed when the repository supplies an invalid default-branch ref", () => {
     const run = vi.fn<GitCommandRunner>(() => gitResult(1, "", "invalid ref"));
 
@@ -108,18 +125,26 @@ describe("the publish ancestor command against a real repository", () => {
       git(work, ["commit", "-am", "unmerged release"]);
       const unmergedCommit = git(work, ["rev-parse", "HEAD"]);
 
+      const command = workflowAncestorCommand();
+      const workflowEnv = {
+        ...process.env,
+        GIT_DIR: path.join(work, ".git"),
+        GIT_WORK_TREE: work,
+        DEFAULT_BRANCH: "trunk",
+      };
+
       const accepted = spawnSync(
-        process.execPath,
-        ["--import", tsxLoader, helperPath, mergedCommit, "trunk"],
-        { cwd: work, encoding: "utf8" },
+        "bash",
+        ["-e", "-c", command],
+        { cwd: repoRoot, encoding: "utf8", env: { ...workflowEnv, GITHUB_SHA: mergedCommit } },
       );
       expect({ status: accepted.status, stderr: accepted.stderr }).toEqual({ status: 0, stderr: "" });
       expect(accepted.stdout).toContain(`is reachable from refs/remotes/origin/trunk`);
 
       const refused = spawnSync(
-        process.execPath,
-        ["--import", tsxLoader, helperPath, unmergedCommit, "trunk"],
-        { cwd: work, encoding: "utf8" },
+        "bash",
+        ["-e", "-c", command],
+        { cwd: repoRoot, encoding: "utf8", env: { ...workflowEnv, GITHUB_SHA: unmergedCommit } },
       );
       expect(refused.status).toBe(1);
       expect(refused.stderr).toContain(`tag commit ${unmergedCommit} is not an ancestor of the default branch trunk`);
