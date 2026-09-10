@@ -132,6 +132,21 @@ guard that would mask its removal. When that is impractical, prefer one guard
 with exhaustive per-arm pins; do not add a second full enforcement layer whose
 effect no single-arm mutation can expose.
 
+## Finish version bumps at the registry
+
+A delivery that changes the root or any workspace package version includes
+publishing all five `@agent-delivery-harness/*` packages through
+`.github/workflows/publish.yml` from the matching pushed version tag, unless the
+user explicitly requests a narrower finish line or no publication. A merged
+version-bump pull request is still in progress: observe the publish workflow to
+completion, then independently query npm for each exact package version and
+confirm that every package's intended dist-tag resolves to it. Stable releases
+use `latest`. A prerelease requires an explicitly selected prerelease channel
+and publishing mechanics that pass that channel; the current workflow uses
+npm's default `latest` tag, so do not assume a prerelease tag selects a channel.
+Report any publication or registry-verification blocker with the exact package,
+version, and remaining release state rather than claiming completion.
+
 ## Run the product's own delivery loop
 
 Every candidate carries a tracked delivery record produced by this repository's
