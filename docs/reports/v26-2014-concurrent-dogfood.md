@@ -67,3 +67,11 @@ freshness enforcement; no new defect was inferred.
 V26-1764 hosted jobs could not start because of account billing, as the owning
 orchestrator confirmed from GitHub annotations. V26-2016 keeps the canonical
 external-CI log; this delivery will independently report its own hosted outcome.
+
+Cross-orchestrator inspection found a real shared-helper defect before review:
+flag extraction shortened `--manifest2` to the valid `--manifest`. V26-2014
+owns the complete-token repair and focused probes; V26-2016 owns the broader
+example-guide consumer proof under existing V26-2007. Digits, uppercase letters,
+underscores and dots now survive extraction for registry rejection. All 58
+focused tests pass and five isolated rollback mutations fail. No duplicate
+ticket or competing parser was introduced.
