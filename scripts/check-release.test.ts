@@ -131,12 +131,13 @@ const SHIPPED_PACKAGE_MANIFESTS = [
 ];
 
 describe("this repository is releasable", () => {
+  // Real npm packing includes each package's prepack work on hosted runners.
   it("passes every release check", () => {
     const result = runReleaseChecks({ root: repoRootFromHere() });
     expect(formatReleaseFindings(result.findings)).toBe("");
     expect(result.findings).toEqual([]);
     expect(result.packageManifests).toEqual(SHIPPED_PACKAGE_MANIFESTS);
-  });
+  }, 30_000);
 
   // The sensor's text half reads the ROOT LICENSE, while npm packs each
   // package's OWN copy — so five of the six license files this workspace
