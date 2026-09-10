@@ -325,7 +325,7 @@ const workflow: MemberCheck = (value, at, collector) => {
 };
 
 const preparation: MemberCheck = (value, at, collector) => {
-  checkClosed(value, at, [
+  checkRunClosed(value, at, [
     { name: "checks", check: oneOf(["executed", "reused"]) },
     { name: "reason", check: oneOf(isSpineRecord(value) && value["checks"] === "reused"
       ? ["validation-equivalent"]
