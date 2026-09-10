@@ -75,3 +75,16 @@ example-guide consumer proof under existing V26-2007. Digits, uppercase letters,
 underscores and dots now survive extraction for registry rejection. All 58
 focused tests pass and five isolated rollback mutations fail. No duplicate
 ticket or competing parser was introduced.
+
+The merge lane transferred after V26-2015 PR #134 merged at
+1838e921c697a54aa0b2ae75537abc6d34a91fe7. The V26-2014 rebase preserved the
+path set and delivered lines exactly. The combined source gate passed 147 test
+files and 3,289 tests. Its separately built 0.4 candidate product passed the
+installed-runtime sensor and real Git identity probes twice with identical bytes.
+These results do not stand in for the later consolidated 0.5 product.
+
+A caller shortened the original scope text while resolving the merge-lane wait.
+The runtime refused that observation with `invalid_transition`; retrying the
+refused event with the original exact scope succeeded. This was transcription
+friction and successful enforcement, recorded without a new product issue. The
+original wait binding and scope must be retained together for resolution.
