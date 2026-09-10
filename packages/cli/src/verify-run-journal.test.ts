@@ -849,6 +849,59 @@ describe("verify's run-journal completeness row", () => {
     expect(required.err, "the journal must never stand in for the record's own verdict").not.toContain("run_journal_incomplete");
     expect(required.err).not.toContain("pr.opened");
   });
+
+  it.each(["merge", "squash", "unrelated"] as const)(
+    "keeps admission stale after %s base movement and explains how to reconcile the finish line",
+    { timeout: 120000 },
+    async (movement) => {
+      const harness = await makeHarness();
+      await journaledDelivery(harness);
+      const before = await harness.cli(["verify"]);
+      expect(before.code, before.err).toBe(EXIT_OK);
+      const recordedBase = await git(harness.dir, "rev-parse", "origin/main");
+      expect(before.out).toContain(`recorded base: origin/main at ${recordedBase}`);
+      expect(before.out).toContain(`observed base: origin/main at ${recordedBase}`);
+      const deliveryHead = await git(harness.dir, "rev-parse", "HEAD");
+      await git(harness.dir, "checkout", "--quiet", "origin/main");
+      if (movement === "merge") {
+        await git(harness.dir, "merge", "--no-ff", "--no-gpg-sign", "-m", "merge delivery", deliveryHead);
+      } else if (movement === "squash") {
+        await git(harness.dir, "merge", "--squash", deliveryHead);
+        await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", "squash delivery");
+      } else {
+        await writeFile(path.join(harness.dir, "unrelated.txt"), "another delivery\n");
+        await git(harness.dir, "add", "unrelated.txt");
+        await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", "unrelated delivery");
+      }
+      const observedBase = await git(harness.dir, "rev-parse", "HEAD");
+      await git(harness.dir, "checkout", "--quiet", "main");
+      const after = await harness.cli(["verify", "--require-run-journal"]);
+      expect(after.code).toBe(EXIT_POLICY);
+      expect(after.err).toContain("base_tip_moved");
+      expect(after.err).toContain(recordedBase);
+      expect(after.err).toContain(observedBase);
+      expect(after.err).toContain("own confirmed merge");
+      expect(after.err).toContain("no new delivery loop");
+      expect(after.err).toContain("same run");
+      expect(after.err).not.toContain("run_journal_incomplete");
+    },
+  );
+
+  it("distinguishes recorded and observed base tips when policy permits base movement", { timeout: 120000 }, async () => {
+    const harness = await makeHarness({ deliveryRecordVerification: { baseMovement: "allow" } });
+    await journaledDelivery(harness);
+    const recordedBase = await git(harness.dir, "rev-parse", "origin/main");
+    await git(harness.dir, "checkout", "--quiet", "origin/main");
+    await git(harness.dir, "commit", "--allow-empty", "--quiet", "--no-gpg-sign", "-m", "advance base");
+    const observedBase = await git(harness.dir, "rev-parse", "HEAD");
+    expect(observedBase).not.toBe(recordedBase);
+    await git(harness.dir, "checkout", "--quiet", "main");
+    const result = await harness.cli(["verify"]);
+    expect(result.code, result.err).toBe(EXIT_OK);
+    expect(result.out).toContain(`recorded base: origin/main at ${recordedBase}`);
+    expect(result.out).toContain(`observed base: origin/main at ${observedBase}`);
+    expect(result.out).toContain("base movement relaxed by policy");
+  });
 });
 
 // ── The argument surface ─────────────────────────────────────────────────────

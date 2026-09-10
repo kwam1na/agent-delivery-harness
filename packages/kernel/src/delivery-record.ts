@@ -854,7 +854,20 @@ export function verifyDeliveryRecord(
     if (policy === "allow") {
       relaxedDriftClasses.push(driftClass);
     } else {
-      blockers.push(drBlocker(driftClass, `The base moved (${driftClass}); the record is stale under the "stale" base-movement policy.`));
+      blockers.push(drBlocker(
+        driftClass,
+        `The base moved (${driftClass}); the record is stale under the "stale" base-movement policy.`,
+        `recorded base ${binding.baseRef} at ${binding.baseTipSha} (merge base ${binding.mergeBaseSha}); ` +
+          `observed base ${base.ref} at ${base.tipSha} (merge base ${base.mergeBaseSha})`,
+        {
+          id: "reconcile-base-movement",
+          kind: "manual_action",
+          summary: "Confirm whether the observed base includes this delivery's own confirmed merge. " +
+            "If so, retain the pre-merge verification and merge evidence; no new delivery loop is required. " +
+            "Otherwise, refresh the candidate, preparation, review evidence, gate, and record within the same run while it remains open. " +
+            "If that run already ended, link the retry with predecessorRunId. This stale-record result does not authorize a merge.",
+        },
+      ));
     }
   }
 

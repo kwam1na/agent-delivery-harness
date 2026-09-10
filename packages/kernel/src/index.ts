@@ -805,12 +805,14 @@ export {
   RUN_COMMAND_OUTCOMES,
   RUN_ENDED_RESULTS,
   RUN_EVENT_KINDS,
+  RUN_EVENT_PAYLOAD_GRAMMAR_SPEC,
   RUN_EVENT_SPEC,
   RUN_FREE_TEXT_MEMBERS,
   RUN_GATE_REPORTED_OUTCOMES,
   RUN_PROVIDER_ID,
   RUN_STORE_ID,
   RUN_TICKET,
+  describeRunEventPayload,
   isRunEventKind,
   isRunInstant,
   reduceToProviderId,
@@ -823,6 +825,8 @@ export {
   type RunEventActor,
   type RunEventInput,
   type RunEventKind,
+  type RunEventPayloadGrammar,
+  type RunEventPayloadMemberGrammar,
   type RunEventRepo,
 } from "./checkpoint/run-event.ts";
 export {

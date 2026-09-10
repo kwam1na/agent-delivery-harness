@@ -22,7 +22,17 @@ import { runArtifactCommand } from "../run-artifact-commands.ts";
  */
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { RUN_JOURNAL_STATUSES, evaluateRunJournal } from "@agent-delivery-harness/kernel";
+import {
+  RUN_EVENT_KINDS,
+  RUN_EVENT_KINDS_V1,
+  RUN_EVENT_SPEC,
+  RUN_EVENT_SPEC_V2,
+  RUN_JOURNAL_STATUSES,
+  describeRunEventPayload,
+  evaluateRunJournal,
+  type RunEventPayloadGrammar,
+  type RunEventVersion,
+} from "@agent-delivery-harness/kernel";
 import {
   READOUT_LABELS,
   detailOf,
@@ -44,7 +54,8 @@ import type { CommandResult, ConfigFreeCommandContext, ConfigFreeCommandDescript
 const USAGE = [
   "Usage: delivery-harness runs capabilities --json",
   "       delivery-harness runs list [--json] [--limit <n>] [--status <status>] [--open|--ended]",
-  "       delivery-harness runs show <run-id> [--json]",
+  "       delivery-harness runs show [<run-id>] [--json]",
+  "       delivery-harness runs grammar <kind> [--version 1|2] [--json]",
   "       delivery-harness runs view <run-id> [--json] [--record <repository-relative-path>]",
   "       delivery-harness runs export <run-id> --output <file>",
   "       delivery-harness runs archive <file> [--artifact <id>]",
@@ -81,18 +92,13 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
       context.write(`${JSON.stringify({ spec: "run-capabilities/1", writerVersions: ["run-event/1", "run-event/2"], artifactCapture: true })}\n`);
       return { kind: "ok" };
     }
+    if (subcommand === "grammar") return showGrammar(context, rest);
     if (subcommand === "view") return runViewCommand(context, rest);
     if (subcommand === "export" || subcommand === "archive") return runArchiveCommand(context, subcommand, rest);
     if (subcommand === "capture" || subcommand === "artifact") return runArtifactCommand(context, subcommand, rest);
     if (subcommand === undefined) return { kind: "usage", message: `runs needs a subcommand.\n${USAGE}` };
     if (subcommand !== "list" && subcommand !== "show" && subcommand !== "serve") {
       return { kind: "usage", message: `Unknown runs subcommand ${oneLine(subcommand, 64)}.\n${USAGE}` };
-    }
-    if (subcommand === "show" && rest[0] === undefined) {
-      return { kind: "usage", message: `runs show needs a run id.\n${USAGE}` };
-    }
-    if (subcommand === "show" && (rest.length > 2 || (rest[1] !== undefined && rest[1] !== "--json"))) {
-      return { kind: "usage", message: `runs show accepts only a run id and optional --json.\n${USAGE}` };
     }
     // `serve` resolves its OWN repositories — one per `--repo`, none of them
     // necessarily the invoking worktree — so it never asks the invoking
@@ -105,14 +111,112 @@ export const runsCommand: ConfigFreeCommandDescriptor = {
     // find out the flag was wrong.
     const listArgs = subcommand === "list" ? parseListArgs(rest) : undefined;
     if (listArgs !== undefined && !listArgs.ok) return { kind: "usage", message: listArgs.message };
+    const showArgs = subcommand === "show" ? parseShowArgs(rest) : undefined;
+    if (showArgs !== undefined && !showArgs.ok) return { kind: "usage", message: showArgs.message };
 
     const resolved = await resolveRunSurface(context.rootDir);
     if (!resolved.ok) return unresolvable(resolved.reason);
 
     if (listArgs !== undefined && listArgs.ok) return listRuns(resolved.surface, context, listArgs.args);
-    return showRun(resolved.surface, context, rest[0]!, rest[1] === "--json");
+    if (showArgs === undefined || !showArgs.ok) throw new Error("runs show arguments were not parsed");
+    let runId = showArgs.args.runId;
+    if (runId === undefined) {
+      const current = await resolved.surface.store.current(resolved.surface.worktreeKey);
+      if (!current.ok || current.runId === undefined) {
+        return {
+          kind: "blocked",
+          blockers: [runSurfaceBlocker({
+            code: "run_unresolvable",
+            summary: "There is no current run that can be resolved in this worktree.",
+            details: current.ok
+              ? "no run id was supplied and the worktree has no readable current run"
+              : `no run id was supplied; current-run lookup was refused: ${oneLine(current.rejections[0]?.message ?? "unreadable", 200)}`,
+            remediation: {
+              id: "start-or-name-a-run",
+              summary: "Start a run with `delivery-harness emit run.started`, or pass a run id from `delivery-harness runs list`.",
+            },
+          })],
+        };
+      }
+      runId = current.runId;
+    }
+    return showRun(resolved.surface, context, runId, showArgs.args.json);
   },
 };
+
+interface ShowArgs { readonly runId?: string; readonly json: boolean }
+type ShowParse = { readonly ok: true; readonly args: ShowArgs } | { readonly ok: false; readonly message: string };
+
+function parseShowArgs(args: readonly string[]): ShowParse {
+  let runId: string | undefined;
+  let json = false;
+  for (const token of args) {
+    if (token === "--json") {
+      if (json) return { ok: false, message: `runs show: --json was given twice.\n${USAGE}` };
+      json = true;
+      continue;
+    }
+    if (token.startsWith("-")) return { ok: false, message: `runs show: unknown flag ${oneLine(token, 64)}.\n${USAGE}` };
+    if (runId !== undefined) return { ok: false, message: `runs show accepts at most one run id.\n${USAGE}` };
+    runId = token;
+  }
+  return { ok: true, args: { json, ...(runId === undefined ? {} : { runId }) } };
+}
+
+interface GrammarArgs { readonly kind: string; readonly version: RunEventVersion; readonly json: boolean }
+type GrammarParse = { readonly ok: true; readonly args: GrammarArgs } | { readonly ok: false; readonly message: string };
+
+function parseGrammarArgs(args: readonly string[]): GrammarParse {
+  let kind: string | undefined;
+  let version: RunEventVersion = RUN_EVENT_SPEC_V2;
+  let versionSeen = false;
+  let json = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === "--json") {
+      if (json) return { ok: false, message: `runs grammar: --json was given twice.\n${USAGE}` };
+      json = true;
+      continue;
+    }
+    if (token === "--version") {
+      if (versionSeen) return { ok: false, message: `runs grammar: --version was given twice.\n${USAGE}` };
+      const value = args[index + 1];
+      if (value !== "1" && value !== "2") return { ok: false, message: `runs grammar: --version needs 1 or 2.\n${USAGE}` };
+      version = value === "1" ? RUN_EVENT_SPEC : RUN_EVENT_SPEC_V2;
+      versionSeen = true;
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) return { ok: false, message: `runs grammar: unknown flag ${oneLine(token, 64)}.\n${USAGE}` };
+    if (kind !== undefined) return { ok: false, message: `runs grammar accepts exactly one event kind.\n${USAGE}` };
+    kind = token;
+  }
+  if (kind === undefined) return { ok: false, message: `runs grammar needs an event kind.\n${USAGE}` };
+  return { ok: true, args: { kind, version, json } };
+}
+
+function renderGrammar(grammar: RunEventPayloadGrammar, context: ConfigFreeCommandContext): void {
+  context.write(`${grammar.kind} (${grammar.version})`);
+  for (const member of grammar.members) {
+    context.write(`  ${member.name}  ${member.required ? "required" : "optional"}${member.values === undefined ? "" : `  values: ${member.values.join(", ")}`}`);
+  }
+}
+
+function showGrammar(context: ConfigFreeCommandContext, args: readonly string[]): CommandResult {
+  const parsed = parseGrammarArgs(args);
+  if (!parsed.ok) return { kind: "usage", message: parsed.message };
+  const grammar = describeRunEventPayload(parsed.args.kind, parsed.args.version);
+  if (grammar === undefined) {
+    const kinds = parsed.args.version === RUN_EVENT_SPEC ? RUN_EVENT_KINDS_V1 : RUN_EVENT_KINDS;
+    return {
+      kind: "usage",
+      message: `runs grammar: ${oneLine(parsed.args.kind, 128)} is not a ${parsed.args.version} event kind; accepted kinds: ${kinds.join(", ")}.\n${USAGE}`,
+    };
+  }
+  if (parsed.args.json) context.write(JSON.stringify(grammar, null, 2));
+  else renderGrammar(grammar, context);
+  return { kind: "ok" };
+}
 
 // ── list ─────────────────────────────────────────────────────────────────────
 

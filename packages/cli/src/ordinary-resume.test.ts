@@ -214,11 +214,13 @@ describe("the writer version a save-context observation is written at", () => {
     const f = await fixture({ version });
     expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
     const before = await f.journal();
+    const runId = before[0]!.runId;
     // An empty acceptance-criteria list is refused by the bounded contract,
     // which is a refusal the command cannot see until the store answers.
     expect(await f.run("save-context", "--json", JSON.stringify({ contract: { ...contract, acceptanceCriteria: [] }, stage: "work" }))).toBe(1);
     const reported = f.errors.join("\n");
     expect(reported).toContain("resume_context_invalid");
+    expect(reported).toContain(`run ${runId}: `);
     expect(reported).toContain("malformed_member");
     expect(reported).toContain("/payload/contract/acceptanceCriteria");
     // The store's own words, not just its code and pointer: an operator who

@@ -241,6 +241,8 @@ export const verifyCommand: CommandDescriptor = {
       kind: "ok",
       summary: [
         `verified ${relativePath}${relaxation}; attestation: ${check.attestationLabel}`,
+        `recorded base: ${oneLine(parsed.record.candidateBinding.baseRef, 256)} at ${parsed.record.candidateBinding.baseTipSha}`,
+        `observed base: ${oneLine(base.ref, 256)} at ${base.tipSha}`,
         ...hostedCheckRow,
         ...runJournalRows(runJournal),
       ].join("\n"),

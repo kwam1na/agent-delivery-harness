@@ -62,6 +62,17 @@ move to a replacement run. `emit run.ended` clears the matching pointer. A run o
 run rather than deleting the worktree out from under it. What is emitted is
 observability, not evidence: no admission, gate, or record decision reads it.
 
+Keep the run open until the authorized finish line is confirmed.
+Under `baseMovement: "stale"`, settle base movement before ending the run:
+fetch the base, compare it with the recorded candidate, and refresh stale
+preparation, review, gate and record within the same open run. For an authorized
+merge, confirm the merge before emitting `run.ended`. For a `merge-ready`
+handoff, confirm the required checks and current base first; a later continuation
+is a new attempt. `run.ended` is terminal; no append can reopen it. If more work
+is needed after it, start a second version-2 run with `predecessorRunId` naming
+the ended run, preserving both journals. An observed own merge completes the
+merge finish line; it does not make a stale record valid for new admission.
+
 Before version-2 reporting, query `runs capabilities --json` through the same
 CLI entry point and inspect the selected run with `runs show <id> --json`.
 Unsupported capabilities or a legacy run do not authorize a version upgrade.

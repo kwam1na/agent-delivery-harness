@@ -694,11 +694,11 @@ describe("emit, the boundary wrap, and runs", () => {
     await expect(lstat(path.join((await storeOf(dir)).runsDir, "notes", "run-deadbeefdeadbeef.jsonl"))).rejects.toThrow();
   });
 
-  it("rejects a missing kind, a missing subcommand, and an unknown flag as usage", async () => {
+  it("rejects missing command arguments as usage and an unresolved id-free show as policy", async () => {
     const dir = await initRepo();
     expect((await cli(dir, ["emit"])).code).toBe(EXIT_USAGE);
     expect((await cli(dir, ["runs"])).code).toBe(EXIT_USAGE);
-    expect((await cli(dir, ["runs", "show"])).code).toBe(EXIT_USAGE);
+    expect((await cli(dir, ["runs", "show"])).code).toBe(EXIT_POLICY);
     expect((await emit(dir, ["run.started", "--nope"], {})).code).toBe(EXIT_USAGE);
   });
 
