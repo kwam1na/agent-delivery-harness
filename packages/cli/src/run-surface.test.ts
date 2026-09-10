@@ -2372,6 +2372,20 @@ describe("runs serve", () => {
     expect(cardOf(barelyStartedRunId)).toContain("0 of 0 review rounds closed");
   });
 
+  it("labels the card caption with closed rounds before opened rounds", async () => {
+    const dir = await initRepo();
+    const runId = await startRun(dir);
+    expect(
+      (await emit(dir, ["review.round.opened"], { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] })).code,
+    ).toBe(EXIT_OK);
+
+    const { page, state } = await pageAndState(await serve([dir]));
+    expect(runOf(state, runId).rounds).toEqual({ opened: 1, closed: 0 });
+    // Unequal counts make a numerator/denominator swap observable in the card.
+    expect(page).toContain("0 of 1 review rounds closed");
+    expect(page).not.toContain("1 of 0 review rounds closed");
+  });
+
   it("distinguishes a round that was never opened, exactly as runs show does", async () => {
     const dir = await initRepo();
     const runId = await startRun(dir);
