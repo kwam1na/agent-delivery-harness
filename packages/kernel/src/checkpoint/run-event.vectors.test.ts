@@ -49,6 +49,7 @@ const expectAccepted = (vector: Vector): void => {
 };
 
 const expectRejected = (vector: Vector): void => {
+  expect((vector.codes?.length ?? 0) + (vector.rejections?.length ?? 0), `${vector.name}: claims nothing the validator must report`).toBeGreaterThan(0);
   const verdict = validateRunEvent(vector.value);
   expect(verdict.ok, vector.name).toBe(false);
   if (verdict.ok) return;
@@ -120,12 +121,6 @@ describe("the run-event/1 golden vectors", () => {
     for (const entry of doc.kinds) {
       expect(entry.accept.length, `${entry.kind} has no accept vector`).toBeGreaterThan(0);
       expect(entry.reject.length, `${entry.kind} has no reject vector`).toBeGreaterThan(0);
-      for (const vector of entry.reject) {
-        expect(
-          (vector.codes ?? []).length + (vector.rejections ?? []).length,
-          `${entry.kind}: reject vector "${vector.name}" claims nothing the validator must report`,
-        ).toBeGreaterThan(0);
-      }
     }
   });
 

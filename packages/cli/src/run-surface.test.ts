@@ -661,11 +661,11 @@ describe("emit, the boundary wrap, and runs", () => {
    * and rooting the store at the relative join a blank value produces would
    * file the journal under the process's working directory.
    */
-  it("treats a blank store override as unset and resolves the repository's own store", async () => {
+  it.each(["", " ", "\t\n"])("treats blank store override %j as unset and resolves the repository's own store", async (override) => {
     const dir = await initRepo();
     const own = await ownStoreOf(dir);
 
-    const runId = await withStoreOverride("", async () => {
+    const runId = await withStoreOverride(override, async () => {
       const resolved = await resolveRunSurface(dir);
       if (!resolved.ok) throw new Error(`a blank ${RUN_STORE_OVERRIDE} was refused: ${resolved.reason}`);
       expect(resolved.surface.runsDir).toBe(own.runsDir);

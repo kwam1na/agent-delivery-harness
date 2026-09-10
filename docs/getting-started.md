@@ -570,3 +570,13 @@ establish that the declared delivery finish line has been reached.
   it proves, and the `baseMovement` policy.
 - [Conformance](conformance.md) — running and regenerating the 89-vector kit.
 - [The spec](spec/delivery-evidence-1.md) — the normative contract itself.
+
+
+### Adopter validation maps
+
+An adopter may maintain a validation map listing each sensor's `sources` for
+navigation. These lists are descriptive; the harness does not require them to
+cover a sensor's transitive local imports. The harness runs configured checks and
+evaluates their bound evidence; a navigation map does not replace those checks.
+Adopters that need a complete source inventory can enforce that requirement
+with their own sensor.

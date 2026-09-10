@@ -15,10 +15,10 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { PERSONA_MANIFEST_ENTRY } from "@agent-delivery-harness/kernel";
@@ -281,6 +281,42 @@ describe("re-recording the compiled policy snapshot", () => {
     await expect(recompilePolicySnapshot(dir)).rejects.toThrow(RecompileError);
   });
 
+  it("refuses a charter manifest entry that escapes the installed generation", async () => {
+    const dir = await fixture();
+    const manifestPath = path.join(dir, INSTALLED_ARCHIVE_DIR, PERSONA_MANIFEST_ENTRY);
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      personas: { path: string }[];
+    };
+    const escapedPath = "../../outside-charter.md";
+    const escapedBytes = "# Outside charter\n";
+    const originalPath = manifest.personas[0]!.path;
+    manifest.personas[0]!.path = escapedPath;
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await writeFile(path.join(dir, "outside-charter.md"), escapedBytes, "utf8");
+    const releaseManifestPath = path.join(dir, INSTALLED_ARCHIVE_DIR, RELEASE_MANIFEST_ENTRY);
+    const releaseManifest = JSON.parse(await readFile(releaseManifestPath, "utf8")) as {
+      files: { path: string; sha256: string }[];
+    };
+    const charter = releaseManifest.files.find((entry) => entry.path === originalPath);
+    expect(charter).toBeDefined();
+    charter!.path = escapedPath;
+    charter!.sha256 = createHash("sha256").update(escapedBytes).digest("hex");
+    await writeFile(releaseManifestPath, `${JSON.stringify(releaseManifest, null, 2)}\n`, "utf8");
+
+    await expect(recompilePolicySnapshot(dir)).rejects.toThrow(RecompileError);
+  });
+
+  it.each(["missing", "unparseable"])("reports an %s comparison report as stale", async (state) => {
+    const dir = await fixture();
+    const reportPath = path.join(dir, POLICY_PROJECTION_DIR, REPORT_FILE);
+    if (state === "missing") await rm(reportPath);
+    else await writeFile(reportPath, "{not json\n", "utf8");
+
+    const result = await recompilePolicySnapshot(dir);
+    expect(result.unchanged).toBe(true);
+    expect(result.staleReport).toBe(true);
+  });
+
   it("refuses when the snapshot it re-records is not there", async () => {
     const dir = await fixture();
     await rm(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE));
@@ -330,6 +366,49 @@ describe("re-recording the compiled policy snapshot", () => {
     const drifted = await run(dir, "--check");
     expect(drifted.code, "a snapshot that is not the current policy's compile is a failure").not.toBe(0);
     expect(await readFile(path.join(dir, POLICY_PROJECTION_DIR, SNAPSHOT_FILE), "utf8")).toBe(before);
+  });
+
+  it("reports a stale comparison report on the unchanged --check path", { timeout: 120_000 }, async () => {
+    const dir = await fixture();
+    const report = await readPolicyJson<{ inputs: Record<string, string> }>(dir, REPORT_FILE);
+    report.inputs[SNAPSHOT_FILE] = "0".repeat(64);
+    await writePolicyJson(dir, REPORT_FILE, report);
+
+    const result = await run(dir, "--check");
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain("is the compile of the current policy");
+    expect(result.stdout).toContain(REPORT_FILE);
+  });
+
+  it("runs through a symlinked main path with preserve-symlinks-main", { timeout: 120_000 }, async () => {
+    const dir = await fixture();
+    const linkedDir = await mkdtemp(path.join(REPO_ROOT, ".recompile-policy-main-"));
+    cleanups.push(linkedDir);
+    const linkedScript = path.join(linkedDir, "recompile-policy-snapshot.ts");
+    await symlink(SCRIPT_PATH, linkedScript);
+    const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        "--preserve-symlinks-main",
+        "--import",
+        pathToFileURL(path.join(REPO_ROOT, "node_modules/tsx/dist/loader.mjs")).href,
+        linkedScript,
+        "--check",
+      ], {
+        cwd: dir,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    });
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain("is the compile of the current policy");
   });
 
   it("refuses as a command, without writing, when an input is unusable", { timeout: 120_000 }, async () => {

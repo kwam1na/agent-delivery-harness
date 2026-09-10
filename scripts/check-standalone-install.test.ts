@@ -52,6 +52,7 @@ import {
   readWorkspacePackages,
   relocatedGitEnvironment,
   relocationControlFinding,
+  runCliSmokeCases,
   runStandaloneInstallCheck,
 } from "./check-standalone-install.ts";
 
@@ -402,6 +403,118 @@ describe("childEnvironment", () => {
   });
 });
 
+describe("the CLI case loop through its spawn boundary", () => {
+  const allocated = "run-0123456789abcdef";
+  const cases: readonly CliSmokeCase[] = [
+    { args: ["emit", "run.started"], exitCode: 0, expected: ["started run"] },
+    {
+      args: ["runs", "list"],
+      exitCode: 0,
+      expected: [ALLOCATED_RUN_ID_EXPECTATION],
+    },
+    {
+      args: ["emit", "run.started"],
+      proves: "relocated",
+      exitCode: 1,
+      expected: ["run_already_current", ALLOCATED_RUN_ID_EXPECTATION],
+      underRelocatedGit: true,
+    },
+  ];
+
+  it("filters every spawned case and hands the relocated case its GIT_ namespace", () => {
+    const spawned: NodeJS.ProcessEnv[] = [];
+    const result = runCliSmokeCases({
+      entry: "/installed/cli.ts",
+      loader: "/installed/loader.mjs",
+      repoDir: "/scratch/repo",
+      decoyDir: "/scratch/decoy",
+      sourceEnv: {
+        PATH: "/usr/bin",
+        GIT_INDEX_FILE: "/caller/index",
+        [RUN_STORE_OVERRIDE]: "/caller/store",
+      },
+      smokeCases: cases,
+      spawnCase: (_entry, _loader, smoke, env) => {
+        spawned.push(env);
+        const output = smoke.underRelocatedGit === true
+          ? `run_already_current ${allocated}`
+          : smoke.args[0] === "runs"
+            ? allocated
+            : `started run ${allocated}`;
+        return { status: smoke.exitCode, signal: null, stdout: output, stderr: "" };
+      },
+      resolveGitCommonDir: (_repoDir, env) => env["GIT_COMMON_DIR"],
+      decoyHoldsRunStore: () => false,
+    });
+
+    expect(result.findings).toEqual([]);
+    expect(result.casesCompleted).toBe(cases.length);
+    expect(spawned[0]).toEqual({ PATH: "/usr/bin" });
+    expect(spawned[1]).toEqual({ PATH: "/usr/bin" });
+    expect(spawned[2]).toEqual({
+      PATH: "/usr/bin",
+      GIT_DIR: "/scratch/decoy/.git",
+      GIT_COMMON_DIR: "/scratch/decoy/.git",
+    });
+  });
+
+  it("reports a relocation control that did not resolve the decoy", () => {
+    const result = runCliSmokeCases({
+      entry: "/installed/cli.ts",
+      loader: "/installed/loader.mjs",
+      repoDir: "/scratch/repo",
+      decoyDir: "/scratch/decoy",
+      sourceEnv: {},
+      smokeCases: [cases[2]!],
+      spawnCase: () => ({ status: 1, signal: null, stdout: `run_already_current ${allocated}`, stderr: "" }),
+      resolveGitCommonDir: () => "/scratch/repo/.git",
+      decoyHoldsRunStore: () => false,
+    });
+
+    expect(result.findings.map((finding) => finding.subject)).toContain("relocated-git");
+  });
+
+  it("reports a decoy store written by the relocated case", () => {
+    const result = runCliSmokeCases({
+      entry: "/installed/cli.ts",
+      loader: "/installed/loader.mjs",
+      repoDir: "/scratch/repo",
+      decoyDir: "/scratch/decoy",
+      sourceEnv: {},
+      smokeCases: [cases[2]!],
+      spawnCase: () => ({ status: 1, signal: null, stdout: `run_already_current ${allocated}`, stderr: "" }),
+      resolveGitCommonDir: (_repoDir, env) => env["GIT_COMMON_DIR"],
+      decoyHoldsRunStore: () => true,
+    });
+
+    expect(result.findings.map((finding) => finding.subject)).toContain(CLI_PACKAGE_NAME);
+    expect(result.findings.some((finding) => finding.message.includes("decoy repository"))).toBe(true);
+  });
+
+  it("asserts the allocated id through the loop rather than only through the needle type", () => {
+    const result = runCliSmokeCases({
+      entry: "/installed/cli.ts",
+      loader: "/installed/loader.mjs",
+      repoDir: "/scratch/repo",
+      decoyDir: "/scratch/decoy",
+      sourceEnv: {},
+      smokeCases: cases.slice(0, 2),
+      spawnCase: (_entry, _loader, smoke) => ({
+        status: 0,
+        signal: null,
+        stdout: smoke.args[0] === "runs" ? "one run exists" : `started run ${allocated}`,
+        stderr: "",
+      }),
+      resolveGitCommonDir: () => undefined,
+      decoyHoldsRunStore: () => false,
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.rule).toBe("cli-command-failed");
+    expect(result.findings[0]?.message).toContain(allocated);
+  });
+});
+
 describe("readScratchRunStore", () => {
   function makeStore(journals: readonly string[], notes: Readonly<Record<string, string>>): string {
     const dir = mkdtempSync(path.join(os.tmpdir(), "dh-standalone-store-"));
@@ -536,6 +649,8 @@ describe("the pack-failure return, through the runner", () => {
       expect(result.findings.map((finding) => [finding.rule, finding.subject])).toEqual([
         ["pack-failed", `${PACKAGE_SCOPE}/kernel`],
       ]);
+      expect(result.packagesProbed).toEqual([]);
+      expect(result.siblingEdgesVerified).toBe(0);
       // The count the summary line reports. Nothing was packed, so nothing was
       // installed and no case could have run.
       expect(result.cliCasesCompleted).toBe(0);

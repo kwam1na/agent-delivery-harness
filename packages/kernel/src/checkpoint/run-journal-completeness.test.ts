@@ -385,7 +385,7 @@ describe("the complete and executor-only readings", () => {
  * the one they belong to.
  *
  * The rule the contract states is that the binding is OPTIONAL — the first
- * `ticket.read` is the run's primary ticket and an entry that omits `ticket`
+ * ticket named in `seq` order is the primary ticket and an entry that omits `ticket`
  * binds to it — so completeness must read the bound and the unbound journal
  * exactly alike. These rows are what stop the member becoming a requirement by
  * accident, in either direction.
@@ -965,5 +965,31 @@ describe("a journal that re-ran a command", () => {
       ended,
     ]);
     expect(evaluateRunJournal(prFirst, TREE, MANDATED).violations).toEqual(["pr-before-gate"]);
+  });
+});
+
+
+describe("each prerequisite binds the first opened round", () => {
+  it.each([ticketRead, posture, lenses()])("rejects an individually late $kind", (late) => {
+    const early = [ticketRead, posture, lenses()].filter(step => step.kind !== late.kind);
+    const result = evaluateRunJournal(journal([
+      started, ...early, opened(1), late, closed(1),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]), TREE, MANDATED);
+    expect(result.violations).toEqual(["prerequisites-after-first-round"]);
+    expect(result.status).toBe("incomplete");
+  });
+
+  it("rejects a prerequisite between two otherwise complete rounds", () => {
+    const result = evaluateRunJournal(journal([
+      started, ticketRead, posture, opened(1), lenses(), closed(1),
+      opened(2), closed(2), completed("gate"), completed("record"), prOpened, ended,
+    ]), TREE, MANDATED);
+    expect(result.violations).toEqual(["prerequisites-after-first-round"]);
+    expect(result.status).toBe("incomplete");
+  });
+
+  it("finds a primary ticket after an event with no ticket", () => {
+    expect(runPrimaryTicket(journal([posture, ticketRead]))).toBe("V26-1548");
   });
 });

@@ -150,9 +150,9 @@ function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`qualification failed: ${message}`);
 }
 
-/** Immutable byte checks run before Python discovery, installation, or provider startup. */
-export async function verifyQualificationInputs(input: QualificationInput): Promise<QualificationPreflight> {
-  const expected = [
+/** The immutable input set verified before Python discovery, installation, or provider startup. */
+export function qualificationInputs(input: QualificationInput) {
+  return [
     [input.archive, ARCHIVE_SHA256],
     [input.metadata, METADATA_SHA256],
     [path.join(input.root, "packages/cli/src/provider-rails.ts"), PROVIDER_RAIL_SHA256],
@@ -165,7 +165,10 @@ export async function verifyQualificationInputs(input: QualificationInput): Prom
     [path.join(input.root, "qualifications/fixtures/agent-skills-linear-qualification.json"), LINEAR_QUALIFICATION_SHA256],
     [path.join(input.root, "qualifications/fixtures/agent-skills-linear-attestation.json"), LINEAR_ATTESTATION_SHA256],
   ] as const;
-  for (const [file, digest] of expected) {
+}
+
+export async function verifyQualificationInputs(input: QualificationInput): Promise<QualificationPreflight> {
+  for (const [file, digest] of qualificationInputs(input)) {
     invariant(await sha256File(file) === digest, `immutable input ${path.basename(file)} differs`);
   }
   return { archiveSha256: ARCHIVE_SHA256, metadataSha256: METADATA_SHA256 };

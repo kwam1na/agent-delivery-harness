@@ -42,6 +42,7 @@ import {
 import { COMMANDS } from "@agent-delivery-harness/cli";
 
 import harnessConfig from "../harness.config.ts";
+import { checkInstalledGenerationIntegrity } from "./installed-generation-integrity.ts";
 
 export const POLICY_PROJECTION_DIR = ".agents/policy";
 
@@ -125,7 +126,10 @@ export type PolicyProjectionFinding = {
     | "aggregate_registered_as_leaf"
     | "activation_drift"
     | "generated_ownership_drift"
-    | "adjudication_incomplete";
+    | "adjudication_incomplete"
+    | "installed_generation_receipt_unreadable"
+    | "installed_generation_pointer_drift"
+    | "installed_generation_file_drift";
   message: string;
 };
 
@@ -240,6 +244,13 @@ export async function runPolicyProjectionCheck(
   };
   const policyDir = options.policyDir ?? path.join(rootDir, POLICY_PROJECTION_DIR);
   const archiveDir = options.archiveDir ?? path.join(rootDir, INSTALLED_ARCHIVE_DIR);
+
+  // Scratch policy fixtures provide their own partial charter archive. The
+  // repository invocation checks the whole lifecycle receipt selected by
+  // `.agent-skills/current` before accepting the release-authenticated bytes.
+  if (options.archiveDir === undefined) {
+    findings.push(...await checkInstalledGenerationIntegrity(rootDir));
+  }
 
   const bytes = new Map<string, Buffer>();
   const parsed = new Map<string, unknown>();

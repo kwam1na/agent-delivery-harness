@@ -602,6 +602,28 @@ describe("taking back a journal that never became a run", () => {
     expect(existsSync(path.join(runsDir, "notes", `${runId}.jsonl`))).toBe(false);
   });
 
+  it("preserves refusal notes when the journal cannot be unlinked", async () => {
+    const { store, runsDir } = freshStore();
+    const runId = await allocated(store);
+    expect((await store.append(runId, event(runId, "run.started", { host: "x" }))).ok).toBe(false);
+    const notes = await store.readNotes(runId);
+    expect(notes).toHaveLength(1);
+    // The notes subdirectory stays writable, so proceeding after a failed
+    // journal unlink would actually delete the note and is observable here.
+    chmodSync(runsDir, 0o500);
+    try {
+      const result = await store.discard(runId);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("An unremoved journal was reported discarded");
+      expect(result.rejections[0]?.code).toBe("access_refused");
+      expect(result.rejections[0]?.message).toContain("could not be removed");
+      expect(existsSync(path.join(runsDir, `${runId}.jsonl`))).toBe(true);
+      expect(await store.readNotes(runId)).toEqual(notes);
+    } finally {
+      chmodSync(runsDir, 0o700);
+    }
+  });
+
   it("refuses a journal that carries history beyond its start", async () => {
     const { store, runsDir } = freshStore();
     const runId = await allocated(store);

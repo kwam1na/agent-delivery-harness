@@ -260,8 +260,16 @@ export async function recompilePolicySnapshot(rootDir: string, options: { readon
   const reportAbsent = await lstat(path.join(policyDir, REPORT_FILE)).then(() => false, (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return true; throw error; });
   // A first compile has no human comparison adjudication. Product recovery
   // preserves that absence; existing reports are still parsed and checked.
-  if (reportAbsent && options.product) return { text, unchanged: text === recordedText, staleReport: false };
-  const report = await readJson(path.join(policyDir, REPORT_FILE), `${POLICY_PROJECTION_DIR}/${REPORT_FILE}`);
+  if (reportAbsent) {
+    return { text, unchanged: text === recordedText, staleReport: options.bootstrap !== true };
+  }
+  let report: unknown;
+  try {
+    report = await readJson(path.join(policyDir, REPORT_FILE), `${POLICY_PROJECTION_DIR}/${REPORT_FILE}`);
+  } catch (error) {
+    if (!(error instanceof RecompileError)) throw error;
+    return { text, unchanged: text === recordedText, staleReport: true };
+  }
   const inputs = isRecord(report) ? report["inputs"] : undefined;
   if (
     !isRecord(inputs) ||
@@ -295,6 +303,7 @@ async function main(argv: readonly string[], rootDir: string): Promise<void> {
       process.stdout.write(
         `recompile-policy-snapshot: ${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE} is the compile of the current policy\n`,
       );
+      reportStaleness(result);
       return;
     }
     process.stderr.write(
@@ -311,10 +320,15 @@ async function main(argv: readonly string[], rootDir: string): Promise<void> {
     process.stdout.write(`recompile-policy-snapshot: rewrote ${POLICY_PROJECTION_DIR}/${SNAPSHOT_FILE}\n`);
   }
   if (result.staleReport) {
-    process.stdout.write(
-      `recompile-policy-snapshot: ${POLICY_PROJECTION_DIR}/${REPORT_FILE} no longer describes it; re-record its inputs and adjudications, then run npm run sensor:policy\n`,
-    );
+    reportStaleness(result);
   }
+}
+
+function reportStaleness(result: RecompileResult): void {
+  if (!result.staleReport) return;
+  process.stdout.write(
+    `recompile-policy-snapshot: ${POLICY_PROJECTION_DIR}/${REPORT_FILE} no longer describes it; re-record its inputs and adjudications, then run npm run sensor:policy\n`,
+  );
 }
 
 function canonicalEntryPath(entryPath: string): string {
@@ -326,7 +340,8 @@ function canonicalEntryPath(entryPath: string): string {
 }
 
 const invokedDirectly =
-  process.argv[1] !== undefined && canonicalEntryPath(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] !== undefined &&
+  canonicalEntryPath(process.argv[1]) === canonicalEntryPath(fileURLToPath(import.meta.url));
 
 if (invokedDirectly) {
   // The root is the working directory, not this file's parent, so the whole
