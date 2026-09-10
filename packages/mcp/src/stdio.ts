@@ -394,15 +394,25 @@ export async function handleRpcMessage(message: unknown, host: ToolHostRuntime, 
  * than closing the connection — is testable without streams.
  */
 export async function handleRpcLine(line: string, host: ToolHostRuntime, session: McpSession): Promise<JsonRpcResponse | null> {
+  const decoded = decodeRpcLine(line);
+  if (decoded.kind === "blank") return null;
+  if (decoded.kind === "parse-error") return decoded.response;
+  return handleRpcMessage(decoded.message, host, session);
+}
+
+type DecodedRpcLine =
+  | { readonly kind: "blank" }
+  | { readonly kind: "parse-error"; readonly response: JsonRpcResponse }
+  | { readonly kind: "message"; readonly message: unknown };
+
+function decodeRpcLine(line: string): DecodedRpcLine {
   const trimmed = line.trim();
-  if (trimmed === "") return null;
-  let decoded: unknown;
+  if (trimmed === "") return { kind: "blank" };
   try {
-    decoded = JSON.parse(trimmed);
+    return { kind: "message", message: JSON.parse(trimmed) as unknown };
   } catch {
-    return fail(null, PARSE_ERROR, "The message could not be parsed as JSON.");
+    return { kind: "parse-error", response: fail(null, PARSE_ERROR, "The message could not be parsed as JSON.") };
   }
-  return handleRpcMessage(decoded, host, session);
 }
 
 /**
@@ -420,17 +430,85 @@ export function encodeResponse(response: JsonRpcResponse): string {
 // ── The loop ─────────────────────────────────────────────────────────────────
 
 /**
- * Serves until the input ends. Messages are answered in arrival order: the
- * transport is one connection with one client, and interleaving responses buys
- * nothing but a reordering bug.
+ * Serves until the input ends. Ordinary messages are answered in arrival order,
+ * while a well-formed `notifications/cancelled` is observed immediately. The
+ * split matters: awaiting the active request before reading its cancellation
+ * makes suppression impossible by construction.
+ *
+ * Cancellation is response suppression, not a new tool API. Active work is
+ * allowed to settle but its response is discarded; queued work is skipped
+ * before it reaches the host. Older revisions say a receiver SHOULD stop
+ * processing and suppress the response, while 2026-07-28 strengthens the stdio
+ * rule to no further messages for that request. The same suppression satisfies
+ * all four revisions this server advertises.
+ *
+ * Unknown and completed ids are absent from `pending`, so they are ignored.
+ * Malformed cancellation notifications never reach this branch and are ignored
+ * as ordinary notifications. `initialize` is deliberately non-cancellable, as
+ * the protocol requires: a cancellation naming it is ignored whether queued or
+ * active. These choices are explicit because accidental notification dropping
+ * was the defect this loop previously carried.
  */
 export async function serveStdio(input: NodeJS.ReadableStream, write: (line: string) => void, host: ToolHostRuntime): Promise<void> {
   const session = createSession();
   const lines = createInterface({ input, crlfDelay: Infinity });
+  type PendingRequest = { readonly id: JsonRpcId; readonly method: string; state: "queued" | "active"; cancelled: boolean };
+  const pending = new Map<JsonRpcId, PendingRequest>();
+  let work = Promise.resolve();
+
   for await (const line of lines) {
-    const response = await handleRpcLine(line, host, session);
-    if (response !== null) write(encodeResponse(response));
+    const decoded = decodeRpcLine(line);
+    if (decoded.kind === "message" && isRecord(decoded.message)) {
+      const message = decoded.message;
+      const params = message["params"];
+      if (
+        message["jsonrpc"] === JSON_RPC_VERSION &&
+        isNotification(message) &&
+        message["method"] === "notifications/cancelled" &&
+        isRecord(params) &&
+        isUsableId(params["requestId"])
+      ) {
+        const target = pending.get(params["requestId"]);
+        if (target !== undefined && target.method !== "initialize") target.cancelled = true;
+        continue;
+      }
+    }
+
+    let tracked: PendingRequest | undefined;
+    if (
+      decoded.kind === "message" &&
+      isRecord(decoded.message) &&
+      decoded.message["jsonrpc"] === JSON_RPC_VERSION &&
+      !isNotification(decoded.message) &&
+      isUsableId(decoded.message["id"]) &&
+      typeof decoded.message["method"] === "string"
+    ) {
+      tracked = { id: decoded.message["id"], method: decoded.message["method"], state: "queued", cancelled: false };
+      pending.set(tracked.id, tracked);
+    }
+
+    work = work.then(async () => {
+      if (tracked?.cancelled === true) {
+        if (pending.get(tracked.id) === tracked) pending.delete(tracked.id);
+        return;
+      }
+      if (tracked !== undefined) tracked.state = "active";
+
+      const response =
+        decoded.kind === "blank"
+          ? null
+          : decoded.kind === "parse-error"
+            ? decoded.response
+            : await handleRpcMessage(decoded.message, host, session);
+
+      if (tracked !== undefined) {
+        if (pending.get(tracked.id) === tracked) pending.delete(tracked.id);
+        if (tracked.cancelled) return;
+      }
+      if (response !== null) write(encodeResponse(response));
+    });
   }
+  await work;
 }
 
 /** Built inside a function, never at import time: the sensor's env rule. */
