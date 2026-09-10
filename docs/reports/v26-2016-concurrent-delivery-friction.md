@@ -19,6 +19,9 @@ Each epic may retain its own observations, but links to that same ticket.
 | Node 23.5 triggers Vitest engine warning during install | V26-2014 | Peer host-environment log; installation succeeded here too |
 | Scenario inventory changes require fresh checked product projection | V26-2015 / V26-2014 coordination | Existing V26-1536; peer observed, no duplicate issue |
 | Shared release/install and final merge sequence | V26-2016 | F3/F4 here; no defect established |
+| Shared lexer predicate-arm coverage | V26-2016 implementation, V26-2014 originating review | Existing V26-2007; AT-2014-R2-001 |
+| Missing milestone observations | V26-2015 | Peer log; all three orchestrators corroborated |
+| Immutable activity/wait binding caller errors | Each observing orchestrator | F8 class here and peer logs; no duplicate issue |
 
 Peer confirmation and any later canonical issue links are recorded here before
 new tracking is created. No new friction issue has been created by V26-2016.
@@ -213,3 +216,22 @@ contaminated result is claimed. This violated the intended isolated-mutation
 workflow; subsequent plants require a detached worktree. The actual location is
 retained in the worker report rather than described as isolated after the fact.
 The source repair was committed as `19a5878`; no new tracking issue was created.
+
+## Follow-through after the first source review
+
+- V26-2015 PR134 merged at1838e921c697a54aa0b2ae75537abc6d34a91fe7 on2026-09-10T09:39:49Z. All six hosted checks later succeeded; no billing failure occurred on that candidate. Our preparation originally boundccec7f6 while its source gate ran; the refreshed pre-review context binds the new base tip while retaining the branch's ccec7f6 merge-base diff. Final integration/admission is still outstanding.
+- V26-2014 acknowledged caller-event friction under our F8 class: its first wait.resolved shortened scope and was correctly refused invalid_transition. Retrying the same event ID with the original exact scope succeeded. Peer retained /Users/kwamina/v26-2014-evidence/wait-resolution-friction.md. No duplicate ticket or admission defect.
+- V26-2015 corroborated operator-event spelling mistakes: gate/result vs command/outcome, action-intent command vs action.intent event, and capture sha256 vs digest/missingeventId. Refusals preceded dependent writes; source-schema lookup corrected them. Existing merged peer log/external closeout retains particulars. Canonical operator-error class remains F8 here, with no new issue.
+- V26-2014's reviewers found additional old docs-reference consumer truncation paths and a removed negative assertion. V26-2014 owns those repairs. V26-2016's direct-helper inventory remains independent and its consumer mutants pass. No competing scanner or duplicate ticket.
+- Final qualification inventory expanded from the initially planned core/Linear pair to bootstrap/core/Linear runtime-bearing products, plus separate workflow-only qualification records. This was discovered by running the full combined producer suite: five freshness failures identified the actual required set. Build all three profile-bound runtimes from one final source. Do not describe a core/Linear-only collection as the full release.
+
+- Shared scanner ownership was settled as `helper-freeze-2016-final1`: V26-2014 accepted the helper and tests at V26-2016 commit `cae1379`, retaining its `flagsIn` export. A provisional helper message crossed the final repair message; the named final acknowledgment arrived before the peer gate, so no completed gate or review was invalidated. Integrate the peer final helper rather than replaying a competing implementation.
+- V26-2014 owns the existing obsolete-headline review finding, including its round-2 wrapped-whitespace miss. It is a carried finding under the same ticket, not a new friction issue. V26-2016 waits for its merge before source integration and runtime freeze.
+- V26-2014 also owns the observed reused-activity `supersedesAttemptId` caller error. Its queued and running updates were refused until the exact immutable binding was retained on every state. V26-2016 acknowledged and will preserve that field in round-2 activity updates. This corroborates F8; no duplicate ticket.
+
+- V26-2014 R2 reported `AT-2014-R2-001` as a new P2 evidence gap in the shared helper: the single-quote backslash exception and column-zero comment arm each survived its existing 70-test control. Peer observations are retained in `/Users/kwamina/v26-2014-evidence/review/round-2/at-probes/helper-boundary-results.json`. The owners agreed to complete both focused witnesses under existing V26-2007 in this run. V26-2016 supplies one final isolated test patch and one tracker progress comment; V26-2014 verifies its own originating finding. No new ticket or completion waiver.
+
+- Athena readiness refresh found its artifact-wait attempt began directly in `waiting`; there are no refused appends, but the historical attempt remains lifecycle-incomplete. Preserve that fact. Resolve the original wait with its original tree/scope, then use a replacement attempt with queued/running/completed and immutable `supersedesAttemptId` for the actual install. This is a caller-observation gap under F8, not a product defect. Shared with V26-2014; no duplicate issue.
+
+- Final two-witness patch `66e0528` was accepted by V26-2014, whose combined docs/helper scope passed 72 tests before its R3 full gate. One V26-2007 progress comment was posted (42b1101b-3148-4c0a-b6cb-b9f40e435e7f). Source helper bytes did not change; each exact predicate-arm mutant failed its new witness, clean/no-op/restored controls passed 32 tests.
+- Read-only in-app UI dogfood retained `run-ui-before-milestones.txt`, `run-ui-after-milestones.txt`, and `run-ui-report.txt`. The viewer correctly shows an agent wait with no human action, stale freshness without inventing failure, both original findings still unresolved, and Changes requested / Findings 2 with an explicit not-approval warning. Missing milestone cards were another instance of V26-2015's canonical caller omission; five factual finish-step events now display. Aggregate R1 acquisition/reduction reports inherited the Testing review label because the caller bound them to that activity; future aggregate captures will use a dedicated reducer activity. This is caller attribution, not changed report bytes or admission. No duplicate issue. Temporary browser tab closed; only our server PID 87420 was terminated, and port 54847 connection refusal verified.
