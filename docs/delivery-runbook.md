@@ -682,7 +682,7 @@ missing tracker is recorded and the loop proceeds.
   On a build predating that fix, `prepare` refuses and `git update-ref -d
   REBASE_HEAD` clears it.
 - **Shell-bearing guides have explicit coverage** in `docs/docs-examples.test.ts`.
-  The getting-started walkthrough executes verbatim; other top-level guides are
+  The `docs/getting-started.md` walkthrough executes verbatim; other top-level guides are
   checked against the CLI's command, flag and runs-subcommand registry. External
   tools and placeholder workflows are not executed. A newly added shell-bearing
   guide fails the inventory until its coverage is declared. The extra bidirectional
