@@ -198,6 +198,26 @@ describe("a coherent fixture", () => {
   });
 });
 
+describe("missing release inputs", () => {
+  it("reports a missing root NOTICE even when package copies remain valid", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, notice: false });
+    expect(runFixture(dir).findings).toEqual([{
+      rule: "license-coherence",
+      file: "NOTICE",
+      message: "NOTICE file is missing at the repository root",
+    }]);
+  });
+
+  it("reports a missing trusted-publisher workflow", () => {
+    const dir = makeFixture({ rootLicense: EXPECTED_LICENSE_ID, publishRepository: false });
+    expect(runFixture(dir).findings).toEqual([{
+      rule: "provenance-repository",
+      file: ".github/workflows/publish.yml",
+      message: "publish workflow is missing, so its trusted publisher repository cannot be reconciled",
+    }]);
+  });
+});
+
 describe("version-consistency", () => {
   it("flags a package whose version disagrees with the root", () => {
     const dir = makeFixture({

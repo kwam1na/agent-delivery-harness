@@ -522,6 +522,16 @@ describe("record-neutral validation excludes only regular blobs", () => {
   });
 });
 
+describe.each(["deliverable-tree/v1", "consumer-tree/v1"])("neutral compatibility for %s", identityToken => {
+  const definition = { identityToken, reviewNeutral: [{ prefix: "delivery/records/" }] };
+  const source = { mode: "100644", objectSha: "b".repeat(40), path: "src/main.ts" };
+  it.each(["120000", "160000"])("omits neutral nonregular mode %s", mode => {
+    const neutral = { mode, objectSha: "a".repeat(40), path: "delivery/records/run.json" };
+    expect(digestDeliverableEntries([source, neutral], definition))
+      .toBe(digestDeliverableEntries([source], definition));
+  });
+});
+
 
 it("reads neutral symlink and gitlink modes from real Git trees", async () => {
   const root = await makeRoot();
