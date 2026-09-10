@@ -31,7 +31,7 @@ async function fixture() {
     }, null, 2)}\n`,
     "utf8",
   );
-  return { root, generationDir };
+  return { root, generationDir, archiveDigest };
 }
 
 describe("installed generation integrity", () => {
@@ -67,6 +67,64 @@ describe("installed generation integrity", () => {
     const findings = await checkInstalledGenerationIntegrity(root);
     expect(findings.map((finding) => finding.code)).toContain("installed_generation_file_drift");
     expect(findings.some((finding) => finding.message.includes("skills/plan-work/SKILL.md"))).toBe(true);
+  });
+
+  it("reports the full refusal when a receipt file is missing", async () => {
+    const { root, generationDir } = await fixture();
+    await rm(path.join(generationDir, "skills", "plan-work", "SKILL.md"));
+
+    expect(await checkInstalledGenerationIntegrity(root)).toEqual([{
+      code: "installed_generation_file_drift",
+      message: expect.stringContaining(
+        "skills/plan-work/SKILL.md is missing or unreadable in the installed generation:",
+      ),
+    }]);
+  });
+
+  it("refuses a receipt path that escapes the selected generation", async () => {
+    const { root, generationDir, archiveDigest } = await fixture();
+    const escapedPath = "../outside.md";
+    const outside = "# Outside generation\n";
+    await writeFile(path.resolve(generationDir, escapedPath), outside, "utf8");
+    await writeFile(
+      path.join(root, ".agent-skills", "active.json"),
+      `${JSON.stringify({
+        release: { archiveSha256: archiveDigest },
+        files: [{ path: escapedPath, sha256: sha256(outside) }],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    expect(await checkInstalledGenerationIntegrity(root)).toEqual([{
+      code: "installed_generation_file_drift",
+      message: "../outside.md escapes the installed generation selected by .agent-skills/current",
+    }]);
+  });
+
+  it("checks every receipt file after the first valid entry", async () => {
+    const { root, generationDir, archiveDigest } = await fixture();
+    const valid = "# Plan work\n";
+    const expected = "# Execute work\n";
+    const corrupted = "# Corrupted execute work\n";
+    const laterPath = "skills/execute-work/SKILL.md";
+    await mkdir(path.dirname(path.join(generationDir, laterPath)), { recursive: true });
+    await writeFile(path.join(generationDir, laterPath), corrupted, "utf8");
+    await writeFile(
+      path.join(root, ".agent-skills", "active.json"),
+      `${JSON.stringify({
+        release: { archiveSha256: archiveDigest },
+        files: [
+          { path: "skills/plan-work/SKILL.md", sha256: sha256(valid) },
+          { path: laterPath, sha256: sha256(expected) },
+        ],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    expect(await checkInstalledGenerationIntegrity(root)).toEqual([{
+      code: "installed_generation_file_drift",
+      message: `${laterPath} has sha256 ${sha256(corrupted)}, not the ${sha256(expected)} recorded by .agent-skills/active.json`,
+    }]);
   });
 
   it("reports when current selects a generation other than active.json's release", async () => {
