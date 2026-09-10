@@ -482,6 +482,12 @@ describe("the computable counts the documentation states", () => {
     // every rule the workflow carries and restates none of them, so the
     // overlay carries the reference and this row checks that instead.
     //
+    // This supersedes V26-1594's proposed phrase pin. That item assumed the
+    // overlay still attributed the count exception to `review-work`; restoring
+    // that attribution would now violate the no-restatement contract. The
+    // current sensor instead pins the overlay's deferral, the absence of its
+    // old restatement, and the rule in the installed skill that owns it.
+    //
     // It is pinned from THREE ends, because "the overlay does not restate a
     // rule" is satisfied for free in two separate ways. An overlay that says
     // nothing at all satisfies it; so does a release that stopped carrying the
