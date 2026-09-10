@@ -114,14 +114,19 @@ new findings or deferrals. Source reports and selected logs are retained under
 - **Impact:** Independent version bumps and installations would overlap despite
   mostly disjoint source edits. No conflicting installation has been performed.
 - **Decision:** V26-2014 and V26-2015 merge source first; V26-2014 qualifies its
-  development candidate in a disposable consumer. V26-2016 owns the consolidated
-  0.5.0 runtime, final qualification and installation, including Athena proof.
+  development candidate in a disposable consumer. V26-2016 supplies the consolidated
+  0.5.0 runtime and owns final installation, including Athena proof.
+  V26-2014 owns qualification of the agreed producer/runtime pair.
 - **Disposition:** Coordination dependency under observation. This entry does not
   claim a product failure or a completed release.
 
 **Observed coordination race:** Near-simultaneous proposals and acknowledgments
 assigned the consolidated producer merge first to V26-2014, then V26-2016, then
-back to V26-2014. No mutation occurred under either provisional assignment.
+back to V26-2014. No producer merge or adopter installation occurred under
+the competing assignments. A provisional qualifier had already started before
+the pause arrived: its disposable Linear items V26-2030 and V26-2031 were
+confirmed cancelled, and its historical evidence was retained. The final
+combined candidate still requires fresh qualification.
 An explicit final message to both peers settles ownership: V26-2014 integrates,
 reviews and merges the combined producer source; V26-2016 supplies signal source
 and the final 0.5.0 harness runtime, and owns final harness/Athena installation.
@@ -145,3 +150,29 @@ concrete message-ordering friction; no new issue was filed by any root.
 - **Disposition:** Expected policy behavior, to be measured during delivery.
   Record actual reopenings, retained evidence and extra sensor cost here if they
   occur; do not infer friction from the policy alone.
+
+## F1 resolution: isolated bootstrap merged
+
+V26-1764 merged in agent-skills PR 67 (`0ff5ee6`). The shared-interpreter
+editable-pointer replacement was demonstrated directly. Two private-environment
+full suites then passed concurrently (394 tests each, one skip), and the final
+review repair passed all 394 tests. This does not retrospectively identify the
+cause of the historical intermittent test failure. The actual bootstrap sensor
+kills both wrong-interpreter and missing-pip mutations. No follow-up remains.
+
+## F5: Hosted checks cannot start because of billing
+
+Agent-skills PR 67's Ubuntu and Windows jobs failed to start with explicit
+billing/spending-limit annotations; macOS was cancelled. Local checks and both
+mandated review lenses passed, so the merge used the user's explicit local-check
+fallback. V26-2016 owns this billing observation; peers link here rather than
+opening duplicate tickets. This is not recorded as a hosted test pass.
+
+## F6: Test fixture resolution and mutation isolation
+
+The MCP wire-test fixture initially lived under the operating system temporary
+directory and could not resolve `tsx`. The worker moved the fixture under its
+worktree and the real subprocess suite passed. This was fixture setup friction,
+not a delivery-product failure. Separately, artifact mutations were kept in a
+detached worktree to avoid contaminating other workers' sensor runs; no shared
+source mutation or contaminated result occurred. No tracking issue was created.
