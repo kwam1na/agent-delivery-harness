@@ -11,12 +11,17 @@ import { submitManifest } from "@agent-delivery-harness/kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { oneLine } from "../run-surface.ts";
 
-function manifestPathFrom(args: readonly string[]): string | undefined {
-  const flagIndex = args.indexOf("--manifest");
-  if (flagIndex !== -1) return args[flagIndex + 1];
-  // A lone positional is accepted too, but never a flag mistaken for a path.
-  const positional = args.find((argument) => !argument.startsWith("-"));
-  return positional;
+function manifestPathsFrom(args: readonly string[]): string[] | undefined {
+  const paths: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === "--manifest") {
+      const value = args[++index];
+      if (value === undefined || value === "") return undefined;
+      paths.push(value);
+    } else if (!token.startsWith("-")) paths.push(token);
+  }
+  return paths;
 }
 
 /**
@@ -50,7 +55,14 @@ export const submitEvidenceCommand: CommandDescriptor = {
     if (unknown !== undefined) {
       return { kind: "usage", message: `Unknown flag ${oneLine(unknown, 64)}.\n${submitEvidenceCommand.usage}` };
     }
-    const manifestPath = manifestPathFrom(context.args);
+    const paths = manifestPathsFrom(context.args);
+    if (paths === undefined) {
+      return { kind: "usage", message: "submit-evidence requires --manifest <path>." };
+    }
+    if (paths.length > 1) {
+      return { kind: "usage", message: `submit-evidence requires one manifest path; received ${paths.map(value => oneLine(value, 256)).join(", ")}.` };
+    }
+    const manifestPath = paths[0];
     if (manifestPath === undefined || manifestPath === "") {
       return { kind: "usage", message: "submit-evidence requires --manifest <path>." };
     }

@@ -244,7 +244,10 @@ export function digestDeliverableEntries(
   hash.update(`${IDENTITY_DOMAIN}${NUL}${definition.identityToken}${NUL}`);
 
   const deliverable = entries
-    .filter((entry) => !matchesNeutralSet(definition.reviewNeutral, entry.path))
+    // Validation may ignore record transport only when it is a regular blob.
+    // A symlink or gitlink at the same path remains part of the strict tree.
+    .filter((entry) => !matchesNeutralSet(definition.reviewNeutral, entry.path)
+      || (definition.identityToken === "validation-tree/v1" && entry.mode !== "100644" && entry.mode !== "100755"))
     .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
 
   for (const entry of deliverable) {

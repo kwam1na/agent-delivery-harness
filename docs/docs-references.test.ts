@@ -43,10 +43,19 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { COMMANDS } from "@agent-delivery-harness/cli";
+import { runCliBoundary, EXIT_OK, EXIT_USAGE, EXIT_POLICY, EXIT_INTERRUPTED } from "../packages/cli/src/boundary.ts";
+import * as ordinaryContext from "../packages/cli/src/ordinary-context.ts";
+import { saveContextCommand } from "../packages/cli/src/commands/save-context.ts";
+import { qualificationInputs } from "../scripts/qualify-agent-skills-provider.ts";
+import { RESOLUTION_OUTCOMES } from "../packages/kernel/src/evaluator.ts";
+import { commandFlags, flagsIn, harnessInvocations, runSubcommands } from "./cli-examples.ts";
 import harnessConfig from "../harness.config.ts";
 import {
+  parseReviewOutcome,
+  REVIEWER_RESULTS,
+  digestCanonical,
   FACADE_CAPABILITY_CLASSES,
   FACADE_OPERATIONS,
   FACADE_SURFACES,
@@ -253,12 +262,12 @@ describe("the documentation's references", () => {
     // matter: the floor catches a regex that stops matching, and the
     // per-document assertion catches a scan that silently drops a file.
     const references = allReferences();
-    // The floor sits just under the real count rather than far below it. A
+    // Keep this floor near the harvested count when the guide set grows. A
     // floor with room to spare is the one thing a partial drop fits through,
     // and a partial drop is the only failure this guard uniquely catches: a
     // scan that stops matching entirely is already caught by the two
     // assertions below.
-    expect(references.length).toBeGreaterThanOrEqual(81);
+    expect(references.length).toBeGreaterThanOrEqual(142);
     // Partitioned from the very array the existence assertion consumes, NOT
     // re-enumerated. Re-enumerating would check a different set from the one
     // being guarded, and would stay green while `allReferences` silently
@@ -328,6 +337,13 @@ const textOf = (document: string): string => readFileSync(path.join(REPO_ROOT, d
  * instead of the `add it to NUMBER_WORDS` failure below.
  */
 const NUMBER_WORDS: Readonly<Record<number, string>> = Object.freeze({
+  1: "one",
+  2: "two",
+  3: "three",
+  4: "four",
+  5: "five",
+  6: "six",
+  7: "seven",
   8: "eight",
   9: "nine",
   10: "ten",
@@ -336,6 +352,7 @@ const NUMBER_WORDS: Readonly<Record<number, string>> = Object.freeze({
   13: "thirteen",
   14: "fourteen",
   15: "fifteen",
+  16: "sixteen",
 });
 
 /**
@@ -423,13 +440,16 @@ describe("the computable counts the documentation states", () => {
   });
 
   it("states the CLI surface's command count", () => {
-    const commands = readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands")).filter(
-      (entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"),
-    );
+    const commands = COMMANDS;
+    expect(commands.length, "the CLI registry is empty").toBeGreaterThan(0);
     // Spelled as a word in the prose, so the computed count is mapped to its
     // word and that is what every statement must agree with — the digits are
     // never written down here.
     everyStatementAgrees("the CLI command count", /(\w+)-command operator surface/g, numberWord(commands.length));
+  });
+
+  it("states the evaluator resolution count", () => {
+    everyStatementAgrees("the resolution count", /(\w+) resolution kinds/g, numberWord(RESOLUTION_OUTCOMES.length));
   });
 
   it("states the conformance kit's vector count", () => {
@@ -531,7 +551,7 @@ describe("the computable counts the documentation states", () => {
     ];
 
     const installedSkill = (skill: string): string =>
-      readFileSync(path.join(REPO_ROOT, ".agent-skills/current/skills", skill, "SKILL.md"), "utf8");
+      readFileSync(path.join(REPO_ROOT, ".agent-skills/current/skills", skill, "SKILL.md"), "utf8").replace(/\s+/g, " ");
 
     // Read with whitespace collapsed, because these are sentence checks over
     // hard-wrapped prose: a rule name or a restatement that happens to fall
@@ -546,6 +566,10 @@ describe("the computable counts the documentation states", () => {
     expect(overlay, "AGENTS.md no longer says where those rules are read from").toContain(
       "read from the installed skills",
     );
+
+    const enumeration = /not restated here — (.*?) are read from the installed skills/.exec(overlay);
+    expect(enumeration, "the overlay has no deferred-rule enumeration").not.toBeNull();
+    expect(enumeration![1]!.split(/, (?:and )?/).sort()).toEqual(DEFERRED_RULES.map(rule => rule.named).sort());
 
     for (const rule of DEFERRED_RULES) {
       // The release still carries it. Without this the row would let a
@@ -607,7 +631,7 @@ describe("the rules the documentation states in prose", () => {
    */
   const statesInProse = (phrase: string): void => {
     const stated = textOf(GUIDE)
-      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
       .replace(/\s+/g, " ");
     expect(stated, `${GUIDE} no longer states: ${phrase}`).toContain(phrase);
   };
@@ -642,9 +666,12 @@ describe("the rules the documentation states in prose", () => {
     // Anti-vacuity from both ends: a policy that declares no testing lens, or
     // more than one, would otherwise satisfy the loop below with nothing in it.
     expect(testing.length, "the repository policy declares no single testing-policy lens").toBe(1);
-    for (const lens of testing) {
-      statesInProse(`\`${lens.personaId}\``);
-      statesInProse(`\`${lens.lensId}\``);
+    for (const document of [GUIDE, "docs/delivery-runbook.md"]) {
+      const prose = textOf(document).replace(/<!--[\s\S]*?(?:-->|$)/g, " ").replace(/\s+/g, " ");
+      for (const lens of testing) {
+        expect(prose).toContain(`\`${lens.personaId}\``);
+        expect(prose).toContain(`\`${lens.lensId}\``);
+      }
     }
   });
 
@@ -656,7 +683,8 @@ describe("the rules the documentation states in prose", () => {
     // authoritative with the whole suite green. Every `harness -- <command>`
     // the page writes is checked against the command modules that exist.
     const runbook = textOf("docs/delivery-runbook.md");
-    const invoked = [...runbook.matchAll(/harness -- ([a-z][a-z-]*)/g)].map((match) => match[1]!);
+    const invoked = harnessInvocations(runbook).map(invocation => invocation.command)
+      .filter(command => command !== "--help"); // Global help is not a command name.
     // Anti-vacuity from both ends, for the same reason the link scan has it: a
     // regex that stops matching would satisfy the loop below with nothing in
     // it, and a partial harvest would satisfy a bare floor.
@@ -708,7 +736,7 @@ describe("the rules the documentation states in prose", () => {
     // Anti-vacuity, raised to the harvest this page now yields: a floor of four
     // was satisfied by the eight executable kinds alone, so a prose scan that
     // silently stopped matching would have changed nothing.
-    expect(allKinds.length, "the runbook names too few run-event kinds to have been scanned").toBeGreaterThanOrEqual(13);
+    expect(allKinds.length, "the runbook names too few run-event kinds to have been scanned").toBeGreaterThanOrEqual(14);
     expect(emitted, "the runbook opens the run").toContain("run.started");
     expect(allKinds, "the runbook no longer names the kinds it recommends in prose").toContain("gate.reported");
     expect(allKinds.filter((kind) => !kinds.has(kind))).toEqual([]);
@@ -973,34 +1001,33 @@ describe("the rules the documentation states in prose", () => {
     // that a regex which stops reaching the prose fails rather than passing on
     // the table alone.
     expect(columnOne.length, "the shape block yields no rows").toBeGreaterThanOrEqual(17);
-    expect(paths.length, "the shape section yields no paths outside its table").toBeGreaterThanOrEqual(22);
+    expect(paths.length, "the shape section yields no paths outside its table").toBeGreaterThanOrEqual(23);
     expect(paths, "the shape block names the root instruction file").toContain("AGENTS.md");
     expect(paths, "the shape section no longer says where a lens charter resolves from").toContain(
       ".agent-skills/current/personas/",
     );
-    expect(paths.filter((entry) => !existsCaseExactly(entry))).toEqual([]);
+    expect([...paths, ".github/pull_request_template.md"].filter((entry) => !existsCaseExactly(entry))).toEqual([".github/pull_request_template.md"]);
   });
 
   it("names only paths that exist in the delivery runbook's prose", () => {
-    // The runbook tells a host to read files out of the installed release — the
-    // round-brief template, the two persona charters, the release manifest, the
-    // compiled snapshot — and those are the paths most likely to move, because
-    // nothing in this repository authors them. They were unchecked while the
-    // guide's block and every markdown link were checked. Scoped to the two
-    // installed-and-policy roots deliberately: a glob or a `<placeholder>` path
-    // elsewhere on the page is not a resolvable claim, and widening this to
-    // every backticked token would pin illustrations rather than references.
-    const runbook = textOf("docs/delivery-runbook.md");
-    const cited = [
-      ...new Set([...runbook.matchAll(/`((?:\.agent-skills|\.agents|\.claude)\/[\w./-]+)`/g)].map((match) => match[1]!)),
-    ];
-    expect(cited.length, "the runbook cites no installed-release path").toBeGreaterThanOrEqual(6);
-    expect(runbook).toContain("`$DELIVERY_SKILLS/obtain-review/references/round-brief-template.md`");
+    // Harvest rooted in-tree tokens, including installed symlinks. Illustrations,
+    // globs, refs and placeholders are not paths a reader can open.
+    const runbook = textOf("docs/delivery-runbook.md").replace(/```[\s\S]*?```/g, " ");
+    const cited = [...new Set([...runbook.matchAll(/`([^`\n]+)`/g)]
+      .map(match => match[1]!)
+      .filter(token => /^(?:\.agent-skills|\.agents|\.claude|\.github|packages|scripts|docs|delivery|telemetry|qualifications)\/[\w./-]+$/.test(token)))];
+    expect(cited.length, "the runbook lost a prose path").toBeGreaterThanOrEqual(27);
+    expect(textOf("docs/delivery-runbook.md")).toContain("`$DELIVERY_SKILLS/obtain-review/references/round-brief-template.md`");
     for (const exposure of [".agents/skills", ".claude/skills"]) {
       expect(cited).toContain(exposure);
       expect(existsCaseExactly(`${exposure}/obtain-review/references/round-brief-template.md`)).toBe(true);
     }
-    expect(cited.filter((entry) => !existsCaseExactly(entry))).toEqual([]);
+    // The wrong-case token is an explicitly documented counterexample; neutral
+    // prefixes describe configured output locations that may not exist yet.
+    const resolvable = cited.filter(entry => entry !== ".github/pull_request_template.md" &&
+      !harnessConfig.reviewNeutral.some(rule => rule.prefix === entry));
+    expect([...resolvable, ".github/pull_request_template.md"].filter(entry => !existsCaseExactly(entry)))
+      .toEqual([".github/pull_request_template.md"]);
   });
 
   it("pairs the rejection code that blocks a capture with the rule the registry gives it", () => {
@@ -1016,20 +1043,26 @@ describe("the rules the documentation states in prose", () => {
 });
 
 /**
- * The runbook's three corrections, pinned.
+ * The runbook's corrections, pinned.
  *
  * These are the sentences that exist because a delivery got them wrong: each
  * one contradicts the obvious guess, each was paid for in a lost round or a
- * damaged sibling delivery, and none of them has a computed counterpart
- * anywhere in this tree to disagree with. Deletion, not drift, is the failure
- * — trimming a runbook to its confident half reads like an edit and leaves the
- * page recommending exactly the thing that failed. Presence is the only
- * available pin, so it is the one used, one row per correction.
+ * damaged sibling delivery. Trimming the historical guidance can leave the
+ * page recommending the thing that failed, while an outdated computed claim
+ * can survive intact. Presence is the only
+ * available pin for historical incidents and operator instructions. The help,
+ * save-context, policy, paths and vocabulary rows below instead compare the
+ * behavior or defining data. Shell availability, process-group discipline,
+ * manual restoration, interrupted-lens relaunch, review-context retention and
+ * the order a human performs a rebase have no deterministic repository
+ * counterpart: presence is the ceiling for those historical/operator claims,
+ * not a proof against arbitrary natural-language negation. The bounded
+ * negation probes below additionally cover demonstrated inversions.
  */
 describe("the corrections the delivery runbook carries", () => {
   const statesInProse = (phrase: string): void => {
     const stated = textOf("docs/delivery-runbook.md")
-      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
       .replace(/\s+/g, " ");
     expect(stated, `docs/delivery-runbook.md no longer states: ${phrase}`).toContain(phrase);
   };
@@ -1065,7 +1098,7 @@ describe("the corrections the delivery runbook carries", () => {
    * the same thing happens again; the day a fourth stops, the page has to name
    * it.
    */
-  it("names the commands whose `--help` executes them, as the CLI behaves today", () => {
+  it("names the commands whose `--help` executes them, as the CLI behaves today", async () => {
     const boundary = readFileSync(path.join(REPO_ROOT, "packages/cli/src/boundary.ts"), "utf8");
     // The arity is the whole safety property: a help request is answered by the
     // boundary only when `--help` is the entire argument list, so a page that
@@ -1073,8 +1106,8 @@ describe("the corrections the delivery runbook carries", () => {
     // direction that costs a round.
     const predicate = /args\.length === (\d+) && \(args\[0\] === "--help" \|\| args\[0\] === "-h"\)/.exec(boundary);
     expect(predicate, "the CLI boundary no longer answers help from one arity-checked predicate").not.toBeNull();
-    expect(predicate![1], "the boundary's help predicate no longer requires a lone argument").toBe("1");
-    statesInProse("**exactly one argument**");
+    const arity = Number(predicate![1]);
+    statesInProse(`**exactly ${numberWord(arity)} argument${arity === 1 ? "" : "s"}**`);
 
     const commands = readdirSync(path.join(REPO_ROOT, "packages/cli/src/commands"))
       .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"));
@@ -1086,7 +1119,7 @@ describe("the corrections the delivery runbook carries", () => {
     // carries one: `--help` beside another token reaches it as an ordinary
     // invocation and it runs.
     const executes = commands
-      .filter((entry) => !/args/.test(readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands", entry), "utf8")))
+      .filter((entry) => !/\bcontext\.args\b/.test(readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands", entry), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, " ")))
       .map((entry) => entry.replace(/\.ts$/, ""))
       .filter((name) => registered.has(name));
 
@@ -1105,6 +1138,30 @@ describe("the corrections the delivery runbook carries", () => {
         executes.slice().sort(),
       );
     }
+    statesInProse("**`<command> --help` is answered read-only, and only when it stands alone.**");
+    statesInProse("prints that command's usage and writes nothing");
+    statesInProse("before it loads config, wires anything, or observes the command");
+    statesInProse("Any other token on the line stops it being a help request, and every command then judges the call itself");
+    statesInProse("`--help` or `-h`");
+    const output: string[] = [];
+    const loadConfig = vi.fn(() => { throw new Error("help loaded configuration"); });
+    const runtime = { cwd: REPO_ROOT, env: {}, stdinIsTTY: false, stdoutIsTTY: false,
+      stdout: (text: string) => output.push(text), stderr: (text: string) => { throw new Error(text); }, loadConfig };
+    // Include both dispatch classes: moving help below config-free dispatch must
+    // fail too, even though the configured `record` command still answers safely.
+    for (const name of ["record", "runs"]) {
+      for (const flag of ["--help", "-h"]) {
+        output.length = 0;
+        const args = Array.from({ length: arity }, () => flag);
+        expect(await runCliBoundary([name, ...args], COMMANDS, runtime)).toBe(EXIT_OK);
+        expect(output.join("")).toBe(`${COMMANDS.find(command => command.name === name)!.usage}\n`);
+      }
+    }
+    expect(loadConfig).not.toHaveBeenCalled();
+    const helpExit = await runCliBoundary(["--help"], COMMANDS, runtime);
+    const emptyExit = await runCliBoundary([], COMMANDS, runtime);
+    statesInProse(`prints the command listing and exits \`${helpExit}\``);
+    statesInProse(`prints the same listing and exits \`${emptyExit}\``);
     // And the consequence, not only the rule: a correction trimmed to its
     // mechanism stops saying why the reader should care, and the hazard is what
     // an older checkout still has.
@@ -1135,34 +1192,54 @@ describe("the corrections the delivery runbook carries", () => {
    * green while sending an agent past a command that now works — the same
    * failure the `--help` row two rows up exists to prevent, and the same one
    * that cost this page's first delivery its grace round. So this claim is held
-   * to the command module by agreement too: it re-stamps itself in whichever
-   * direction the CLI moves, rather than only when someone notices.
+   * to the command's emitted events and writer output, not a token in its
+   * source. The command probe also reaches a partial revert that leaves
+   * `run.version` in dead text, which a writer-only unit probe cannot see.
    */
-  it("says which event version `save-context` writes at, as the CLI behaves today", () => {
-    const command = readFileSync(path.join(REPO_ROOT, "packages/cli/src/commands/save-context.ts"), "utf8");
-    // Anti-vacuity: a renamed or unreadable module would leave both branches
-    // below deciding on an empty string, and the `false` branch would then
-    // quietly demand the sentence that is wrong.
-    expect(command, "the save-context command module no longer builds a run event").toContain("buildRunEvent");
-    // The whole property: the event carries the version the *run* was started
-    // at, read from the run this command selected, rather than one the command
-    // fixes for itself.
-    if (/run\.version/.test(command)) {
-      statesInProse("**`save-context` writes at the run's own event version.**");
-      // The consequence, not only the mechanism — this is the sentence a
-      // delivering agent acts on.
-      statesInProse("it appends on a version-2 run as well as a version-1 one");
-      // And the page must not still be carrying the refusal as its headline
-      // claim, which is exactly how it would read if only the assertions above
-      // were added and the old paragraph left in place.
-      expect(
-        textOf("docs/delivery-runbook.md").replace(/\s+/g, " "),
-        "save-context follows the run's version, but the runbook still headlines the refusal",
-      ).not.toContain("**`save-context` is refused on a version-2 run.**");
-    } else {
-      statesInProse("**`save-context` is refused on a version-2 run.**");
-      statesInProse("`unsupported_spec`");
-    }
+  it("says which event version `save-context` writes at, as the CLI behaves today", async () => {
+    const contract = { objective: "Check documented saves", acceptanceCriteria: ["Journal keeps the observation"], finishLine: "merge-ready" };
+    const candidate = { treeSha: "a".repeat(40), deliverable: { digest: "b".repeat(64), identity: "test/1" },
+      base: { ref: "main", tipSha: "c".repeat(40), mergeBaseSha: "c".repeat(40) }, workspaceId: "docs" };
+    const observed: { version: string; eventId?: string; payload: unknown }[] = [];
+    const append = vi.fn(async (_id, event) => { observed.push(event); return { ok: true }; });
+    const release = vi.spyOn(ordinaryContext, "installedRelease").mockResolvedValue({ runtimeVersion: "test", releaseId: "test", profile: "linear", archiveSha256: "d".repeat(64) });
+    const selected = vi.spyOn(ordinaryContext, "recoveryRun");
+    try {
+      for (const version of ["run-event/2", "run-event/1"] as const) {
+        observed.length = 0;
+        selected.mockResolvedValue({ ok: true, version, runId: "run-docs", events: [],
+          surface: { commonDir: "/tmp/docs", store: { append } } } as never);
+        for (const stage of ["work", "work", "review"]) {
+          const result = await saveContextCommand.run({ rootDir: REPO_ROOT, config: harnessConfig,
+            args: ["--json", JSON.stringify({ contract, stage })], wire: async () => ({ captureCandidate: async () => ({ ok: true, candidate }) }) } as never);
+          expect(result.kind).toBe("ok");
+        }
+        for (const event of observed) {
+          const writer = ordinaryContext.ordinaryEventWriter(version, "context.saved", event.payload);
+          expect(event.version).toBe(writer.version);
+          expect(event.eventId).toBe(writer.eventId);
+          if (version === "run-event/2") expect(event.eventId).toBe(`context-saved-${digestCanonical(event.payload)}`);
+          else expect(event.eventId).toBeUndefined();
+        }
+        if (version === "run-event/2") {
+          expect(observed[0]!.eventId).toBe(observed[1]!.eventId);
+          expect(observed[2]!.eventId).not.toBe(observed[0]!.eventId);
+          expect(append.mock.calls.every(call => call[2]?.reuseExistingTimestamp === true)).toBe(true);
+        }
+      }
+    } finally { selected.mockRestore(); release.mockRestore(); }
+    statesInProse("**`save-context` writes at the run's own event version.**");
+    expect(textOf("docs/delivery-runbook.md").replace(/\s+/g, " ")).not.toContain("**`save-context` is refused on a version-2 run.**");
+    statesInProse("it appends on a version-2 run as well as a version-1 one");
+    statesInProse("On a version-2 run the event id it derives is the canonical digest of the observation");
+    statesInProse("the same save twice appends once");
+    statesInProse("is a different id and a second entry");
+    statesInProse("a version-1 run carries no event id, so an identical repeat appends again");
+    const recovery = textOf("packages/cli/src/ordinary-context.ts").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, " ");
+    const index = /version: read\.events\[(\d+)\]\?\.version/.exec(recovery);
+    expect(index, "recovery no longer derives the writer version from a journal event").not.toBeNull();
+    const ordinal = Number(index![1]) === 0 ? "first" : `index ${index![1]}`;
+    statesInProse(`version out of the journal's ${ordinal} event`);
   });
 
   it("says how a round that is already open is resumed rather than reopened", () => {
@@ -1221,5 +1298,167 @@ describe("the corrections the delivery runbook carries", () => {
     statesInProse("`.agents/skills` is the default for Codex and other hosts; Claude Code uses `.claude/skills`");
     statesInProse("`execute-work` says when that has to exist, and `obtain-review` says what discharges it.");
     statesInProse("are `linear-tracker-adapter`'s, as is the rule about writing to the properties file.");
+  });
+});
+
+describe("the runbook's computed operating contract", () => {
+  const prose = () => textOf("docs/delivery-runbook.md").replace(/<!--[\s\S]*?(?:-->|$)/g, " ").replace(/\s+/g, " ");
+  const policy = () => JSON.parse(textOf(".agents/policy/repository-policy.json"));
+  const quoted = (text: string) => [...text.matchAll(/`([^`]+)`/g)].map(match => match[1]!);
+
+  it("documents exactly the inputs the qualification verifies before implementation", () => {
+    const pins = qualificationInputs({ root: "", archive: "qualifications/fixtures/agent-skills-core-v1.zip", metadata: "qualifications/fixtures/agent-skills-core-v1.release.json" });
+    expect(pins.length).toBeGreaterThan(2);
+    const section = /## Qualification inputs\n([\s\S]*?)\n## /.exec(textOf("docs/agent-guide.md"));
+    expect(section).not.toBeNull();
+    const documented = [...section![1]!.matchAll(/^- `([^`]+)`$/gm)].map(match => match[1]!);
+    expect(documented.sort()).toEqual(pins.map(([file]) => file).sort());
+    expect(section![1]!.replace(/\s+/g, " ")).toContain("Re-running this historical qualification with changed bytes requires a newly earned harness baseline commit and tree.");
+  });
+
+  it("states the checkpoint path sets and configured neutral prefixes by agreement", () => {
+    const implement = policy().checkpoints.find((checkpoint: { stageId: string }) => checkpoint.stageId === "implement");
+    expect(implement).toBeDefined();
+    const writable = /Writable in the `implement` checkpoint: (.*?)\. Protected:/.exec(prose());
+    const protectedPaths = /Protected: (.*?)\. Some files/.exec(prose());
+    expect(writable).not.toBeNull(); expect(protectedPaths).not.toBeNull();
+    const compiled = JSON.parse(textOf(".agents/policy/compiled-snapshot.json")).compiled;
+    const grant = compiled.checkpointGrants.find((checkpoint: { stageId: string }) => checkpoint.stageId === "implement").grant;
+    // Git internals are not candidate-edit paths; all other compiled protections
+    // must appear, including the platform's .claude protection.
+    const protectedSet = grant.protectedPaths.filter((entry: string) => ![".git", ".managed-projection"].includes(entry));
+    expect(quoted(writable![1]!).sort()).toEqual(implement.writablePaths.slice().sort());
+    expect(quoted(protectedPaths![1]!).sort()).toEqual(protectedSet.sort());
+    const neutral = /Only (`docs\/[^.]*?) are review-neutral\./.exec(prose());
+    expect(neutral).not.toBeNull();
+    expect(quoted(neutral![1]!).sort()).toEqual(harnessConfig.reviewNeutral.map(rule => rule.prefix).sort());
+    const recordPaths = harnessConfig.recordNeutral.map(rule => rule.prefix);
+    for (const prefix of recordPaths) {
+      expect(harnessConfig.reviewNeutral.map(rule => rule.prefix)).toContain(prefix);
+      expect(prose()).toContain(`lists \`${prefix}\` in both \`reviewNeutral\` and \`recordNeutral\``);
+    }
+    const recorderPin = /\[path\.join\(input.root, "([^"\n]+recorder\.ts)"\), (\w+)\]/.exec(textOf("scripts/qualify-agent-skills-provider.ts"));
+    expect(recorderPin).not.toBeNull();
+    expect(prose()).toContain(`\`${recorderPin![1]}\` (\`${recorderPin![2]}\` in \`scripts/qualify-agent-skills-provider.ts\`)`);
+    expect(prose()).toContain("everything under `docs/contracts/`");
+  });
+
+  it("states the CI matrix, tracker statuses and CLI exit codes by agreement", () => {
+    const matrix = [...textOf(".github/workflows/ci.yml").split("    steps:")[0]!.matchAll(/^\s+- name: ([\w-]+)$/gm)].map(match => match[1]!);
+    expect(matrix.length).toBeGreaterThan(0);
+    const stated = /\(matrix (.*?)\)/.exec(prose());
+    expect(stated).not.toBeNull();
+    expect(quoted(stated![1]!)).toEqual(matrix);
+    const tracker = JSON.parse(textOf(".agents/tracker-properties.json"));
+    expect(prose()).toContain(`Team \`${tracker.team}\`, project \`${tracker.project}\``);
+    const statuses = /statuses from `\.agents\/tracker-properties.json` \((.*?)\)/.exec(prose());
+    expect(statuses).not.toBeNull();
+    expect(quoted(statuses![1]!)).toEqual([tracker.statuses.inProgress, tracker.statuses.inReview, tracker.statuses.done]);
+    expect(prose()).toContain(`**Exit codes**: \`${EXIT_OK}\` pass, \`${EXIT_POLICY}\` policy block, \`${EXIT_USAGE}\` usage, \`${EXIT_INTERRUPTED}\` interrupted.`);
+  });
+
+  it("binds the printed lens selection and reviewer ids to policy", () => {
+    const lenses = policy().reviewLenses;
+    const command = /emit lens.selected[^\n]*\\\n\s+--json '([^']+)'/.exec(textOf("docs/delivery-runbook.md"));
+    expect(command).not.toBeNull();
+    const payload = JSON.parse(command![1]!);
+    expect(payload.mandated.slice().sort()).toEqual(lenses.map((lens: { lensId: string }) => lens.lensId).sort());
+    expect(payload.selected.slice().sort()).toEqual(payload.mandated.slice().sort());
+    for (const lens of lenses) expect(prose()).toContain(`| \`${lens.lensId}\` | \`${lens.personaId}\` |`);
+    const ids = /charter basenames: (.*?)\./.exec(prose());
+    expect(ids).not.toBeNull();
+    expect(quoted(ids![1]!)).toEqual(lenses.map((lens: { personaId: string }) => lens.personaId.replace(/^persona\./, "")));
+  });
+
+  it("validates the printed review outcome and its result and cost contract", () => {
+    const heredoc = /<<'JSON'\n([\s\S]*?)\nJSON/.exec(textOf("docs/delivery-runbook.md"));
+    expect(heredoc).not.toBeNull();
+    const digest = "a".repeat(64);
+    const document = JSON.parse(heredoc![1]!.replace("<the retained context's digest, exactly>", digest));
+    const ids = policy().reviewLenses.map((lens: { personaId: string }) => lens.personaId.replace(/^persona\./, ""));
+    const parsed = parseReviewOutcome(document, ids);
+    expect(document.contextDigest).toBe(digest);
+    expect(parsed.verdict).toBe("green");
+    expect(prose()).toContain(`\`result\` is one of ${REVIEWER_RESULTS.map(result => `\`${result}\``).join(", ")}`);
+    expect(prose()).toContain("only `approved` stamps an approval");
+    expect(prose()).toContain("An optional `cost` requires `costCoverage`");
+    expect(() => parseReviewOutcome({ ...document, cost: 1 }, ids)).toThrow(/costCoverage/);
+  });
+
+  it("checks runbook flags, runs subcommands and quoted config member names", () => {
+    const runbook = textOf("docs/delivery-runbook.md");
+    const shellBlocks = [...runbook.matchAll(/```sh\n([\s\S]*?)```/g)].map(match => match[1]!).join("\n");
+    for (const invocation of harnessInvocations(shellBlocks)) {
+      const descriptor = COMMANDS.find(command => command.name === invocation.command);
+      expect(descriptor, `unknown command ${invocation.command}`).toBeDefined();
+      const accepted = commandFlags([descriptor!]);
+      expect(invocation.flags.filter(flag => !accepted.has(flag)), `${invocation.command} rejects a documented flag`).toEqual([]);
+    }
+    const knownFlags = commandFlags(COMMANDS);
+    const invocations = harnessInvocations(runbook);
+    const inline = quoted(runbook.replace(/```[\s\S]*?```/g, " "));
+    const inlineInvocations = inline.filter(value => /^(?:verify|emit|runs)(?:\s|$)/.test(value))
+      .flatMap(value => harnessInvocations(`delivery-harness ${value}`));
+    // These spans illustrate grep, generic flag syntax, or diff markers rather
+    // than naming harness options. Keep exceptions on the complete example.
+    const otherExamples = new Set(["--include='*.ts'", "--flag value", "--flag=value", "--- a/path", "--- /dev/null", "---", "----"]);
+    const standaloneFlags = inline.filter(value => value.startsWith("--") && !otherExamples.has(value)).flatMap(flagsIn);
+    expect(invocations.length).toBeGreaterThan(10);
+    const flags = new Set([...invocations, ...inlineInvocations].flatMap(invocation => invocation.flags)
+      // Git flags and Vitest's separately checked option.
+      .concat(standaloneFlags.filter(flag => !["--continue", "--name-status", "--testTimeout"].includes(flag))));
+    expect(flags.size).toBeGreaterThanOrEqual(8);
+    expect([...flags].filter(flag => !knownFlags.has(flag))).toEqual([]);
+    const registered = runSubcommands(COMMANDS);
+    const named = [...invocations, ...inlineInvocations]
+      .filter(invocation => invocation.command === "runs" && invocation.subcommand !== undefined)
+      .map(invocation => invocation.subcommand!);
+    expect(new Set(named).size).toBeGreaterThanOrEqual(3);
+    expect(named.filter(name => !registered.has(name))).toEqual([]);
+    const members = new Set([...Object.keys(harnessConfig), ...Object.keys(policy())]);
+    const claimed = [...runbook.matchAll(/`((?:review|record|tracker|deliveryRecord|baseMovement|granted|forbidden)[A-Z][\w]*)`/g)].map(match => match[1]!);
+    expect(claimed.length).toBeGreaterThanOrEqual(5);
+    for (const name of claimed) expect(members.has(name) || name in (harnessConfig.deliveryRecordVerification ?? {}), `unknown config/policy member ${name}`).toBe(true);
+    // Vitest's public declaration is the local source for its differently-cased flag.
+    const timeout = standaloneFlags.find(flag => flag === "--testTimeout");
+    if (timeout) {
+      const chunks = readdirSync(path.join(REPO_ROOT, "node_modules/vitest/dist/chunks")).filter(name => name.startsWith("cac.") && name.endsWith(".js"));
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks.some(name => textOf(`node_modules/vitest/dist/chunks/${name}`).includes(timeout.slice(2)))).toBe(true);
+    }
+  });
+
+  it("holds retry-only run-start members to the grammar", () => {
+    const runbook = prose();
+    const payload = { host: "codex", workflow: { releaseId: "test", profile: "linear" } };
+    for (const member of ["predecessorRunId", "displacedRunId"]) {
+      expect(runbook).toContain(`\`${member}\``);
+      const input = { ...runEventEnvelope(payload), kind: "run.started", payload: { ...payload, [member]: "run-before" } };
+      expect(validateRunEventInput(input).ok, member).toBe(true);
+      expect(validateRunEventInput({ ...input, payload: { ...payload, [member.replace(/Id$/, "")]: "run-before" } }).ok).toBe(false);
+    }
+  });
+});
+
+
+describe("visible rules cannot be contradicted by demonstrated negations", () => {
+  const inversions = [
+    { pattern: /(?:lens|reviewer) (?:may|can|should) (?:plant|mutate)(?: in)? the delivery worktree/i,
+      probes: ["In practice a lens may plant in the delivery worktree and restore afterwards; the rule above is a preference, not a requirement.", "A reviewer can mutate the delivery worktree."] },
+    { pattern: /(?:rule|worktree isolation)(?: above)? is (?:a preference|optional|not a requirement)/i,
+      probes: ["The rule above is a preference, not a requirement.", "Worktree isolation is optional."] },
+    { pattern: /(?:do not|never) (?:run `npm run check` on the replayed candidate|re-run `npm install` after every rebase)/i,
+      probes: ["Do not Run `npm run check` on the replayed candidate before deciding a round is a reopen.", "Never Re-run `npm install` after every rebase, before the gate."] },
+  ];
+  it("sweeps every scanned document and proves each forbidden shape still matches", () => {
+    expect(inversions.length).toBe(3);
+    for (const { pattern, probes } of inversions) {
+      expect(probes.length).toBeGreaterThan(0);
+      for (const probe of probes) expect(pattern.test(probe), probe).toBe(true);
+      for (const document of scannedDocuments()) {
+        const visible = textOf(document).replace(/<!--[\s\S]*?(?:-->|$)/g, " ").replace(/\s+/g, " ");
+        expect(pattern.test(visible), `${document} contradicts a pinned rule: ${pattern}`).toBe(false);
+      }
+    }
   });
 });

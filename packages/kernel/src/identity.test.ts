@@ -20,12 +20,13 @@
  * exactly on astral paths. Both are computed here and both must diverge from
  * the golden, so a port that quietly adopted either would be caught.
  *
- * WHERE REAL REPOSITORIES ARE USED, AND WHERE A DOUBLE IS. Every digest comes
+ * WHERE REAL REPOSITORIES ARE USED, AND WHERE A DOUBLE IS. Golden digests come
  * from a real `git ls-tree` over a real repository, because the NUL stream and
  * its mode column are the subject. The command runner is injected only for the
  * two failures a healthy repository will not produce on demand: a git
  * invocation that fails, and a listing whose records are malformed.
  */
+import { execFileSync } from "node:child_process";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -503,4 +504,39 @@ describe("a docs-only commit", () => {
     expect(treeSha).not.toBe(before.treeSha);
     expect(digest).toBe(before.digest);
   });
+});
+
+describe("record-neutral validation excludes only regular blobs", () => {
+  const definition = { identityToken: "validation-tree/v1", reviewNeutral: [{ prefix: "delivery/records/" }] };
+  const empty = digestDeliverableEntries([], definition);
+  it.each(["100644", "100755"])("omits record transport with regular mode %s", mode => {
+    expect(digestDeliverableEntries([{ mode, objectSha: "a".repeat(40), path: "delivery/records/run.json" }], definition)).toBe(empty);
+  });
+  it.each(["120000", "160000"])("retains nonregular mode %s at a neutral path", mode => {
+    const entry = { mode, objectSha: "a".repeat(40), path: "delivery/records/run.json" };
+    const digest = digestDeliverableEntries([entry], definition);
+    expect(digest).not.toBe(empty);
+    expect(digestDeliverableEntries([{ ...entry, objectSha: "b".repeat(40) }], definition)).not.toBe(digest);
+    expect(digestDeliverableEntries([{ ...entry, path: "delivery/records/other.json" }], definition)).not.toBe(digest);
+    expect(digestDeliverableEntries([{ ...entry, mode: mode === "120000" ? "160000" : "120000" }], definition)).not.toBe(digest);
+  });
+});
+
+
+it("reads neutral symlink and gitlink modes from real Git trees", async () => {
+  const root = await makeRoot();
+  const git = (args: string[], input?: string) => execFileSync("git", args, { cwd: root, encoding: "utf8", input }).trim();
+  git(["init", "-q"]);
+  const blob = git(["hash-object", "-w", "--stdin"], "target");
+  const emptyTree = git(["mktree"], "");
+  const commit = git(["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit-tree", emptyTree], "fixture\n");
+  const config = { ...testConfig(), computingIdentityVersion: "validation-tree/v1", reviewNeutral: [{ prefix: "neutral" }] };
+  const digest = (treeSha: string) => computeDeliverableIdentity({ rootDir: root, treeSha, config });
+  const empty = await digest(emptyTree);
+  for (const mode of ["100644", "100755", "120000", "160000"]) {
+    const tree = git(["mktree"], `${mode} ${mode === "160000" ? "commit" : "blob"} ${mode === "160000" ? commit : blob}\tneutral\n`);
+    const actual = await digest(tree);
+    if (mode === "100644" || mode === "100755") expect(actual).toBe(empty);
+    else expect(actual).not.toBe(empty);
+  }
 });

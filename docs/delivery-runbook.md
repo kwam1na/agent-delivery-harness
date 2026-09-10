@@ -129,10 +129,11 @@ refused for `emit` — only the CLI writes it.
 
 **`save-context` writes at the run's own event version.** It reads the writer
 version out of the journal's first event rather than fixing one of its own, so
-it appends on a version-2 run as well as a version-1 one. The event id it
+it appends on a version-2 run as well as a version-1 one. On a version-2 run the event id it
 derives is the canonical digest of the observation, which makes an exact repeat
 idempotent — the same save twice appends once — while a changed observation, a
-different `stage` for instance, is a different id and a second entry. On a build
+different `stage` for instance, is a different id and a second entry; a version-1 run carries no event id, so an
+identical repeat appends again. On a build
 predating that fix the command built a `run-event/1` event, a version-2 journal
 refused it as `unsupported_spec`, and `runs show` listed the refusal under
 `refused appends` rather than storing a `context.saved`; one journal here holds
@@ -216,11 +217,15 @@ Writable in the `implement` checkpoint: `packages`, `scripts`, `docs`,
 Protected: `.agents`, `.claude`, `delivery`, `qualifications`,
 `packages/conformance/vectors`.
 
-Some files sit in a writable path and are still byte-pinned:
+Some files sit in a writable path and participate in byte-pinned checks.
+The historical provider experiment includes
 `packages/kernel/src/recorder.ts` (`RECORDER_SHA256` in
-`scripts/qualify-agent-skills-provider.ts`) and everything under
-`docs/contracts/` (the provider qualification driver and
-`packages/cli/src/provider-rails.test.ts`). One byte is a failure.
+`scripts/qualify-agent-skills-provider.ts`); the agent guide's qualification
+inventory names every input. Re-running that experiment needs the original
+bytes or a newly earned baseline. The current gate retains its historical
+result and qualifies the distributed product separately. The contract tests
+still byte-pin everything under `docs/contracts/`
+(`packages/cli/src/provider-rails.test.ts`).
 
 **Commit every candidate edit before opening a review round**, and keep the
 worktree clean — no unstaged tracked changes, no untracked files — from

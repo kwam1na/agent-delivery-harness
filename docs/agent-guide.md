@@ -45,6 +45,29 @@ resolved from the installed release by persona identity, under
 `.agent-skills/current/personas/`, and its digest is pinned in the compiled
 policy snapshot.
 
+## Qualification inputs
+
+Read this inventory before choosing a design that changes qualification inputs.
+The historical provider-interoperability experiment checks these inputs before
+installing or starting a provider. Re-running this historical qualification
+with changed bytes requires a newly earned harness baseline commit and tree.
+The current gate preserves the historical result and qualifies the distributed
+product separately; these historical pins do not prohibit current source edits.
+The archive and metadata below are the default fixture paths; an explicit
+invocation can supply their locations.
+
+- `qualifications/fixtures/agent-skills-core-v1.zip`
+- `qualifications/fixtures/agent-skills-core-v1.release.json`
+- `packages/cli/src/provider-rails.ts`
+- `packages/kernel/src/recorder.ts`
+- `docs/contracts/delivery-provider-rails-v1.md`
+- `docs/contracts/delivery-provider-rails.schema.json`
+- `packages/cli/fixtures/delivery-provider-rails-v1.json`
+- `qualifications/fixtures/agent-skills-core-qualification.json`
+- `qualifications/fixtures/agent-skills-provider-qualification.json`
+- `qualifications/fixtures/agent-skills-linear-qualification.json`
+- `qualifications/fixtures/agent-skills-linear-attestation.json`
+
 ## Kernel module boundaries
 
 The kernel is one package with hard internal boundaries. Crossing one is a

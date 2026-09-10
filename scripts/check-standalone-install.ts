@@ -516,6 +516,128 @@ export interface StandaloneCheckResult {
   readonly cliCasesCompleted: number;
 }
 
+export interface CliSmokeRunResult {
+  readonly findings: readonly StandaloneFinding[];
+  readonly casesCompleted: number;
+}
+
+interface CliSpawnResult {
+  readonly error?: Error;
+  readonly status: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+export interface CliSmokeRunInput {
+  readonly entry: string;
+  readonly loader: string;
+  readonly repoDir: string;
+  readonly decoyDir: string;
+  readonly sourceEnv?: NodeJS.ProcessEnv;
+  readonly smokeCases?: readonly CliSmokeCase[];
+  readonly spawnCase?: (
+    entry: string,
+    loader: string,
+    smoke: CliSmokeCase,
+    env: NodeJS.ProcessEnv,
+    repoDir: string,
+  ) => CliSpawnResult;
+  readonly resolveGitCommonDir?: (repoDir: string, env: NodeJS.ProcessEnv) => string | undefined;
+  readonly decoyHoldsRunStore?: (repoDir: string) => boolean;
+  readonly log?: (line: string) => void;
+}
+
+/**
+ * Run the CLI cases across their real spawn boundary.
+ *
+ * Keeping environment selection, the relocation control, dynamic-id matching,
+ * and the decoy-store check in one injectable loop makes each load-bearing
+ * call site observable without repeating the five-package install leg.
+ */
+export function runCliSmokeCases(input: CliSmokeRunInput): CliSmokeRunResult {
+  const findings: StandaloneFinding[] = [];
+  const smokeCases = input.smokeCases ?? CLI_SMOKE_CASES;
+  const childEnv = childEnvironment(input.sourceEnv ?? process.env);
+  const relocatedEnv = relocatedGitEnvironment(childEnv, path.join(input.decoyDir, ".git"));
+  const spawnCase = input.spawnCase ?? ((entry, loader, smoke, env, repoDir) => {
+    const ran = spawnSync(process.execPath, ["--import", pathToFileURL(loader).href, entry, ...smoke.args], {
+      cwd: repoDir,
+      env,
+      encoding: "utf8",
+      timeout: STEP_TIMEOUT_MS,
+      stdio: CAPTURED,
+    });
+    return {
+      error: ran.error,
+      status: ran.status,
+      signal: ran.signal,
+      stdout: ran.stdout,
+      stderr: ran.stderr,
+    };
+  });
+  const resolveGitCommonDir = input.resolveGitCommonDir ?? gitCommonDirUnder;
+  const decoyHoldsRunStore = input.decoyHoldsRunStore ?? holdsRunStore;
+  let allocatedRunId: string | undefined;
+  let casesCompleted = 0;
+
+  for (const smoke of smokeCases) {
+    const label = caseLabel(smoke);
+    const caseEnv = caseEnvironment(smoke, childEnv, relocatedEnv);
+    if (smoke.underRelocatedGit === true) {
+      const control = relocationControlFinding(
+        label,
+        resolveGitCommonDir(input.repoDir, caseEnv),
+        path.join(input.decoyDir, ".git"),
+      );
+      if (control !== undefined) findings.push(control);
+    }
+
+    const ran = spawnCase(input.entry, input.loader, smoke, caseEnv, input.repoDir);
+    if (ran.error !== undefined || ran.status === null) {
+      findings.push({
+        rule: "cli-command-failed",
+        subject: CLI_PACKAGE_NAME,
+        message: `\`${label}\` did not run to completion from a standalone install: ${
+          ran.error === undefined ? `terminated by ${ran.signal ?? "an unknown signal"}` : describe(ran.error)
+        }`,
+      });
+      continue;
+    }
+    casesCompleted += 1;
+    const output = `${ran.stdout}${ran.stderr}`;
+    allocatedRunId ??= allocatedRunIdFrom(output);
+    if (ran.status !== smoke.exitCode) {
+      findings.push({
+        rule: "cli-command-failed",
+        subject: CLI_PACKAGE_NAME,
+        message: `\`${label}\` exited ${ran.status} from a standalone install, not ${smoke.exitCode}: ${excerpt(output)}`,
+      });
+      continue;
+    }
+    const missing = missingExpectations(smoke, output, allocatedRunId);
+    if (missing.length > 0) {
+      findings.push({
+        rule: "cli-command-failed",
+        subject: CLI_PACKAGE_NAME,
+        message: `\`${label}\` exited ${ran.status} as expected but its output named none of ${missing.join(", ")}: ${excerpt(output)}`,
+      });
+      continue;
+    }
+    input.log?.(`cli-ok ${label}`);
+  }
+
+  if (decoyHoldsRunStore(input.decoyDir)) {
+    findings.push({
+      rule: "run-store-unexpected",
+      subject: CLI_PACKAGE_NAME,
+      message: `a run store was created under managed-delivery/runs/ of the decoy repository at ${input.decoyDir}; the case that ran with GIT_DIR and GIT_COMMON_DIR pointed there must resolve its store from the working directory's repository instead`,
+    });
+  }
+
+  return { findings, casesCompleted };
+}
+
 // ── Workspace inspection ─────────────────────────────────────────────────────
 
 export interface WorkspacePackage {
@@ -760,69 +882,9 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
           });
           continue;
         }
-        const relocatedEnv = relocatedGitEnvironment(childEnv, path.join(decoyDir, ".git"));
-
-        /** What `emit run.started` reported, for the cases that assert on it. */
-        let allocatedRunId: string | undefined;
-
-        for (const smoke of CLI_SMOKE_CASES) {
-          const label = caseLabel(smoke);
-          const caseEnv = caseEnvironment(smoke, childEnv, relocatedEnv);
-
-          // Asked under the case's own environment value, so the control and the
-          // case it guards cannot disagree about what was relocated.
-          if (smoke.underRelocatedGit === true) {
-            const control = relocationControlFinding(label, gitCommonDirUnder(repoDir, caseEnv), path.join(decoyDir, ".git"));
-            if (control !== undefined) findings.push(control);
-          }
-
-          const ran = spawnSync(process.execPath, ["--import", pathToFileURL(loader).href, entry, ...smoke.args], {
-            cwd: repoDir,
-            env: caseEnv,
-            encoding: "utf8",
-            timeout: STEP_TIMEOUT_MS,
-            stdio: CAPTURED,
-          });
-          if (ran.error !== undefined || ran.status === null) {
-            findings.push({
-              rule: "cli-command-failed",
-              subject: pkg.name,
-              message: `\`${label}\` did not run to completion from a standalone install: ${
-                ran.error === undefined ? `terminated by ${ran.signal ?? "an unknown signal"}` : describe(ran.error)
-              }`,
-            });
-            continue;
-          }
-          // Counted here rather than after the assertions below: what the guard
-          // at the end of the run refuses is a case that never ran, and a case
-          // whose exit code or output was wrong already has its own finding.
-          cliCasesCompleted += 1;
-          // Both streams: an ok result prints to stdout and a blocked one to
-          // stderr, and two of these cases are asserting on a refusal.
-          const output = `${ran.stdout}${ran.stderr}`;
-          // The first allocation wins: later cases assert against the id this
-          // run produced, and the relocated case must never be able to supply
-          // one of its own.
-          allocatedRunId ??= allocatedRunIdFrom(output);
-          if (ran.status !== smoke.exitCode) {
-            findings.push({
-              rule: "cli-command-failed",
-              subject: pkg.name,
-              message: `\`${label}\` exited ${ran.status} from a standalone install, not ${smoke.exitCode}: ${excerpt(output)}`,
-            });
-            continue;
-          }
-          const missing = missingExpectations(smoke, output, allocatedRunId);
-          if (missing.length > 0) {
-            findings.push({
-              rule: "cli-command-failed",
-              subject: pkg.name,
-              message: `\`${label}\` exited ${ran.status} as expected but its output named none of ${missing.join(", ")}: ${excerpt(output)}`,
-            });
-            continue;
-          }
-          log(`cli-ok ${label}`);
-        }
+        const smokeResult = runCliSmokeCases({ entry, loader, repoDir, decoyDir, log });
+        findings.push(...smokeResult.findings);
+        cliCasesCompleted += smokeResult.casesCompleted;
 
         // What the run-surface cases left behind, read before the `finally`
         // below removes the tree it lives in. An `emit` that exited zero having
@@ -845,17 +907,6 @@ export function runStandaloneInstallCheck(input: StandaloneCheckInput): Standalo
           });
         }
 
-        // The other half of the relocation witness. The case above says which
-        // store ANSWERED; this says which store was WRITTEN — an installed CLI
-        // that stopped clearing the namespace would have allocated here, in a
-        // repository the operator never named.
-        if (holdsRunStore(decoyDir)) {
-          findings.push({
-            rule: "run-store-unexpected",
-            subject: pkg.name,
-            message: `a run store was created under managed-delivery/runs/ of the decoy repository at ${decoyDir}; the case that ran with GIT_DIR and GIT_COMMON_DIR pointed there must resolve its store from the working directory's repository instead`,
-          });
-        }
       }
     }
 

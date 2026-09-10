@@ -1,0 +1,148 @@
+# Concurrent delivery dogfood: V26-2014
+
+Observed during the September 10, 2026 delivery of V26-2014 alongside V26-2015
+and V26-2016. This report records friction, ownership, and outcomes; observations
+are not delivery evidence or permission to bypass admission.
+
+| Observation | Evidence and impact | Owner / tracking | Workaround or resolution |
+|---|---|---|---|
+| Shared Python editable installs cross worktree boundaries | The V26-2016 orchestrator reported two concurrent producer suites with identical 335-test failures (7 failures, 4 errors). Editable-install metadata in shared site-packages names whichever worktree installed last; isolated qualification children also miss user-site dependencies. V26-2014's producer agent was using that shared environment. | Existing V26-1764, owned by V26-2016; peer-reported diagnosis, not an independently reproduced V26-2014 result. | Use a private virtual environment per producer worktree. V26-2014 private environment installation completed in about 3 seconds; 33 targeted tests passed in 15.515 seconds, registry validation and 22 registry mutation sensors passed. The private environment stayed out of Git. The owner subsequently merged V26-1764 in producer PR #67 after two concurrent private-environment suites each passed 394 tests; its two mandated lenses aligned in round 2. This is peer-reported merge evidence. |
+| Saving a work-stage checkpoint requires a capturable candidate | V26-2014 invoked `save-context` with its contract and `stage: work` while implementation files were unstaged. It refused with `candidate_unprepared`, listing unstaged/untracked changes. The saved-workflow instruction says to save at meaningful stage boundaries, but concurrent shared-tree workers naturally have incomplete edits. | Existing ordinary recovery work V26-1845; reported for contract clarification. | Confirmed workaround: after the intended batch was committed at c363e4a, the identical command saved ordinary context for run-ac30923bb07f0e8f. No false saved-context success was recorded during the dirty stage. |
+| Shared generated outputs need explicit ownership across orchestrators | V26-2014 proposed a patch runtime bump; V26-2016 already owned an additive API requiring 0.5.0. Independent installations would churn policy/generation bytes and stale each other's candidates. | V26-2014/V26-2015/V26-2016 coordination; V26-1402 owns version advancement. | Agreed V26-2014/2015 merge compatible source first; V26-2016 owns final 0.5.0 release/installation. V26-2014 separately qualifies its candidate artifacts. |
+| Parallel source edits can make intermediate typechecks fail | Docs worker's intermediate typecheck reached another worker's new integrity test before its implementation module existed. This was an in-progress shared-tree state, not a failed final candidate. | V26-2014 orchestration log; no separate defect inferred. | Ownership boundaries and narrow tests during implementation; freeze the whole candidate before the full gate and review. |
+| Cross-task direct subagent messaging was unavailable | V26-2016 reported that its app message to the docs subagent was disallowed. Root-to-root messages worked and relayed the proposed shared CLI-doc parser API. | V26-2016 canonical log owner; host limitation observed by peer, no product issue. | Route shared-file/API decisions through orchestrators, retaining the owning task and exact files. |
+
+The delivery uses sibling isolated worktrees for mutation probes. Mutants are
+never planted in the shared delivery worktree; this avoids phantom failures in
+other workers' controls and keeps the eventual candidate capturable.
+
+
+Friction deduplication is coordinated root-to-root before issue creation. The
+canonical owners are V26-1764/V26-2016 for Python isolation, V26-1845/V26-2014
+for the work-stage checkpoint observation, V26-2016 for the host messaging and
+release-sequencing logs, and V26-2015 for interrupted-subagent discovery. No new
+friction issue has been created by this delivery.
+
+Older ticket descriptions also named superseded implementation details: the
+record command now parses retention options rather than checking its first
+argument directly, and provider qualification now preserves a historical
+experiment separately from current distributed-product qualification. Workers
+read current source/tests and adapted their proofs rather than reinstating the
+old mechanics. These are intake costs, not new product defects.
+
+
+The fresh harness `npm install` also emitted `EBADENGINE`: the host Node was
+23.5.0, while Vitest 4.1.11 declares Node 20, 22, or 24+. Installation succeeded
+and targeted tests ran successfully. The apparent `node@22` Homebrew path also
+reported 23.5.0, so it was not claimed as Node 22 validation. This is retained as
+host-environment evidence, with no product ticket or false hosted-matrix claim.
+
+
+Crossed root-to-root messages briefly oscillated consolidated producer ownership
+between V26-2014 and V26-2016. Both directions had been proposed before all
+messages arrived. The final acknowledged decision is V26-2014 owns producer
+integration/review/merge; V26-2016 supplies signal changes and the final runtime;
+V26-2015 supplies its source changes. A named decision and explicit acknowledgments
+resolved the ambiguity. This is logged coordination overhead, not a new product
+issue. The provisional qualifier finished before its pause message arrived:
+core 12 scenarios/102 assertions and Linear 7 scenarios/39 assertions passed;
+disposable V26-2030 and V26-2031 were confirmed canceled. Those qualifications
+remain bound only to the provisional artifacts and will not be reused for
+changed consolidated bytes. Qualification began before the cross-epic source set
+was fully agreed, so this requalification cost was avoidable orchestration
+overhead. Final live collection will wait for one explicit source/artifact freeze,
+as the existing batch-release guidance already requires.
+
+A parent self-check found a trailing missing `--manifest` value regression after
+the initial harness batch was frozen. Test-first rows were added and repaired;
+all 11 focused argument tests pass. The overlapping full gate saw the temporary
+red rows and is superseded, not credited as validation of the repaired candidate.
+The final gate will run only after the updated source and shared base settle.
+
+The provisional product sensor rejected the archive built before the manifest
+repair because its embedded runtime no longer matched candidate source. Rebuilding
+restored parity and the installed-runtime probe passed. This is successful
+freshness enforcement; no new defect was inferred.
+
+V26-1764 hosted jobs could not start because of account billing, as the owning
+orchestrator confirmed from GitHub annotations. V26-2016 keeps the canonical
+external-CI log; this delivery will independently report its own hosted outcome.
+
+Cross-orchestrator inspection found a real shared-helper defect before review:
+flag extraction shortened `--manifest2` to the valid `--manifest`. V26-2014
+owns the complete-token repair and focused probes; V26-2016 owns the broader
+example-guide consumer proof under existing V26-2007. Digits, uppercase letters,
+underscores and dots now survive extraction for registry rejection. All 58
+focused tests pass and five isolated rollback mutations fail. No duplicate
+ticket or competing parser was introduced.
+
+The merge lane transferred after V26-2015 PR #134 merged at
+1838e921c697a54aa0b2ae75537abc6d34a91fe7. The V26-2014 rebase preserved the
+path set and delivered lines exactly. The combined source gate passed 147 test
+files and 3,289 tests. Its separately built 0.4 candidate product passed the
+installed-runtime sensor and real Git identity probes twice with identical bytes.
+These results do not stand in for the later consolidated 0.5 product.
+
+A caller shortened the original scope text while resolving the merge-lane wait.
+The runtime refused that observation with `invalid_transition`; retrying the
+refused event with the original exact scope succeeded. This was transcription
+friction and successful enforcement, recorded without a new product issue. The
+original wait binding and scope must be retained together for resolution.
+
+The first independent review round found four causes: incomplete downstream
+token parsing, a removed obsolete-command guard, an unobserved default spawn
+environment, and an unpinned unreadable generation receipt. Repairs remain under
+the existing acceptance tickets, including V26-1593 for the receipt witness.
+V26-2016 also found compound commands missed by the shared parser under V26-2007
+and supplied its helper and focused tests. V26-2014 integrated that dependency
+before verification rather than duplicating the parser or creating another issue.
+The documentation, real child-process environment, and receipt mutations now
+fail their focused sensors; originating reviewers still decide closure.
+
+The shared helper was first supplied before the supplier completed its mutation
+followthrough. That followthrough exposed escaped-separator and shell-comment
+cases, so the supplier named a final freeze at cae1379. V26-2014 replaced the
+provisional bytes before its full gate or second round began and acknowledged
+that exact freeze. The handoff ordering cost one repeated focused check; it did
+not invalidate a completed gate or consume another review round.
+
+The second review closed the token, default-spawn and unreadable-receipt
+findings. Both lenses retained the obsolete-headline finding because its repair
+had omitted the former whitespace normalization. Newline, CRLF, tab and repeated
+space probes now fail with that normalization restored. The testing lens also
+found two unpinned shared-parser branches; V26-2016 owns their focused witnesses
+under existing V26-2007. No duplicate ticket was created.
+
+Reusing a review activity for round two exposed a caller binding error: the new
+attempt must name its predecessor and retain that supersedesAttemptId on every
+state update. Two refused observations were corrected with their stable event
+identifiers before reviewer dispatch. Both peers acknowledged V26-2014 as the
+canonical friction owner. This records successful enforcement and caller
+friction; it does not claim an admission or product failure.
+
+In-app run UI dogfood showed both unresolved findings and readable captured
+reports with the explicit observation-not-approval boundary. Initially root had
+not emitted its current peer wait or delivery milestones, so neither appeared.
+After factual activity, agent-wait and milestone events were emitted, the page
+correctly said no human action was required and showed the remaining merge and
+tracker finish steps. V26-2015 independently observed the same milestone caller
+omission; this corroborates its record rather than opening another product issue.
+
+Round three aligned both mandated lenses within the original four-round bound.
+All carried findings and in-run deferrals were closed by their originating
+lenses, including both V26-2007 parser witnesses. The final source gate passed
+147 files and 3,308 tests. No new deferred ticket remains from the harness review.
+
+Both V26-2014 and V26-2016 browser checks showed that the inventory subtitle is
+the configured repository source name for every shared-common-directory run,
+not the originating worktree. Tickets distinguish the runs, but the subtitle can
+be misread during concurrent delivery. V26-2014 owns this interpretation note;
+V26-2016 corroborated it without a duplicate issue or unsupported defect claim.
+The V26-2014 temporary tab and local server were closed; port54214 refused a
+connection afterward.
+
+The consolidated producer has separate run run-45162c0bd7b8d3f2. Its final
+runtime-bearing provider qualification is owned by V26-2015; V26-2016 supplies
+the reviewed runtime, and V26-2014 owns composition, remaining qualifications,
+review and merge. No harness review history or bound is reset for that distinct
+repository delivery.
