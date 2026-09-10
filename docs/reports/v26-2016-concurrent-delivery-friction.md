@@ -176,3 +176,14 @@ worktree and the real subprocess suite passed. This was fixture setup friction,
 not a delivery-product failure. Separately, artifact mutations were kept in a
 detached worktree to avoid contaminating other workers' sensor runs; no shared
 source mutation or contaminated result occurred. No tracking issue was created.
+
+## F7: A proposed liveness probe counted zombies as surviving work
+
+During V26-1911/1912 implementation, a second post-SIGKILL process-group probe
+occasionally classified a killed, reparented zombie as incomplete cleanup. The
+native sensor distinguishes absent/zombie processes from live workload. The
+extra probe was removed; bounded direct-child waits remain and failures now
+produce typed diagnostics with only observed PID liveness. Native POSIX controls
+and targeted mutations pass. This implementation finding is resolved within
+existing V26-1911/1912, owned by V26-2016; no duplicate follow-up was created.
+Windows branches were modeled on macOS and are not claimed as native proof.
