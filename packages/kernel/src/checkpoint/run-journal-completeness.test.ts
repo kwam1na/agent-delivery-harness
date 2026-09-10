@@ -276,6 +276,20 @@ describe("the complete and executor-only readings", () => {
     expect(result.missing).toContain("command.completed:gate");
   });
 
+  it("does not apply gate.reported ordering to a journal governed by CLI completions", () => {
+    const reportedAfterPr = journal([
+      ...COMPLETE.slice(0, -1),
+      gateReported,
+      ended,
+    ]);
+    const reportedBeforeClose = journal([
+      started, ticketRead, posture, lenses(), opened(1), gateReported, closed(1),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(reportedAfterPr, TREE, MANDATED).violations).toEqual([]);
+    expect(evaluateRunJournal(reportedBeforeClose, TREE, MANDATED).violations).toEqual([]);
+  });
+
   it("refuses executor-only status to a journal that has any CLI completion", () => {
     // The row above is satisfied whether the executor-only test reads "no CLI
     // completion at all" or the weaker "no CLI GATE completion", because its
