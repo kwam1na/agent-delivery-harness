@@ -60,12 +60,21 @@ describe("run-event payload grammar discovery", () => {
         expect(unknown?.message, `${version} ${kind} accepted set`).toContain(`accepted members: ${members.join(", ")}`);
 
         for (const member of grammar!.members) {
-          if (member.values === undefined) continue;
-          const malformed = rejections(event(kind, version, { [member.name]: "__not_in_vocabulary__" }))
+          const invalid = validateRunEvent(event(kind, version, { [member.name]: "__not_in_vocabulary__" }));
+          const malformed = (invalid.ok ? [] : invalid.rejections)
             .find(rejection => rejection.code === "malformed_member" && rejection.pointer === `/payload/${member.name}`);
-          expect(malformed?.message, `${version} ${kind}.${member.name}`).toBe(
-            `${member.name} accepts only: ${member.values.join(", ")}`,
-          );
+          const prefix = `${member.name} accepts only: `;
+          const expected = malformed?.message.startsWith(prefix)
+            ? malformed.message.slice(prefix.length).split(", ") : undefined;
+          // Ask the validator first: missing descriptor metadata must not skip
+          // the very assertion that would observe its absence.
+          expect(member.values, `${version} ${kind}.${member.name}`).toEqual(expected);
+          for (const accepted of expected ?? []) {
+            const verdict = validateRunEvent(event(kind, version, { [member.name]: accepted }));
+            const rejectedMember = verdict.ok ? [] : verdict.rejections.filter(rejection =>
+              rejection.code === "malformed_member" && rejection.pointer === `/payload/${member.name}`);
+            expect(rejectedMember, `${kind}.${member.name} accepts ${accepted}`).toEqual([]);
+          }
         }
       }
     });
@@ -74,6 +83,40 @@ describe("run-event payload grammar discovery", () => {
   it("does not project unknown kinds or v2-only kinds into version 1", () => {
     expect(describeRunEventPayload("unknown.kind", RUN_EVENT_SPEC_V2)).toBeUndefined();
     expect(describeRunEventPayload("activity.observed", RUN_EVENT_SPEC)).toBeUndefined();
+  });
+
+  const nestedTables = [
+    { kind: "run.started", member: "workflow", value: { releaseId: "test", profile: "core" }, members: ["releaseId", "profile"], required: "releaseId" },
+    { kind: "run.ended", member: "cost", value: { unit: "usd", total: 1, reportedBy: "host" }, members: ["unit", "total", "reportedBy", "coverage"], required: "reportedBy" },
+    { kind: "run.ended", member: "cost", value: { coverage: "unreported", reportedBy: "host" }, members: ["coverage", "reportedBy"], required: "reportedBy" },
+    { kind: "review.round.closed", member: "findings", value: { P0: 0, P1: 0, P2: 0, P3: 0 }, members: ["P0", "P1", "P2", "P3"], required: "P0" },
+    { kind: "context.saved", member: "contract", value: { objective: "deliver", finishLine: "merged", acceptanceCriteria: ["checks pass"] }, members: ["objective", "finishLine", "acceptanceCriteria"], required: "objective" },
+    { kind: "context.saved", member: "candidateBinding", value: { deliverableDigest: "a".repeat(64), identity: "tree/1", baseRef: "main", baseTipSha: "b".repeat(40), mergeBaseSha: "c".repeat(40), workspaceId: "repo" }, members: ["deliverableDigest", "identity", "baseRef", "baseTipSha", "mergeBaseSha", "workspaceId"], required: "identity" },
+    { kind: "context.saved", member: "release", value: { runtimeVersion: "1", releaseId: "test", profile: "core", archiveSha256: "a".repeat(64) }, members: ["runtimeVersion", "releaseId", "profile", "archiveSha256"], required: "releaseId" },
+    { kind: "ticket.read", member: "repo", envelope: true, value: { commonDir: "/tmp/repo/.git" }, members: ["commonDir", "remote"], required: "commonDir" },
+    { kind: "ticket.read", member: "actor", envelope: true, value: { role: "executor" }, members: ["role", "id"], required: "role" },
+  ] as const;
+
+  it.each(nestedTables)("identifies the active $kind.$member table on missing and unknown members ($required)", fixture => {
+    const pointer = `${"envelope" in fixture ? "" : "/payload"}/${fixture.member}`;
+    const make = (value: Record<string, unknown>): unknown => {
+      const base = event(fixture.kind, RUN_EVENT_SPEC_V2, "envelope" in fixture ? {} : { [fixture.member]: value });
+      return "envelope" in fixture ? { ...base as Record<string, unknown>, [fixture.member]: value } : base;
+    };
+    // The valid nested value survives independently of unrelated missing
+    // payload members in these minimal event probes.
+    const valid = validateRunEvent(make(fixture.value));
+    expect(valid.ok ? [] : valid.rejections.filter(item => item.pointer.startsWith(`${pointer}/`))).toEqual([]);
+    const missing: Record<string, unknown> = { ...fixture.value };
+    delete missing[fixture.required];
+    for (const [value, code, member] of [
+      [missing, "missing_member", fixture.required],
+      [{ ...fixture.value, invented: true }, "unknown_member", "invented"],
+    ] as const) {
+      const rejection = rejections(make(value)).find(item => item.code === code && item.pointer === `${pointer}/${member}`);
+      expect(rejection?.message).toContain(`accepted members: ${fixture.members.join(", ")}`);
+      expect(rejection?.message.match(/accepted members:/g)).toHaveLength(1);
+    }
   });
 
   it("does not expose the validator's closed vocabulary arrays to consumer mutation", () => {

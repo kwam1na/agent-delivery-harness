@@ -203,10 +203,13 @@ interface Pairing {
   readonly inverted: boolean;
 }
 
-// A replay keeps its counted round number, but has a fresh v2 roundId. Legacy
-// journals have no such identity and retain their numeric pairing semantics.
+// A replay keeps its counted round number, but has a fresh v2 roundId. Both
+// fields must agree within a pair; legacy journals retain numeric pairing.
 function roundKey(event: RunEvent): unknown {
-  return payloadOf(event)[event.version === "run-event/2" ? "roundId" : "round"];
+  const payload = payloadOf(event);
+  return event.version === "run-event/2"
+    ? JSON.stringify([payload["roundId"], payload["round"]])
+    : payload["round"];
 }
 
 function pairRounds(events: readonly RunEvent[]): Pairing {

@@ -19,7 +19,7 @@ import {
   type RunJournalRequiredEntry,
   type RunJournalViolation,
 } from "./run-journal-completeness.ts";
-import { runPrimaryTicket, type RunEvent, type RunEventKind } from "./run-event.ts";
+import { runPrimaryTicket, validateRunEvent, type RunEvent, type RunEventKind } from "./run-event.ts";
 
 const TREE = "a".repeat(40);
 const OTHER_TREE = "b".repeat(40);
@@ -126,6 +126,23 @@ const v2Round = (step: Step, roundId: string, reopensRoundId?: string): Step => 
 
 describe("retry and base-move replay completeness", () => {
   const retry: Step = { ...started, version: "run-event/2", payload: { ...started.payload, predecessorRunId: "run-previous" } };
+
+  it.each([[1, 2], [2, 1]])("requires matching counted numbers for the same v2 round id (%i to %i)", (opening, closing) => {
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(opening), "same-round-id"), v2Round(closed(closing), "same-round-id"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]).map((entry, index) => ({ ...entry, eventId: `number-consistency-${index}` }));
+    for (const entry of events) expect(validateRunEvent(entry)).toEqual({ ok: true });
+    const result = evaluateRunJournal(events, TREE, MANDATED);
+    expect(result.status).toBe("incomplete");
+    expect(result.missing).toContain("review.round.closed");
+    expect(result.violations).toContain("gate-before-closed-round");
+
+    const matched = events.map(entry => entry.kind === "review.round.closed"
+      ? { ...entry, payload: { ...entry.payload, round: opening } } : entry);
+    expect(evaluateRunJournal(matched, TREE, MANDATED).status).toBe("complete");
+  });
 
   it("retains an existing PR on a linked retry without requiring its opening after this attempt's gate", () => {
     const steps = [retry, ticketRead, posture, lenses(), prOpened, opened(1), closed(1), completed("gate"), completed("record"), ended];

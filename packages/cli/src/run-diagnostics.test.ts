@@ -169,6 +169,23 @@ describe("current-run and grammar diagnostics", () => {
 });
 
 describe("writer-version diagnostics", () => {
+  it.each(["1", "2"] as const)("explains invalid version %s startup flags without allocating a run", async version => {
+    const root = await repository();
+    const refused = await cli(root, ["emit", "run.started", "--version", version,
+      ...(version === "1" ? ["--event-id", "extra"] : []), "--json", JSON.stringify(started)]);
+    expect(refused.code).toBe(EXIT_USAGE);
+    expect(refused.out).toBe("");
+    expect(refused.err).toContain(version === "2"
+      ? "run.started is creating a version 2 run; every emit needs --event-id"
+      : "run.started is creating a version 1 run and does not accept --event-id; drop it");
+    const resolved = await resolveRunSurface(root);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    expect(await resolved.surface.store.current(resolved.surface.worktreeKey)).toEqual({ ok: true });
+    expect(await resolved.surface.store.list()).toEqual([]);
+    const runId = await start(root, version);
+    expect(await journal(root, runId)).toHaveLength(1);
+  });
+
   it("distinguishes a missing v2 event id from an extra v1 event id", async () => {
     const v2Root = await repository();
     const v2Run = await start(v2Root, "2");
