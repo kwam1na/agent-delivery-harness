@@ -14,6 +14,7 @@
  * to move with it.
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -141,7 +142,17 @@ describe("re-recording the compiled policy snapshot", () => {
     const snapshot = JSON.parse(result.text) as Snapshot;
     expect(snapshot.compiled.snapshot.productTrustRevocationEpoch).toBe(2);
     expect(snapshot.compiled.snapshot.repositoryAuthorityRevocationEpoch).toBe(3);
-    expect(snapshot.compiledWith["compilerSha256"]).toMatch(/^[a-f0-9]{64}$/);
+    const installedRuntime = JSON.parse(await readFile(path.join(dir, INSTALLED_ARCHIVE_DIR, "runtime/runtime.json"), "utf8")) as { runtimeVersion: string };
+    const activeRelease = JSON.parse(await readFile(path.join(dir, ".agent-skills/active.json"), "utf8")) as { release: { archiveSha256: string } };
+    expect(snapshot.compiledWith).toEqual({
+      productTrustRevocationEpoch: 2,
+      repositoryAuthorityRevocationEpoch: 3,
+      module: "runtime/kernel.mjs",
+      compilerSha256: createHash("sha256").update(await readFile(path.join(dir, INSTALLED_ARCHIVE_DIR, "runtime/kernel.mjs"))).digest("hex"),
+      runtimeVersion: installedRuntime.runtimeVersion,
+      bootstrapInputsSha256: createHash("sha256").update(await readFile(path.join(dir, POLICY_PROJECTION_DIR, "bootstrap-inputs.json"))).digest("hex"),
+      personaSource: { archiveSha256: activeRelease.release.archiveSha256 },
+    });
     expect(result.staleReport).toBe(false);
     expect((await run(dir, "--product", "--bootstrap")).code).toBe(0);
     await expect(readFile(path.join(dir, POLICY_PROJECTION_DIR, REPORT_FILE))).rejects.toMatchObject({ code: "ENOENT" });
