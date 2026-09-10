@@ -48,6 +48,8 @@ export interface RunRootRequest {
 export interface RunRoot {
   readonly providerId: string;
   readonly runId: string;
+  /** The original physical pool, retained across later path changes. */
+  readonly resolvedBasePath: string;
   /** Absolute, symlink-resolved. */
   readonly path: string;
 }
@@ -89,7 +91,8 @@ export type RunRootResolution =
  *                         port never touched the filesystem with it.
  *   `missing`           — nothing resolves there.
  *   `outside_run_root`  — it resolves, and the resolution is not inside the
- *                         run root. A symlink that resolves *inside* is not
+ *                         run root, or the root has left its original pool.
+ *                         A symlink that resolves *inside* is not
  *                         this: containment is judged after resolution, so a
  *                         link within the run is an ordinary file.
  *   `not_a_file`        — a directory, or another non-regular entry. It has no
@@ -156,10 +159,18 @@ export interface ArtifactsPort {
   allocateRunRoot(request: RunRootRequest): Promise<RunRootResolution>;
   /** The same derivation without creating anything. */
   resolveRunRoot(request: RunRootRequest): Promise<RunRootResolution>;
-  /** Whether `target` resolves to a location strictly inside `runRootPath`. */
+  /**
+   * Whether `target` resolves strictly inside `runRootPath` and that root is
+   * still inside the port's original resolved pool. Rechecked on every call;
+   * a path-based port cannot make resolution and use atomic.
+   */
   isInsideRunRoot(runRootPath: string, target: string): Promise<boolean>;
-  /** Classifies one declared artifact path against a run root. */
-  observeArtifact(runRootPath: string, declaredPath: string): Promise<ArtifactObservation>;
+  /**
+   * Classifies an artifact. A RunRoot rechecks its original pool on every call;
+   * a string names a generic source directory (repository inputs or captured
+   * attachments), with containment only inside that directory.
+   */
+  observeArtifact(root: RunRoot | string, declaredPath: string): Promise<ArtifactObservation>;
   /** Reads a UTF-8 text file — the submitted manifest. */
   readTextFile(target: string): Promise<string>;
   /** Writes a UTF-8 text file atomically, creating parent directories. */

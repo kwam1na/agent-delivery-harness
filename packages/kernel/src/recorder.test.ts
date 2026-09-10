@@ -24,7 +24,7 @@
  *   a receipt is a blocker rather than a rejection, and that nothing bypasses
  *   it, is this module's own contract.
  */
-import { mkdir, mkdtemp, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -853,6 +853,43 @@ describe("artifact verification", () => {
 // ── A run root the provider tampered with ──────────────────────────────────
 
 describe("a run root that is not where the harness put it", () => {
+  it.each(["containment", "artifact-read"] as const)("rejects a run-root swap at the %s boundary after derivation (V13)", async (boundary) => {
+    const test = await preparedScenario();
+    const manifestPath = await test.writeManifest(manifestFor());
+    const planted = path.join(test.outsideDir, "planted-run");
+    let swapped = false;
+    const swap = async () => {
+      expect(swapped).toBe(false);
+      await rename(test.runRoot, planted);
+      await symlink(planted, test.runRoot);
+      swapped = true;
+    };
+
+    // Inject through the filesystem port, after derive() has accepted the
+    // original root. At artifact-read, SUB-3 has also already passed: its
+    // earlier containment check must not mask a missing observation guard.
+    const outcome = await test.submit(manifestPath, {
+      artifacts: {
+        ...test.artifacts,
+        async isInsideRunRoot(root, target) {
+          if (boundary === "containment") await swap();
+          return test.artifacts.isInsideRunRoot(root, target);
+        },
+        async observeArtifact(root, declaredPath) {
+          if (boundary === "artifact-read" && !swapped) await swap();
+          return test.artifacts.observeArtifact(root, declaredPath);
+        },
+      },
+    });
+
+    expect(swapped).toBe(true);
+    expect(outcome.status).toBe("rejected");
+    expect(codesOf(outcome)).toContain("artifact_outside_run_root");
+    if (boundary === "containment") expect(codesOf(outcome)).toContain("manifest_outside_run_root");
+    else expect(codesOf(outcome)).not.toContain("manifest_outside_run_root");
+    expect(await test.recordFiles()).toEqual([]);
+  });
+
   it("blocks a submission whose run root has been replaced with a symlink", async () => {
     // The provider owns the run root between allocation and submission, so it
     // can remove the directory and link the name somewhere else. Every

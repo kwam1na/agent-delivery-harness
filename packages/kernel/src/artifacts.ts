@@ -222,8 +222,19 @@ export async function defaultRunRootBase(): Promise<string> {
 }
 
 export function createArtifactsPort(options: ArtifactsPortOptions = {}): ArtifactsPort {
-  const base = async (): Promise<string> =>
-    options.runRootBase === undefined ? defaultRunRootBase() : realpath(options.runRootBase);
+  // Pin the physical pool once per port, lazily so record-only I/O need not
+  // create a run pool. Re-resolving the base on each call would let a swapped
+  // base symlink redefine the very boundary we are trying to enforce.
+  let resolvedBase: Promise<string> | undefined;
+  const base = (): Promise<string> =>
+    resolvedBase ??= options.runRootBase === undefined ? defaultRunRootBase() : realpath(options.runRootBase);
+
+  // Node's portable filesystem API has no openat/dirfd-relative reads. This
+  // fallback rechecks pool containment at every operation, rejecting a root
+  // or parent swapped after derive(). It narrows, but does NOT fully close,
+  // the TOCTOU window: path resolution and the later stat/open are separate
+  // operations, and a concurrent rename can still occur between them. The
+  // file handle below pins bytes only after open; it does not pin ancestors.
 
   const derive = async (request: RunRootRequest, create: boolean): Promise<RunRootResolution> => {
     if (!PROVIDER_ID.test(request.providerId)) return { ok: false, reason: "unsafe_provider_id" };
@@ -270,6 +281,7 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
     const runRoot: RunRoot = {
       providerId: request.providerId,
       runId: request.runId,
+      resolvedBasePath: baseDir,
       // An unallocated run root has no physical form yet; the derived path is
       // still the answer to "where would it be". Nothing resolves there, so
       // every containment check against it is false and every artifact under it
@@ -286,10 +298,11 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
     async isInsideRunRoot(runRootPath, target) {
       const [root, resolved] = await Promise.all([resolvedOrNull(runRootPath), resolvedOrNull(target)]);
       if (root === null || resolved === null) return false;
-      return isInsideResolved(root, resolved);
+      return isInsideResolved(await base(), root) && isInsideResolved(root, resolved);
     },
 
-    async observeArtifact(runRootPath, declaredPath) {
+    async observeArtifact(runRoot, declaredPath) {
+      const runRootPath = typeof runRoot === "string" ? runRoot : runRoot.path;
       const observation = (
         rest: Omit<ArtifactObservation, "declaredPath">,
       ): ArtifactObservation => ({ declaredPath, ...rest });
@@ -312,6 +325,16 @@ export function createArtifactsPort(options: ArtifactsPortOptions = {}): Artifac
           sha256: null,
           contents: null,
           detail: "the run root does not exist",
+        });
+      }
+
+      if (typeof runRoot !== "string" && !isInsideResolved(runRoot.resolvedBasePath, root)) {
+        return observation({
+          status: "outside_run_root",
+          resolvedPath: root,
+          sha256: null,
+          contents: null,
+          detail: "the run root resolves outside its original pool",
         });
       }
 
