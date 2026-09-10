@@ -498,20 +498,35 @@ describe("the charter set the emitter reviews under", () => {
     expect(manifest.personas.length).toBeGreaterThan(activated.length);
   });
 
-  it("is the set this emitter's usage and the provider guide already name", async () => {
-    // Both documents show an outcome by reviewer id. Reviewer ids did not move
-    // when the charters became identity references, and this is where that is
-    // checked rather than asserted.
-    const own = new Set(await resolveReviewerCharters(CHECKOUT_ROOT));
+  it("is the set and arity this emitter's usage and the provider guide describe", async () => {
+    // Both documents show named result entries, and the guide also carries the
+    // complete unnamed reviewer array a reader can submit. Reviewer ids did not
+    // move when the charters became identity references; the array's arity must
+    // move when the policy-selected set does.
+    const own = await resolveReviewerCharters(CHECKOUT_ROOT);
+    const ownSet = new Set(own);
     const namedIn = (text: string) => [...text.matchAll(/"id":\s*"([^"]+)",\s*"result"/g)].map((match) => match[1]!);
+    const outcomesIn = (text: string): readonly { reviewers: readonly unknown[] }[] =>
+      [...text.matchAll(/<<'JSON'\s*\n([\s\S]*?)\nJSON/g)]
+        .map((match) => match[1]!)
+        .filter((document) => /"spec"\s*:\s*"review-outcome\/1"/.test(document))
+        .map((document) => JSON.parse(document) as { reviewers: readonly unknown[] });
     const usage = readFileSync(EMITTER_PATH, "utf8").split("*/")[0]!;
     const guide = await readFile(path.join(CHECKOUT_ROOT, "docs", "provider-guide.md"), "utf8");
-    for (const [source, ids] of [
-      ["the emitter's usage header", namedIn(usage)],
-      ["the provider guide's outcome example", namedIn(guide)],
+    for (const [source, text] of [
+      ["the emitter's usage header", usage],
+      ["the provider guide", guide],
     ] as const) {
+      const ids = namedIn(text);
       expect(ids.length, `${source} names a reviewer`).toBeGreaterThan(0);
-      for (const id of ids) expect(own.has(id), `${source} names reviewer ${id}`).toBe(true);
+      for (const id of ids) expect(ownSet.has(id), `${source} names reviewer ${id}`).toBe(true);
+    }
+    const documentedOutcomes = outcomesIn(guide);
+    expect(documentedOutcomes.length, "the provider guide carries a complete review outcome to pin").toBeGreaterThan(0);
+    for (const outcome of documentedOutcomes) {
+      expect(outcome.reviewers, "the provider guide's reviewer array follows the policy-selected arity").toHaveLength(
+        own.length,
+      );
     }
   });
 

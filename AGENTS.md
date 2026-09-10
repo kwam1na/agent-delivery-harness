@@ -120,6 +120,18 @@ rejected by `delivery-harness verify` and by the pull-request check.
 CLI-inventory sensors, then the test suite. It must be green before a candidate
 is offered.
 
+For mutation testing, start with the narrowest sensor that reaches the changed
+behavior and run the clean control and mutant against the same isolated scope.
+A timeout in a full-suite run under concurrent load establishes neither
+contention nor a killed mutation; rerun both control and mutant in isolation
+before attributing the result.
+
+Overlapping guards can make each other equivalent mutants when either guard
+fully enforces the same claim. Evidence for one guard must disable every other
+guard that would mask its removal. When that is impractical, prefer one guard
+with exhaustive per-arm pins; do not add a second full enforcement layer whose
+effect no single-arm mutation can expose.
+
 ## Run the product's own delivery loop
 
 Every candidate carries a tracked delivery record produced by this repository's
