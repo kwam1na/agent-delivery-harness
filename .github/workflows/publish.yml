@@ -33,6 +33,12 @@
 # discovered the one time it was needed. HARNESS_VERSION is covered
 # transitively: `scripts/check-release.ts` holds it in lockstep with the root
 # manifest, which this step has just pinned to the tag.
+#
+# A RE-RUN COMPLETES A PARTIAL PUBLISH. Before each package is published, the
+# workflow asks npm for that exact package and version. An existing version is
+# skipped; only npm's explicit E404 means the version is absent and may be
+# published. Transport, authentication, malformed, and other registry failures
+# stop the job rather than being mistaken for absence.
 
 name: Publish
 
@@ -97,6 +103,11 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Require the tag commit on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node --import tsx scripts/check-publish-ancestor.ts "${GITHUB_SHA}" "${DEFAULT_BRANCH}"
+
       - name: Version equality with the tag, and its refusal
         env:
           TAG_NAME: ${{ github.ref_name }}
@@ -153,22 +164,22 @@ jobs:
       - name: Static release sensor
         run: node --import tsx scripts/check-release.ts
 
-      # Dependency order, so no published package can name a sibling version the
-      # registry does not yet have: kernel depends on nothing, conformance, cli
-      # and action depend on kernel, mcp depends on cli and kernel. One step per
-      # package, so a failure names the package that did not publish — and says
-      # which ones already did.
+      # Dependency order, so no newly published package can name a sibling
+      # version the registry does not yet have: kernel depends on nothing;
+      # conformance, cli and action depend on kernel; mcp depends on cli and
+      # kernel. Each helper invocation skips an exact version npm already has,
+      # allowing a failed run to resume at the first missing package.
       - name: Publish kernel
-        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/kernel"
+        run: node --import tsx scripts/publish-workspace-if-missing.ts "@agent-delivery-harness/kernel" "${GITHUB_REF_NAME#v}"
 
       - name: Publish conformance
-        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/conformance"
+        run: node --import tsx scripts/publish-workspace-if-missing.ts "@agent-delivery-harness/conformance" "${GITHUB_REF_NAME#v}"
 
       - name: Publish cli
-        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/cli"
+        run: node --import tsx scripts/publish-workspace-if-missing.ts "@agent-delivery-harness/cli" "${GITHUB_REF_NAME#v}"
 
       - name: Publish action
-        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/action"
+        run: node --import tsx scripts/publish-workspace-if-missing.ts "@agent-delivery-harness/action" "${GITHUB_REF_NAME#v}"
 
       - name: Publish mcp
-        run: npm publish --provenance --access public --workspace "@agent-delivery-harness/mcp"
+        run: node --import tsx scripts/publish-workspace-if-missing.ts "@agent-delivery-harness/mcp" "${GITHUB_REF_NAME#v}"
