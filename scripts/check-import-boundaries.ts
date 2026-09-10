@@ -300,6 +300,9 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     status: "present",
   },
   { id: "host-exec-port", path: "packages/kernel/src/host/exec-port.ts", kind: "file", rules: ["e"], status: "present" },
+  // Entry identity resolves filesystem spellings, so it is neither d1-pure nor
+  // a d2 artifact-port consumer. It remains a decision path with no clock.
+  { id: "host-entry", path: "packages/kernel/src/host/entry.ts", kind: "file", rules: ["e"], status: "present" },
   { id: "kernel-facade", path: "packages/kernel/src/facade", kind: "dir", rules: ["e"], status: "present" },
   { id: "kernel-evaluator", path: "packages/kernel/src/evaluator.ts", kind: "file", rules: ["d1", "e"], status: "present" },
   { id: "kernel-context", path: "packages/kernel/src/context.ts", kind: "file", rules: ["d1"], status: "present" },

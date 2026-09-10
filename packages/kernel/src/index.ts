@@ -921,6 +921,7 @@ export {
   type ProjectionConsumptionObservation,
 } from "./projection-consumption-observation.ts";
 export { createExecPort, type ExecInvocation, type ExecOutcome, type ExecPort } from "./host/exec-port.ts";
+export { entryHref, invokedDirectly } from "./host/entry.ts";
 export {
   checkReviewFloor,
   composeOutcomeVerification,

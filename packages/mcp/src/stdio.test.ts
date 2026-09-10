@@ -10,13 +10,11 @@
  */
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
-import { access, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { realpathSync, rmSync } from "node:fs";
+import { access, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, onTestFinished } from "vitest";
-import { invokedDirectly } from "./stdio.ts";
 import {
   HANDSHAKE_PROTOCOL_VERSIONS,
   INVALID_PARAMS,
@@ -429,7 +427,9 @@ describe("cancellation on the real stdio wire", () => {
       cwd: dir,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    onTestFinished(() => child.kill("SIGKILL"));
+    onTestFinished(() => {
+      child.kill("SIGKILL");
+    });
     child.stdin.on("error", () => {});
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -882,73 +882,6 @@ describe("the executable entry guard", () => {
   const cleanups: string[] = [];
   afterAll(() => {
     for (const dir of cleanups) rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("survives a path containing a URL-significant character", async () => {
-    // A `#` or `?` in a directory name truncates a naively built file:// URL.
-    // A real on-disk fixture, so the resolved branch is the one exercised.
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-mcp-entry-url-"));
-    cleanups.push(dir);
-    const weird = path.join(dir, "a#b");
-    await mkdir(weird, { recursive: true });
-    const modulePath = path.join(weird, "stdio.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    expect(invokedDirectly(modulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
-  });
-
-  it("matches through a symlinked invocation path, under either symlink regime", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-mcp-entry-"));
-    cleanups.push(dir);
-    const real = path.join(dir, "real");
-    await mkdir(real, { recursive: true });
-    const modulePath = path.join(real, "module.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    const linkedDir = path.join(dir, "linked");
-    await symlink(real, linkedDir, "dir");
-    const linkedModulePath = path.join(linkedDir, "module.ts");
-
-    // Under default module resolution `import.meta.url` carries the module's
-    // realpath while argv carries the caller's spelling — the symlink, for a
-    // checkout launched through one (`/tmp` → `/private/tmp` on macOS).
-    expect(invokedDirectly(linkedModulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
-    // Under `--preserve-symlinks-main` the regime flips: `import.meta.url`
-    // keeps the symlink spelling. A guard that realpathed only the argv side
-    // would under-match here — same dead server, opposite configuration.
-    const linkedHref = pathToFileURL(linkedModulePath).href;
-    expect(invokedDirectly(linkedModulePath, linkedHref)).toBe(true);
-    expect(invokedDirectly(modulePath, linkedHref)).toBe(true);
-    // A different module never matches, whatever the spelling.
-    const otherPath = path.join(real, "other.ts");
-    await writeFile(otherPath, "export const y = 2;\n", "utf8");
-    expect(invokedDirectly(linkedModulePath, pathToFileURL(otherPath).href)).toBe(false);
-    expect(invokedDirectly(undefined, linkedHref)).toBe(false);
-  });
-
-  it("falls back to comparing the spellings when a side cannot be resolved", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-mcp-entry-fallback-"));
-    cleanups.push(dir);
-    const real = path.join(dir, "real");
-    await mkdir(real, { recursive: true });
-    const linkedDir = path.join(dir, "linked");
-    await symlink(real, linkedDir, "dir");
-
-    // Neither path exists, so both canonicalizations keep the spellings —
-    // which match, URL-significant characters included. Deleting the
-    // per-side catch turns this row into a thrown error, not a wrong answer.
-    const ghost = path.join(real, "gh#ost.ts");
-    expect(invokedDirectly(ghost, pathToFileURL(ghost).href)).toBe(true);
-    // A side that cannot be resolved cannot be seen through: the only
-    // difference between these two spellings is the link, and with no
-    // filesystem entry to resolve it, the guard honestly under-matches.
-    expect(invokedDirectly(path.join(linkedDir, "gh#ost.ts"), pathToFileURL(ghost).href)).toBe(false);
-    // Each side is canonicalized independently, so one unresolvable side does
-    // not discard the other side's resolution — in either direction.
-    const modulePath = path.join(real, "module.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    expect(invokedDirectly(path.join(linkedDir, "module.ts"), pathToFileURL(path.join(real, "missing.ts")).href)).toBe(false);
-    expect(invokedDirectly(path.join(linkedDir, "missing.ts"), pathToFileURL(realpathSync(modulePath)).href)).toBe(false);
-    // A module href that is not a file: URL is never this module.
-    expect(invokedDirectly(modulePath, "data:text/javascript,export{}")).toBe(false);
   });
 
   /**
