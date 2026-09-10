@@ -646,6 +646,19 @@ const HOSTILE_ROWS = [
 ] as const;
 
 describe("reasons built from untrusted receipt bytes", () => {
+  it.each(["token_", "x"])("redacts credentials glued to %s in the receipt reason and blocker", async (prefix) => {
+    const tree = await tempTree("glued-credential");
+    const receiptPath = await prepared(tree);
+    const token = `ghp_${"a".repeat(36)}`;
+    tamper(receiptPath, { gateId: `${prefix}${token}` });
+    const evaluation = await evaluate(tree);
+    expect(failure(evaluation)).toBe("invalid");
+    if (evaluation.prepared) return;
+    expect(evaluation.reason).not.toContain(token);
+    expect(evaluation.reason).toContain("[REDACTED]");
+    expect(evaluation.blockers[0]?.details).toBe(evaluation.reason);
+  });
+
   it.each(HOSTILE_ROWS)("redacts, bounds, and shares one sanitized string on the %s class", async (expected, changes) => {
     const tree = await tempTree(`hostile-${expected}`);
     const receiptPath = await prepared(tree);

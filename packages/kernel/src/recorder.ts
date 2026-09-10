@@ -521,7 +521,7 @@ export async function submitManifest(input: SubmissionInput, options: Submission
     }
 
     for (const entry of declaredArtifacts(manifest)) {
-      const observation = await artifacts.observeArtifact(runRoot.path, entry.path);
+      const observation = await artifacts.observeArtifact(runRoot, entry.path);
       observations.set(entry.path, observation);
       if (observation.status === "readable" && observation.contents !== null) {
         artifactContents.set(entry.path, observation.contents);

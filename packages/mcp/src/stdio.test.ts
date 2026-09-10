@@ -10,13 +10,11 @@
  */
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { realpathSync, rmSync } from "node:fs";
+import { access, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, onTestFinished } from "vitest";
-import { invokedDirectly } from "./stdio.ts";
 import {
   HANDSHAKE_PROTOCOL_VERSIONS,
   INVALID_PARAMS,
@@ -319,10 +317,227 @@ describe("the loop", () => {
     const written: string[] = [];
     await serveStdio(Readable.from([`${lines.join("\n")}\n`]), (line) => written.push(line), host);
 
-    expect(written).toHaveLength(3);
-    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual(["a", "b", "c"]);
+    expect(written).toHaveLength(2);
+    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual(["a", "c"]);
     expect(written.every((line) => line.endsWith("\n") && !line.slice(0, -1).includes("\n"))).toBe(true);
   });
+
+  it("suppresses an active cancelled response, skips queued cancelled work, and continues in order", async () => {
+    const input = new Readable({ read() {} });
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedHost = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let loads = 0;
+    const slowHost: ToolHostRuntime = {
+      cwd: process.cwd(),
+      env: {},
+      loadConfig: async () => {
+        loads += 1;
+        started();
+        await blocked;
+        return {} as never;
+      },
+    };
+    const written: string[] = [];
+    const serving = serveStdio(input, (line) => written.push(line), slowHost);
+
+    input.push(`${JSON.stringify(request("tools/call", { name: "review-context", arguments: {} }, "active"))}\n`);
+    await reachedHost;
+    input.push(`${JSON.stringify(request("tools/call", { name: "review-context", arguments: {} }, "queued"))}\n`);
+    input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "active" } })}\n`);
+    input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "queued" } })}\n`);
+    input.push(`${JSON.stringify(request("ping", undefined, "after"))}\n`);
+    input.push(null);
+    release();
+    await serving;
+
+    expect(loads, "a queued cancellation must stop work before it reaches the host").toBe(1);
+    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual(["after"]);
+    expect(written[0]).toBe(`${JSON.stringify({ jsonrpc: "2.0", id: "after", result: {} })}\n`);
+  });
+
+  it.each([17, 0])("keeps numeric cancellation id %s distinct from its string spelling", async (numericId) => {
+    const input = new Readable({ read() {} });
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedHost = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const slowHost: ToolHostRuntime = {
+      cwd: process.cwd(),
+      env: {},
+      loadConfig: async () => {
+        started();
+        await blocked;
+        return {} as never;
+      },
+    };
+    const written: string[] = [];
+    const serving = serveStdio(input, (line) => written.push(line), slowHost);
+
+    input.push(`${JSON.stringify(request("tools/call", { name: "review-context", arguments: {} }, numericId))}\n`);
+    await reachedHost;
+    input.push(`${JSON.stringify(request("ping", undefined, String(numericId)))}\n`);
+    input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: numericId } })}\n`);
+    input.push(null);
+    release();
+    await serving;
+
+    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual([String(numericId)]);
+  });
+
+  it("answers an id-bearing cancellation-shaped request without cancelling its pending target", async () => {
+    const input = new Readable({ read() {} });
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedHost = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const slowHost: ToolHostRuntime = {
+      cwd: process.cwd(),
+      env: {},
+      loadConfig: async () => {
+        started();
+        await blocked;
+        return {} as never;
+      },
+    };
+    const written: string[] = [];
+    const serving = serveStdio(input, (line) => written.push(line), slowHost);
+
+    input.push(`${JSON.stringify(request("tools/call", { name: "review-context", arguments: {} }, "blocker"))}\n`);
+    await reachedHost;
+    input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "blocker" } })}\n`);
+    input.push(`${JSON.stringify(request("ping", undefined, "target"))}\n`);
+    input.push(`${JSON.stringify(request("notifications/cancelled", { requestId: "target" }, "cancel-request"))}\n`);
+    input.push(`${JSON.stringify(request("ping", undefined, "after"))}\n`);
+    input.push(null);
+    release();
+    await serving;
+
+    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual(["target", "cancel-request", "after"]);
+    expect(JSON.parse(written[1] ?? "null")).toMatchObject({
+      jsonrpc: "2.0",
+      id: "cancel-request",
+      error: { code: METHOD_NOT_FOUND },
+    });
+  });
+
+  it("ignores cancellations for initialize, completed, unknown, and malformed targets", async () => {
+    const input = new Readable({ read() {} });
+    const written: string[] = [];
+    let sentFollowup = false;
+    const serving = serveStdio(
+      input,
+      (line) => {
+        written.push(line);
+        const response = JSON.parse(line) as JsonRpcResponse;
+        if (response.id !== "done" || sentFollowup) return;
+        sentFollowup = true;
+        input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "done" } })}\n`);
+        input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "unknown" } })}\n`);
+        input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: {} } })}\n`);
+        input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled" })}\n`);
+        input.push(`${JSON.stringify(request("ping", undefined, "after"))}\n`);
+        input.push(null);
+      },
+      host,
+    );
+
+    input.push(`${JSON.stringify(request("ping", undefined, "done"))}\n`);
+    input.push(`${JSON.stringify(request("initialize", { protocolVersion: MCP_PROTOCOL_VERSION }, "initialize"))}\n`);
+    input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "initialize" } })}\n`);
+    await serving;
+
+    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual(["done", "initialize", "after"]);
+  });
+});
+
+async function waitForPath(file: string, child: ReturnType<typeof spawn>): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      await access(file);
+      return;
+    } catch {
+      if (child.exitCode !== null) throw new Error(`MCP server exited before reaching the slow config fixture: ${child.exitCode}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error("MCP server did not reach the slow config fixture.");
+}
+
+describe("cancellation on the real stdio wire", () => {
+  it.each(SUPPORTED_PROTOCOL_VERSIONS)("suppresses a cancelled %s response and preserves the next response bytes", async (version) => {
+    const repoRoot = path.resolve(import.meta.dirname, "../../..");
+    const dir = await mkdtemp(path.join(repoRoot, ".mcp-cancel-wire-"));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const marker = path.join(dir, "config-started");
+    await writeFile(
+      path.join(dir, "harness.config.ts"),
+      [
+        'import { writeFile } from "node:fs/promises";',
+        `await writeFile(${JSON.stringify(marker)}, "started", "utf8");`,
+        "await new Promise((resolve) => setTimeout(resolve, 750));",
+        "export default {};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const child = spawn(process.execPath, ["--import", "tsx", path.join(repoRoot, "packages/mcp/src/stdio.ts")], {
+      cwd: dir,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    onTestFinished(() => {
+      child.kill("SIGKILL");
+    });
+    child.stdin.on("error", () => {});
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+
+    const stateless = version === MCP_STATELESS_PROTOCOL_VERSION;
+    if (!stateless) {
+      child.stdin.write(`${JSON.stringify(request("initialize", { protocolVersion: version }, "initialize"))}\n`);
+    }
+    const slow = stateless
+      ? statelessRequest("tools/call", { name: "review-context", arguments: {} }, statelessMeta({ [META_PROTOCOL_VERSION]: version }), "cancelled")
+      : request("tools/call", { name: "review-context", arguments: {} }, "cancelled");
+    child.stdin.write(`${JSON.stringify(slow)}\n`);
+    await waitForPath(marker, child);
+
+    const cancellationParams = stateless
+      ? { requestId: "cancelled", _meta: statelessMeta({ [META_PROTOCOL_VERSION]: version }) }
+      : { requestId: "cancelled" };
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: cancellationParams })}\n`);
+    const after = stateless
+      ? statelessRequest("tools/list", {}, statelessMeta({ [META_PROTOCOL_VERSION]: version }), "after")
+      : request("ping", undefined, "after");
+    child.stdin.end(`${JSON.stringify(after)}\n`);
+
+    const exitCode = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    const diagnostics = Buffer.concat(stderr).toString("utf8");
+    expect(exitCode, diagnostics).toBe(0);
+    const lines = Buffer.concat(stdout).toString("utf8").split("\n").filter(Boolean);
+    const responses = lines.map((line) => JSON.parse(line) as JsonRpcResponse);
+    expect(responses.some((response) => response.id === "cancelled"), diagnostics).toBe(false);
+    const afterWire = lines.find((line) => (JSON.parse(line) as JsonRpcResponse).id === "after");
+    const expectedAfter = encodeResponse((await answer(after)) as JsonRpcResponse).trimEnd();
+    expect(afterWire).toBe(expectedAfter);
+  }, 30_000);
 });
 
 /**
@@ -740,73 +955,6 @@ describe("the executable entry guard", () => {
   const cleanups: string[] = [];
   afterAll(() => {
     for (const dir of cleanups) rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("survives a path containing a URL-significant character", async () => {
-    // A `#` or `?` in a directory name truncates a naively built file:// URL.
-    // A real on-disk fixture, so the resolved branch is the one exercised.
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-mcp-entry-url-"));
-    cleanups.push(dir);
-    const weird = path.join(dir, "a#b");
-    await mkdir(weird, { recursive: true });
-    const modulePath = path.join(weird, "stdio.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    expect(invokedDirectly(modulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
-  });
-
-  it("matches through a symlinked invocation path, under either symlink regime", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-mcp-entry-"));
-    cleanups.push(dir);
-    const real = path.join(dir, "real");
-    await mkdir(real, { recursive: true });
-    const modulePath = path.join(real, "module.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    const linkedDir = path.join(dir, "linked");
-    await symlink(real, linkedDir, "dir");
-    const linkedModulePath = path.join(linkedDir, "module.ts");
-
-    // Under default module resolution `import.meta.url` carries the module's
-    // realpath while argv carries the caller's spelling — the symlink, for a
-    // checkout launched through one (`/tmp` → `/private/tmp` on macOS).
-    expect(invokedDirectly(linkedModulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
-    // Under `--preserve-symlinks-main` the regime flips: `import.meta.url`
-    // keeps the symlink spelling. A guard that realpathed only the argv side
-    // would under-match here — same dead server, opposite configuration.
-    const linkedHref = pathToFileURL(linkedModulePath).href;
-    expect(invokedDirectly(linkedModulePath, linkedHref)).toBe(true);
-    expect(invokedDirectly(modulePath, linkedHref)).toBe(true);
-    // A different module never matches, whatever the spelling.
-    const otherPath = path.join(real, "other.ts");
-    await writeFile(otherPath, "export const y = 2;\n", "utf8");
-    expect(invokedDirectly(linkedModulePath, pathToFileURL(otherPath).href)).toBe(false);
-    expect(invokedDirectly(undefined, linkedHref)).toBe(false);
-  });
-
-  it("falls back to comparing the spellings when a side cannot be resolved", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-mcp-entry-fallback-"));
-    cleanups.push(dir);
-    const real = path.join(dir, "real");
-    await mkdir(real, { recursive: true });
-    const linkedDir = path.join(dir, "linked");
-    await symlink(real, linkedDir, "dir");
-
-    // Neither path exists, so both canonicalizations keep the spellings —
-    // which match, URL-significant characters included. Deleting the
-    // per-side catch turns this row into a thrown error, not a wrong answer.
-    const ghost = path.join(real, "gh#ost.ts");
-    expect(invokedDirectly(ghost, pathToFileURL(ghost).href)).toBe(true);
-    // A side that cannot be resolved cannot be seen through: the only
-    // difference between these two spellings is the link, and with no
-    // filesystem entry to resolve it, the guard honestly under-matches.
-    expect(invokedDirectly(path.join(linkedDir, "gh#ost.ts"), pathToFileURL(ghost).href)).toBe(false);
-    // Each side is canonicalized independently, so one unresolvable side does
-    // not discard the other side's resolution — in either direction.
-    const modulePath = path.join(real, "module.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    expect(invokedDirectly(path.join(linkedDir, "module.ts"), pathToFileURL(path.join(real, "missing.ts")).href)).toBe(false);
-    expect(invokedDirectly(path.join(linkedDir, "missing.ts"), pathToFileURL(realpathSync(modulePath)).href)).toBe(false);
-    // A module href that is not a file: URL is never this module.
-    expect(invokedDirectly(modulePath, "data:text/javascript,export{}")).toBe(false);
   });
 
   /**

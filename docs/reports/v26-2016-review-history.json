@@ -1,0 +1,583 @@
+{
+  "outcome": "aligned",
+  "bound": 4,
+  "boundRelease": {
+    "archiveSha256": "f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea",
+    "metadataSha256": "c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8",
+    "profile": "linear",
+    "releaseId": "linear-contract-alignment-v1"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "candidateRef": {
+        "schemaVersion": "workflow-candidate-ref/1",
+        "opaque": "harness-context-c3a5725b9a6b4624de60ccb03b605079f03f4452d923a476530dc6e85c6dd2b7"
+      },
+      "entries": [
+        {
+          "release": {
+            "archiveSha256": "f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea",
+            "metadataSha256": "c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8",
+            "profile": "linear",
+            "releaseId": "linear-contract-alignment-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-c3a5725b9a6b4624de60ccb03b605079f03f4452d923a476530dc6e85c6dd2b7"
+          },
+          "round": 1,
+          "lens": "lens.outcome-correctness",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "aligned",
+            "findings": [],
+            "evidence": [
+              "realizationBasis: host-convention; modelClass: gpt-5.6-sol; lens: lens.outcome-correctness; ordinary assessment round 1 of original bound 4; actual result contract: review-lens-result/1. There were no prior harness findings, deferrals, or carry-forward entries.",
+              "Binding preserved exactly: release archiveSha256 f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea, metadataSha256 c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8, profile linear, releaseId linear-contract-alignment-v1; graphSha256 49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7; subjectRef V26-2016:harness; candidateRef harness-context-c3a5725b9a6b4624de60ccb03b605079f03f4452d923a476530dc6e85c6dd2b7; round 1.",
+              "Candidate resolution verified in the isolated worktree: HEAD 7d1731666be6e12098f0be0bfcadf193a965fae6, tree 8a5f6ba4400c68579e79590241fcf9bb77df1aa8, merge base ccec7f64b0022023d9f434520629ea795c340492. The complete merge-base..HEAD diff was reviewed: 40 files, 1,046 insertions and 433 deletions. The newer prepared base tip and peer V26-2015 source were not used as a reverse-diff baseline.",
+              "V26-1349 holds in shipped code. packages/kernel/src/blockers.ts removes the word-boundary escape from recognizable provider, AWS, and JWT credential classes while leaving the context-sensitive assignment rules and their negative controls intact. Chain tests cover glued letter, digit, and underscore prefixes plus trailing separators; records quarantine and preparation refusal tests exercise the shared consumer renderers.",
+              "V26-1350 uses the explicitly allowed portable fallback. Each artifacts port lazily pins the resolved pool path; isInsideRunRoot rechecks the root against that pool; recorder artifact observations carry the allocated RunRoot so each read rechecks the root against its original resolvedBasePath. The code explicitly says this narrows rather than eliminates the path-resolution/open race. Focused tests cover root, parent, and base redirection, the two V13 injection boundaries, static outside plants, an inside-pool relocation, the macOS-style base alias, raw-byte digestion, and the 89-vector integration runner through retained source evidence.",
+              "V26-1351 holds at both parse and execution boundaries. parseDeliveryRecord rejects top-level identityToken disagreement with candidateBinding and repeated obligation ids before returning a typed record, including delivery-record/1 and delivery-record/2 fixtures. captureGitCandidate classifies actual index.lock/File exists write-tree failures as retryable contention while retaining repair-index guidance for other index failures. The retained eight-child witness observes eight fail-closed contention responses and a successful retry after releasing the real Git lock.",
+              "V26-1401 tracks queued and active request ids in serveStdio while continuing to read cancellation notifications outside the serialized work chain. A valid notifications/cancelled marks ordinary work, queued requests are skipped before host dispatch, active results are discarded, unknown/completed/malformed targets are ignored, initialize remains non-cancellable, and later requests preserve arrival order. Real stdio child tests cover 2026-07-28, 2025-11-25, 2025-06-18, and 2024-11-05 and prove the cancelled id is absent while the next response equals the ordinary encoded bytes.",
+              "V26-1402 centralizes entryHref and invokedDirectly in packages/kernel/src/host/entry.ts, exports them from the kernel barrel, and leaves CLI, MCP, and Action with their import.meta.url call sites. Per-side realpath fallback, URL-significant characters, both Node symlink regimes, missing paths, and non-file URLs are covered. The module is registered as the fs-bearing host-entry class under sensor rule e only, and the anti-vacuity fixture plus a time-read falsification row guard that registration.",
+              "V26-2007 inventories the exact eight top-level shell-bearing guides and checks every detected harness invocation against the live COMMANDS registry by command, full flag token, and runs subcommand. Getting-started remains executable verbatim. The shared scanner recognizes npm/bare CLI launchers and the installed python/python3 product launcher, excludes shell comment-only lines, and leaves external/placeholder commands unexecuted. The imported f707f56 scanner and test bytes at ac15ecc compare byte-identically with their source commit before the candidate's Python-launcher increment.",
+              "Independent focused verification at the bound candidate passed 667 tests in 11 files in 16.80 seconds with DELIVERY_HARNESS_MAX_WORKERS=2: blockers, preparation, records, candidate, delivery-record, artifacts, recorder, host entry, MCP stdio, CLI-example scanner, and import-boundary sensor tests. Parent-provided full gate evidence is also green at the same commit: 144 files and 3,228 tests, with typecheck, import-boundary sensor, CLI inventory, and vitest all passing.",
+              "Declined concerns: the handle-free artifact approach does not fully close every filesystem check/use race, but V26-1350 expressly permits this fallback and requires the residual limitation to be documented, which it is. A cancellation that arrives after completion is ignored as the protocol permits; active work may settle but emits no response. The stale two-tool wording in the historical V26-1401 ticket and review-neutral friction reports do not change the delivered behavior and are not findings inside the code diff.",
+              "No concrete P0, P1, P2, or P3 failure was found inside the delivered diff. This assessment covers the source behavior claimed for this round only. Peer reconciliation, final installed product identity, renewed review/admission after integration, PR, merge, tracker closeout, and journal lifecycle remain with the root delivery. The review worktree stayed clean; no source fix, mutation, commit, merge, tracker write, or run event was performed by this lens."
+            ]
+          }
+        },
+        {
+          "release": {
+            "archiveSha256": "f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea",
+            "metadataSha256": "c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8",
+            "profile": "linear",
+            "releaseId": "linear-contract-alignment-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-c3a5725b9a6b4624de60ccb03b605079f03f4452d923a476530dc6e85c6dd2b7"
+          },
+          "round": 1,
+          "lens": "lens.adversarial-testing",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "changes-requested",
+            "findings": [
+              "[P0] AT1: Pin cancellation request-ID types and message shape (packages/mcp/src/stdio.ts:466-471; packages/mcp/src/stdio.test.ts:325-389). M1 changes pending.get(params[\"requestId\"]) to pending.get(String(params[\"requestId\"])); all 81 MCP tests remain green although cancelling numeric id 17 now emits response 17. M2 deletes isNotification(message) && from the cancellation interceptor; the same 81 tests remain green although an id-bearing notifications/cancelled request now suppresses its target and loses its own response. The exact clean witness emits [\"after\"] for numeric cancellation and [\"target\",\"cancel-request\",\"after\"] for the id-bearing message; mutants emit [17,\"after\"] and [\"after\"] respectively. Add a numeric-ID cancellation row (including distinct numeric/string identity) and a matched pending-target id-bearing-message row that assert surviving target and request response. These falsify two central cancellation claims; severity follows the mandated testing charter.",
+              "[P0] AT2: Enumerate every harness invocation on a compound shell line (docs/cli-examples.ts:28; docs/docs-examples.test.ts:145-160). In docs/provider-guide.md:95, change delivery-harness prepare to delivery-harness prepare; delivery-harness deploy. All 64 documentation tests remain green, including the registry sensor; the scanner returns only prepare because its args capture consumes the entire remainder of the line. The new all-guide command-existence claim therefore admits a real invalid documented command. Add a compound-line case that proves both invocations are harvested and the invalid later command is rejected, then repair the scanner boundary; retain valid compound commands and continuation coverage. Severity follows the mandated testing charter."
+            ],
+            "evidence": [
+              "review-lens-result/1; realizationBasis=host-convention; actual model class=gpt-6-astra; lens=lens.adversarial-testing; reviewer=/root/harness_testing; independent isolated worktree=/Users/kwamina/agent-delivery-harness-v26-2016-r1-at.",
+              "Assessment round 1 of original bound 4; subjectRef=V26-2016:harness; candidateRef=harness-context-c3a5725b9a6b4624de60ccb03b605079f03f4452d923a476530dc6e85c6dd2b7 resolves to tree 8a5f6ba4400c68579e79590241fcf9bb77df1aa8 at commit 7d1731666be6e12098f0be0bfcadf193a965fae6. Reviewed merge-base ccec7f64b0022023d9f434520629ea795c340492..candidate, not reverse peer-main differences.",
+              "Original release archiveSha256=f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea; metadataSha256=c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8; profile=linear; releaseId=linear-contract-alignment-v1; graphSha256=49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7.",
+              "Observation binding: run-be224a9c0f2cc055 / review-harness-at / harness-at-r1 / harness-round-1 / round 1. Root owns lifecycle and capture; this reviewer emitted no journal events.",
+              "No prior findings, carried deferrals, late findings, or new tracker writes. Both findings are in the assessment scope. No fixes were implemented.",
+              "Independent initial clean control: 193 tests across 6 files. Same-scope MCP comment-only control: 81 tests across 3 files; M1 and M2 each survive the same entire MCP scope with 81 passing tests. Same-scope docs clean control: 64 tests across 4 files; M3 survives all 64. Detailed commands, exact patches, wire witnesses, source-evidence assessment, and declined findings: /Users/kwamina/.codex/v26-2016-evidence/harness-at-r1-evidence.md.",
+              "Reviewed executor artifacts and recorder fallback plants: each operation guard and recorder binding independently killed, with comment-only control and V13 post-containment witness. Audited redaction-family and parser/lock plants; credited their documented behavioral failures, not byte pins. Full repository gate supplied by root is green (144 files, 3228 tests); this reviewer did not rerun or claim independent full-gate execution.",
+              "Final restored control passed 145 tests across 7 files (entire MCP and docs scopes), 10.87s, harness-at-r1-restored.log. git status --porcelain is empty; HEAD and tree exactly match the bound candidate. All mutants restored."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "candidateRef": {
+        "schemaVersion": "workflow-candidate-ref/1",
+        "opaque": "harness-context-5d2e207a64af2bec2ca8421afcd57534cebc2964422bea9f9bd1f7a46eea171f"
+      },
+      "entries": [
+        {
+          "release": {
+            "archiveSha256": "f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea",
+            "metadataSha256": "c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8",
+            "profile": "linear",
+            "releaseId": "linear-contract-alignment-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-5d2e207a64af2bec2ca8421afcd57534cebc2964422bea9f9bd1f7a46eea171f"
+          },
+          "round": 2,
+          "lens": "lens.outcome-correctness",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "aligned",
+            "findings": [],
+            "evidence": [
+              "realizationBasis: host-convention; modelClass: gpt-5.6-sol; independence: unverified; lens: lens.outcome-correctness; ordinary verification round 2 of the original bound 4; result contract: review-lens-result/1.",
+              "Binding preserved exactly: release archiveSha256 f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea, metadataSha256 c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8, profile linear, releaseId linear-contract-alignment-v1; graphSha256 49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7; subjectRef V26-2016:harness; candidateRef harness-context-5d2e207a64af2bec2ca8421afcd57534cebc2964422bea9f9bd1f7a46eea171f; round 2.",
+              "Candidate resolution verified in the isolated worktree: HEAD 3de8c8f3cb6782a48df267ab9fae543e57bb9982 and tree 72f9aac329d79d1c2f7b158e9760a58d35c3b2c8. The previous candidate reference resolves to tree 8a5f6ba4400c68579e79590241fcf9bb77df1aa8. The complete previous/current tree delta contains 40 files, 2,490 insertions and 283 deletions; peer integration was included rather than treated as reverse differences from another checkout.",
+              "Round 1 carried disposition: the exact bound round-1 entry reported zero findings, zero deferrals and no late findings, so there is no individual finding to close, keep open, raise, withdraw or keep deferred. Every round-1 acceptance judgment was rechecked at the current tree and continues aligned; none was inferred closed from an executor closure list.",
+              "V26-1349, V26-1350, V26-1351, and V26-1402 retain the source reviewed in round 1 byte-for-byte. The shared redaction chain still covers glued token, AWS and JWT forms at its three consumer surfaces; the artifacts port still rechecks each original RunRoot against its lazily pinned resolved pool and documents the expressly permitted residual re-resolve race; record parsing still rejects token disagreement and duplicate obligations while Git index-lock failures remain retryable contention; and the shared host entry guard remains the single fs-bearing implementation used by CLI, MCP, and Action.",
+              "V26-1401 also retains its runtime implementation byte-for-byte. The round-2 addition supplies the missing identity distinctions at the wire boundary: numeric and string request ids remain separate, including zero, and an id-bearing cancellation-shaped request receives METHOD_NOT_FOUND without cancelling its target. The existing queued/active suppression, initialize exception, completed/unknown/malformed ignores, later-request ordering, and four supported protocol-revision transcript controls remain intact.",
+              "V26-2007 remains bound to the live command registry across the exact eight top-level shell-bearing guides. The integrated scanner now enumerates unquoted shell-separated commands while preserving quoted and escaped separators and discarding shell comments; the runbook checks commands, flags, runs subcommands, quoted config members, and resolvable prose paths. The final docs/getting-started.md spelling in the runbook restores the case-sensitive prose-path witness that the immediately preceding candidate lacked.",
+              "The full integrated delta was reviewed for load-bearing regressions. V26-2014 additions refuse unknown or ambiguous submit-evidence arguments before wiring, keep nonregular record-neutral entries in validation identity, recompute installed-generation receipt file digests and active pointer identity, preserve policy-report staleness on recovery, and retain standalone smoke behavior through its extracted loop. V26-2015 additions keep licensing/provenance and package dependency closure fail closed, verify a tag commit against a freshly fetched remote default branch, and resume partial publication only after npm explicitly reports the exact package version present or explicitly returns E404.",
+              "Focused verification at the current tree passed 447 tests in 13 affected suites in 6.97 seconds: documentation scanner/reference, CLI argument ordering, config, identity, MCP stdio, release/workflow/ancestry/publish, standalone install, installed-generation integrity, and policy recompile tests. The parent-supplied full gate is green at the same commit and tree: typecheck, import-boundary sensor, 15-command CLI inventory, and 148 test files with 3,346 passing tests. Supplied standalone installation is clean across five packages, five sibling edges and six CLI smoke cases; supplied policy projection is clean.",
+              "Declined concerns: the artifact fallback still cannot eliminate every filesystem check/use race, but V26-1350 explicitly allows the re-verification design when Node cannot provide portable handle-relative I/O and requires this remaining limitation to be documented, which it is. The installed-generation integrity check authenticates current bytes against the receipt and compares the selected directory basename to the receipt archive digest; its receipt and pointer are tracked review inputs, so alternate-path hypotheticals with identical verified bytes do not establish a failed delivered outcome. Neither is a finding.",
+              "No concrete P0, P1, P2 or P3 correctness failure was found in the round-2 scope, and no late finding exists. This result assesses the integrated source candidate only. Final qualified product installation and any later candidate change require a subsequent review round before merge. The review worktree is clean; this lens made no source fix, mutation, commit, merge, tracker write or run event."
+            ]
+          }
+        },
+        {
+          "release": {
+            "archiveSha256": "f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea",
+            "metadataSha256": "c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8",
+            "profile": "linear",
+            "releaseId": "linear-contract-alignment-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-5d2e207a64af2bec2ca8421afcd57534cebc2964422bea9f9bd1f7a46eea171f"
+          },
+          "round": 2,
+          "lens": "lens.adversarial-testing",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "changes-requested",
+            "findings": [
+              "[P0] AT4: Per-file installed-byte verification proves only the first member (scripts/installed-generation-integrity.ts:65; scripts/installed-generation-integrity.test.ts). Changing for (const entry of receipt.files) to for (const entry of receipt.files.slice(0, 1)) leaves all 66 integrity/policy tests green. The fixture names one file; a real two-file witness with first.md intact and second.md corrupted changes from an installed_generation_file_drift finding naming second.md to []. The central all-receipt-files claim is unproven. Add a multi-file fixture/row that leaves the first valid and corrupts a later member; require the exact truncation mutation to fail with the full clean installation accepted. Existing repair owner V26-1593. Evidence: harness-at-r2-integrity-first-only.patch/.log and harness-at-r2-integrity-set-witness-{control,first-only}.json under /Users/kwamina/.codex/v26-2016-evidence."
+            ],
+            "evidence": [
+              "review-lens-result/1; realizationBasis=host-convention; actual model class=gpt-6-astra; reviewer=/root/harness_testing; lens=lens.adversarial-testing; independence=unverified. Complete filled R2 brief and complete bound R1 entry read, with original result retained unchanged.",
+              "Ordinary verification round 2 of original bound 4. subjectRef=V26-2016:harness. Prior candidateRef harness-context-c3a5725b9a6b4624de60ccb03b605079f03f4452d923a476530dc6e85c6dd2b7 resolves to tree 8a5f6ba4400c68579e79590241fcf9bb77df1aa8. Current candidateRef harness-context-5d2e207a64af2bec2ca8421afcd57534cebc2964422bea9f9bd1f7a46eea171f resolves to tree 72f9aac329d79d1c2f7b158e9760a58d35c3b2c8 at commit 3de8c8f3cb6782a48df267ab9fae543e57bb9982. Reviewed the entire prior/current tree delta, 40 files, including peer integration.",
+              "Original release archiveSha256=f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea; metadataSha256=c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8; profile=linear; releaseId=linear-contract-alignment-v1; graphSha256=49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7. Observation binding run-be224a9c0f2cc055 / review-harness-at / harness-at-r2 / supersedesAttemptId harness-at-r1 / harness-round-2. Root owns lifecycle/capture; no journal event emitted here.",
+              "AT1 CLOSED: independently replanted original numeric-ID coercion and id-bearing interception mutations. Entire MCP scope is 84/84 green clean/no-op. M1 causes exactly the two numeric/string rows to fail (2 failed, 82 passed); M2 causes exactly the id-bearing request response-sequence row to fail (1 failed, 83 passed). Logs harness-at-r2-{mcp-clean,mcp-noop,m1,m2}.log; these are behavioral failures.",
+              "AT2 CLOSED: exact provider-guide prepare; deploy mutation now fails the real registry consumer, unknown command deploy (1 failed, 85 passed); clean full docs scope passes 86/86. Single-quote and initial-comment branch removals each fail their own focused row (1 failed, 31 passed); no-op passes 32/32. Logs harness-at-r2-{docs-clean,m3,helper-noop,helper-singlequote,helper-commentzero}.log.",
+              "AT3 | P2 | deferred for in-run repair to V26-1593 | scripts/installed-generation-integrity.ts:67-72,77-82. Deleting the per-file read-error finding push or independently disabling the escaped-path guard leaves all 66 integrity/policy tests green. Clean witnesses return one installed_generation_file_drift finding for a missing named file or an escaped named file; corresponding mutants return []. Required follow-up: real missing-file and escaped-entry fixtures that kill each plant independently, matched positive/no-op/restored controls. Parent confirmed V26-1593 reopened In Progress and append-only comment 3dc047e3-f378-460c-8821-dd0c50b70088 preserves PR135 history. Current V26-2016 run owns repair and this lens must close it in next bound round; no final finish-line claim while open.",
+              "AT5 | P2 | deferred for in-run repair to V26-1646 and V26-1630 | scripts/check-release.ts:440,469-473. Deleting the missing root NOTICE finding or independently deleting the missing publish-workflow finding leaves all 38 release tests green. Real minimal fixture clean source reports exactly one corresponding finding; mutant reports none. Required follow-up: exercise existing notice:false and publishRepository:false fixture options and assert finding class/path; kill each plant separately. Parent/peer 2015 confirmed V26-1646 for NOTICE and V26-1630 for workflow, preserving prior PR134 history through append-only reopening/reclosing. Root owns test repair, this lens next-round closure; no new ticket.",
+              "AT6 | P2 | deferred for in-run repair to V26-1905 | packages/kernel/src/identity.ts:250. Removing definition.identityToken === \"validation-tree/v1\" && leaves all 53 identity/conformance tests green while neutral symlink/gitlink entries become included in deliverable-tree/v1 and custom consumer-token digests. Clean witness excludes them for those tokens and includes them for validation-tree/v1. Required follow-up: legacy/custom nonregular-neutral controls alongside strict-validation allow/deny matrix, killing the exact restriction-removal plant. Parent/peer 2014 confirmed V26-1905 canonical, with append-only reopening preserving PR135/qualified 0.4 history; root owns repair and this lens next-round closure.",
+              "New AT3-AT6 are in the full integrated delta and are not late against this lens prior candidate. No carried finding was withdrawn or severity-lowered. No prior deferral existed. All P2 entries remain open for the parent-authorized in-run follow-through; no tracker write or fix was performed by this reviewer.",
+              "Assessed the remaining integrated changes and supporting peer evidence for publish ancestry/error paths, partial publishing, structural-code per-arm collisions and duplicate config arrays, release byte/copy/identity claims, standalone real-child environments, policy report staleness and symlinked entry, docs token/operating-contract sensors, manifest argument ordering, and run-journal tightening. Detailed scope decisions and declined concerns: /Users/kwamina/.codex/v26-2016-evidence/harness-at-r2-evidence.md. Peer reports are supporting evidence only, not adopted closure authority.",
+              "Final restored combined control passed 327 tests across 12 files, exit 0, 16.36s: harness-at-r2-restored.log. git status --porcelain empty; HEAD/tree exactly match bound candidate. All mutants were restored in the isolated worktree /Users/kwamina/agent-delivery-harness-v26-2016-r1-at. No source fixes, commits, merges or tracker writes. Root-supplied full gate 148 files / 3346 tests and policy/standalone receipts were not independently rerun or claimed as this lens execution."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "candidateRef": {
+        "schemaVersion": "workflow-candidate-ref/1",
+        "opaque": "harness-context-5dd747f87192d69ed78aa5b0f85b74fd52606f8448e932ab5f296421f81a4db9"
+      },
+      "entries": [
+        {
+          "release": {
+            "archiveSha256": "f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea",
+            "metadataSha256": "c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8",
+            "profile": "linear",
+            "releaseId": "linear-contract-alignment-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-5dd747f87192d69ed78aa5b0f85b74fd52606f8448e932ab5f296421f81a4db9"
+          },
+          "round": 3,
+          "lens": "lens.outcome-correctness",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "aligned",
+            "findings": [],
+            "evidence": [
+              "realizationBasis: host-convention; modelClass: gpt-5.6-sol; independence: unverified; lens: lens.outcome-correctness; ordinary verification round 3 of the original bound 4; result contract: review-lens-result/1.",
+              "Binding preserved exactly: release archiveSha256 f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea, metadataSha256 c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8, profile linear, releaseId linear-contract-alignment-v1; graphSha256 49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7; subjectRef V26-2016:harness; candidateRef harness-context-5dd747f87192d69ed78aa5b0f85b74fd52606f8448e932ab5f296421f81a4db9; round 3.",
+              "Candidate resolution verified in the isolated worktree: HEAD 3a6ec7f8938afd6f8dd3e881d18ef7ddcaf7996f and tree 445b6c3a7353a93958149231270ed4a08f620b1c. The previous candidate reference resolves to tree 72f9aac329d79d1c2f7b158e9760a58d35c3b2c8. The complete previous/current tree delta contains four files, 108 insertions and one deletion: three test files plus the retained concurrent-delivery report.",
+              "Own carried disposition from the complete contiguous R1 and R2 entries: this lens reported zero findings, zero deferrals and no late findings in both rounds. There is no OC item to close, keep open, raise, withdraw or keep deferred. Every prior OC acceptance judgment was independently rechecked at the current tree and continues aligned; no executor closure list was substituted.",
+              "All V26-2016 production paths and the integrated peer production paths reviewed in R2 are byte-identical between the previous and current candidates. V26-1349 redaction, V26-1350 run-root containment, V26-1351 record coherence/lock classification, V26-1401 cancellation, V26-1402 shared entry guards and V26-2007 guide scanning therefore retain their prior source behavior. The delta adds missing falsification evidence without changing those outcomes.",
+              "Cross-lens follow-through, kept separate from OC carry authority: the testing lens's bound R2 entry records AT1 and AT2 closed. No R3 path touches their MCP or documentation helper source/tests, so their evidence remains intact. AT3 and AT4 receive missing-file, escaped-entry and valid-first/corrupt-later installed-receipt witnesses; AT5 receives missing root NOTICE and missing publish-workflow witnesses; AT6 receives symlink/gitlink neutral-compatibility rows under deliverable-tree/v1 and a custom consumer token. The originating testing lens remains the authority that closes AT1-AT6; these are supporting OC observations only.",
+              "The new integrity fixtures exercise distinct absent, containment and iteration boundaries. A missing receipt-named file must produce installed_generation_file_drift with the path context; an escaped path whose outside bytes deliberately match the recorded digest must still be refused; and a two-entry receipt with the first valid and the later member corrupted must name the later digest mismatch. The unchanged loop, lexical containment guard and read-error branch satisfy all three.",
+              "The new release fixtures isolate each absent authority input while keeping the rest of the release shape coherent. Removing only the root NOTICE produces the one expected license-coherence finding even though package copies remain, and removing only .github/workflows/publish.yml produces the one expected provenance-repository finding. The unchanged fail-closed branches satisfy both.",
+              "The new identity matrix preserves compatibility rather than widening validation-tree/v1. For deliverable-tree/v1 and a custom consumer-tree/v1 token, a neutral symlink or gitlink leaves a retained nonneutral source digest unchanged; under validation-tree/v1 the existing strict rows still include nonregular neutral entries while omitting regular record transport. The identity-token restriction in the unchanged filter maintains that split.",
+              "Independent focused verification passed 143 tests across four affected suites before and after falsification: installed-generation integrity, policy projection, release, and identity. In the isolated review worktree, a combined removal of missing/escaped receipt refusals plus truncation to the first receipt entry failed exactly the three new integrity rows; removing the NOTICE/workflow absence findings failed exactly the two new release rows; removing the validation-tree token restriction failed exactly the four new compatibility rows. Every production mutation was restored, git diff returned empty, and the final focused scope passed 143/143.",
+              "The root-supplied full gate is green at the exact candidate commit/tree: generated types and typecheck passed, the import-boundary sensor was clean across 307 files, the CLI inventory registered 15 commands, and 148 test files passed all 3,355 tests. This lens did not repeat the full gate.",
+              "No concrete P0, P1, P2 or P3 correctness failure was found in the round-3 scope, and no late finding exists. This result assesses the integrated source candidate only. Final qualified product installation and any later candidate change require a subsequent review round before merge. The review worktree is clean; this lens made no source fix, commit, merge, tracker write or run event."
+            ]
+          }
+        },
+        {
+          "release": {
+            "archiveSha256": "f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea",
+            "metadataSha256": "c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8",
+            "profile": "linear",
+            "releaseId": "linear-contract-alignment-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-5dd747f87192d69ed78aa5b0f85b74fd52606f8448e932ab5f296421f81a4db9"
+          },
+          "round": 3,
+          "lens": "lens.adversarial-testing",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "aligned",
+            "findings": [],
+            "evidence": [
+              "Realization basis host-convention; actual model class gpt-6-astra; reviewer /root/harness_testing; independence unverified. Only lens.adversarial-testing realized.",
+              "Read the complete filled round-3 brief and both complete original round-1 and round-2 bound entries. Verification round 3 of the original four-round bound for subject V26-2016:harness.",
+              "Previous candidateRef harness-context-5d2e207a64af2bec2ca8421afcd57534cebc2964422bea9f9bd1f7a46eea171f resolves to tree 72f9aac329d79d1c2f7b158e9760a58d35c3b2c8. Current candidateRef harness-context-5dd747f87192d69ed78aa5b0f85b74fd52606f8448e932ab5f296421f81a4db9 resolves to tree 445b6c3a7353a93958149231270ed4a08f620b1c at commit 3a6ec7f8938afd6f8dd3e881d18ef7ddcaf7996f. Reviewed entire four-file prior/current tree delta, including all test changes and review-neutral report append; no narrowed review.",
+              "Original release binding retained: archiveSha256 f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea; metadataSha256 c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8; profile linear; releaseId linear-contract-alignment-v1; instructionGraphDigest 49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7.",
+              "Observation binding: runId run-be224a9c0f2cc055; activityId review-harness-at; attemptId harness-at-r3; supersedesAttemptId harness-at-r2; roundId harness-round-3. No run events emitted by this reviewer.",
+              "AT1 remains closed. Independently repeated String(requestId) lookup mutation: two numeric/string distinction rows fail, 82 pass. Independently removed isNotification guard: id-bearing cancellation request row fails, 83 pass. Matched MCP clean/no-op/restored controls each pass all 84 tests.",
+              "AT2 remains closed. Actual provider guide compound-command mutation prepare; delivery-harness deploy is rejected at unknown command deploy; one fails, 85 pass. Matched documentation clean/no-op/restored controls each pass all 86 tests.",
+              "AT3 closed, including both prior P2 in-run deferral branches under canonical V26-1593. Removing only missing-file finding and independently disabling escaped-path guard each fails its new real-filesystem assertion (one failed/68 passed). Escaped outside bytes match receipt digest, preventing incidental missing/digest failure from masking the guard.",
+              "AT4 closed under canonical V26-1593. Limiting receipt iteration to first entry fails the first-valid/later-corrupted fixture (one failed/68 passed). Integrity clean/no-op/restored scopes each pass all 69 tests. No implementation change or severity reduction used for closure.",
+              "AT5 closed, including prior P2 in-run deferral under canonical V26-1646 for root NOTICE and V26-1630 for workflow absence. Independently deleting each corresponding finding fails its exact single-finding assertion (one failed/73 passed each). Canonical tracker owners retain status reclosure responsibility.",
+              "AT6 closed, including prior P2 in-run deferral under canonical V26-1905. Removing the validation-tree/v1-only condition causes all four legacy/custom identity-token by symlink/gitlink compatibility cases to fail (four failed/70 passed). Matched release/identity clean/no-op/restored controls each pass all 74 tests.",
+              "All 21 independent isolated invocations matched expected outcomes: nine attributable mutation kills and twelve passing controls. Restored scopes collectively cover 313 tests across 11 files in four matched runs. No timeout, import error or incidental byte-pin failure credited. Root supplied exact-candidate full gate evidence: npm run check passed 148 files/3355 tests; this reviewer did not repeat the full gate.",
+              "All carried findings AT1 through AT6 are explicitly closed; no withdrawn, waived, severity-lowered, outstanding deferred, newly actionable, or late findings. Repair/peer reports were supporting evidence only; closure above is independent.",
+              "Final isolated worktree /Users/kwamina/agent-delivery-harness-v26-2016-r1-at has empty git status --porcelain and exact bound HEAD/tree. All mutations restored. No source fixes, tracker writes, commits, merges, run events or shared-source mutations.",
+              "Detailed evidence: /Users/kwamina/.codex/v26-2016-evidence/harness-at-r3-evidence.md. Exact probe driver: /Users/kwamina/.codex/v26-2016-evidence/harness-at-r3-probes.py. Machine-readable 21-run results: /Users/kwamina/.codex/v26-2016-evidence/harness-at-r3-probe-results.json. Each named probe retains its log and each mutant its exact patch in the same directory."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "candidateRef": {
+        "schemaVersion": "workflow-candidate-ref/1",
+        "opaque": "harness-context-ddf422ac174a65832350283c808d193e9d5853f87ab757973ee9ef9e83890448"
+      },
+      "entries": [
+        {
+          "release": {
+            "archiveSha256": "e63b1f2bb5516d55445aa7050f2a9366b05abdb9d8584bdeed4119abb5440578",
+            "metadataSha256": "d46f7f75e11b7f809f93e10b961954bfd7f8dc533f474074aa57b5594d39868e",
+            "profile": "linear",
+            "releaseId": "linear-concurrent-delivery-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-ddf422ac174a65832350283c808d193e9d5853f87ab757973ee9ef9e83890448"
+          },
+          "round": 4,
+          "lens": "lens.outcome-correctness",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "aligned",
+            "findings": [],
+            "evidence": [
+              "realizationBasis: host-convention; modelClass: gpt-5.6-sol; independence: unverified; lens: lens.outcome-correctness; ordinary counted verification round 4 of the original bound 4; result contract: review-lens-result/1.",
+              "Current binding verified exactly from the retained review context: release archiveSha256 e63b1f2bb5516d55445aa7050f2a9366b05abdb9d8584bdeed4119abb5440578, metadataSha256 d46f7f75e11b7f809f93e10b961954bfd7f8dc533f474074aa57b5594d39868e, profile linear, releaseId linear-concurrent-delivery-v1; graphSha256 49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7; subjectRef V26-2016:harness; candidateRef harness-context-ddf422ac174a65832350283c808d193e9d5853f87ab757973ee9ef9e83890448; round 4. The original bound release remains archive f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea, metadata c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8, profile linear, releaseId linear-contract-alignment-v1; R1-R3 remain retained.",
+              "Candidate resolution succeeded at review start and end in the isolated worktree: HEAD 0491d79274aea10bc310732b6fee2f057ab37fa4 and tree 719f8f1359f2faa61f97b650ec36cc6de26397e2. The preceding R3 candidate resolves to tree 445b6c3a7353a93958149231270ed4a08f620b1c. The complete R3-to-R4 delta contains 123 files, 11,676 insertions and 10,292 deletions: the installed generation and lifecycle receipt move to the exact final qualified product, with the retained delivery report updated; repository product source outside the installation is unchanged.",
+              "Own carried disposition from all three complete contiguous OC entries: R1, R2 and R3 each reported zero findings, zero deferrals and zero late findings. This lens therefore has no item to close, keep open, raise, withdraw or keep deferred. Every prior OC acceptance conclusion was rechecked against the current tree rather than inferred from executor state; no executor closure list was substituted.",
+              "The complete acceptance set remains satisfied. The production paths reviewed through R3 for V26-1349 redaction, V26-1350 handle-bound artifact containment, V26-1351 record identity/claim/lock coherence, V26-1401 cancellation, V26-1402 shared entry guards and V26-2007 guide scanning are unchanged outside the installed product payload. The installed payload adds the qualified launcher/runtime/workflow generation: first-policy bootstrap is explicit and product-gated, lifecycle readiness is checked before execution, provider history preserves request/result evidence, cancellation uses isolated native process groups with bounded cleanup and typed incomplete-cancellation failures, and the workflow text preserves the original delivery-review bound, every historical pass, ordinary/grace/reopened distinctions, full verification delta scope and last-round judgment.",
+              "Exact artifact identity was independently established. The retained linear archive hashes to e63b1f2bb5516d55445aa7050f2a9366b05abdb9d8584bdeed4119abb5440578 and its metadata hashes to d46f7f75e11b7f809f93e10b961954bfd7f8dc533f474074aa57b5594d39868e. All 117 receipt-named installed files match their recorded digests, the archive members and the retained verified extraction byte-for-byte; the sole additional generation file is the lifecycle ownership marker. Both 11-entry host exposure sets resolve strictly inside the selected generation, .agent-skills/current names that generation, and no Python bytecode is present.",
+              "Supplier and product evidence agree on the shipped bytes. The runtime handoff binds runtime 0.5.0 and its ten file digests to source commit/tree 3a6ec7f8938afd6f8dd3e881d18ef7ddcaf7996f / 445b6c3a7353a93958149231270ed4a08f620b1c; the installed runtime descriptor repeats those digests and workflowContentSha256 25681904fc0e82d040ebe5bfc477942d17da42caa02a2cc112d5ae2d31c4f8e1. Product status reports lifecycle current, both exposures current, no blockers, productReady true and no recovery action. The consolidated exact-byte qualification passed bootstrap 3 scenarios/10 assertions, core 12/102, provider 11/76 and linear 7/39; archiveMetadataUnchanged and receiptExactReadback are true. The Linear qualification binds the exact release and graph, exercises installation/discovery, all declared host-native operations and reconciliation, and records both disposable entities canceled. A separate producer OC review has requested a test-only repair under V26-1798; that peer finding changes no workflow or archive byte and is outside this harness lens's carried set. Producer review/promotion remains a separate finish line and does not change this immutable artifact qualification.",
+              "Cross-lens observations remain supporting only. AT1 and AT2 retain their originating testing lens closure evidence. AT3-AT6 received the R3 missing-file, escape, later-member, absent-license/workflow and compatibility witnesses described in that lens's history. None is an OC-carried finding or deferral, and this result does not claim testing-lens closure authority.",
+              "Independent installed-integrity falsification used npm run sensor:policy in the isolated checkout. The clean control passed. Appending one comment to the active generation's runtime/policy.mjs changed its digest and failed the sensor with installed_generation_file_drift, naming actual 87d987d4089c7d26218d98ed6e56338d7ba5343deca2d4ee9ea35c7cb58af42b against recorded 320aa341d55833061c08b4c9e47f998c341229e964e84bebbf9db8da875a0d24. After the inverse patch, the restored control passed and the file again hashed to the recorded value. Git status was empty and HEAD/tree remained frozen.",
+              "The root-supplied final gate is green at the exact candidate commit/tree: type generation and TypeScript checks passed, the import-boundary sensor was clean, the CLI inventory passed, and 148 test files passed all 3,355 tests in 399,061 ms. This lens did not repeat the full gate.",
+              "No concrete P0, P1, P2 or P3 correctness failure was found in the full round-4 scope, and no late finding exists. The result judges the last ordinary round by the same bar as every earlier round. This lens made no source fix, commit, merge, tracker write or run event; the review checkout is clean."
+            ]
+          }
+        },
+        {
+          "release": {
+            "archiveSha256": "e63b1f2bb5516d55445aa7050f2a9366b05abdb9d8584bdeed4119abb5440578",
+            "metadataSha256": "d46f7f75e11b7f809f93e10b961954bfd7f8dc533f474074aa57b5594d39868e",
+            "profile": "linear",
+            "releaseId": "linear-concurrent-delivery-v1"
+          },
+          "graphSha256": "49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7",
+          "subjectRef": {
+            "schemaVersion": "workflow-subject-ref/1",
+            "opaque": "V26-2016:harness"
+          },
+          "candidateRef": {
+            "schemaVersion": "workflow-candidate-ref/1",
+            "opaque": "harness-context-ddf422ac174a65832350283c808d193e9d5853f87ab757973ee9ef9e83890448"
+          },
+          "round": 4,
+          "lens": "lens.adversarial-testing",
+          "state": "obtained",
+          "independence": {
+            "status": "unverified"
+          },
+          "result": {
+            "outcome": "aligned",
+            "findings": [],
+            "evidence": [
+              "review-lens-result/1; lens.adversarial-testing; actual model class gpt-6-astra; realizationBasis host-convention; reviewer /root/harness_testing; independence unverified. Ordinary counted verification round4 of original bound4, same attempt resumed after clean pause; no fifth round or reacquisition inferred.",
+              "Read complete filled R4 installed-template brief and all three complete bound originating R1/R2/R3 entries with unabridged results. Subject V26-2016:harness. Prior candidateRef harness-context-5dd747f87192d69ed78aa5b0f85b74fd52606f8448e932ab5f296421f81a4db9 resolves tree445b6c3a7353a93958149231270ed4a08f620b1c; current candidateRef harness-context-ddf422ac174a65832350283c808d193e9d5853f87ab757973ee9ef9e83890448 resolves tree719f8f1359f2faa61f97b650ec36cc6de26397e2, commit0491d79274aea10bc310732b6fee2f057ab37fa4.",
+              "Original bound release retained: releaseId linear-contract-alignment-v1; profile linear; archiveSha256 f5f05e4866c8642225a274fc698aed938641d1f25f8209f0f3531ca2498debea; metadataSha256 c3a17ddb977825a688fe0d7492af9e67987344e40988c1e8e363a9699b2fded8. Current installed releaseId linear-concurrent-delivery-v1; profile linear; archiveSha256 e63b1f2bb5516d55445aa7050f2a9366b05abdb9d8584bdeed4119abb5440578; metadataSha256 d46f7f75e11b7f809f93e10b961954bfd7f8dc533f474074aa57b5594d39868e. Graph digest49630e23374f0375cb7d019ea024bcd5ea0c284feb8dc124b393b60f6e8d9aa7 unchanged.",
+              "Observation binding: runId run-be224a9c0f2cc055; activityId review-harness-at; attemptId harness-at-r4; supersedesAttemptId harness-at-r3; roundId harness-round-4. Root owns lifecycle/capture; this lens emitted no run events.",
+              "Successful initial, resumed and final identity checks: isolated worktree /Users/kwamina/agent-delivery-harness-v26-2016-r1-at clean, HEAD0491d79274aea10bc310732b6fee2f057ab37fa4/tree719f8f1359f2faa61f97b650ec36cc6de26397e2. No candidate move or remaining mutation. Final identity receipt /Users/kwamina/.codex/v26-2016-evidence/harness-at-r4-final-identity.json.",
+              "Reviewed complete123-entry rename-aware tree delta, including30 changed active payload/marker files, all installed launcher/runtime/workflow changes, active receipt/current pointer and neutral narration. Original bound generation remains retained. No narrowed scope. Independently rebuilt all11 runtime files byte-identically from current unchanged harness source and the exact verified workflow-manifest input. Independently checked13 qualification artifact hashes and all117 installed payload files against the exact qualified Linear ZIP, again after all mutations restored.",
+              "AT1 remains CLOSED. Repeated original cancellation-ID coercion and notification-shape-removal plants against current source:2/82 and1/83 failed/passed respectively, with clean/no-op/restored84-test MCP controls. AT2 remains CLOSED. Actual guide compound prepare; deploy mutation fails the registry consumer1/85; clean/no-op/restored documentation controls86green.",
+              "AT3 remains CLOSED, including both in-run V26-1593 missing-file and escape deferrals: each exact removal independently fails1/68. AT4 remains CLOSED under V26-1593: first-receipt-member-only plant fails1/68. Integrity/policy clean/no-op/restored controls69green.",
+              "AT5 remains CLOSED, including in-run V26-1646 missing NOTICE and V26-1630 missing workflow deferrals: each exact finding deletion fails1/73. AT6 remains CLOSED under V26-1905: removing validation-only token restriction fails4/70 legacy/custom nonregular-neutral cases. Release/identity clean/no-op/restored74green. Total carried recheck21invocations:9kills and12controls; four restored scopes cover313tests/11files.",
+              "Installed launcher additional matched full controls pass11 tests with one nativeWindows skip; omitted SIGQUIT, overridden inherited ignored SIGHUP, invented exited-target liveness and wrong post-escalation timeout label each killed. Installed provider retained maxRounds removal independently fails its shipped history assertion; clean/no-op/restored reopening controls11green. No receipt byte-pin or timeout credited.",
+              "R4 partial dissent retained unchanged at /Users/kwamina/.codex/v26-2016-evidence/harness-at-r4-partial-dissent.json and .md: AT7 P0 comprised two surviving POSIX cleanup-error normal-return mutations; AT8 P2 comprised invented liveness on poll error. Both in current installed delta, neither late, both canonical existing V26-1911. Root assigned persistent producer test-only repair; no installed archive or harness candidate byte changed.",
+              "Supplemental persistent tests read from exact producer commit4bae144f03f1f35e175af64f9c33391d65d6a6c2/tree18b7eca0ad4e5e5cf6a2e8e692d0b49b29484905, not mutable peer state. tests/test_product_launcher.py SHA25694dca40f0ad1b959e6828b8347dd31ceb7a7f9c60ff16c5cc8dcb58c05d12b0b independently verified and frozen in evidence. Runtime imports and child PYTHONPATH pinned to this isolated installed generation.",
+              "AT7 CLOSED by this originating lens in the same R4 attempt: original pre-escalation observation-error and SIGKILL-OSError normal-return plants now each fail their persistent typed-error row. Adjacent ProcessLookupError normal-cancellation allow arm also independently pinned. AT8 CLOSED by this originating lens: original poll-exception fabricated-PID plant fails both OSError and SubprocessError subcases requiring unknown/unknown/empty. No severity reduction, waiver or future-run deferral.",
+              "Supplemental independent27invocations:24attributable mutation kills plus clean/no-op/restored controls12diagnostic tests each. Covers original AT7/AT8 plants, ProcessLookup allow arm,7typed attributes,7rendered labels and6cleanup values. Full restored persistent launcher suite15tests passed13.110s with one nativeWindows skip. Earlier unmutated resistantSIGINT control failure retained, not credited as kill or assigned a cause; standalone native restored recheck passed12.788s.",
+              "All own originating findings AT1\u2013AT8 explicitly closed; no outstanding deferred, actionable or late finding remains. Partial dissent retained and its hash verified. No producer/primary source edits, tracker writes, commits, merges or journal events. Producer formal review/gate/promotion are separate and not claimed complete by this result.",
+              "Supporting exact product qualifications inspected: bootstrap3scenarios/10assertions, core12/102, provider11/76, Linear7/39 all passed; artifacts independently hashed. Live Linear operations and qualifications were not rerun by this lens. Root-supplied exact-candidate full gate148files/3355tests passed399061ms; not independently rerun.",
+              "Detailed report /Users/kwamina/.codex/v26-2016-evidence/harness-at-r4-evidence.md. Carried probes harness-at-r4-probe-results.json; supplemental exact test binding harness-at-r4-supplemental-binding.json; supplemental27run results harness-at-r4-supplemental-results.json; exact driver harness-at-r4-supplemental-probes.py; each plant retains a named log and patch. All under the same evidence root."
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "dissent": [
+    {
+      "lens": "lens.adversarial-testing",
+      "round": 1,
+      "findings": [
+        "[P0] AT1: Pin cancellation request-ID types and message shape (packages/mcp/src/stdio.ts:466-471; packages/mcp/src/stdio.test.ts:325-389). M1 changes pending.get(params[\"requestId\"]) to pending.get(String(params[\"requestId\"])); all 81 MCP tests remain green although cancelling numeric id 17 now emits response 17. M2 deletes isNotification(message) && from the cancellation interceptor; the same 81 tests remain green although an id-bearing notifications/cancelled request now suppresses its target and loses its own response. The exact clean witness emits [\"after\"] for numeric cancellation and [\"target\",\"cancel-request\",\"after\"] for the id-bearing message; mutants emit [17,\"after\"] and [\"after\"] respectively. Add a numeric-ID cancellation row (including distinct numeric/string identity) and a matched pending-target id-bearing-message row that assert surviving target and request response. These falsify two central cancellation claims; severity follows the mandated testing charter.",
+        "[P0] AT2: Enumerate every harness invocation on a compound shell line (docs/cli-examples.ts:28; docs/docs-examples.test.ts:145-160). In docs/provider-guide.md:95, change delivery-harness prepare to delivery-harness prepare; delivery-harness deploy. All 64 documentation tests remain green, including the registry sensor; the scanner returns only prepare because its args capture consumes the entire remainder of the line. The new all-guide command-existence claim therefore admits a real invalid documented command. Add a compound-line case that proves both invocations are harvested and the invalid later command is rejected, then repair the scanner boundary; retain valid compound commands and continuation coverage. Severity follows the mandated testing charter."
+      ]
+    },
+    {
+      "lens": "lens.adversarial-testing",
+      "round": 2,
+      "findings": [
+        "[P0] AT4: Per-file installed-byte verification proves only the first member (scripts/installed-generation-integrity.ts:65; scripts/installed-generation-integrity.test.ts). Changing for (const entry of receipt.files) to for (const entry of receipt.files.slice(0, 1)) leaves all 66 integrity/policy tests green. The fixture names one file; a real two-file witness with first.md intact and second.md corrupted changes from an installed_generation_file_drift finding naming second.md to []. The central all-receipt-files claim is unproven. Add a multi-file fixture/row that leaves the first valid and corrupts a later member; require the exact truncation mutation to fail with the full clean installation accepted. Existing repair owner V26-1593. Evidence: harness-at-r2-integrity-first-only.patch/.log and harness-at-r2-integrity-set-witness-{control,first-only}.json under /Users/kwamina/.codex/v26-2016-evidence."
+      ]
+    },
+    {
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "stage": "partial assessment before supplemental external test proof",
+      "source": "harness-at-r4-partial-dissent.json",
+      "result": {
+        "outcome": "changes-requested",
+        "findings": [
+          "[P0] AT7: Pin both POSIX cancellation cleanup-error refusals in the installed launcher (.agent-skills/current/agent_skills/product.py:196-215). Independently replace the raise _incomplete_cancellation(...) from error block for cleanup=\"pre-escalation-wait-failed\" or cleanup=\"sigkill-failed\" with return 128 + interrupted. Each exact mutation leaves all eight diagnostic launcher tests green. Clean witnesses raise the named CancellationIncompleteError while a live child remains; each mutant instead returns 143. These erase the central distinct incomplete-cancellation result. Require a persistent producer test row for each arm that forces its OSError, asserts the typed cleanup result and handler restoration, and independently kills each return mutation with matched controls. Canonical existing V26-1911; no source repair by this reviewer."
+        ],
+        "evidence": [
+          "Partial dissent retained before supplemental repair; not the final R4 result. lens.adversarial-testing; actual model gpt-6-astra; host-convention; independence unverified.",
+          "Ordinary verification R4/original bound4, subject V26-2016:harness. CandidateRef harness-context-ddf422ac174a65832350283c808d193e9d5853f87ab757973ee9ef9e83890448; exact tree719f8f1359f2faa61f97b650ec36cc6de26397e2, commit0491d79274aea10bc310732b6fee2f057ab37fa4. Initial and post-probe identity checks clean and matching.",
+          "AT1\u2013AT6 independently rechecked with all original exact plants; each remains closed. Nine kills,12matched controls. None was waived or severity-lowered.",
+          "AT8 | P2 | in-run repair under canonical V26-1911 | lens.adversarial-testing. In product.py:49\u201354, replace the poll-exception return unknown,unknown,() with running,confirmed,(child.pid,). All eight diagnostic tests stay green, while a child.poll OSError witness changes from unknown/no survivor IDs to invented live PID12345. Follow-up requires persistent poll-exception cases for both OSError and subprocess.SubprocessError, asserting unknown target/liveness and empty surviving_pids, killing this exact plant. Parent has assigned the same producer test-only repair owner; no new ticket or future-run waiver. Still open at this partial checkpoint.",
+          "AT7 and AT8 concern installed launcher branches newly changed from R3; neither is late. AT7 is blocking; AT8 diagnostic evidence gap is nonblocking in severity but remains part of required in-run follow-through.",
+          "Current combined producer test_product_launcher.py verified byte-identical to retained signals test file used by the independent runner. Imports and child PYTHONPATH point to this reviewer isolated installed generation, with PYTHONDONTWRITEBYTECODE=1. The 8-test scope is every diagnostic/mock launcher test; real POSIX signal cases and native Windows-only row are excluded from this branch-focused scope.",
+          "A preceding extra full11-test clean run hit resistant SIGINT return1 versus130. This unmutated control failure was not credited as a kill or as evidence of these gaps. Narrow same-scope clean/no-op/mutant/restored runs all passed eight diagnostics. Earlier matched full launcher clean/no-op/restored passed11 tests with one nativeWindows skip; four separate expected plants were killed.",
+          "Proof: harness-at-r4-launcher-gap-results.json; harness-at-r4-launcher-diagnostics-probes.py; exact *.patch, *.log and *-witness.json files for launcher-poll-error, launcher-prewait-error and launcher-kill-error in /Users/kwamina/.codex/v26-2016-evidence. Clean and restored witnesses preserved too.",
+          "Parent authorized supplemental persistent producer test-only repair and originating independent recheck before finalizing this R4 at unchanged installed bytes. If payload or harness candidate bytes move, separate review handling is required. No fifth round inferred. This dissent will remain retained even if the final result closes it."
+        ]
+      },
+      "finalDispositionSource": "harness-at-r4-result.json"
+    }
+  ],
+  "typedFailures": [],
+  "blockers": [],
+  "lateFindings": [],
+  "dispositions": [
+    {
+      "findingId": "AT1",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 2,
+      "report": "harness-at-r2-result.json"
+    },
+    {
+      "findingId": "AT2",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 2,
+      "report": "harness-at-r2-result.json"
+    },
+    {
+      "findingId": "AT1",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 3,
+      "report": "harness-at-r3-result.json"
+    },
+    {
+      "findingId": "AT2",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 3,
+      "report": "harness-at-r3-result.json"
+    },
+    {
+      "findingId": "AT3",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 3,
+      "report": "harness-at-r3-result.json"
+    },
+    {
+      "findingId": "AT4",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 3,
+      "report": "harness-at-r3-result.json"
+    },
+    {
+      "findingId": "AT5",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 3,
+      "report": "harness-at-r3-result.json"
+    },
+    {
+      "findingId": "AT6",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 3,
+      "report": "harness-at-r3-result.json"
+    },
+    {
+      "findingId": "AT1",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT2",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT3",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT4",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT5",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT6",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT7",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT8",
+      "state": "closed",
+      "lens": "lens.adversarial-testing",
+      "round": 4,
+      "report": "harness-at-r4-result.json"
+    }
+  ],
+  "deferrals": [
+    {
+      "findingId": "AT3",
+      "severity": "P2",
+      "lens": "lens.adversarial-testing",
+      "round": 2,
+      "tickets": [
+        "V26-1593"
+      ],
+      "state": "closure reconfirmed by originating lens in round 4; tracker reclosure pending merged repair",
+      "report": "harness-at-r2-result.json",
+      "closedRound": 4,
+      "closureReport": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT5",
+      "severity": "P2",
+      "lens": "lens.adversarial-testing",
+      "round": 2,
+      "tickets": [
+        "V26-1646",
+        "V26-1630"
+      ],
+      "state": "closure reconfirmed by originating lens in round 4; tracker reclosure pending merged repair",
+      "report": "harness-at-r2-result.json",
+      "closedRound": 4,
+      "closureReport": "harness-at-r4-result.json"
+    },
+    {
+      "findingId": "AT6",
+      "severity": "P2",
+      "lens": "lens.adversarial-testing",
+      "round": 2,
+      "tickets": [
+        "V26-1905"
+      ],
+      "state": "closure reconfirmed by originating lens in round 4; tracker reclosure pending merged repair",
+      "report": "harness-at-r2-result.json",
+      "closedRound": 4,
+      "closureReport": "harness-at-r4-result.json"
+    }
+  ],
+  "nextAction": "Emit final review evidence with all four actual run-history entries, submit, gate, record, verify and merge; reconcile producer/Athena merges and tracker closeout."
+}

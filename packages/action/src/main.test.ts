@@ -18,11 +18,11 @@ import { withPortableEvidence } from "../fixtures/portable-record.ts";
  *     no implementation that resolved it could survive.
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, symlink, writeFile, mkdir } from "node:fs/promises";
-import { realpathSync, rmSync } from "node:fs";
+import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -40,7 +40,7 @@ import {
   type HarnessConfig,
   type HarnessConfigInput,
 } from "@agent-delivery-harness/kernel";
-import { ACTION_EXIT_OK, ACTION_EXIT_POLICY, invokedDirectly, runAction, type ActionRuntime } from "./main.ts";
+import { ACTION_EXIT_OK, ACTION_EXIT_POLICY, runAction, type ActionRuntime } from "./main.ts";
 
 const run = promisify(execFile);
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "events");
@@ -557,6 +557,21 @@ describe("the failure-class table", () => {
     expect(codesOf(result.blockers)).toContain("delivery_record_malformed");
   });
 
+  it.each(["identity", "claims"])("rejects committed %s tampering as a malformed record", TIMEOUT, async (field) => {
+    const dir = await initRepo();
+    const config = makeConfig();
+    const digest = await identityOf(dir, config, "HEAD");
+    const record = await buildRecord(dir, config, digest);
+    const tampered = field === "identity"
+      ? { ...record, identityToken: "bogus/v9" }
+      : { ...record, claims: [record.claims[0], { ...record.claims[0], outcome: "not_applicable" }] };
+    await commitRecord(dir, config, digest, `${JSON.stringify(tampered)}\n`);
+    const { runtime } = await driveRuntime(dir, { config });
+    const result = await runAction(runtime);
+    expect(result.ok).toBe(false);
+    expect(codesOf(result.blockers)).toContain("delivery_record_malformed");
+  });
+
   it("fails closed when the configuration cannot be loaded", TIMEOUT, async () => {
     const dir = await initRepo();
     const { runtime } = await driveRuntime(dir, {
@@ -1054,65 +1069,5 @@ describe("the summary says nothing it does not know", () => {
     const result = await runAction(runtime);
     expect(result.ok).toBe(false);
     expect(codesOf(result.blockers)).toContain("event_payload_unreadable");
-  });
-});
-
-// ── Review round 1: the entry guard cannot fail silently ─────────────────────
-
-describe("the executable entry guard", () => {
-  it("matches through a symlinked invocation path, under either symlink regime", TIMEOUT, async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-entry-"));
-    cleanups.push(dir);
-    const real = path.join(dir, "real");
-    await mkdir(real, { recursive: true });
-    const modulePath = path.join(real, "module.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    const linkedDir = path.join(dir, "linked");
-    await symlink(real, linkedDir, "dir");
-    const linkedModulePath = path.join(linkedDir, "module.ts");
-
-    // Under default module resolution `import.meta.url` carries the module's
-    // realpath while argv carries the caller's spelling — the symlink, for a
-    // workspace reached through one. (The temp root itself sits behind a
-    // symlink on macOS, so the realpath here is load-bearing for the test too.)
-    expect(invokedDirectly(linkedModulePath, pathToFileURL(realpathSync(modulePath)).href)).toBe(true);
-    // Under `--preserve-symlinks-main` the regime flips: `import.meta.url`
-    // keeps the symlink spelling. A guard that realpathed only the argv side
-    // would under-match here — same silent exit 0, opposite configuration.
-    const linkedHref = pathToFileURL(linkedModulePath).href;
-    expect(invokedDirectly(linkedModulePath, linkedHref)).toBe(true);
-    expect(invokedDirectly(modulePath, linkedHref)).toBe(true);
-    // A different module never matches, whatever the spelling.
-    const otherPath = path.join(real, "other.ts");
-    await writeFile(otherPath, "export const y = 2;\n", "utf8");
-    expect(invokedDirectly(linkedModulePath, pathToFileURL(otherPath).href)).toBe(false);
-    expect(invokedDirectly(undefined, linkedHref)).toBe(false);
-  });
-
-  it("falls back to comparing the spellings when a side cannot be resolved", TIMEOUT, async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "dh-entry-fallback-"));
-    cleanups.push(dir);
-    const real = path.join(dir, "real");
-    await mkdir(real, { recursive: true });
-    const linkedDir = path.join(dir, "linked");
-    await symlink(real, linkedDir, "dir");
-
-    // Neither path exists, so both canonicalizations keep the spellings —
-    // which match, URL-significant characters included. Deleting the per-side
-    // catch turns this row into a thrown error, not a wrong answer.
-    const ghost = path.join(real, "gh#ost.ts");
-    expect(invokedDirectly(ghost, pathToFileURL(ghost).href)).toBe(true);
-    // A side that cannot be resolved cannot be seen through: the only
-    // difference between these two spellings is the link, and with no
-    // filesystem entry to resolve it, the guard honestly under-matches.
-    expect(invokedDirectly(path.join(linkedDir, "gh#ost.ts"), pathToFileURL(ghost).href)).toBe(false);
-    // Each side is canonicalized independently, so one unresolvable side does
-    // not discard the other side's resolution — in either direction.
-    const modulePath = path.join(real, "module.ts");
-    await writeFile(modulePath, "export const x = 1;\n", "utf8");
-    expect(invokedDirectly(path.join(linkedDir, "module.ts"), pathToFileURL(path.join(real, "missing.ts")).href)).toBe(false);
-    expect(invokedDirectly(path.join(linkedDir, "missing.ts"), pathToFileURL(realpathSync(modulePath)).href)).toBe(false);
-    // A module href that is not a file: URL is never this module.
-    expect(invokedDirectly(modulePath, "data:text/javascript,export{}")).toBe(false);
   });
 });

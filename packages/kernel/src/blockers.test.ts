@@ -336,6 +336,18 @@ describe("redaction runs inside the constructor", () => {
     expect(blocker({ summary: `auth failed with password=${PASSWORD_VALUE}` }).summary).toBe("auth failed with password=[REDACTED]");
   });
 
+  it.each(["token_", "x", "7"])("redacts provider credentials glued to %s", (prefix) => {
+    for (const token of [GITHUB_TOKEN, GITHUB_FINE_GRAINED_PAT, SLACK_TOKEN, OPENAI_STYLE_KEY, AWS_ACCESS_KEY_ID, JWT]) {
+      expect(blocker({ details: `${prefix}${token} rejected` }).details).toBe(`${prefix}[REDACTED] rejected`);
+    }
+  });
+
+  it("redacts a credential immediately followed by an identifier separator", () => {
+    for (const token of [GITHUB_TOKEN, AWS_ACCESS_KEY_ID]) {
+      expect(blocker({ details: `${token}_tail` }).details).toBe("[REDACTED]_tail");
+    }
+  });
+
   it("redacts argv spliced into a remediation command", () => {
     const built = blocker({
       remediations: [{ id: "rerun", kind: "command", command: ["harness", "gate", `--api-key=${API_KEY_VALUE}`], summary: "Rerun." }],

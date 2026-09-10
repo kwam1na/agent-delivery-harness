@@ -365,6 +365,22 @@ describe("deliveryRecordBytes", () => {
 // ── parse ────────────────────────────────────────────────────────────────────
 
 describe("parseDeliveryRecord", () => {
+  it.each(["delivery-record/1", DELIVERY_RECORD_VERSION])("rejects mismatched identity tokens in %s at parse", (version) => {
+    const record = { ...buildFreshRecord(), version, identityToken: "bogus/v9" };
+    const parsed = parseDeliveryRecord(JSON.stringify(record));
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.blockers[0]?.code).toBe("delivery_record_malformed");
+  });
+
+  it.each(["satisfied_evidence", "not_applicable"])("rejects duplicate claims even when the second outcome is %s", (outcome) => {
+    const record = buildFreshRecord();
+    const parsed = parseDeliveryRecord(JSON.stringify({ ...record, claims: [record.claims[0], { ...record.claims[0], outcome }] }));
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.blockers[0]?.code).toBe("delivery_record_malformed");
+  });
+
   it("rejects non-JSON as a finding, never a skip", () => {
     const parsed = parseDeliveryRecord("{ not json");
     expect(parsed.ok).toBe(false);

@@ -674,6 +674,34 @@ describe("candidate capture fails closed on the base", () => {
   });
 });
 
+describe("write-tree diagnostics", () => {
+  it.each([
+    "fatal: Unable to create '/repo/.git/index.lock': File exists.",
+    "fatal: Unable to create 'C:/repo/.git/index.lock': File exists.\nAnother git process seems to be running in this repository",
+  ])("identifies index lock contention: %s", async (stderr) => {
+    const { work } = await preparedFixture();
+    const run: CandidateCommandRunner = async (command, options) => command.includes("write-tree")
+      ? { exitCode: 128, stdout: "", stderr }
+      : runGitCommand(command, options);
+    const result = await captureGitCandidate(captureOptions(work, { run }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("candidate_repository_unreadable");
+    expect(JSON.stringify(result)).toContain("Retry");
+    expect(JSON.stringify(result)).not.toContain("Repair the index");
+  });
+
+  it("keeps repair guidance for a corrupt index", async () => {
+    const { work } = await preparedFixture();
+    const run: CandidateCommandRunner = async (command, options) => command.includes("write-tree")
+      ? { exitCode: 128, stdout: "", stderr: "fatal: index file corrupt" }
+      : runGitCommand(command, options);
+    const result = await captureGitCandidate(captureOptions(work, { run }));
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).toContain("Repair the index");
+  });
+});
+
 // ── Capture: probes that never ran ─────────────────────────────────────────
 
 describe("a probe that fails to start is not an answer", () => {

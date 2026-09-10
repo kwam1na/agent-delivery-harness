@@ -681,12 +681,13 @@ missing tracker is recorded and the loop proceeds.
   `rebase-merge` and `rebase-apply` directories are the authoritative signals.
   On a build predating that fix, `prepare` refuses and `git update-ref -d
   REBASE_HEAD` clears it.
-- **`docs/getting-started.md` fenced blocks are executed** by
-  `docs/docs-examples.test.ts`, which reads that page and no other. Its `sh`
-  blocks are one shell session. Its flag-token agreement is narrower than it
-  reads: the CLI's side is harvested from one invocation, `submit-evidence` with
-  no arguments, so adding usage text to another command is free and changing
-  that message is not.
+- **Shell-bearing guides have explicit coverage** in `docs/docs-examples.test.ts`.
+  The `docs/getting-started.md` walkthrough executes verbatim; other top-level guides are
+  checked against the CLI's command, flag and runs-subcommand registry. External
+  tools and placeholder workflows are not executed. A newly added shell-bearing
+  guide fails the inventory until its coverage is declared. The extra bidirectional
+  flag check covers only the getting-started walkthrough and `submit-evidence`'s
+  no-argument usage output.
 - **`docs/docs-references.test.ts` pins the set of guides it scans**, so a new
   `docs/*.md` file fails it until the enumeration is updated, and it checks
   every sentence stating a computable count *in every scanned document*. Adding

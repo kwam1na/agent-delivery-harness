@@ -19,7 +19,7 @@
  *   write path whose only test is a caller that does not exist yet is a write
  *   path with no test.
  */
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -211,7 +211,7 @@ describe("symlinked bases and the macOS /var alias", () => {
     await writeFile(throughAlias, "{}", "utf8");
     expect(await port.isInsideRunRoot(allocation.runRoot.path, throughAlias)).toBe(true);
 
-    const observation = await port.observeArtifact(allocation.runRoot.path, "reviewers/a.json");
+    const observation = await port.observeArtifact(allocation.runRoot, "reviewers/a.json");
     expect(observation.status).toBe("readable");
   });
 
@@ -228,6 +228,45 @@ describe("symlinked bases and the macOS /var alias", () => {
 // ── Observation ────────────────────────────────────────────────────────────
 
 describe("artifact observation", () => {
+  it.each(["root", "parent", "base"])("refuses a %s redirected outside the original pool after allocation", async (component) => {
+    const base = await freshBase(`observe-swapped-${component}`);
+    const port = createArtifactsPort({ runRootBase: base });
+    const allocation = await port.allocateRunRoot({ providerId: "p", runId: "r-1" });
+    if (!allocation.ok) throw new Error("fixture run root was refused");
+    const runRoot = allocation.runRoot.path;
+    const artifact = path.join(runRoot, "a.json");
+    await writeFile(artifact, "{}");
+    expect(await port.isInsideRunRoot(runRoot, artifact)).toBe(true);
+    expect((await port.observeArtifact(allocation.runRoot, "a.json")).status).toBe("readable");
+
+    const target = component === "root" ? runRoot : component === "parent" ? path.dirname(runRoot) : base;
+    const outside = path.join(workspace, `redirected-${component}`);
+    await rename(target, outside);
+    await symlink(outside, target);
+
+    expect(await port.isInsideRunRoot(runRoot, artifact)).toBe(false);
+    expect(await port.observeArtifact(allocation.runRoot, "a.json")).toMatchObject({
+      status: "outside_run_root",
+      sha256: null,
+      contents: null,
+    });
+  });
+
+  it("accepts a run-root symlink that stays inside the original pool", async () => {
+    const base = await freshBase("observe-root-symlink-inside");
+    const port = createArtifactsPort({ runRootBase: base });
+    const allocation = await port.allocateRunRoot({ providerId: "p", runId: "r-1" });
+    if (!allocation.ok) throw new Error("fixture run root was refused");
+    const runRoot = allocation.runRoot.path;
+    await writeFile(path.join(runRoot, "a.json"), "{}");
+    const relocated = path.join(base, "relocated-run");
+    await rename(runRoot, relocated);
+    await symlink(relocated, runRoot);
+
+    expect(await port.isInsideRunRoot(runRoot, path.join(runRoot, "a.json"))).toBe(true);
+    expect(await port.observeArtifact(allocation.runRoot, "a.json")).toMatchObject({ status: "readable", contents: "{}" });
+  });
+
   async function runRootWith(name: string): Promise<{ readonly port: ReturnType<typeof createArtifactsPort>; readonly runRoot: string }> {
     const base = await freshBase(name);
     const port = createArtifactsPort({ runRootBase: base });

@@ -50,10 +50,9 @@
  * skip: a check that reports success because it could not run is worse than no
  * check, because it looks like one.
  */
-import { realpathSync } from "node:fs";
 import { access, appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { observeHostedCheckTime } from "./observation.ts";
 import {
   ATTESTATION_LABEL,
@@ -76,6 +75,7 @@ import {
   capturePortableVerificationInputs,
   collectLiveProviderResults,
   isObligationActive,
+  invokedDirectly,
   type CapturedCandidate,
   type Blocker,
   type BlockerSource,
@@ -1103,45 +1103,6 @@ export function defaultRuntime(): ActionRuntime {
     },
     log: (line) => process.stdout.write(`${line}\n`),
   };
-}
-
-/** The spelling the filesystem can vouch for: the realpath where it can answer, the spelling itself where it cannot. */
-function canonicalEntryPath(entryPath: string): string {
-  try {
-    return realpathSync(entryPath);
-  } catch {
-    return entryPath;
-  }
-}
-
-/**
- * Whether this module is the entry the process was started with.
- *
- * argv and `import.meta.url` may spell the same file differently: argv is the
- * caller's spelling, and Node builds the module URL from the realpath by
- * default but from the caller's spelling under `--preserve-symlinks-main`. So
- * each side is canonicalized independently and the canonical forms compared:
- * a symlinked spelling matches its realpath whenever the link can be read
- * (`/tmp` → `/private/tmp` on macOS, a runner's action path, a pnpm workspace
- * link), and equal spellings still match when neither side resolves.
- *
- * What is NOT claimed: a symlink the filesystem cannot resolve cannot be seen
- * through, and the failing-exit-code floor below sits inside this guard, so an
- * under-match exits 0 in silence — the Action reporting success having
- * verified nothing. The floor cannot be hoisted above the guard: that would
- * stamp a failing exit code on every process that merely *imports* this
- * module. And a non-`file:` module href (a bundled or single-executable
- * build) never matches — such a build must invoke `main` explicitly.
- */
-export function invokedDirectly(argvEntry: string | undefined, moduleHref: string): boolean {
-  if (argvEntry === undefined) return false;
-  let modulePath: string;
-  try {
-    modulePath = fileURLToPath(moduleHref);
-  } catch {
-    return false;
-  }
-  return canonicalEntryPath(argvEntry) === canonicalEntryPath(modulePath);
 }
 
 export async function main(): Promise<number> {
