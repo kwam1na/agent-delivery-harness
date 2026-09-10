@@ -28,6 +28,18 @@ describe("argument refusal precedes side effects", () => {
   });
 
   it.each([
+    ["--manifest"],
+    ["alpha.json", "--manifest"],
+    ["--manifest", "alpha.json", "--manifest"],
+    ["--manifest", "", "alpha.json"],
+  ])("refuses a missing manifest flag value %j before wiring", async (...args) => {
+    const { context, accessed } = argumentOnlyContext(args);
+    const result = await submitEvidenceCommand.run(context);
+    expect(result.kind).toBe("usage");
+    expect(accessed).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["alpha.json", "beta.json"],
     ["alpha.json", "--manifest", "beta.json"],
     ["--manifest", "alpha.json", "beta.json"],

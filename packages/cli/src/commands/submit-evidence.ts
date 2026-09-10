@@ -11,13 +11,14 @@ import { submitManifest } from "@agent-delivery-harness/kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { oneLine } from "../run-surface.ts";
 
-function manifestPathsFrom(args: readonly string[]): string[] {
+function manifestPathsFrom(args: readonly string[]): string[] | undefined {
   const paths: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index]!;
     if (token === "--manifest") {
       const value = args[++index];
-      if (value !== undefined) paths.push(value);
+      if (value === undefined || value === "") return undefined;
+      paths.push(value);
     } else if (!token.startsWith("-")) paths.push(token);
   }
   return paths;
@@ -55,6 +56,9 @@ export const submitEvidenceCommand: CommandDescriptor = {
       return { kind: "usage", message: `Unknown flag ${oneLine(unknown, 64)}.\n${submitEvidenceCommand.usage}` };
     }
     const paths = manifestPathsFrom(context.args);
+    if (paths === undefined) {
+      return { kind: "usage", message: "submit-evidence requires --manifest <path>." };
+    }
     if (paths.length > 1) {
       return { kind: "usage", message: `submit-evidence requires one manifest path; received ${paths.map(value => oneLine(value, 256)).join(", ")}.` };
     }
