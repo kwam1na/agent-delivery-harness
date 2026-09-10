@@ -267,7 +267,9 @@ describe("the preparation fingerprint", () => {
     const tree = await tempTree();
     const straight = await computePreparationFingerprint(tree.rootDir, CONFIG);
     const shuffled = testConfig({ preparationWiringPaths: [...WIRING_PATHS].reverse() });
-    const repeated = testConfig({ preparationWiringPaths: [...WIRING_PATHS, WIRING_PATHS[0]] });
+    // The loader rejects duplicate declarations; exercise the fingerprint's
+    // set semantics directly, without asking the loader to accept one.
+    const repeated = { ...CONFIG, preparationWiringPaths: [...WIRING_PATHS, WIRING_PATHS[0]] };
     expect(await computePreparationFingerprint(tree.rootDir, shuffled)).toBe(straight);
     expect(await computePreparationFingerprint(tree.rootDir, repeated)).toBe(straight);
   });
