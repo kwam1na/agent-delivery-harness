@@ -16,8 +16,13 @@ it.each([
 });
 it.each([
   { checks: "reused", reason: "ordinary" },
+  { checks: "reused", reason: "receipt-not-reusable" },
+  { checks: "reused", reason: "preparation-fingerprint-changed" },
   { checks: "executed", reason: "validation-equivalent" },
   { checks: "reused", reason: "estimated" },
+  { checks: "executed", reason: "estimated" },
+  { checks: "skipped", reason: "ordinary" },
+  { reason: "ordinary" },
   { checks: "reused" },
   { checks: "reused", reason: "validation-equivalent", passed: true },
 ])("refuses contradictory or malformed preparation %j", observation => {
