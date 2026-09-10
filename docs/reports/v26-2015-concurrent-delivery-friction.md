@@ -28,3 +28,7 @@ proofs successful.
 ## Subsequent observations and dispositions
 
 2026-09-10 08:57 UTC: confirmed shared ownership with both sibling orchestrators. V26-1764 owns F1; V26-1845 retains F4. No new friction ticket was created. Each task retains its own evidence log and coordinates before introducing any new actionable item. Delivery completion remains pending.
+
+- F4 follow-through: after implementation was committed, `save-context` succeeded. Plain `resume` returned the saved contract and correctly refused evidence reuse with `preparation_missing`. An attempted `resume --json` was a usage refusal; the command emits structured output without that flag. This demonstrates the clean-stage workaround, not dirty-stage recovery. Corroborating result recorded on V26-1845.
+- F1 enabling witness: V26-2016 reported two private-environment full suites passing concurrently, 394 tests each with one skip, approximately 230 seconds each. V26-2015 then started its own full suite through its private environment; its outcome remains pending.
+- F5 lane agreement: V26-2014 granted V26-2015 the first harness prepare-through-merge lane; V26-2016 confirmed it is not entering that lane yet. No stale preparation has occurred here.
