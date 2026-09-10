@@ -361,6 +361,79 @@ describe("the loop", () => {
     expect(written[0]).toBe(`${JSON.stringify({ jsonrpc: "2.0", id: "after", result: {} })}\n`);
   });
 
+  it.each([17, 0])("keeps numeric cancellation id %s distinct from its string spelling", async (numericId) => {
+    const input = new Readable({ read() {} });
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedHost = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const slowHost: ToolHostRuntime = {
+      cwd: process.cwd(),
+      env: {},
+      loadConfig: async () => {
+        started();
+        await blocked;
+        return {} as never;
+      },
+    };
+    const written: string[] = [];
+    const serving = serveStdio(input, (line) => written.push(line), slowHost);
+
+    input.push(`${JSON.stringify(request("tools/call", { name: "review-context", arguments: {} }, numericId))}\n`);
+    await reachedHost;
+    input.push(`${JSON.stringify(request("ping", undefined, String(numericId)))}\n`);
+    input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: numericId } })}\n`);
+    input.push(null);
+    release();
+    await serving;
+
+    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual([String(numericId)]);
+  });
+
+  it("answers an id-bearing cancellation-shaped request without cancelling its pending target", async () => {
+    const input = new Readable({ read() {} });
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reachedHost = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const slowHost: ToolHostRuntime = {
+      cwd: process.cwd(),
+      env: {},
+      loadConfig: async () => {
+        started();
+        await blocked;
+        return {} as never;
+      },
+    };
+    const written: string[] = [];
+    const serving = serveStdio(input, (line) => written.push(line), slowHost);
+
+    input.push(`${JSON.stringify(request("tools/call", { name: "review-context", arguments: {} }, "blocker"))}\n`);
+    await reachedHost;
+    input.push(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "blocker" } })}\n`);
+    input.push(`${JSON.stringify(request("ping", undefined, "target"))}\n`);
+    input.push(`${JSON.stringify(request("notifications/cancelled", { requestId: "target" }, "cancel-request"))}\n`);
+    input.push(`${JSON.stringify(request("ping", undefined, "after"))}\n`);
+    input.push(null);
+    release();
+    await serving;
+
+    expect(written.map((line) => (JSON.parse(line) as JsonRpcResponse).id)).toEqual(["target", "cancel-request", "after"]);
+    expect(JSON.parse(written[1] ?? "null")).toMatchObject({
+      jsonrpc: "2.0",
+      id: "cancel-request",
+      error: { code: METHOD_NOT_FOUND },
+    });
+  });
+
   it("ignores cancellations for initialize, completed, unknown, and malformed targets", async () => {
     const input = new Readable({ read() {} });
     const written: string[] = [];
