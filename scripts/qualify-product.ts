@@ -2130,7 +2130,7 @@ async function runLifecycle(input: LifecycleInput): Promise<void> {
 export const SCOPED_RUNTIME_PROBES = [
   "partial-failure", "retry-reuse", "report-reuse", "source-invalidation",
   "setup-invalidation", "foreign-portable", "tamper-refusal",
-  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations",
+  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations", "large-source-portability",
 ] as const;
 
 export interface ScopedRuntimeQualification {
@@ -2284,6 +2284,46 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     const baseRace = await cli(full, "prepare", 1);
     requireObservation(baseRace.stderr.includes("check.selection") && !baseRace.stdout.includes("checking check.a"), "base selection race must stop downstream checks");
     proven.add("selection-snapshot-guard");
+    // Large repository inputs are distinct from bounded provider evidence. The
+    // commands retain only small digests; exact tail bytes must still participate
+    // in source and dependency identities and in portable verification.
+    const largeSource = "s".repeat(14 * 1024 * 1024), largeDependency = "d".repeat(14 * 1024 * 1024);
+    const largeConfig = config("none");
+    for (const provider of largeConfig.providers) {
+      const inputs = provider.id === "check.a" ? ["source.txt", "deps.lock"] : ["source.txt"];
+      provider.check.command = [process.execPath, "-e", "const fs=require('node:fs'),crypto=require('node:crypto');const hashes=" + JSON.stringify(inputs) + ".map(file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'));fs.writeFileSync(" + JSON.stringify(provider.check.outputs[0]) + ",JSON.stringify(hashes));"];
+    }
+    write(files, "harness.config.ts", "import {defineHarnessConfig} from '@agent-delivery-harness/kernel';\nexport default defineHarnessConfig(" + JSON.stringify(largeConfig) + ");\n");
+    write(files, "source.txt", largeSource); write(files, "deps.lock", largeDependency);
+    git(files, "add", "."); git(files, "-c", "commit.gpgsign=false", "commit", "-qm", "large source and dependency");
+    await cli(files, "prepare"); const largeGate = await cli(files, "gate");
+    requireObservation(["a", "b"].every(id => largeGate.stdout.includes("checking check." + id)), "large source commands must execute");
+    const priorRecords = new Set(readdirSync(path.join(files, "delivery/records")));
+    await cli(files, "record"); git(files, "add", "."); await cli(files, "verify");
+    const largeRecords = readdirSync(path.join(files, "delivery/records")).filter(name => !priorRecords.has(name));
+    requireObservation(largeRecords.length === 1, "one newly verified large-input record required");
+    const largeRecord = JSON.parse(readFileSync(path.join(files, "delivery/records", largeRecords[0]!), "utf8"));
+    requireObservation(Array.isArray(largeRecord.claims) && largeRecord.claims.length === 2, "both large-input provider claims required");
+    const expectedHashes = [largeSource, largeDependency].map(bytes => createHash("sha256").update(bytes).digest("hex"));
+    for (const claim of largeRecord.claims) {
+      const portable = claim.evidence.resolution.portable;
+      const output = JSON.parse(Buffer.from(portable.artifacts["check-output-0.json"], "base64").toString("utf8"));
+      const bytes = Buffer.from(output.base64, "base64");
+      requireObservation(bytes.length < 200 && bytes.toString() === JSON.stringify(output.path === "result-a.json" ? expectedHashes : expectedHashes.slice(0, 1)), "small evidence must contain full large-input digests");
+    }
+    git(files, "-c", "commit.gpgsign=false", "commit", "-qm", "large input record");
+    rmSync(foreign, { recursive: true, force: true }); git(temporary, "clone", "--no-local", files, foreign);
+    git(foreign, "update-ref", "refs/remotes/origin/main", git(files, "rev-parse", "origin/main"));
+    requireObservation(!existsSync(path.join(foreign, ".git/delivery-harness")), "large-input foreign verifier must have no original private evidence");
+    await cli(foreign, "verify");
+    for (const [name, original] of [["source.txt", largeSource], ["deps.lock", largeDependency]] as const) {
+      write(foreign, name, original.slice(0, -1) + "!"); git(foreign, "add", name); await cli(foreign, "verify", 1);
+      write(foreign, name, original); git(foreign, "add", name); await cli(foreign, "verify");
+      write(files, name, original.slice(0, -1) + "!"); await cli(files, "prepare"); const tail = await cli(files, "gate");
+      requireObservation(tail.stdout.includes("checking check.a") && (name === "source.txt" ? tail.stdout.includes("checking check.b") : tail.stdout.includes("reusing check.b")), "tail bytes must invalidate exactly the affected scoped inputs");
+      write(files, name, original); await cli(files, "prepare"); await cli(files, "gate");
+    }
+    proven.add("large-source-portability");
     const result = { runtimeSha256: createHash("sha256").update(descriptorBytes).digest("hex"), repositories: 3, probes: SCOPED_RUNTIME_PROBES.filter(probe => proven.has(probe)), commands };
     assertScopedRuntimeQualification(result); return result;
   } finally { rmSync(temporary, { recursive: true, force: true }); }

@@ -1031,7 +1031,7 @@ export type { ReviewOutcome, ReviewerOutcome, ReviewerResult } from "./review-ou
 export { capturePortableEvidenceContext, repositoryEvidenceReader, verifyPortableEvidence, portableArtifactContents, MAX_PORTABLE_RECORD_BYTES } from "./portable-evidence.ts";
 export type { PortableEvidence, PortableEvidenceContext } from "./records.types.ts";
 
-export { candidateTreeEvidenceReader, capturePortableVerificationInputs } from "./portable-inputs.ts";
+export { candidateTreeEvidenceReader, candidateTreeSourceReader, capturePortableVerificationInputs } from "./portable-inputs.ts";
 
 export * from "./provider-rails.ts";
 export * from "./live-providers.ts";

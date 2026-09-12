@@ -57,6 +57,32 @@ it("retains A across B failure, retry and report replan, then records portable e
   expect(await f.run("verify")).toBe(1);
   expect(f.err.join("\n")).toContain("portable_scoped_inputs_invalid");
 }, 60000);
+it("hashes large source and dependency files through execution and foreign verification without transporting them", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const source = Buffer.alloc(14 * 1024 * 1024, 97);
+  const dependency = Buffer.alloc(3 * 1024 * 1024, 98);
+  await writeFile(path.join(f.dir, "source.txt"), source);
+  await writeFile(path.join(f.dir, "large.lock"), dependency);
+  f.setConfig({ ...f.config, providers: f.config.providers.map(p => ({ ...p, check: { ...p.check!, command: [process.execPath, "-e", `const fs=require('fs'),crypto=require('crypto');fs.writeFileSync('${p.check!.outputs![0]}',JSON.stringify({source:crypto.createHash('sha256').update(fs.readFileSync('source.txt')).digest('hex'),dependency:crypto.createHash('sha256').update(fs.readFileSync('large.lock')).digest('hex')}))`] } })),
+    scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p, dependencyInputs: ["large.lock"] })) } });
+  await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "large inputs");
+  for (const command of ["prepare", "gate", "record"]) expect(await f.run(command), f.err.join("\n")).toBe(0);
+  await f.git("add", "."); expect(await f.run("verify"), f.err.join("\n")).toBe(0);
+  await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "record");
+  const foreign = await mkdtemp(path.join(tmpdir(), "scoped-large-foreign-")); dirs.push(foreign);
+  await exec("git", ["clone", "--no-local", f.dir, foreign]);
+  await exec("git", ["update-ref", "refs/remotes/origin/main", await f.git("rev-parse", "origin/main")], { cwd: foreign });
+  expect(await runCli(["verify"], { ...f.runtime, cwd: foreign }), f.err.join("\n")).toBe(0);
+  for (const [file, bytes] of [["source.txt", source], ["large.lock", dependency]] as const) {
+    const changed = Buffer.from(bytes); changed[changed.length - 1] = 99;
+    await writeFile(path.join(foreign, file), changed);
+    await exec("git", ["add", file], { cwd: foreign });
+    expect(await runCli(["verify"], { ...f.runtime, cwd: foreign }), file).toBe(1);
+    expect(f.err.join("\n")).toContain("delivery_record_missing");
+    await exec("git", ["restore", "--source=HEAD", "--staged", "--worktree", file], { cwd: foreign });
+  }
+  expect(await runCli(["verify"], { ...f.runtime, cwd: foreign }), f.err.join("\n")).toBe(0);
+}, 60000);
 it("captures untracked source without changing the author index", async () => {
   const f = await fixture();
   await writeFile(path.join(f.dir, "new-source.txt"), "untracked source");
