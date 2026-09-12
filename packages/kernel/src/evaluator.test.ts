@@ -281,6 +281,32 @@ const GREEN_RESULT: LiveProviderResult = {
   findings: [],
 };
 
+describe("opt-in scoped freshness", () => {
+  const scope = { version: "scoped-check/1" as const, files: ["src/app.ts"], memberships: ["tests/"], tests: [], cwd: ".", profile: "local", environment: [] };
+  const binding = { definitionDigest: "a".repeat(64), validationDigest: "b".repeat(64), policyDigest: "c".repeat(64), wiringFingerprint: "d".repeat(64), outputsDigest: "e".repeat(64), scopedInputDigest: "b".repeat(64), scopedAttemptDigest: "f".repeat(64), scopedProfileDigest: "d".repeat(64) };
+  function fixture(scoped = true) {
+    const check = { command: ["test"] as [string], timeoutMs: 1000, ...(scoped ? { scope } : {}) };
+    const config = testConfig({ providers: [{ id: "review.provider", findingCodes: ["review-incomplete"], check }], obligations: [{ ...obligation(), acceptedPayloadSpecs: ["checks.passed/1"] }] });
+    const record = evidence({ binding: boundTo({ treeSha: "1".repeat(40), deliverableDigest: "2".repeat(64), baseTipSha: "3".repeat(40), mergeBaseSha: "4".repeat(40) }) });
+    if (record.resolution.kind !== "evidence") throw new Error("fixture");
+    return { config, record: { ...record, resolution: { ...record.resolution, checkBinding: binding } } };
+  }
+  it("reuses scoped evidence after candidate/base movement only with current matching bindings", () => {
+    const { config, record } = fixture();
+    expect(evaluate({ config, records: [record], checkBindings: { "review.provider": binding } }).admitted).toBe(true);
+    expect(evaluate({ config, records: [record], checkBindings: {} }).admitted).toBe(false);
+    for (const key of Object.keys(binding)) {
+      expect(evaluate({ config, records: [record], checkBindings: { "review.provider": { ...binding, [key]: "0".repeat(64) } } }).admitted).toBe(false);
+    }
+    expect(evaluate({ config, records: [{ ...record, candidateBinding: { ...record.candidateBinding, workspaceId: "elsewhere" } }], checkBindings: { "review.provider": binding } }).admitted).toBe(false);
+  });
+  it("does not widen legacy or independent review freshness", () => {
+    const { config, record } = fixture(false);
+    expect(evaluate({ config, records: [record], checkBindings: { "review.provider": binding } }).admitted).toBe(false);
+    expect(evaluate({ config: testConfig(), records: [record], checkBindings: { "review.provider": binding } }).admitted).toBe(false);
+  });
+});
+
 // ── One scenario per outcome ───────────────────────────────────────────────
 
 describe("the six outcomes", () => {

@@ -408,6 +408,7 @@ function parseResolution(value: unknown): EvidenceRecord["resolution"] {
       const binding = value["checkBinding"];
       const members = ["definitionDigest", "validationDigest", "policyDigest", "wiringFingerprint", "outputsDigest"];
       if (!isRecordObject(binding)) throw new RecordShapeError("malformed_shape", "checkBinding must be an object");
+      if (binding["scopedInputDigest"] !== undefined) members.push("scopedInputDigest", "scopedAttemptDigest", "scopedProfileDigest");
       requireExactMembers(binding, members, "checkBinding");
       if (members.some(key => typeof binding[key] !== "string" || !/^[a-f0-9]{64}$/.test(binding[key] as string))) throw new RecordShapeError("malformed_shape", "checkBinding requires sha256 digests");
     }

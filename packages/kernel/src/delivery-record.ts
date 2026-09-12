@@ -1015,11 +1015,14 @@ function verifyRecordEvidence(config: HarnessConfig, record: DeliveryRecord, opt
       }
       const resolution = evidence.resolution;
       const eb = evidence.candidateBinding;
+      const scoped = config.providers.some(p => p.id === resolution.providerId && p.check?.scope !== undefined) &&
+        resolution.checkBinding?.scopedInputDigest !== undefined && options.checkBindings?.[resolution.providerId]?.scopedInputDigest !== undefined &&
+        digestCanonical(resolution.checkBinding) === digestCanonical(options.checkBindings[resolution.providerId]);
       if (evidence.schemaVersion !== 1 || evidence.recordId !== computeRecordId(evidence.workspaceId, evidence) || evidence.workspaceId !== eb.workspaceId ||
           evidence.gateId !== config.gateId || evidence.obligationId !== claim.obligationId ||
           evidence.recordId !== claim.recordId || resolution.providerId !== claim.providerId || resolution.runId !== claim.runId ||
           resolution.finalPassId !== claim.finalPassId || resolution.manifestDigest !== claim.manifestDigest ||
-          BINDING_FIELDS.filter(field => field !== "treeSha").some(field => eb[field] !== b[field])) {
+          BINDING_FIELDS.filter(field => scoped ? field === "workspaceId" || field === "identityToken" : field !== "treeSha").some(field => eb[field] !== b[field])) {
         blockers.push(portableBlocker("portable_claim_binding", "The claim differs from its original accepted evidence binding.")); continue;
       }
       blockers.push(...verifyPortableEvidence(config, resolution.portable!, eb, options.evidenceContext, options.checkBindings));
