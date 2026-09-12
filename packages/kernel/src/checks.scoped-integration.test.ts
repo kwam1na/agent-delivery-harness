@@ -47,6 +47,9 @@ it("replans a real Git candidate, reuses scoped proof, and keeps final-record bi
     await publishPreparationReceipt(rootDir, { config, candidate });
     await exec(check.command[0], check.command.slice(1), { cwd: rootDir });
     const bindings = await captureCheckBindings(rootDir, config, candidate, { scopedPlan: plan });
+    const nonreusable = (p: ScopedCheckPlan): ScopedCheckPlan => ({ ...p, checks: { ...p.checks, "check.app": { ...p.checks["check.app"]!, reusable: false } } });
+    expect(await captureCheckBindings(rootDir, config, candidate, { scopedPlan: nonreusable(plan) })).toEqual(bindings);
+    await expect(captureCheckBindings(rootDir, config, candidate, { scopedPlan: { ...plan, selectionDigest: digestCanonical("wrong-selection") } })).rejects.toThrow();
     const payload = { verdict: "green", exitCode: 0, binding: bindings["check.app"] };
     await mkdir(path.join(rootDir, ".git/artifacts"));
     const artifacts = createArtifactsPort({ runRootBase: path.join(rootDir, ".git/artifacts") });
@@ -65,6 +68,7 @@ it("replans a real Git candidate, reuses scoped proof, and keeps final-record bi
     expect((await inputs(current.treeSha)).inputDigest).toBe(originalInputs.inputDigest);
     await expect(captureCheckBindings(rootDir, config, current, { scopedPlan: plan })).rejects.toThrow();
     const currentBindings = await captureCheckBindings(rootDir, config, current, { scopedPlan: makePlan(current) });
+    expect(await captureCheckBindings(rootDir, config, current, { scopedPlan: nonreusable(makePlan(current)) })).toEqual({});
     const projection = { relevantLineCount: 1, relevantPaths: ["report.html"], excludedPaths: [], binaryPaths: [], sensitivePathIds: [], hasRelevantBinaryChange: false, hasRelevantZeroLineChange: false, changedEntryCount: 1 };
     const context = { kind: "unknown" as const, reason: "noninteractive_unrecognized" as const };
     const records = submitted.records.map(r => r.record);

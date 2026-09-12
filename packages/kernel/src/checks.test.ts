@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { captureScopedCheckInputs, type ScopedInputCapturePorts } from "./checks.ts";
 import { digestCanonical } from "./digest.ts";
+import { sha256Hex } from "./digest.ts";
 import { selectScopedCheckAttempt } from "./evaluator.ts";
 import type { ScopedCheckAttempt } from "./records.types.ts";
 import { isScopedCheckDefinition } from "./config.ts";
@@ -31,6 +32,17 @@ describe("scoped input capture", () => {
     expect((await capture(files, { FEATURE: "on", TOKEN: "" })).inputDigest).not.toBe(original.inputDigest);
     expect((await capture(files, undefined, null)).reusable).toBe(false);
     await expect(capture(files, undefined, "sentinel-secret")).rejects.toThrow(/nonsecret/);
+    await expect(capture(files, undefined, sha256Hex("sentinel-secret"))).rejects.toThrow(/nonsecret/);
+    expect((await capture(files, undefined, "account-revision-2")).inputDigest).not.toBe(original.inputDigest);
+  });
+  it("distinguishes an absent flag from an explicitly empty flag", async () => {
+    const absent = await capture(files, undefined, undefined, { environment: { TOKEN: "sentinel-secret" } });
+    const empty = await capture(files, undefined, undefined, { environment: { FEATURE: "", TOKEN: "sentinel-secret" } });
+    expect(empty.inputDigest).not.toBe(absent.inputDigest);
+  });
+  it("refuses both inventory/byte disagreement directions", async () => {
+    await expect(capture(files, undefined, undefined, { readFile: async p => p === "optional.json" ? Buffer.from("unlisted") : Buffer.from(files[p as keyof typeof files]) })).rejects.toThrow(/disagree/);
+    await expect(capture(files, undefined, undefined, { listFiles: async () => [...Object.keys(files), "optional.json"] })).rejects.toThrow(/disagree/);
   });
   it("refuses unsupported scope versions and malformed declarations", () => {
     expect(isScopedCheckDefinition(definition)).toBe(true);
@@ -50,8 +62,12 @@ describe("scoped attempt fencing", () => {
     expect(select([attempt(2, "failed"), attempt(3, "passed"), attempt(1, "passed")])?.generation).toBe(3);
     expect(select([attempt(1, "passed"), { ...attempt(2, "failed"), providerId: "docs" }])?.status).toBe("passed");
     expect(select([attempt(1, "passed"), attempt(2, "running")])?.status).toBe("running");
+    expect(select([attempt(1, "passed"), { ...attempt(2, "failed"), profileDigest: "c".repeat(64) }])?.generation).toBe(1);
+    expect(select([attempt(1, "passed"), { ...attempt(2, "passed"), inputDigest: "c".repeat(64) }])?.generation).toBe(1);
+    expect(select([attempt(1, "passed"), attempt(2, "interrupted")])?.status).toBe("interrupted");
   });
   it("refuses conflicting generations", () => {
     expect(() => select([attempt(1, "passed"), { ...attempt(1, "failed"), attemptId: "another" }])).toThrow(/generation/);
+    expect(() => select([attempt(1, "passed"), { ...attempt(2, "passed"), attemptId: "attempt-1" }])).toThrow(/generation/);
   });
 });

@@ -55,9 +55,9 @@ export async function captureScopedCheckInputs(definition: ScopedCheckDefinition
   }
   const environment: ScopedInputCapture["environment"] = [...definition.environment].sort((a, b) => a.name.localeCompare(b.name)).map(entry => {
     const value = ports.environment[entry.name];
-    const present = value !== undefined && value !== "";
+    const present = value !== undefined;
     if (entry.kind === "flag") return { ...entry, present, value: value ?? "" };
-    const identity = present ? ports.credentialIdentity(entry.name) : null;
+    const identity = present && value !== "" ? ports.credentialIdentity(entry.name) : null;
     if (identity !== null && (identity === value || identity === sha256Hex(value ?? ""))) throw new Error("Credential identity must be a nonsecret external revision, never credential bytes or their hash");
     return { ...entry, present, identity };
   });
