@@ -63,7 +63,7 @@ export class ScopedChecks {
           return [e.name, { present, identity }];
         })) };
       session.observations.set(provider.id, observation);
-      session.identities.set(provider.id, await scopedCheckIdentity(context.config, provider, inventory, read, observation));
+      session.identities.set(provider.id, await scopedCheckIdentity(context.config, provider, inventory, read, observation, candidate.base));
       session.stores.set(provider.id, new AttemptStore(path.join(storage.storageDir, digestCanonical({ gate: context.config.gateId, provider: provider.id }))));
     }
     return session;

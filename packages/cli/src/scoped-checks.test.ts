@@ -355,3 +355,28 @@ it.each(["mode", "link"])("portable verification recomputes declared %s metadata
   expect(capture.ok).toBe(true); if (!capture.ok) throw new Error("capture failed");
   await expect(capturePortableVerificationInputs(f.dir, f.config, capture.candidate, record)).rejects.toMatchObject({ blockers: [expect.objectContaining({ code: "portable_scoped_inputs_invalid" })] });
 }, 60000);
+
+it("binds changed injected base context", async () => {
+ const f=await fixture(); f.env["FAIL"]="0"; const old=await f.git("rev-parse","origin/main"); const a=f.config.providers[0]!;
+ f.setConfig({...f.config,providers:[{...a,check:{...a.check!,command:[process.execPath,"-e",`if(require('child_process').execFileSync('git',['rev-parse',process.env.DELIVERY_CHECK_BASE_REF],{encoding:'utf8'}).trim()!==${JSON.stringify(old)})process.exit(7);require('fs').writeFileSync('result-a.json','{}')`]}},f.config.providers[1]!]});
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.err.join("\n")).toBe(0);
+ const moved=await f.git("-c","commit.gpgsign=false","commit-tree",await f.git("rev-parse","origin/main^{tree}"),"-p",old,"-m","advance base");await f.git("update-ref","refs/heads/origin/main",moved);
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);
+ expect(await f.run("gate"),f.err.join("\n")+f.out.join("\n")).toBe(1);
+},60000);
+
+it.each(["ref", "tipSha", "mergeBaseSha"] as const)("portable scoped identity binds selected base %s", async member => {
+  const { readdir } = await import("node:fs/promises");
+  const { capturePortableVerificationInputs, withDeliverableIdentity } = await import("@agent-delivery-harness/kernel");
+  const { captureScopedCandidate } = await import("./scoped-candidate.ts");
+  const f = await fixture(); f.env["FAIL"] = "0";
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("record"), f.err.join("\n")).toBe(0); await f.git("add", ".");
+  const recordRoot = path.join(f.dir, path.dirname(f.config.deliveryRecordPath));
+  const record = JSON.parse(await readFile(path.join(recordRoot, (await readdir(recordRoot))[0]!), "utf8"));
+  const capture = await captureScopedCandidate({ rootDir: f.dir, config: f.config, workspaceId: "foreign-verifier", computeIdentity: withDeliverableIdentity() });
+  expect(capture.ok).toBe(true); if (!capture.ok) throw new Error("capture failed");
+  await expect(capturePortableVerificationInputs(f.dir, f.config, capture.candidate, record)).resolves.toBeDefined();
+  const changed = { ...capture.candidate, base: { ...capture.candidate.base, [member]: member === "ref" ? "origin/other" : "f".repeat(40) } };
+  await expect(capturePortableVerificationInputs(f.dir, f.config, changed, record)).rejects.toMatchObject({ blockers: [expect.objectContaining({ code: "portable_scoped_inputs_invalid" })] });
+}, 60000);

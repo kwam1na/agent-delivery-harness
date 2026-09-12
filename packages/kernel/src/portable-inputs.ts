@@ -105,7 +105,7 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
       if (!raw) throw new BlockedError([portableBlocker("portable_scoped_inputs_missing", "Scoped execution requires retained input observations and its originating attempt.")]);
       try {
         const retained = JSON.parse(raw) as { observation: ScopedRuntimeObservation; attempt: ScopedCheckAttempt };
-        const identity = await scopedCheckIdentity(config, provider, listing.stdout.split("\0").filter(Boolean), read, retained.observation);
+        const identity = await scopedCheckIdentity(config, provider, listing.stdout.split("\0").filter(Boolean), read, retained.observation, candidate.base);
         if (retained.attempt.providerId !== provider.id || retained.attempt.status !== "passed" || retained.attempt.inputDigest !== identity.inputDigest || retained.attempt.profileDigest !== identity.profileDigest) throw new Error("Mismatched scoped execution identity");
         checks[provider.id] = { inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, reusable: identity.reusable, attempts: [retained.attempt] };
       } catch { throw new BlockedError([portableBlocker("portable_scoped_inputs_invalid", "Retained scoped inputs do not match the selected source, profile or policy.")]); }

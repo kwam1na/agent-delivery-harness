@@ -4,6 +4,7 @@ import { digestCanonical, sha256Hex } from "./digest.ts";
 import type { HarnessConfig, ProviderRegistration } from "./config.ts";
 import { readWorkflowRelease } from "./review-inputs.ts";
 import type { CandidateTreeInputReader } from "./portable-inputs.ts";
+import type { CapturedCandidate } from "./candidate.types.ts";
 import { BlockedError, createBlocker } from "./blockers.ts";
 const invalid = (code: string, summary: string) => new BlockedError([createBlocker({ code, source: { kind: "command", id: "delivery-harness.scoped-inputs" }, summary,
   remediations: [{ id: "repair-scoped-inputs", kind: "manual_action", summary: "Restore the declared dependency inputs or correct the execution profile, then prepare again." }] })]);
@@ -13,7 +14,7 @@ export interface ScopedRuntimeObservation {
   readonly flags: Readonly<Record<string, string>>;
   readonly credentials: Readonly<Record<string, { readonly present: boolean; readonly identity: string | null }>>;
 }
-export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: CandidateTreeInputReader, observation: ScopedRuntimeObservation) {
+export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: CandidateTreeInputReader, observation: ScopedRuntimeObservation, base: CapturedCandidate["base"]) {
   const scope = provider.check?.scope;
   const profile = config.scopedExecution?.profiles.find(p => p.id === scope?.profile);
   if (!scope || !profile || observation.version !== "scoped-runtime/1" || !/^[a-f0-9]{64}$/.test(observation.runtimeDigest)) throw invalid("check_identity_invalid", "Unsupported scoped execution identity.");
@@ -38,8 +39,11 @@ export async function scopedCheckIdentity(config: HarnessConfig, provider: Provi
   const relevantProfile = { ...profile,
     mutableOutputs: profile.mutableOutputs.filter(m => provider.check!.outputs?.some(o => m.endsWith("/") ? o.startsWith(m) : o === m)),
     credentialIdentities: Object.fromEntries(credentials.filter(name => profile.credentialIdentities[name] !== undefined).map(name => [name, profile.credentialIdentities[name]])) };
-  const profileDigest = digestCanonical({ profile: relevantProfile, runtimeDigest: observation.runtimeDigest, dependencyDigest, releaseDigest, policyDigest });
+  // The executor injects Git base context, so even unchanged source can execute
+  // differently after the base moves. Recompute this from the selected candidate.
+  const runtimeDigest = digestCanonical({ runtime: observation.runtimeDigest, base });
+  const profileDigest = digestCanonical({ profile: relevantProfile, runtimeDigest, dependencyDigest, releaseDigest, policyDigest });
   const capture = await captureScopedCheckInputs(scope, { listFiles: async () => inventory, readFile: read, readMetadata: read.metadata, command: provider.check!.command, timeoutMs: provider.check!.timeoutMs,
-    runtimeDigest: observation.runtimeDigest, dependencyDigest, releaseDigest, policyDigest, environment, credentialIdentity: name => observation.credentials[name]?.identity ?? null });
+    runtimeDigest, dependencyDigest, releaseDigest, policyDigest, environment, credentialIdentity: name => observation.credentials[name]?.identity ?? null });
   return { ...capture, profileDigest };
 }

@@ -18,6 +18,9 @@ transfer. Its deterministic synthetic HEAD contains staged and new source, with
 the original HEAD retained separately. Explicit base/candidate refs are injected
 for changed-file checks. The shared tree reader binds declared input bytes,
 executable modes and symlink target chains for execution and portable verification.
+The selected base ref, tip and merge base also enter that shared identity: a
+changed-file command can change its result when the base moves even if declared
+source bytes stay identical. Unchanged-base report edits retain scoped reuse.
 Source and dependencies never link to the authoring
 checkout. Dependencies install privately, prepared source is checked for drift,
 and the installed tree is hashed and checked after execution. Compatible checks
