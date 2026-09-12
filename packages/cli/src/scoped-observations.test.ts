@@ -69,3 +69,25 @@ it("ignores unselected and unscoped provider history and never copies unexpected
   expect((await readScopedCheckObservations({ ...f, config: { ...f.config, providers: [{ id: "check.a", findingCodes: [] }] } })).providers).toEqual([]);
   expect((await readScopedCheckObservations({ ...f, config: { ...f.config, providers: [f.config.providers[1]!] } })).providers).toEqual([{ providerId: "check.b", attempts: [] }]);
 });
+it("preserves complete native metadata and caller provider order", async () => {
+  const f = await fixture();
+  const a = await f.store("check.a").allocate({ ...f.input("check.a"), inputDigest: "1".repeat(64), profileDigest: "2".repeat(64), origin: {
+    runId: "a-run", candidate: { treeSha: "3".repeat(40), deliverableDigest: "4".repeat(64), identityToken: "identity-a", baseRef: "origin/base-a", baseTipSha: "5".repeat(40), mergeBaseSha: "6".repeat(40), workspaceId: "workspace-a" },
+  } });
+  const b = await f.store("check.b").allocate({ ...f.input("check.b"), origin: { ...f.input("check.b").origin, runId: "b-run" } });
+  await f.store("check.a").finish(a, "failed", { outputs: [], durationMs: 0 });
+  expect(await readScopedCheckObservations({ ...f, config: { ...f.config, providers: [f.config.providers[1]!, f.config.providers[0]!] } })).toEqual({
+    version: "scoped-check-observations/1", providers: [
+      { providerId: "check.b", attempts: [b] },
+      { providerId: "check.a", attempts: [{ ...a, status: "failed", durationMs: 0 }] },
+    ],
+  });
+});
+it.each([["origin.runId", ""], ["origin.candidate.treeSha", ""], ["inputDigest", "not-a-digest"], ["profileDigest", "A".repeat(64)]])("rejects invalid string %s metadata", async (member, value) => {
+  const f = await fixture(); const store = f.store("check.a"); await store.allocate(f.input("check.a"));
+  expect((await readScopedCheckObservations(f)).providers[0]!.attempts).toHaveLength(1);
+  const file = path.join(store.root, "1/running.json"); const row = JSON.parse(await readFile(file, "utf8"));
+  const keys = member.split("."), last = keys.pop()!; const target = keys.reduce((obj, key) => obj[key], row.entry.attempt);
+  target[last] = value; row.digest = digestCanonical(row.entry); await writeFile(file, JSON.stringify(row));
+  await expect(readScopedCheckObservations(f)).rejects.toMatchObject({ code: "check_attempt_corrupt" });
+});
