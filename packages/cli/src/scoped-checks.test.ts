@@ -413,3 +413,30 @@ it("refuses an unknown Git context before expensive preparation", () => {
  const profile={id:"fixture",gitContext:"partial",dependencyInputs:[],mutableOutputs:[],credentialIdentities:{}};
  expect(()=>defineHarnessConfig({...base,scopedExecution:{version:"scoped-execution/1",mechanicalProviders:[],profiles:[profile]}} as unknown as HarnessConfigInput)).toThrow();
 });
+
+it("full Git context binds staged raw-tree changes with fixed HEAD and base", async()=>{
+ const f=await fixture();f.env["FAIL"]="0";const old=await f.git("rev-parse","HEAD^{tree}");const head=await f.git("rev-parse","HEAD");const a=f.config.providers[0]!;
+ f.setConfig({...f.config,scopedExecution:{...f.config.scopedExecution!,profiles:f.config.scopedExecution!.profiles.map(({gitContext,...p})=>p)},providers:[{...a,check:{...a.check!,command:[process.execPath,"-e",`if(process.env.DELIVERY_CHECK_ORIGIN_TREE!==${JSON.stringify(old)})process.exit(7);require('fs').writeFileSync('result-a.json','{}')`]}},f.config.providers[1]!]});
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.err.join("\n")).toBe(0);
+ await mkdir(path.join(f.dir,"docs/reports"),{recursive:true});await writeFile(path.join(f.dir,"docs/reports/new.md"),"report");await f.git("add",".");expect(await f.git("rev-parse","HEAD")).toBe(head);
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.out.join("\n")+f.err.join("\n")).toBe(1);
+},60000);
+it.each(["nonneutral","merge","bound"])("full-context transport rejects %s history",async(kind)=>{
+ const f=await fixture();f.env["FAIL"]="0";f.setConfig({...f.config,scopedExecution:{...f.config.scopedExecution!,profiles:f.config.scopedExecution!.profiles.map(({gitContext,...p})=>p)}});
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("record"),f.err.join("\n")).toBe(0);await f.git("add",".");await f.git("-c","commit.gpgsign=false","commit","-qm","record");expect(await f.run("verify"),f.err.join("\n")).toBe(0);
+ const transport=await f.git("rev-parse","HEAD");const tree=await f.git("rev-parse","HEAD^{tree}");
+ if(kind==="nonneutral"){
+  await writeFile(path.join(f.dir,"source.txt"),"changed");await f.git("add",".");await f.git("-c","commit.gpgsign=false","commit","-qm","nonneutral");
+  await writeFile(path.join(f.dir,"source.txt"),"source");await f.git("add",".");await f.git("-c","commit.gpgsign=false","commit","-qm","restore");
+ }else if(kind==="merge"){
+  const side=await f.git("-c","commit.gpgsign=false","commit-tree",tree,"-p",transport,"-m","side");
+  const merge=await f.git("-c","commit.gpgsign=false","commit-tree",tree,"-p",transport,"-p",side,"-m","merge");await f.git("update-ref","HEAD",merge);
+ }else{
+  const bump=path.join(f.dir,"delivery/records/transport.txt");
+  for(let i=0;i<63;i++){await writeFile(bump,String(i));await f.git("add",".");await f.git("-c","commit.gpgsign=false","commit","-qm",`transport ${i}`);}
+  expect(await f.run("verify"),f.err.join("\n")).toBe(0);
+  await writeFile(bump,"64");await f.git("add",".");await f.git("-c","commit.gpgsign=false","commit","-qm","transport 64");
+ }
+ if(kind!=="bound")expect(await f.git("rev-parse","HEAD^{tree}")).toBe(tree);
+ expect(await f.run("verify"),f.err.join("\n")).toBe(1);expect(f.err.join("\n")).toContain("portable_scoped_inputs_invalid");
+},120000);
