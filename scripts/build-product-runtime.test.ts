@@ -129,3 +129,20 @@ it("runs composite admission from bundled runtime bytes in a disposable consumer
     expect(records).toHaveLength(1);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }, 30_000);
+
+it("qualifies scoped execution through the actual bundled runtime", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "product-runtime-scoped-"));
+  try {
+    const manifest = path.join(temporary, "workflow.json");
+    await writeFile(manifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: "a".repeat(64) }));
+    const runtime = path.join(temporary, "runtime");
+    await buildProductRuntime(process.cwd(), manifest, runtime);
+    const { runScopedRuntimeQualification, SCOPED_RUNTIME_PROBES } = await import("./qualify-product.ts");
+    const result = await runScopedRuntimeQualification(runtime);
+    expect(result.probes).toEqual(SCOPED_RUNTIME_PROBES);
+    expect(result.runtimeSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.repositories).toBe(3);
+    await writeFile(path.join(runtime, "cli.mjs"), "throw Error(\"must not execute corrupt runtime\");\n");
+    await expect(runScopedRuntimeQualification(runtime)).rejects.toThrow("runtime checksum mismatch: cli.mjs");
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+}, 180000);

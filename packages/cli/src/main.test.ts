@@ -201,3 +201,18 @@ describe("the executable entry guard", () => {
     expect(output, `entry guard skipped main; stderr: ${diagnostics}`).toContain("Usage:");
   }, 30_000);
 });
+
+it.each([false, true])("process cancellation settles stdin and waiver waits (already aborted=%s)", async (alreadyAborted) => {
+  const controller = new AbortController();
+  if (alreadyAborted) controller.abort();
+  const { input, output } = streams();
+  const read = readStdinText(input, controller.signal);
+  const prompt = createWaiverPrompt(input, output, controller.signal)(DECISION, ["review.green"]);
+  const checks = Promise.all([
+    expect(read).rejects.toBeInstanceOf(CliInterruption),
+    expect(prompt).rejects.toBeInstanceOf(CliInterruption),
+  ]);
+  controller.abort();
+  await checks;
+  expect(input.listenerCount("data")).toBe(0);
+});

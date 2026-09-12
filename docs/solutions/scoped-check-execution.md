@@ -65,3 +65,46 @@ code. Declared source closure and installation policy remain adopter contracts.
 Qualification lives in the real Git CLI lifecycle, snapshot and attempt-store
 fixtures, alongside the unchanged strict declared-check sensors. Distribution
 and artifact qualification are the dependent V26-2067 delivery.
+
+## Bind dynamic selection to the execution snapshot
+
+Configuration loads before `scopedExecution.repairCommands` run. Loading a new
+process after repair fixes that ordering, but does not by itself bind a dynamic
+provider selection to the candidate captured later. An edit or base movement in
+between can otherwise make a valid check list incomplete for the captured tree.
+
+An adopter can use the existing mandatory mechanical provider seam without a
+second admission engine:
+
+1. Complete selection-affecting repair first. Resolve immutable candidate tree,
+   original HEAD, base tip and merge-base Git objects. Derive provider membership
+   and input closure from those objects, not subsequent working-directory reads.
+2. Pass expected coordinates as declared nonsecret environment flags to a dedicated
+   scoped provider with a static command.
+   Its profile uses `gitContext: "full"`, no dependency setup and no outputs.
+   Add an always-active obligation requiring its `checks.passed/1` evidence and
+   put it first in `scopedExecution.mechanicalProviders`.
+3. Inside that check, compare expected tree and HEAD to
+   `DELIVERY_CHECK_ORIGIN_TREE` and `DELIVERY_CHECK_ORIGIN_HEAD`; compare the base
+   tip to `git rev-parse "$DELIVERY_CHECK_BASE_REF"` in the private repository,
+   and compare the merge base to `DELIVERY_CHECK_MERGE_BASE`. The planner and
+   execution configuration must use the same declared base ref. Exit nonzero on
+   any mismatch. Do not replace these native snapshot coordinates with live
+   authoring-checkout reads or before/after filesystem observations.
+4. On rejection, derive a new plan from new immutable objects and prepare again.
+   Keep selection-affecting repairs outside this invocation. The guard runs
+   before later mechanical providers and before preparation publishes a receipt;
+   a missing or stale receipt also blocks direct gate and record calls.
+
+The expected coordinates are declared flags, so a changed expectation changes
+this guard's scoped identity without changing configuration definitions. Its full Git profile also binds native
+base, HEAD and raw tree; a previous pass cannot authorize a moved snapshot.
+Application checks may retain separate `gitContext: "none"` profiles and reuse
+unchanged inputs independently. No tree pin is written into the source tree it
+identifies: the invocation carries the derived flags. Keep provider definitions stable across
+neutral transport so portable verification can use their retained observations.
+
+`scoped-checks.test.ts` exercises an exact positive control, then candidate-only,
+base-only and HEAD-only races, plus changed guard commands, including direct gate
+and record calls before another prepare. This pattern establishes selection
+consistency; the adopter still owns the correctness of the dependency planner.

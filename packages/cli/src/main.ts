@@ -9,7 +9,7 @@
  * a Ctrl-C into the typed {@link CliInterruption} the boundary maps to exit 130.
  */
 import { createInterface } from "node:readline";
-import { CliInterruption, EXIT_POLICY, runCli, type CliRuntime } from "./index.ts";
+import { CliInterruption, EXIT_INTERRUPTED, EXIT_POLICY, runCli, type CliRuntime } from "./index.ts";
 import { invokedDirectly, type WaiverPrompt } from "@agent-delivery-harness/kernel";
 
 /**
@@ -35,23 +35,25 @@ import { invokedDirectly, type WaiverPrompt } from "@agent-delivery-harness/kern
  * would reject and then resolve, and a settled promise silently ignoring its
  * second settlement is exactly how this class of bug hides.
  */
-export function createWaiverPrompt(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): WaiverPrompt {
+export function createWaiverPrompt(input: NodeJS.ReadableStream, output: NodeJS.WritableStream, signal?: AbortSignal): WaiverPrompt {
   return (decision, obligationIds) =>
     new Promise<Awaited<ReturnType<WaiverPrompt>>>((resolve, reject) => {
+      if (signal?.aborted) { reject(new CliInterruption()); return; }
       const rl = createInterface({ input, output });
       let settled = false;
       const settle = (action: () => void): void => {
         if (settled) return;
         settled = true;
+        signal?.removeEventListener("abort", interrupt);
         action();
       };
 
-      rl.on("SIGINT", () => {
-        settle(() => {
-          rl.close();
-          reject(new CliInterruption("Waiver prompt interrupted."));
-        });
+      const interrupt = () => settle(() => {
+        rl.close();
+        reject(new CliInterruption("Waiver prompt interrupted."));
       });
+      rl.on("SIGINT", interrupt);
+      signal?.addEventListener("abort", interrupt, { once: true });
       // Ctrl-D, a closed pipe, or any other end of input.
       rl.on("close", () => {
         settle(() => resolve(false));
@@ -93,20 +95,29 @@ export const readlineWaiverPrompt: WaiverPrompt = (decision, obligationIds) =>
  * reads as empty, and the store refuses the empty payload with a diagnostic,
  * which is a far better answer than silence.
  */
-export function readStdinText(input: NodeJS.ReadableStream & { isTTY?: boolean }): Promise<string> {
+export function readStdinText(input: NodeJS.ReadableStream & { isTTY?: boolean }, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) return Promise.reject(new CliInterruption());
   if (input.isTTY === true) return Promise.resolve("");
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let text = "";
+    const cleanup = () => {
+      input.removeListener("data", data);
+      input.removeListener("error", finish);
+      input.removeListener("end", finish);
+      signal?.removeEventListener("abort", interrupt);
+    };
+    const data = (chunk: string) => { text += chunk; };
+    const finish = () => { cleanup(); resolve(text); };
+    const interrupt = () => { cleanup(); input.pause(); reject(new CliInterruption()); };
     input.setEncoding("utf8");
-    input.on("data", (chunk: string) => {
-      text += chunk;
-    });
-    input.once("error", () => resolve(text));
-    input.once("end", () => resolve(text));
+    input.on("data", data);
+    input.once("error", finish);
+    input.once("end", finish);
+    signal?.addEventListener("abort", interrupt, { once: true });
   });
 }
 
-export function defaultRuntime(): CliRuntime {
+export function defaultRuntime(signal?: AbortSignal): CliRuntime {
   return {
     cwd: process.cwd(),
     env: process.env,
@@ -114,13 +125,20 @@ export function defaultRuntime(): CliRuntime {
     stdoutIsTTY: process.stdout.isTTY === true,
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
-    promptForWaiver: readlineWaiverPrompt,
-    readStdin: () => readStdinText(process.stdin),
+    ...(signal ? { signal } : {}),
+    promptForWaiver: createWaiverPrompt(process.stdin, process.stderr, signal),
+    readStdin: () => readStdinText(process.stdin, signal),
   };
 }
 
 export async function main(argv: readonly string[]): Promise<number> {
-  return runCli(argv, defaultRuntime());
+  const controller = new AbortController();
+  const interrupt = () => controller.abort();
+  process.on("SIGINT", interrupt);
+  try {
+    const code = await runCli(argv, defaultRuntime(controller.signal));
+    return controller.signal.aborted ? EXIT_INTERRUPTED : code;
+  } finally { process.removeListener("SIGINT", interrupt); }
 }
 
 if (invokedDirectly(process.argv[1], import.meta.url)) {
