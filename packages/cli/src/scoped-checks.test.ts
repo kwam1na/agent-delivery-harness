@@ -18,7 +18,7 @@ async function fixture() {
   const providers = ["a", "b"].map(id => ({ id: `check.${id}`, findingCodes: [], check: { command: [process.execPath, "-e", `if('${id}'==='b'&&process.env["FAIL"]==='1')process.exit(3);require('fs').writeFileSync('result-${id}.json',JSON.stringify({value:require('fs').readFileSync('source.txt','utf8')}))`], timeoutMs: 5000, outputs: [`result-${id}.json`], scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: "fixture", environment: id === "b" ? [{ name: "FAIL", kind: "flag" }] : [] } } }));
   const input = { ...base, preparationWiringPaths: ["harness.config.ts"], preparationCommands: [], providers,
     obligations: providers.map(p => ({ ...base.obligations[0]!, id: `${p.id}.passed`, activation: { kind: "always" }, providers: [p.id], acceptedPayloadSpecs: ["checks.passed/1"], humanWaiverAllowed: false, allowedResolutionKinds: ["satisfied_evidence"] })),
-    scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "fixture", dependencyInputs: [], mutableOutputs: ["result-a.json", "result-b.json"], credentialIdentities: {} }] } };
+    scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "fixture", gitContext: "none", dependencyInputs: [], mutableOutputs: ["result-a.json", "result-b.json"], credentialIdentities: {} }] } };
   let config = defineHarnessConfig(input as unknown as HarnessConfigInput);
   const artifacts = path.join(dir, ".git/artifacts"); await mkdir(artifacts);
   const out: string[] = [], err: string[] = [], env: Record<string, string> = { FAIL: "1" };
@@ -357,7 +357,7 @@ it.each(["mode", "link"])("portable verification recomputes declared %s metadata
 }, 60000);
 
 it("binds changed injected base context", async () => {
- const f=await fixture(); f.env["FAIL"]="0"; const old=await f.git("rev-parse","origin/main"); const a=f.config.providers[0]!;
+ const f=await fixture(); f.env["FAIL"]="0"; const old=await f.git("rev-parse","origin/main"); f.setConfig({...f.config,scopedExecution:{...f.config.scopedExecution!,profiles:f.config.scopedExecution!.profiles.map(p=>({...p,gitContext:"full"}))}}); const a=f.config.providers[0]!;
  f.setConfig({...f.config,providers:[{...a,check:{...a.check!,command:[process.execPath,"-e",`if(require('child_process').execFileSync('git',['rev-parse',process.env.DELIVERY_CHECK_BASE_REF],{encoding:'utf8'}).trim()!==${JSON.stringify(old)})process.exit(7);require('fs').writeFileSync('result-a.json','{}')`]}},f.config.providers[1]!]});
  expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.err.join("\n")).toBe(0);
  const moved=await f.git("-c","commit.gpgsign=false","commit-tree",await f.git("rev-parse","origin/main^{tree}"),"-p",old,"-m","advance base");await f.git("update-ref","refs/heads/origin/main",moved);
@@ -380,3 +380,36 @@ it.each(["ref", "tipSha", "mergeBaseSha"] as const)("portable scoped identity bi
   const changed = { ...capture.candidate, base: { ...capture.candidate.base, [member]: member === "ref" ? "origin/other" : "f".repeat(40) } };
   await expect(capturePortableVerificationInputs(f.dir, f.config, changed, record)).rejects.toMatchObject({ blockers: [expect.objectContaining({ code: "portable_scoped_inputs_invalid" })] });
 }, 60000);
+
+it("full Git context binds original HEAD independently of source and base", async () => {
+ const f=await fixture();f.env["FAIL"]="0"; const old=await f.git("rev-parse","HEAD"); const a=f.config.providers[0]!;
+ f.setConfig({...f.config,scopedExecution:{...f.config.scopedExecution!,profiles:f.config.scopedExecution!.profiles.map(p=>({...p,gitContext:"full"}))},providers:[{...a,check:{...a.check!,command:[process.execPath,"-e",`if(process.env.DELIVERY_CHECK_ORIGIN_HEAD!==${JSON.stringify(old)})process.exit(7);require('fs').writeFileSync('result-a.json','{}')`]}},f.config.providers[1]!]});
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.err.join("\n")).toBe(0);
+ const tree=await f.git("rev-parse","HEAD^{tree}"); await f.git("-c","commit.gpgsign=false","commit","--allow-empty","-qm","advance HEAD only");expect(await f.git("rev-parse","HEAD^{tree}")).toBe(tree);
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.out.join("\n")+f.err.join("\n")).toBe(1);
+},60000);
+it("file-only checks cannot discover repository metadata or injected Git coordinates", async () => {
+ const f=await fixture(); f.env["FAIL"]="0"; const a=f.config.providers[0]!;
+ f.setConfig({...f.config,providers:[{...a,check:{...a.check!,command:[process.execPath,"-e","if(require('fs').existsSync('.git')||Object.keys(process.env).some(k=>k.startsWith('DELIVERY_CHECK_'))||require('child_process').spawnSync('git',['rev-parse','HEAD']).status===0)process.exit(7);require('fs').writeFileSync('result-a.json','{}')"]}},f.config.providers[1]!]});
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.err.join("\n")).toBe(0);
+},60000);
+it("full context verifies record-only transport but reruns on report changes", async () => {
+ const f=await fixture(); f.env["FAIL"]="0";
+ f.setConfig({...f.config,scopedExecution:{...f.config.scopedExecution!,profiles:f.config.scopedExecution!.profiles.map(({gitContext,...p})=>p)}});
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("record"),f.err.join("\n")).toBe(0);
+ await f.git("add",".");expect(await f.run("verify"),f.err.join("\n")).toBe(0);
+ await f.git("-c","commit.gpgsign=false","commit","-qm","record");expect(await f.run("verify"),f.err.join("\n")).toBe(0);
+ const foreign=await mkdtemp(path.join(tmpdir(),"scoped-full-foreign-"));dirs.push(foreign);
+ await exec("git",["clone","--no-local",f.dir,foreign]);await exec("git",["update-ref","refs/remotes/origin/main",await f.git("rev-parse","origin/main")],{cwd:foreign});
+ expect(await runCli(["verify"],{...f.runtime,cwd:foreign}),f.err.join("\n")).toBe(0);
+ const transportHead=await f.git("rev-parse","HEAD");await f.git("-c","commit.gpgsign=false","commit","--allow-empty","-qm","arbitrary HEAD movement");
+ expect(await f.run("verify"),f.err.join("\n")).toBe(1);expect(f.err.join("\n")).toContain("portable_scoped_inputs_invalid");
+ await f.git("update-ref","HEAD",transportHead);
+ await mkdir(path.join(f.dir,"docs/reports"),{recursive:true});await writeFile(path.join(f.dir,"docs/reports/new.md"),"report");await f.git("add",".");
+ expect(await f.run("verify"),f.err.join("\n")).toBe(1);expect(f.err.join("\n")).toContain("portable_scoped_inputs_invalid");
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);expect(await f.run("gate"),f.err.join("\n")).toBe(0);expect(f.out.join("\n")).toContain("checking check.a");expect(f.out.join("\n")).not.toContain("reusing check.a");
+},60000);
+it("refuses an unknown Git context before expensive preparation", () => {
+ const profile={id:"fixture",gitContext:"partial",dependencyInputs:[],mutableOutputs:[],credentialIdentities:{}};
+ expect(()=>defineHarnessConfig({...base,scopedExecution:{version:"scoped-execution/1",mechanicalProviders:[],profiles:[profile]}} as unknown as HarnessConfigInput)).toThrow();
+});

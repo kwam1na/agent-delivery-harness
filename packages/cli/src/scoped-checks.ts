@@ -63,7 +63,7 @@ export class ScopedChecks {
           return [e.name, { present, identity }];
         })) };
       session.observations.set(provider.id, observation);
-      session.identities.set(provider.id, await scopedCheckIdentity(context.config, provider, inventory, read, observation, candidate.base));
+      session.identities.set(provider.id, await scopedCheckIdentity(context.config, provider, inventory, read, observation, candidate));
       session.stores.set(provider.id, new AttemptStore(path.join(storage.storageDir, digestCanonical({ gate: context.config.gateId, provider: provider.id }))));
     }
     return session;
@@ -121,7 +121,7 @@ export class ScopedChecks {
       const key = profile.id;
       let snapshot = this.snapshots.get(key);
       if (!snapshot) {
-        snapshot = await createCheckSnapshot({ rootDir: this.context.rootDir, candidate: this.candidate, outputs: profile.mutableOutputs, environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" }, ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}) });
+        snapshot = await createCheckSnapshot({ rootDir: this.context.rootDir, candidate: this.candidate, outputs: profile.mutableOutputs, gitContext: profile.gitContext ?? "full", environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" }, ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}) });
         this.snapshots.set(key, snapshot);
       }
       await snapshot.verify();
@@ -129,7 +129,7 @@ export class ScopedChecks {
       for (const output of check.outputs ?? []) await rm(path.join(snapshot.rootDir, output), { recursive: true, force: true });
       const injected = Object.fromEntries(check.scope!.environment.filter(e => this.context.env[e.name] !== undefined).map(e => [e.name, this.context.env[e.name]!]));
       this.context.write(`checking ${provider.id}: attempt ${attempt.attemptId}`);
-      const commandHome = path.join(snapshot.rootDir, ".git/commands", attempt.attemptId, "home"), commandTemp = path.join(snapshot.rootDir, ".git/commands", attempt.attemptId, "tmp");
+      const commandHome = path.join(snapshot.commandRoot, attempt.attemptId, "home"), commandTemp = path.join(snapshot.commandRoot, attempt.attemptId, "tmp");
       await mkdir(commandHome, { recursive: true }); await mkdir(commandTemp, { recursive: true });
       const result = await createExecPort().run({ command: check.command[0], args: check.command.slice(1), cwd: path.join(snapshot.rootDir, check.scope!.cwd), env: { ...snapshot.environment, ...injected, HOME: commandHome, TMPDIR: commandTemp }, timeoutMs: check.timeoutMs, maxBuffer: 1024 * 1024, ...(this.context.signal ? { signal: this.context.signal } : {}) });
       const secrets = check.scope!.environment.filter(e => e.kind === "credential").map(e => this.context.env[e.name]).filter((v): v is string => !!v);

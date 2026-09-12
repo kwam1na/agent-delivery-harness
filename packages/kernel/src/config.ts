@@ -227,6 +227,8 @@ export function isScopedCheckDefinition(value: unknown): value is ScopedCheckDef
 
 /** Supported private executor profiles; old runtimes reject this opt-in. */
 export interface ScopedExecutionProfile {
+  /** Full Git context is conservative; none permits file-scoped reuse without Git metadata. */
+  readonly gitContext?: "full" | "none";
   readonly id: string;
   readonly dependencyInputs: readonly string[];
   readonly dependencies?: { readonly command: NonEmptyTuple<string>; readonly timeoutMs: number };
@@ -248,7 +250,8 @@ function isScopedExecution(value: unknown): value is ScopedExecutionDefinition {
   const list = (v: unknown) => Array.isArray(v) && new Set(v).size === v.length && v.every(safe);
   return new Set(value["mechanicalProviders"]).size === value["mechanicalProviders"].length && value["mechanicalProviders"].every(v => typeof v === "string") &&
     new Set(value["profiles"].map(p => isRecord(p) ? p["id"] : null)).size === value["profiles"].length && value["profiles"].every(p => {
-      if (!isRecord(p) || Object.keys(p).some(k => !["id", "dependencyInputs", "dependencies", "mutableOutputs", "credentialIdentities"].includes(k)) || typeof p["id"] !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(p["id"]) || !list(p["dependencyInputs"]) || !list(p["mutableOutputs"]) || !isRecord(p["credentialIdentities"]) || !Object.entries(p["credentialIdentities"]).every(([k, v]) => /^[A-Z_][A-Z0-9_]*$/.test(k) && typeof v === "string" && v.length > 0)) return false;
+      if (!isRecord(p) || Object.keys(p).some(k => !["id", "dependencyInputs", "dependencies", "mutableOutputs", "credentialIdentities", "gitContext"].includes(k)) || typeof p["id"] !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(p["id"]) || !list(p["dependencyInputs"]) || !list(p["mutableOutputs"]) || !isRecord(p["credentialIdentities"]) || !Object.entries(p["credentialIdentities"]).every(([k, v]) => /^[A-Z_][A-Z0-9_]*$/.test(k) && typeof v === "string" && v.length > 0)) return false;
+      if (p["gitContext"] !== undefined && p["gitContext"] !== "full" && p["gitContext"] !== "none") return false;
       const dep = p["dependencies"];
       return dep === undefined || (isRecord(dep) && Object.keys(dep).sort().join(",") === "command,timeoutMs" && Array.isArray(dep["command"]) && dep["command"].length > 0 && dep["command"].every(v => typeof v === "string" && v.length > 0 && !v.includes("\0")) && Number.isSafeInteger(dep["timeoutMs"]) && Number(dep["timeoutMs"]) > 0 && Number(dep["timeoutMs"]) <= 3600000);
     });

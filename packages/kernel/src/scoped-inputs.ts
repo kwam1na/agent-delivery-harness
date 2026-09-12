@@ -14,7 +14,7 @@ export interface ScopedRuntimeObservation {
   readonly flags: Readonly<Record<string, string>>;
   readonly credentials: Readonly<Record<string, { readonly present: boolean; readonly identity: string | null }>>;
 }
-export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: CandidateTreeInputReader, observation: ScopedRuntimeObservation, base: CapturedCandidate["base"]) {
+export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: CandidateTreeInputReader, observation: ScopedRuntimeObservation, candidate: Pick<CapturedCandidate, "base" | "headSha" | "treeSha">) {
   const scope = provider.check?.scope;
   const profile = config.scopedExecution?.profiles.find(p => p.id === scope?.profile);
   if (!scope || !profile || observation.version !== "scoped-runtime/1" || !/^[a-f0-9]{64}$/.test(observation.runtimeDigest)) throw invalid("check_identity_invalid", "Unsupported scoped execution identity.");
@@ -41,7 +41,7 @@ export async function scopedCheckIdentity(config: HarnessConfig, provider: Provi
     credentialIdentities: Object.fromEntries(credentials.filter(name => profile.credentialIdentities[name] !== undefined).map(name => [name, profile.credentialIdentities[name]])) };
   // The executor injects Git base context, so even unchanged source can execute
   // differently after the base moves. Recompute this from the selected candidate.
-  const runtimeDigest = digestCanonical({ runtime: observation.runtimeDigest, base });
+  const runtimeDigest = digestCanonical({ runtime: observation.runtimeDigest, base: candidate.base, ...(profile.gitContext === "none" ? {} : { headSha: candidate.headSha, treeSha: candidate.treeSha }) });
   const profileDigest = digestCanonical({ profile: relevantProfile, runtimeDigest, dependencyDigest, releaseDigest, policyDigest });
   const capture = await captureScopedCheckInputs(scope, { listFiles: async () => inventory, readFile: read, readMetadata: read.metadata, command: provider.check!.command, timeoutMs: provider.check!.timeoutMs,
     runtimeDigest, dependencyDigest, releaseDigest, policyDigest, environment, credentialIdentity: name => observation.credentials[name]?.identity ?? null });

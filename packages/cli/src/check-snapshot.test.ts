@@ -100,3 +100,14 @@ it("accepts internal source and private dependency-bin symlinks under the defaul
     await expect(snapshot.verify()).resolves.toBeUndefined();
   } finally { await snapshot.cleanup(); }
 });
+it("file-only snapshot excludes Git for setup and checks even under a parent repository", async () => {
+ const f=await fixture(); const prior=process.env["TMPDIR"]; process.env["TMPDIR"]=f.root;
+ let snapshot: Awaited<ReturnType<typeof createCheckSnapshot>> | undefined;
+ try {
+  snapshot=await createCheckSnapshot({rootDir:f.root,candidate:f.candidate,gitContext:"none",outputs:[],environment:{},dependencies:{command:[process.execPath,"-e","if(require('fs').existsSync('.git')||Object.keys(process.env).some(k=>k.startsWith('DELIVERY_CHECK_'))||require('child_process').spawnSync('git',['rev-parse','HEAD']).status===0)process.exit(7)"],timeoutMs:5000}});
+  await expect(exec("git",["rev-parse","HEAD"],{cwd:snapshot.rootDir,env:snapshot.environment})).rejects.toMatchObject({code:128});
+  await expect(snapshot.verify()).resolves.toBeUndefined();
+  await mkdir(path.join(snapshot.rootDir,".git"));await expect(snapshot.verify()).rejects.toMatchObject({code:"check_snapshot_drift"});
+  const control=path.dirname(snapshot.commandRoot);await snapshot.cleanup();snapshot=undefined;await expect(readFile(path.join(control,"repository/HEAD"))).rejects.toMatchObject({code:"ENOENT"});
+ } finally {if(snapshot)await snapshot.cleanup();if(prior===undefined)delete process.env["TMPDIR"];else process.env["TMPDIR"]=prior;}
+});

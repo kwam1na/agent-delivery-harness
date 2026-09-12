@@ -1,7 +1,7 @@
 /** Private execution tree. Never shares writable source, objects, index or dependencies. */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -16,11 +16,13 @@ export interface SnapshotRequest {
   readonly rootDir: string;
   readonly candidate: { readonly treeSha: string; readonly headSha: string; readonly base: { readonly ref: string; readonly tipSha: string; readonly mergeBaseSha: string } };
   readonly outputs: readonly string[];
+  readonly gitContext?: "full" | "none";
   readonly environment: Readonly<Record<string, string>>;
   readonly dependencies?: { readonly command: readonly [string, ...string[]]; readonly timeoutMs: number };
   readonly signal?: AbortSignal;
 }
 export interface CheckSnapshot {
+  readonly commandRoot: string;
   readonly rootDir: string;
   readonly environment: Readonly<Record<string, string>>;
   readonly dependencyDigest: string;
@@ -57,10 +59,12 @@ export function executionPath(root: string, value: string): string {
 export async function createCheckSnapshot(input: SnapshotRequest): Promise<CheckSnapshot> {
   const rootDir = await realpath(await mkdtemp(path.join(tmpdir(), "delivery-check-")));
   const cleanEnv = { ...input.environment, PATH: executionPath(input.rootDir, input.environment["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" };
-  const git = async (...args: string[]) => (await exec("git", args, { cwd: rootDir, env: cleanEnv, maxBuffer: 128 * 1024 * 1024, ...(input.signal ? { signal: input.signal } : {}) })).stdout.trim();
+  let privateControl: string | undefined;
+  let gitDirectory: string | undefined;
+  const git = async (...args: string[]) => (await exec("git", gitDirectory ? [`--git-dir=${gitDirectory}`, `--work-tree=${rootDir}`, ...args] : args, { cwd: rootDir, env: cleanEnv, maxBuffer: 128 * 1024 * 1024, ...(input.signal ? { signal: input.signal } : {}) })).stdout.trim();
   const cleanup = async () => {
-    try { await rm(rootDir, { recursive: true, force: true }); }
-    catch { throw new CheckSnapshotError("check_snapshot_cleanup_failed", "Cannot remove the owned execution snapshot after retaining evidence."); }
+    const removed = await Promise.allSettled([rootDir, ...(privateControl ? [privateControl] : [])].map(dir => rm(dir, { recursive: true, force: true })));
+    if (removed.some(result => result.status === "rejected")) throw new CheckSnapshotError("check_snapshot_cleanup_failed", "Cannot remove the owned execution snapshot after retaining evidence.");
   };
   try {
     await git("init", "-q");
@@ -80,12 +84,19 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
     await git("update-ref", "refs/delivery/merge-base", input.candidate.base.mergeBaseSha);
     // Conventional branch refs also resolve to the pinned base for existing checks.
     if (/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(input.candidate.base.ref)) await git("update-ref", input.candidate.base.ref.startsWith("refs/") ? input.candidate.base.ref : `refs/remotes/${input.candidate.base.ref}`, input.candidate.base.tipSha);
+    if (input.gitContext === "none") {
+      privateControl = await realpath(await mkdtemp(path.join(tmpdir(), "delivery-check-control-")));
+      gitDirectory = path.join(privateControl, "repository");
+      await rename(path.join(rootDir, ".git"), gitDirectory);
+    }
+    const controlRoot = privateControl ?? path.join(rootDir, ".git");
     const output = (p: string) => input.outputs.some(o => o.endsWith("/") ? p === o.slice(0, -1) || p.startsWith(o) : p === o);
     const sourceExcluded = (p: string) => p === ".git" || p.split("/").includes("node_modules") || output(p);
     const sourceDigest = await snapshotInventory(rootDir, sourceExcluded);
-    const environment = { ...input.environment, PATH: `${path.join(rootDir, "node_modules/.bin")}${path.delimiter}${cleanEnv["PATH"]}`, HOME: path.join(rootDir, ".git/home"), TMPDIR: path.join(rootDir, ".git/tmp"),
-      DELIVERY_CHECK_BASE_REF: baseRef, DELIVERY_CHECK_CANDIDATE_REF: candidateRef, DELIVERY_CHECK_ORIGIN_HEAD: input.candidate.headSha, DELIVERY_CHECK_ORIGIN_TREE: input.candidate.treeSha, DELIVERY_CHECK_MERGE_BASE: input.candidate.base.mergeBaseSha };
-    await mkdir(environment.HOME, { recursive: true }); await mkdir(environment.TMPDIR, { recursive: true });
+    const environment: Record<string, string> = { ...input.environment, PATH: `${path.join(rootDir, "node_modules/.bin")}${path.delimiter}${cleanEnv["PATH"]}`, HOME: path.join(controlRoot, "home"), TMPDIR: path.join(controlRoot, "tmp"), GIT_CEILING_DIRECTORIES: path.dirname(rootDir),
+      ...(input.gitContext === "none" ? {} : {
+      DELIVERY_CHECK_BASE_REF: baseRef, DELIVERY_CHECK_CANDIDATE_REF: candidateRef, DELIVERY_CHECK_ORIGIN_HEAD: input.candidate.headSha, DELIVERY_CHECK_ORIGIN_TREE: input.candidate.treeSha, DELIVERY_CHECK_MERGE_BASE: input.candidate.base.mergeBaseSha }) };
+    await mkdir(environment["HOME"]!, { recursive: true }); await mkdir(environment["TMPDIR"]!, { recursive: true });
     if (input.dependencies) {
       const result = await createExecPort().run({ command: input.dependencies.command[0], args: input.dependencies.command.slice(1), cwd: rootDir, env: environment, timeoutMs: input.dependencies.timeoutMs, maxBuffer: 1024 * 1024, ...(input.signal ? { signal: input.signal } : {}) });
       if (result.code !== 0 || input.signal?.aborted) throw new CheckSnapshotError("check_dependency_failed", "Private dependency installation did not complete successfully.");
@@ -95,10 +106,11 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
     // The second digest covers both source and installed dependency bytes and
     // all links. It intentionally excludes only declared mutable output paths.
     const verify = async () => {
+      if (input.gitContext === "none" && await lstat(path.join(rootDir, ".git")).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; })) throw new CheckSnapshotError("check_snapshot_drift", "A file-only check introduced Git metadata.");
       await snapshotInventory(rootDir, p => p === ".git");
       if (await git("write-tree") !== input.candidate.treeSha || await git("rev-parse", "HEAD") !== candidateCommit || await git("rev-parse", `${candidateRef}^{tree}`) !== input.candidate.treeSha || await git("rev-parse", baseRef) !== input.candidate.base.tipSha || dependencyDigest !== await snapshotInventory(rootDir, p => p === ".git" || output(p))) throw new CheckSnapshotError("check_snapshot_drift", "Execution changed the private source, dependencies or pinned Git context.");
     };
-    return { rootDir, environment, dependencyDigest, verify, cleanup };
+    return { rootDir, commandRoot: path.join(controlRoot, "commands"), environment, dependencyDigest, verify, cleanup };
   } catch (error) {
     await cleanup();
     if (error instanceof CheckSnapshotError) throw error;
