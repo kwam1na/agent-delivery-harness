@@ -2130,7 +2130,7 @@ async function runLifecycle(input: LifecycleInput): Promise<void> {
 export const SCOPED_RUNTIME_PROBES = [
   "partial-failure", "retry-reuse", "report-reuse", "source-invalidation",
   "setup-invalidation", "foreign-portable", "tamper-refusal",
-  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard",
+  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations",
 ] as const;
 
 export interface ScopedRuntimeQualification {
@@ -2178,6 +2178,12 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     });
     commands.push(result); requireObservation(result.code === code, command + " expected exit " + code); return result;
   };
+  const observations = (cwd: string) => {
+    const program = "const {readScopedCheckObservations}=await import(" + JSON.stringify(pathToFileURL(path.join(runtime, "cli-api.mjs")).href) + ");const {default:config}=await import(" + JSON.stringify(pathToFileURL(path.join(cwd, "harness.config.ts")).href) + ");console.log(JSON.stringify(await readScopedCheckObservations({rootDir:process.cwd(),config})));";
+    const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--import", path.join(runtime, "bootstrap.mjs"), "--input-type=module", "--eval", program], { cwd, env, encoding: "utf8", timeout: 30000 });
+    commands.push({ repository: path.basename(cwd), command: "api:readScopedCheckObservations", code: 0, stdout, stderr: "" });
+    return JSON.parse(stdout) as { version: string; providers: { providerId: string; attempts: { attemptId: string; status: string; durationMs?: number }[] }[] };
+  };
   const config = (gitContext: "none" | "full", slow = false) => {
     const providers = ["a", "b"].map(id => ({ id: "check." + id, findingCodes: [], check: {
       command: [process.execPath, "-e", slow && id === "a" ? "setTimeout(()=>{},10000)" : "if('" + id + "'==='b'&&process.env.FAIL==='1')process.exit(3);require('fs').writeFileSync('result-" + id + ".json',JSON.stringify({value:require('fs').readFileSync('source.txt','utf8')}))"],
@@ -2196,6 +2202,8 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     const files = createRepo("files", "none");
     env["FAIL"] = "1"; await cli(files, "prepare"); const partial = await cli(files, "gate", 1);
     requireObservation(partial.stdout.includes("passed check.a") && partial.stdout.includes("checking check.b"), "partial execution"); proven.add("partial-failure");
+    const failedRead = observations(files);
+    requireObservation(failedRead.version === "scoped-check-observations/1" && failedRead.providers.some(provider => provider.providerId === "check.a" && provider.attempts.some(attempt => attempt.status === "passed" && typeof attempt.durationMs === "number")) && failedRead.providers.some(provider => provider.providerId === "check.b" && provider.attempts.some(attempt => attempt.status === "failed" && typeof attempt.durationMs === "number")), "public bundled API must expose passed and failed durations after gate refusal");
     env["FAIL"] = "0"; const retry = await cli(files, "gate");
     requireObservation(retry.stdout.includes("reusing check.a") && retry.stdout.includes("checking check.b"), "retry must preserve sibling"); proven.add("retry-reuse");
     write(files, "docs/reports/result.md", "report"); git(files, "add", "."); git(files, "-c", "commit.gpgsign=false", "commit", "-qm", "report");
@@ -2230,6 +2238,8 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     collect(path.join(full, ".git/delivery-harness/scoped-attempts"));
     requireObservation(terminalAttempts.length === 1 && terminalAttempts[0]!.status === "interrupted" && Number.isSafeInteger(terminalAttempts[0]!.generation), "exact cancelled check.a must have one interrupted terminal and no passed terminal");
     requireObservation(!cancelled.stdout.includes("passed check.a"), "cancelled check cannot report passed"); proven.add("cancellation");
+    const interruptedRead = observations(full);
+    requireObservation(interruptedRead.providers.some(provider => provider.providerId === "check.a" && provider.attempts.some(attempt => attempt.attemptId === cancelledAttempt && attempt.status === "interrupted" && typeof attempt.durationMs === "number")), "public bundled API must expose the exact interrupted attempt duration"); proven.add("attempt-observations");
     // Static configuration keeps evidence portable; only the guard observes
     // these declared, nonsecret coordinates of the immutable selection.
     const guarded = config("none");
@@ -2245,7 +2255,11 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
       env["SELECTION_BASE"] = git(full, "rev-parse", "origin/main"); env["SELECTION_MERGE_BASE"] = git(full, "merge-base", "HEAD", "origin/main");
     };
     select(); const guardedPass = await cli(full, "prepare"); requireObservation(guardedPass.stdout.includes("checking check.a"), "selection guard positive control");
-    await cli(full, "gate");
+    const selectedMergeBase = env["SELECTION_MERGE_BASE"];
+    env["SELECTION_MERGE_BASE"] = selectedMergeBase === "0".repeat(40) ? "1".repeat(40) : "0".repeat(40);
+    const mergeBaseMismatch = await cli(full, "prepare", 1);
+    requireObservation(mergeBaseMismatch.stderr.includes("check.selection") && !mergeBaseMismatch.stdout.includes("checking check.a"), "stale expected merge-base must stop downstream checks");
+    env["SELECTION_MERGE_BASE"] = selectedMergeBase; await cli(full, "prepare"); await cli(full, "gate");
     write(full, "docs/reports/guard.md", "neutral report"); git(full, "add", "."); select();
     const guardReport = await cli(full, "prepare"); requireObservation(guardReport.stdout.includes("checking check.selection") && guardReport.stdout.includes("reusing mechanical check.a"), "replan guard while preserving app result");
     await cli(full, "record"); git(full, "add", "."); await cli(full, "verify"); git(full, "-c", "commit.gpgsign=false", "commit", "-qm", "guarded record transport");

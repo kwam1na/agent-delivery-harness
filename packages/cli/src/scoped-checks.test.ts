@@ -443,7 +443,7 @@ it.each(["nonneutral","merge","bound"])("full-context transport rejects %s histo
 
 // Dynamic adopters derive the selection from immutable Git objects, then put
 // this native snapshot guard first in the mandatory mechanical provider list.
-it.each(["candidate", "base", "head", "guard"])("a mandatory snapshot selection guard rejects the %s derivation race before selected checks", async (race) => {
+it.each(["candidate", "base", "head", "guard", "merge-base"])("a mandatory snapshot selection guard rejects the %s derivation race before selected checks", async (race) => {
   const f = await fixture(); f.env["FAIL"] = "0";
   const selected = { tree: await f.git("write-tree"), head: await f.git("rev-parse", "HEAD"), base: await f.git("rev-parse", "origin/main"), mergeBase: await f.git("merge-base", "HEAD", "origin/main") };
   Object.assign(f.env, { SELECTION_TREE: selected.tree, SELECTION_HEAD: selected.head, SELECTION_BASE: selected.base, SELECTION_MERGE_BASE: selected.mergeBase });
@@ -467,6 +467,7 @@ it.each(["candidate", "base", "head", "guard"])("a mandatory snapshot selection 
     const moved = await f.git("-c", "commit.gpgsign=false", "commit-tree", selected.tree, "-p", selected.base, "-m", "base advanced");
     await f.git("update-ref", "refs/heads/origin/main", moved);
   }
+  if (race === "merge-base") f.env["SELECTION_MERGE_BASE"] = await f.git("-c", "commit.gpgsign=false", "commit-tree", selected.tree, "-p", selected.head, "-m", "different immutable selection merge base");
   if (race === "guard") f.setConfig({ ...f.config, providers: f.config.providers.map(p => p.id === guard.id ? { ...p, check: { ...p.check!, command: [process.execPath, "-e", "process.exit(1)"] } } : p) });
   // Bypassing preparation cannot reuse the old successful guard or receipt.
   expect(await f.run("gate")).toBe(1);
