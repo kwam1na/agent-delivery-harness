@@ -590,7 +590,7 @@ describe("verify's run-journal completeness row", () => {
     expect(required.code, required.err).toBe(EXIT_OK);
   });
 
-  it("recognizes the raw reviewed tree through a verified neutral projection", { timeout: 120000 }, async () => {
+  it.each([false, true])("recognizes reviewed trees through record-neutral transport (projection=%s)", { timeout: 120000 }, async (withProjection) => {
     const harness = await makeHarness({}, true);
     const runId = await startRun(harness);
     await emitAll(harness, prerequisites());
@@ -603,13 +603,14 @@ describe("verify's run-journal completeness row", () => {
     const reviewedTreeSha = reviewedDocument.binding.candidate.treeSha;
     await emitAll(harness, [roundOpened(reviewedTreeSha), roundClosed(reviewedTreeSha)]);
 
-    await mkdir(path.join(harness.dir, "docs/reports"), { recursive: true });
-    await writeFile(path.join(harness.dir, "docs/reports/review.md"), "Reviewed delivery report.\n");
-    await git(harness.dir, "add", "docs/reports/review.md");
-    await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", "add neutral review report");
-    const projectedTreeSha = await captureTreeSha(harness.dir, harness.config);
-    expect(projectedTreeSha).not.toBe(reviewedTreeSha);
-    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    if (withProjection) {
+      await mkdir(path.join(harness.dir, "docs/reports"), { recursive: true });
+      await writeFile(path.join(harness.dir, "docs/reports/review.md"), "Reviewed delivery report.\n");
+      await git(harness.dir, "add", "docs/reports/review.md");
+      await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", "add neutral review report");
+      expect(await captureTreeSha(harness.dir, harness.config)).not.toBe(reviewedTreeSha);
+      expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    }
 
     const contextDir = await mkdtemp(path.join(os.tmpdir(), "dh-reviewed-context-"));
     cleanups.push(contextDir);
@@ -629,9 +630,14 @@ describe("verify's run-journal completeness row", () => {
     const manifestPath = emitted.out.trim();
     expect((await harness.cli(["submit-evidence", "--manifest", manifestPath])).code).toBe(EXIT_OK);
     expect((await harness.cli(["gate"])).code).toBe(EXIT_OK);
+    await mkdir(path.join(harness.dir, "telemetry/delivery-runs"), { recursive: true });
+    await writeFile(path.join(harness.dir, "telemetry/delivery-runs/transport.json"), '{"observation":"retained"}\n');
+    await git(harness.dir, "add", "telemetry/delivery-runs/transport.json");
+    const transportedTreeSha = await captureTreeSha(harness.dir, harness.config);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
     expect((await harness.cli(["record"])).code).toBe(EXIT_OK);
-    expect(await recordedTreeSha(harness.dir)).toBe(projectedTreeSha);
-    await emitAll(harness, [["pr.opened", { url: "https://example.invalid/pr/neutral", candidateTreeSha: projectedTreeSha }]]);
+    expect(await recordedTreeSha(harness.dir)).toBe(transportedTreeSha);
+    await emitAll(harness, [["pr.opened", { url: "https://example.invalid/pr/neutral", candidateTreeSha: transportedTreeSha }]]);
     await commitRecord(harness.dir);
     await emitAll(harness, [ended()]);
 
@@ -639,12 +645,13 @@ describe("verify's run-journal completeness row", () => {
     expect(verified.code, verified.err).toBe(EXIT_OK);
     const row = rowOf(verified.out);
     expect(row).toContain(runId);
-    expect(row).toContain(`record candidate: ${projectedTreeSha}`);
-    expect(row).toContain(`reviewed candidate: ${reviewedTreeSha}`);
+    expect(row).toContain(`record candidate: ${transportedTreeSha}`);
+    expect(row.split("\n").find(line => line.includes("reviewed candidate:"))).toContain(reviewedTreeSha);
     expect(row).toContain("verified review-neutral projection");
     expect(row).not.toContain("gate-before-closed-round");
     expect(row).not.toContain("round-not-bound-to-record");
 
+    if (!withProjection) return;
     const recordDir = path.join(harness.dir, "telemetry/delivery-runs");
     const recordName = (await readdir(recordDir)).find((name) => name.startsWith("record--"));
     if (recordName === undefined) throw new Error("record missing");

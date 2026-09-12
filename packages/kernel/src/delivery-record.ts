@@ -955,7 +955,11 @@ function projectedReviewTreeShas(record: DeliveryRecord): readonly string[] {
     const manifest = portable.manifest;
     if (portable.context.reviewerCharters.length === 0 || !isRecord(manifest) || !Array.isArray(manifest["artifacts"]) ||
         !Array.isArray(manifest["claims"]) || !manifest["claims"].some((claim) => isRecord(claim) &&
+          claim["obligation"] === entry.obligationId &&
           (claim["payloadSpec"] === "review.green/1" || claim["payloadSpec"] === "review.green/2"))) continue;
+    // A verified review can precede record-neutral telemetry staging even when
+    // its initial acquisition needed no explicit review-context projection.
+    trees.add(entry.candidateBinding.treeSha);
     const contents = portableArtifactContents(portable.artifacts).artifacts;
     for (const declared of manifest["artifacts"]) {
       if (!isRecord(declared) || declared["role"] !== "review-context-projection" || typeof declared["path"] !== "string") continue;
@@ -963,7 +967,7 @@ function projectedReviewTreeShas(record: DeliveryRecord): readonly string[] {
         const projection: unknown = JSON.parse(contents.get(declared["path"]) ?? "null");
         if (!isRecord(projection) || projection["spec"] !== "review-context-projection/1" || !isRecord(projection["reviewedCandidate"]) ||
             !isRecord(projection["preparedCandidate"]) || projection["reviewRoundAdded"] !== false ||
-            projection["preparedCandidate"]["treeSha"] !== record.candidateBinding.treeSha) continue;
+            projection["preparedCandidate"]["treeSha"] !== entry.candidateBinding.treeSha) continue;
         const reviewedTreeSha = projection["reviewedCandidate"]["treeSha"];
         if (typeof reviewedTreeSha === "string" && /^[a-f0-9]{40}$/.test(reviewedTreeSha)) trees.add(reviewedTreeSha);
       } catch {

@@ -440,3 +440,44 @@ it.each(["nonneutral","merge","bound"])("full-context transport rejects %s histo
  if(kind!=="bound")expect(await f.git("rev-parse","HEAD^{tree}")).toBe(tree);
  expect(await f.run("verify"),f.err.join("\n")).toBe(1);expect(f.err.join("\n")).toContain("portable_scoped_inputs_invalid");
 },120000);
+
+// Dynamic adopters derive the selection from immutable Git objects, then put
+// this native snapshot guard first in the mandatory mechanical provider list.
+it.each(["candidate", "base", "head", "guard", "merge-base"])("a mandatory snapshot selection guard rejects the %s derivation race before selected checks", async (race) => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const selected = { tree: await f.git("write-tree"), head: await f.git("rev-parse", "HEAD"), base: await f.git("rev-parse", "origin/main"), mergeBase: await f.git("merge-base", "HEAD", "origin/main") };
+  Object.assign(f.env, { SELECTION_TREE: selected.tree, SELECTION_HEAD: selected.head, SELECTION_BASE: selected.base, SELECTION_MERGE_BASE: selected.mergeBase });
+  const guard = {
+    id: "check.selection", findingCodes: [], check: {
+      command: [process.execPath, "-e", `const {execFileSync}=require('node:child_process');const expected={tree:process.env.SELECTION_TREE,head:process.env.SELECTION_HEAD,base:process.env.SELECTION_BASE,mergeBase:process.env.SELECTION_MERGE_BASE};const actual={tree:process.env.DELIVERY_CHECK_ORIGIN_TREE,head:process.env.DELIVERY_CHECK_ORIGIN_HEAD,base:execFileSync('git',['rev-parse',process.env.DELIVERY_CHECK_BASE_REF],{encoding:'utf8'}).trim(),mergeBase:process.env.DELIVERY_CHECK_MERGE_BASE};if(JSON.stringify(actual)!==JSON.stringify(expected))throw Error('selection_snapshot_mismatch');`],
+      timeoutMs: 5000, scope: { version: "scoped-check/1", files: [], memberships: [], tests: [], cwd: ".", profile: "selection", environment: ["SELECTION_TREE", "SELECTION_HEAD", "SELECTION_BASE", "SELECTION_MERGE_BASE"].map(name => ({ name, kind: "flag" })) },
+    },
+  };
+  f.setConfig({ ...f.config, providers: [guard, ...f.config.providers],
+    obligations: [{ ...f.config.obligations[0]!, id: "selection.passed", providers: [guard.id] }, ...f.config.obligations],
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: [guard.id, "check.a"], profiles: [{ id: "selection", gitContext: "full", dependencyInputs: [], mutableOutputs: [], credentialIdentities: {} }, ...f.config.scopedExecution!.profiles] },
+  } as unknown as HarnessConfigInput);
+  // Clean positive control: the expected immutable objects are precisely the
+  // captured snapshot, and downstream checks really execute.
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(f.out.join("\n")).toContain("checking check.a");
+  if (race === "candidate") await writeFile(path.join(f.dir, "new-consumer.ts"), "export const consumer = true;\n");
+  if (race === "head") await f.git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "head advanced");
+  if (race === "base") {
+    const moved = await f.git("-c", "commit.gpgsign=false", "commit-tree", selected.tree, "-p", selected.base, "-m", "base advanced");
+    await f.git("update-ref", "refs/heads/origin/main", moved);
+  }
+  if (race === "merge-base") f.env["SELECTION_MERGE_BASE"] = await f.git("-c", "commit.gpgsign=false", "commit-tree", selected.tree, "-p", selected.head, "-m", "different immutable selection merge base");
+  if (race === "guard") f.setConfig({ ...f.config, providers: f.config.providers.map(p => p.id === guard.id ? { ...p, check: { ...p.check!, command: [process.execPath, "-e", "process.exit(1)"] } } : p) });
+  // Bypassing preparation cannot reuse the old successful guard or receipt.
+  expect(await f.run("gate")).toBe(1);
+  expect(f.out.join("\n")).not.toContain("checking check.a");
+  expect(await f.run("record")).toBe(1);
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(1);
+  expect(f.err.join("\n")).toContain("check_command_failed");
+  expect(f.err.join("\n")).toContain("check.selection");
+  expect(f.out.join("\n")).not.toContain("checking check.a");
+  expect(await f.run("review-context")).toBe(1);
+  expect(await f.run("gate")).toBe(1);
+  expect(await f.run("record")).toBe(1);
+}, 60000);

@@ -64,9 +64,9 @@
  * suite. `npm run qualify:product` runs it; `scripts/qualify-product.test.ts`
  * falsifies its rules cheaply on every leg.
  */
-import { execFileSync, type StdioOptions } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, type StdioOptions } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -2126,6 +2126,169 @@ async function runLifecycle(input: LifecycleInput): Promise<void> {
   }
 }
 
+/** Required observations from the executable bundle, independently pinned by tests. */
+export const SCOPED_RUNTIME_PROBES = [
+  "partial-failure", "retry-reuse", "report-reuse", "source-invalidation",
+  "setup-invalidation", "foreign-portable", "tamper-refusal",
+  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations",
+] as const;
+
+export interface ScopedRuntimeQualification {
+  readonly runtimeSha256: string;
+  readonly repositories: number;
+  readonly probes: readonly string[];
+  readonly commands: readonly { repository: string; command: string; code: number; stdout: string; stderr: string }[];
+}
+
+export function assertScopedRuntimeQualification(result: ScopedRuntimeQualification): void {
+  if (!/^[a-f0-9]{64}$/.test(result.runtimeSha256) || result.repositories !== 3 ||
+      JSON.stringify(result.probes) !== JSON.stringify(SCOPED_RUNTIME_PROBES) || result.commands.length === 0) {
+    throw new Error("scoped runtime qualification is incomplete");
+  }
+}
+
+/** Execute only the supplied release. Each CLI invocation loads its config afresh. */
+export async function runScopedRuntimeQualification(runtimeRoot: string): Promise<ScopedRuntimeQualification> {
+  const runtime = realpathSync(runtimeRoot);
+  const descriptorBytes = readFileSync(path.join(runtime, "runtime.json"));
+  const descriptor = JSON.parse(descriptorBytes.toString()) as { schemaVersion: string; files: { path: string; sha256: string }[] };
+  const required = ["LICENSE", "NOTICE", "bootstrap.mjs", "cli-api.d.mts", "cli-api.mjs", "cli.mjs", "kernel.d.mts", "kernel.mjs", "loader.mjs", "policy.mjs"];
+  if (descriptor.schemaVersion !== "delivery-runtime/1" || !Array.isArray(descriptor.files) ||
+      JSON.stringify(descriptor.files.map(file => file.path).sort()) !== JSON.stringify(required.sort())) throw new Error("invalid runtime closure");
+  for (const file of descriptor.files) {
+    if (createHash("sha256").update(readFileSync(path.join(runtime, file.path))).digest("hex") !== file.sha256) throw new Error("runtime checksum mismatch: " + file.path);
+  }
+  const temporary = mkdtempSync(path.join(os.tmpdir(), "scoped-runtime-qualification-"));
+  const commands: ScopedRuntimeQualification["commands"][number][] = [];
+  const proven = new Set<string>();
+  const env: Record<string, string | undefined> = { PATH: process.env["PATH"], HOME: temporary, NODE_PATH: "", FAIL: "0" };
+  const args = ["--experimental-strip-types", "--import", path.join(runtime, "bootstrap.mjs"), path.join(runtime, "cli.mjs")];
+  const git = (cwd: string, ...argv: string[]) => execFileSync("git", argv, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const write = (cwd: string, name: string, bytes: string) => { mkdirSync(path.dirname(path.join(cwd, name)), { recursive: true }); writeFileSync(path.join(cwd, name), bytes); };
+  const requireObservation = (condition: boolean, label: string) => { if (!condition) throw new Error(label + "\n" + JSON.stringify(commands.slice(-3), null, 2)); };
+  const cli = async (cwd: string, command: string, code = 0, cancel = false) => {
+    const result = await new Promise<ScopedRuntimeQualification["commands"][number]>((resolve, reject) => {
+      const child = spawn(process.execPath, [...args, command], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "", stderr = "", interrupted = false;
+      const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("runtime command timed out: " + command)); }, 30000);
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (cancel && !interrupted && stdout.includes("checking check.a")) { interrupted = true; child.kill("SIGINT"); } });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on("error", error => { clearTimeout(timeout); reject(error); });
+      child.on("close", status => { clearTimeout(timeout); resolve({ repository: path.basename(cwd), command, code: status ?? -1, stdout, stderr }); });
+    });
+    commands.push(result); requireObservation(result.code === code, command + " expected exit " + code); return result;
+  };
+  const observations = (cwd: string) => {
+    const program = "const {readScopedCheckObservations}=await import(" + JSON.stringify(pathToFileURL(path.join(runtime, "cli-api.mjs")).href) + ");const {default:config}=await import(" + JSON.stringify(pathToFileURL(path.join(cwd, "harness.config.ts")).href) + ");console.log(JSON.stringify(await readScopedCheckObservations({rootDir:process.cwd(),config})));";
+    const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--import", path.join(runtime, "bootstrap.mjs"), "--input-type=module", "--eval", program], { cwd, env, encoding: "utf8", timeout: 30000 });
+    commands.push({ repository: path.basename(cwd), command: "api:readScopedCheckObservations", code: 0, stdout, stderr: "" });
+    return JSON.parse(stdout) as { version: string; providers: { providerId: string; attempts: { attemptId: string; status: string; durationMs?: number }[] }[] };
+  };
+  const config = (gitContext: "none" | "full", slow = false) => {
+    const providers = ["a", "b"].map(id => ({ id: "check." + id, findingCodes: [], check: {
+      command: [process.execPath, "-e", slow && id === "a" ? "setTimeout(()=>{},10000)" : "if('" + id + "'==='b'&&process.env.FAIL==='1')process.exit(3);require('fs').writeFileSync('result-" + id + ".json',JSON.stringify({value:require('fs').readFileSync('source.txt','utf8')}))"],
+      timeoutMs: 15000, outputs: ["result-" + id + ".json"], scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: id, environment: id === "b" ? [{ name: "FAIL", kind: "flag" }] : [] },
+    } }));
+    return { gateId: "scoped.release", baseRef: "origin/main", storageNamespace: "delivery-harness/", acceptedEnvelopeSpecs: ["delivery-evidence/1"], identityVersions: ["scoped-release/v1"], computingIdentityVersion: "scoped-release/v1", reviewNeutral: [{ prefix: "docs/reports/" }, { prefix: "delivery/records/" }], recordNeutral: [{ prefix: "delivery/records/" }], pathClassification: { generated: [], test: [], lockfile: [] }, sensitivePaths: [], activationThreshold: 1, agentEnvSignals: [], ciPolicies: [], ciPolicyEnvKey: "QUALIFICATION_CI", preparationWiringPaths: ["harness.config.ts"], preparationCommands: [], providers,
+      obligations: providers.map(provider => ({ id: provider.id + ".passed", activation: { kind: "always" }, freshness: "exact_candidate", providers: [provider.id], acceptedPayloadSpecs: ["checks.passed/1"], allowedResolutionKinds: ["satisfied_evidence"], humanWaiverAllowed: false, minimumAttestationLevel: "self", ciDelegationPolicyIds: [], remediation: { default: [{ id: "check", kind: "manual_action", summary: "Run check." }] }, waivableCodes: [], nonWaivableCodes: ["review_evidence_missing", "stale_evidence", "evidence_not_green", "unresolved_actionable_findings", "ambiguous_records", "malformed_record", "unknown_provider", "live_provider_missing", "ambiguous_live_provider", "live_provider_failed", "resolution_not_allowed"] })),
+      scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: ["a", "b"].map(id => ({ id, gitContext, dependencyInputs: id === "a" ? ["deps.lock"] : [], mutableOutputs: ["result-" + id + ".json"], credentialIdentities: {} })) }, deliveryRecordPath: "delivery/records/record.json", deliveryRecordVerification: { baseMovement: "stale" } };
+  };
+  const writeConfig = (cwd: string, mode: "none" | "full", slow = false) => write(cwd, "harness.config.ts", "import { defineHarnessConfig } from '@agent-delivery-harness/kernel';\nexport default defineHarnessConfig(" + JSON.stringify(config(mode, slow)) + ");\n");
+  const createRepo = (name: string, mode: "none" | "full") => {
+    const cwd = path.join(temporary, name); mkdirSync(cwd); git(cwd, "init", "-q"); git(cwd, "config", "user.name", "Qualification"); git(cwd, "config", "user.email", "qualification@example.invalid");
+    writeConfig(cwd, mode); write(cwd, "source.txt", "source"); write(cwd, "deps.lock", "one"); git(cwd, "add", "."); git(cwd, "-c", "commit.gpgsign=false", "commit", "-qm", "base"); git(cwd, "update-ref", "refs/remotes/origin/main", "HEAD"); return cwd;
+  };
+  try {
+    const files = createRepo("files", "none");
+    env["FAIL"] = "1"; await cli(files, "prepare"); const partial = await cli(files, "gate", 1);
+    requireObservation(partial.stdout.includes("passed check.a") && partial.stdout.includes("checking check.b"), "partial execution"); proven.add("partial-failure");
+    const failedRead = observations(files);
+    requireObservation(failedRead.version === "scoped-check-observations/1" && failedRead.providers.some(provider => provider.providerId === "check.a" && provider.attempts.some(attempt => attempt.status === "passed" && typeof attempt.durationMs === "number")) && failedRead.providers.some(provider => provider.providerId === "check.b" && provider.attempts.some(attempt => attempt.status === "failed" && typeof attempt.durationMs === "number")), "public bundled API must expose passed and failed durations after gate refusal");
+    env["FAIL"] = "0"; const retry = await cli(files, "gate");
+    requireObservation(retry.stdout.includes("reusing check.a") && retry.stdout.includes("checking check.b"), "retry must preserve sibling"); proven.add("retry-reuse");
+    write(files, "docs/reports/result.md", "report"); git(files, "add", "."); git(files, "-c", "commit.gpgsign=false", "commit", "-qm", "report");
+    await cli(files, "prepare"); const report = await cli(files, "record");
+    requireObservation(["a", "b"].every(id => report.stdout.includes("reusing check." + id)), "report reuse"); proven.add("report-reuse");
+    git(files, "add", "."); await cli(files, "verify"); git(files, "-c", "commit.gpgsign=false", "commit", "-qm", "record");
+    const foreign = path.join(temporary, "foreign"); git(temporary, "clone", "--no-local", files, foreign); git(foreign, "update-ref", "refs/remotes/origin/main", git(files, "rev-parse", "origin/main"));
+    requireObservation(!existsSync(path.join(foreign, ".git/delivery-harness")), "foreign clone must have no original evidence store"); await cli(foreign, "verify"); proven.add("foreign-portable");
+    const recordRoot = path.join(foreign, "delivery/records"); const names = readdirSync(recordRoot); requireObservation(names.length === 1, "one portable record required");
+    const recordPath = path.join(recordRoot, names[0]!); const record = JSON.parse(readFileSync(recordPath, "utf8")); record.claims[0].evidence.resolution.portable.artifacts["scoped-inputs.json"] = Buffer.from("{}").toString("base64"); writeFileSync(recordPath, JSON.stringify(record)); git(foreign, "add", ".");
+    const tamper = await cli(foreign, "verify", 1); requireObservation(tamper.stderr.includes("portable_scoped_inputs_invalid"), "portable tamper refusal"); proven.add("tamper-refusal");
+    write(files, "source.txt", "changed"); await cli(files, "prepare"); const source = await cli(files, "gate"); requireObservation(["a", "b"].every(id => source.stdout.includes("checking check." + id)), "source invalidation"); proven.add("source-invalidation");
+    write(files, "deps.lock", "two"); await cli(files, "prepare"); const setup = await cli(files, "gate"); requireObservation(setup.stdout.includes("checking check.a") && setup.stdout.includes("reusing check.b"), "dependency invalidation"); proven.add("setup-invalidation");
+    const full = createRepo("full", "full"); await cli(full, "prepare"); await cli(full, "gate"); const stable = await cli(full, "gate"); requireObservation(stable.stdout.includes("reusing check.a"), "full mode stable positive control");
+    git(full, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "new head"); await cli(full, "prepare"); const head = await cli(full, "gate"); requireObservation(head.stdout.includes("checking check.a"), "head invalidation"); proven.add("head-invalidation");
+    git(full, "update-ref", "refs/remotes/origin/main", "HEAD"); await cli(full, "prepare"); const base = await cli(full, "gate"); requireObservation(base.stdout.includes("checking check.a"), "base invalidation"); proven.add("base-invalidation");
+    writeConfig(full, "full", true); await cli(full, "prepare"); const cancelled = await cli(full, "gate", 130, true);
+    const cancelledAttempt = /checking check\.a: attempt ([a-f0-9-]+)/.exec(cancelled.stdout)?.[1];
+    requireObservation(cancelledAttempt !== undefined, "cancelled check.a attempt must be observed");
+    const terminalAttempts: { attemptId: string; status: string; generation: number }[] = [];
+    const collect = (directory: string): void => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) collect(file);
+        else if (entry.name === "terminal.json") {
+          const retained = JSON.parse(readFileSync(file, "utf8")) as { entry?: { attempt?: { attemptId: string; status: string; generation: number } } };
+          const attempt = retained.entry?.attempt;
+          if (attempt && attempt.attemptId === cancelledAttempt) terminalAttempts.push(attempt);
+        }
+      }
+    };
+    collect(path.join(full, ".git/delivery-harness/scoped-attempts"));
+    requireObservation(terminalAttempts.length === 1 && terminalAttempts[0]!.status === "interrupted" && Number.isSafeInteger(terminalAttempts[0]!.generation), "exact cancelled check.a must have one interrupted terminal and no passed terminal");
+    requireObservation(!cancelled.stdout.includes("passed check.a"), "cancelled check cannot report passed"); proven.add("cancellation");
+    const interruptedRead = observations(full);
+    requireObservation(interruptedRead.providers.some(provider => provider.providerId === "check.a" && provider.attempts.some(attempt => attempt.attemptId === cancelledAttempt && attempt.status === "interrupted" && typeof attempt.durationMs === "number")), "public bundled API must expose the exact interrupted attempt duration"); proven.add("attempt-observations");
+    // Static configuration keeps evidence portable; only the guard observes
+    // these declared, nonsecret coordinates of the immutable selection.
+    const guarded = config("none");
+    const selectionNames = ["SELECTION_TREE", "SELECTION_HEAD", "SELECTION_BASE", "SELECTION_MERGE_BASE"];
+    const guard = { id: "check.selection", findingCodes: [], check: {
+      command: [process.execPath, "-e", "const expected={tree:process.env.SELECTION_TREE,head:process.env.SELECTION_HEAD,base:process.env.SELECTION_BASE,mergeBase:process.env.SELECTION_MERGE_BASE};const actual={tree:process.env.DELIVERY_CHECK_ORIGIN_TREE,head:process.env.DELIVERY_CHECK_ORIGIN_HEAD,base:require('node:child_process').execFileSync('git',['rev-parse',process.env.DELIVERY_CHECK_BASE_REF],{encoding:'utf8'}).trim(),mergeBase:process.env.DELIVERY_CHECK_MERGE_BASE};if(JSON.stringify(actual)!==JSON.stringify(expected))throw Error('selection_snapshot_mismatch');"],
+      timeoutMs: 5000, scope: { version: "scoped-check/1", files: [], memberships: [], tests: [], cwd: ".", profile: "selection", environment: selectionNames.map(name => ({ name, kind: "flag" })) },
+    } };
+    const guardConfig = { ...guarded, providers: [guard, ...guarded.providers], obligations: [{ ...guarded.obligations[0], id: "selection.passed", providers: [guard.id] }, ...guarded.obligations], scopedExecution: { ...guarded.scopedExecution, mechanicalProviders: [guard.id, "check.a"], profiles: [{ id: "selection", gitContext: "full", dependencyInputs: [], mutableOutputs: [], credentialIdentities: {} }, ...guarded.scopedExecution.profiles] } };
+    write(full, "harness.config.ts", "import { defineHarnessConfig } from '@agent-delivery-harness/kernel';\nexport default defineHarnessConfig(" + JSON.stringify(guardConfig) + ");\n"); git(full, "add", ".");
+    const select = () => {
+      env["SELECTION_TREE"] = git(full, "write-tree"); env["SELECTION_HEAD"] = git(full, "rev-parse", "HEAD");
+      env["SELECTION_BASE"] = git(full, "rev-parse", "origin/main"); env["SELECTION_MERGE_BASE"] = git(full, "merge-base", "HEAD", "origin/main");
+    };
+    select(); const guardedPass = await cli(full, "prepare"); requireObservation(guardedPass.stdout.includes("checking check.a"), "selection guard positive control");
+    const selectedMergeBase = env["SELECTION_MERGE_BASE"];
+    env["SELECTION_MERGE_BASE"] = selectedMergeBase === "0".repeat(40) ? "1".repeat(40) : "0".repeat(40);
+    const mergeBaseMismatch = await cli(full, "prepare", 1);
+    requireObservation(mergeBaseMismatch.stderr.includes("check.selection") && !mergeBaseMismatch.stdout.includes("checking check.a"), "stale expected merge-base must stop downstream checks");
+    env["SELECTION_MERGE_BASE"] = selectedMergeBase; await cli(full, "prepare"); await cli(full, "gate");
+    write(full, "docs/reports/guard.md", "neutral report"); git(full, "add", "."); select();
+    const guardReport = await cli(full, "prepare"); requireObservation(guardReport.stdout.includes("checking check.selection") && guardReport.stdout.includes("reusing mechanical check.a"), "replan guard while preserving app result");
+    await cli(full, "record"); git(full, "add", "."); await cli(full, "verify"); git(full, "-c", "commit.gpgsign=false", "commit", "-qm", "guarded record transport");
+    // Commit source/config first in this fixture so the following record-only
+    // transport is the same portable lifecycle used by a real delivery.
+    select(); await cli(full, "prepare"); await cli(full, "record"); git(full, "add", "."); await cli(full, "verify"); git(full, "-c", "commit.gpgsign=false", "commit", "-qm", "record transport"); await cli(full, "verify");
+    rmSync(foreign, { recursive: true, force: true }); git(temporary, "clone", "--no-local", full, foreign); git(foreign, "update-ref", "refs/remotes/origin/main", git(full, "rev-parse", "origin/main"));
+    const retainedFlags = Object.fromEntries(selectionNames.map(name => [name, env[name]]));
+    for (const name of selectionNames) delete env[name];
+    try { await cli(foreign, "verify"); }
+    finally { Object.assign(env, retainedFlags); }
+    select(); await cli(full, "prepare");
+    write(full, "new-consumer.ts", "export const consumer = true;");
+    await cli(full, "gate", 1); await cli(full, "record", 1);
+    const guardedFailure = await cli(full, "prepare", 1);
+    requireObservation(guardedFailure.stderr.includes("check.selection") && !guardedFailure.stdout.includes("checking check.a"), "stale selection must stop downstream checks");
+    await cli(full, "gate", 1); await cli(full, "record", 1);
+    rmSync(path.join(full, "new-consumer.ts")); await cli(full, "prepare");
+    const alternateBase = git(full, "-c", "commit.gpgsign=false", "commit-tree", git(full, "write-tree"), "-p", git(full, "rev-parse", "origin/main"), "-m", "base race");
+    git(full, "update-ref", "refs/remotes/origin/main", alternateBase);
+    await cli(full, "gate", 1); await cli(full, "record", 1);
+    const baseRace = await cli(full, "prepare", 1);
+    requireObservation(baseRace.stderr.includes("check.selection") && !baseRace.stdout.includes("checking check.a"), "base selection race must stop downstream checks");
+    proven.add("selection-snapshot-guard");
+    const result = { runtimeSha256: createHash("sha256").update(descriptorBytes).digest("hex"), repositories: 3, probes: SCOPED_RUNTIME_PROBES.filter(probe => proven.has(probe)), commands };
+    assertScopedRuntimeQualification(result); return result;
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
+}
+
 // ── Reporting ────────────────────────────────────────────────────────────────
 
 export function formatQualificationFindings(findings: readonly QualificationFinding[]): string {
@@ -2137,6 +2300,12 @@ export function repoRootFromHere(): string {
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "--scoped-runtime") {
+    if (!process.argv[3] || process.argv.length !== 4) throw new Error("usage: qualify-product --scoped-runtime <runtime-directory>");
+    process.stdout.write(JSON.stringify(await runScopedRuntimeQualification(process.argv[3]), null, 2) + "\n");
+    return;
+  }
+  if (process.argv.length !== 2) throw new Error("unknown qualification arguments");
   const verbose = process.env["DELIVERY_HARNESS_VERBOSE"] === "1";
   const result = await runProductQualification({
     sourceRoot: repoRootFromHere(),

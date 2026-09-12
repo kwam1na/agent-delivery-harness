@@ -102,3 +102,5 @@ export { resumeCommand } from "./commands/resume.ts";
 export function runCli(argv: readonly string[], runtime: CliRuntime): Promise<number> {
   return runCliBoundary(argv, COMMANDS, runtime);
 }
+
+export { readScopedCheckObservations, type ScopedCheckObservations } from "./scoped-observations.ts";

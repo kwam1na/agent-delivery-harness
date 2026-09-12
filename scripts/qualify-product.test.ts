@@ -532,3 +532,39 @@ describe("the lane's own wiring", () => {
     expect(result.observations.repositoriesDelivered).toEqual([]);
   }, 120_000);
 });
+
+// Pin membership separately: deleting an executed probe and its registry entry
+// must not turn an incomplete release qualification into a pass.
+describe("bundled scoped qualification completeness", () => {
+  it("requires every named probe, three repositories and actual command observations", async () => {
+    const { SCOPED_RUNTIME_PROBES, assertScopedRuntimeQualification } = await import("./qualify-product.ts");
+    expect(SCOPED_RUNTIME_PROBES).toEqual([
+      "partial-failure", "retry-reuse", "report-reuse", "source-invalidation",
+      "setup-invalidation", "foreign-portable", "tamper-refusal", "base-invalidation",
+      "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations",
+    ]);
+    const result = { runtimeSha256: "a".repeat(64), repositories: 3, probes: [...SCOPED_RUNTIME_PROBES], commands: [{ repository: "files", command: "prepare", code: 0, stdout: "prepared", stderr: "" }] };
+    expect(() => assertScopedRuntimeQualification(result)).not.toThrow();
+    for (const omitted of SCOPED_RUNTIME_PROBES) {
+      expect(() => assertScopedRuntimeQualification({ ...result, probes: result.probes.filter(probe => probe !== omitted) })).toThrow("incomplete");
+    }
+    for (const repositories of [0, 1, 2, 4]) expect(() => assertScopedRuntimeQualification({ ...result, repositories })).toThrow("incomplete");
+    expect(() => assertScopedRuntimeQualification({ ...result, probes: [] })).toThrow("incomplete");
+    expect(() => assertScopedRuntimeQualification({ ...result, commands: [] })).toThrow("incomplete");
+    expect(() => assertScopedRuntimeQualification({ ...result, runtimeSha256: "" })).toThrow("incomplete");
+  });
+});
+
+it("the scoped CLI mode refuses the supplied missing artifact instead of qualifying producer packages", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "missing-scoped-artifact-"));
+  try {
+    let output = "";
+    try {
+      execFileSync(process.execPath, ["--import", "tsx", "scripts/qualify-product.ts", "--scoped-runtime", path.join(directory, "absent")], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000 });
+    } catch (error) {
+      output = String((error as { stderr?: unknown }).stderr ?? error);
+    }
+    expect(output).toContain("ENOENT");
+    expect(output).toContain("absent");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

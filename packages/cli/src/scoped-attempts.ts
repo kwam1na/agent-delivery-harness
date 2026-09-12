@@ -16,12 +16,14 @@ export class AttemptStore {
   readonly root: string;
   constructor(root: string) { this.root = root; }
   private async generations(): Promise<number[]> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 });
-    const names = await readdir(this.root);
+    let names: string[];
+    try { names = await readdir(this.root); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
     if (names.some(n => !/^[1-9][0-9]*$/.test(n) || !Number.isSafeInteger(Number(n)))) throw corrupt();
     return names.map(Number).sort((a, b) => a - b);
   }
   async allocate(input: Omit<ScopedCheckAttempt, "attemptId" | "generation" | "status">): Promise<ScopedCheckAttempt> {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
     let generation = Math.max(0, ...await this.generations()) + 1;
     for (;;) {
       const dir = path.join(this.root, String(generation));
@@ -50,7 +52,17 @@ export class AttemptStore {
   private async load(file: string): Promise<StoredAttempt> {
     const raw = JSON.parse(await readFile(file, "utf8")) as { digest?: string; entry?: StoredAttempt };
     const row = raw.entry;
-    if (!row || raw.digest !== digestCanonical(row) || row.attempt.version !== "scoped-attempt/1" || typeof row.attempt.attemptId !== "string" || !Number.isSafeInteger(row.attempt.generation) || !["running", "passed", "failed", "interrupted"].includes(row.attempt.status)) throw corrupt();
+    const attempt = row?.attempt;
+    const nonempty = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+    const candidate = attempt?.origin?.candidate;
+    if (!row || !attempt || raw.digest !== digestCanonical(row) || attempt.version !== "scoped-attempt/1" ||
+        !nonempty(attempt.attemptId) || !nonempty(attempt.providerId) || !nonempty(attempt.origin?.runId) ||
+        !Number.isSafeInteger(attempt.generation) || attempt.generation < 1 ||
+        !["running", "passed", "failed", "interrupted"].includes(attempt.status) ||
+        ![attempt.inputDigest, attempt.profileDigest].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)) ||
+        !candidate || ![candidate.treeSha, candidate.deliverableDigest, candidate.identityToken, candidate.baseRef,
+          candidate.baseTipSha, candidate.mergeBaseSha, candidate.workspaceId].every(nonempty)) throw corrupt();
+    if (row.payload?.durationMs !== undefined && (typeof row.payload.durationMs !== "number" || !Number.isFinite(row.payload.durationMs) || row.payload.durationMs < 0)) throw corrupt();
     return row;
   }
   async read(): Promise<StoredAttempt[]> {
