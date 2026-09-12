@@ -1,3 +1,6 @@
+import { scopedCheckIdentity, type ScopedRuntimeObservation } from "./scoped-inputs.ts";
+import { digestCanonical } from "./digest.ts";
+import type { ScopedCheckPlan, ScopedCheckAttempt } from "./records.types.ts";
 /** Capture verifier inputs from the selected tree, never a synthetic CI checkout. */
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -8,13 +11,18 @@ import type { HarnessConfig } from "./config.ts";
 import { computePreparationFingerprint } from "./preparation.ts";
 import { parseCandidateTreeListing, type DeliveryRecord } from "./delivery-record.ts";
 import { capturePortableEvidenceContext, portableArtifactContents, portableBlocker, MAX_PORTABLE_ARTIFACT_BYTES } from "./portable-evidence.ts";
-import { computeDeliverableIdentity } from "./identity.ts";
+import { computeDeliverableIdentity, isRecordNeutralPath } from "./identity.ts";
 import { captureCheckBindings } from "./checks.ts";
 import { retainedCheckOutput } from "./validator/checks-passed.ts";
 import { readCompiledRepositoryPolicy, type ReviewInputReader } from "./review-inputs.ts";
 import { isSafeRelativePath } from "./validator/envelope.ts";
 
-export async function candidateTreeEvidenceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<ReviewInputReader> {
+export interface CandidateTreeInputMetadata {
+  readonly mode: string | null;
+  readonly links: readonly { readonly path: string; readonly target: string }[];
+}
+export type CandidateTreeInputReader = ReviewInputReader & { metadata(repoPath: string): Promise<CandidateTreeInputMetadata> };
+export async function candidateTreeEvidenceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<CandidateTreeInputReader> {
   const refusal = (message: string): never => { throw new BlockedError([portableBlocker("portable_tree_unreadable", message)]); };
   const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", treeSha], { cwd: rootDir });
   if (listing.exitCode !== 0) refusal("The target candidate tree cannot be enumerated.");
@@ -29,9 +37,10 @@ export async function candidateTreeEvidenceReader(rootDir: string, treeSha: stri
     if (actual !== sha) refusal("The target-tree reader did not preserve the exact blob bytes.");
     return bytes;
   };
-  return async (requested) => {
+  const resolve = async (requested: string) => {
     if (!isSafeRelativePath(requested)) refusal("An evidence input is not a safe repository-relative path.");
     let current = requested;
+    const links: { path: string; target: string }[] = [];
     for (let depth = 0; depth < 32; depth += 1) {
       const segments = current.split("/");
       let redirected = false;
@@ -40,6 +49,7 @@ export async function candidateTreeEvidenceReader(rootDir: string, treeSha: stri
         const entry = entries.get(prefix);
         if (entry?.mode !== "120000") continue;
         const target = (await readBlob(entry.objectSha)).toString("utf8");
+        links.push({ path: prefix, target });
         if (path.posix.isAbsolute(target) || target.includes("\\") || target.includes("\0")) refusal("An evidence input symlink escapes the repository.");
         current = path.posix.normalize(path.posix.join(path.posix.dirname(prefix), target, ...segments.slice(index + 1)));
         if (!isSafeRelativePath(current)) refusal("An evidence input symlink escapes the repository.");
@@ -48,15 +58,42 @@ export async function candidateTreeEvidenceReader(rootDir: string, treeSha: stri
       }
       if (redirected) continue;
       const entry = entries.get(current);
-      if (entry === undefined) return null;
+      if (entry === undefined) return { entry, links };
       if (!/^100(?:644|755)$/.test(entry.mode)) refusal("An evidence input is not a regular committed file.");
-      return readBlob(entry.objectSha);
+      return { entry, links };
     }
     return refusal("An evidence input symlink chain is cyclic or too deep.");
   };
+  return Object.assign(async (requested: string) => {
+    const { entry } = await resolve(requested);
+    return entry ? readBlob(entry.objectSha) : null;
+  }, { metadata: async (requested: string): Promise<CandidateTreeInputMetadata> => {
+    const { entry, links } = await resolve(requested);
+    return { mode: entry?.mode ?? null, links };
+  } });
 }
 
 export async function capturePortableVerificationInputs(rootDir: string, config: HarnessConfig, candidate: CapturedCandidate, record: DeliveryRecord, run: CandidateCommandRunner = runGitCommand) {
+  const transportedHeads = new Map<string, Promise<boolean>>();
+  const recordTransportFrom = (originalHead: string): Promise<boolean> => {
+    const cached = transportedHeads.get(originalHead);
+    if (cached) return cached;
+    const proof = (async () => {
+      let head = candidate.headSha;
+      for (let count = 0; head !== originalHead && count < 64; count++) {
+        const parent = await run(["git", "rev-list", "--parents", "-n", "1", head], { cwd: rootDir });
+        const members = parent.stdout.trim().split(/\s+/);
+        if (parent.exitCode !== 0 || members.length !== 2 || members[0] !== head) return false;
+        const diff = await run(["git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", head], { cwd: rootDir });
+        const paths = diff.stdout.split("\0").filter(Boolean);
+        if (diff.exitCode !== 0 || paths.length === 0 || paths.some(p => !isRecordNeutralPath(config, p))) return false;
+        head = members[1]!;
+      }
+      return head === originalHead;
+    })();
+    transportedHeads.set(originalHead, proof);
+    return proof;
+  };
   const read = await candidateTreeEvidenceReader(rootDir, candidate.treeSha, run);
   const readWiring = async (repoPath: string): Promise<Uint8Array> => {
     const bytes = await read(repoPath);
@@ -66,7 +103,42 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
   const preparationFingerprint = await computePreparationFingerprint(rootDir, config, { readWiring });
   const evidenceContext = await capturePortableEvidenceContext(config, read, preparationFingerprint);
   const compiledPolicy = await readCompiledRepositoryPolicy(read);
-  const checkBindings = await captureCheckBindings(rootDir, config, candidate, { readWiring, readReleaseInputs: read,
+  let scopedPlan: ScopedCheckPlan | undefined;
+  let bindingCandidate = candidate;
+  if (config.providers.some(p => p.check?.scope)) {
+    const validationConfig = { ...config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: config.recordNeutral };
+    const [recorded, current] = await Promise.all([record.candidateBinding.treeSha, candidate.treeSha].map(treeSha => computeDeliverableIdentity({ rootDir, treeSha, config: validationConfig }, { run })));
+    // Non-reusable executions may be verified after their record transport is
+    // staged. This proves strict byte equivalence; it never grants gate reuse.
+    if (recorded === current && record.candidateBinding.baseRef === candidate.base.ref && record.candidateBinding.baseTipSha === candidate.base.tipSha && record.candidateBinding.mergeBaseSha === candidate.base.mergeBaseSha) bindingCandidate = { ...candidate, treeSha: record.candidateBinding.treeSha, workspaceId: record.candidateBinding.workspaceId };
+  }
+  const scopedProviders = config.providers.filter(p => p.check?.scope);
+  if (scopedProviders.length) {
+    const listing = await run(["git", "ls-tree", "-r", "--name-only", "-z", candidate.treeSha], { cwd: rootDir });
+    if (listing.exitCode !== 0) throw new BlockedError([portableBlocker("portable_tree_unreadable", "Cannot enumerate scoped source inputs.")]);
+    const checks: Record<string, ScopedCheckPlan["checks"][string]> = {};
+    for (const provider of scopedProviders) {
+      const evidence = record.claims.flatMap(c => [...(c.evidence ? [c.evidence] : []), ...(c.supportingEvidence ?? [])]).find(e => e.resolution.kind === "evidence" && e.resolution.providerId === provider.id);
+      const portable = evidence?.resolution.kind === "evidence" ? evidence.resolution.portable : undefined;
+      const contents = portableArtifactContents(portable?.artifacts);
+      const raw = contents.artifacts.get("scoped-inputs.json");
+      if (!raw) throw new BlockedError([portableBlocker("portable_scoped_inputs_missing", "Scoped execution requires retained input observations and its originating attempt.")]);
+      try {
+        const retained = JSON.parse(raw) as { observation: ScopedRuntimeObservation; attempt: ScopedCheckAttempt };
+        // Record-only transport verifies the historical execution, including its
+        // HEAD. The strict equivalence/base proof above does not grant gate reuse.
+        const manifestCandidate = (portable?.manifest as { candidate?: { headSha?: unknown } } | undefined)?.candidate;
+        const identityCandidate = bindingCandidate.treeSha === record.candidateBinding.treeSha && bindingCandidate.workspaceId === record.candidateBinding.workspaceId && typeof manifestCandidate?.headSha === "string" && /^[a-f0-9]{40}$/.test(manifestCandidate.headSha) && await recordTransportFrom(manifestCandidate.headSha)
+          ? { ...bindingCandidate, headSha: manifestCandidate.headSha } : candidate;
+        const identity = await scopedCheckIdentity(config, provider, listing.stdout.split("\0").filter(Boolean), read, retained.observation, identityCandidate);
+        if (retained.attempt.providerId !== provider.id || retained.attempt.status !== "passed" || retained.attempt.inputDigest !== identity.inputDigest || retained.attempt.profileDigest !== identity.profileDigest) throw new Error("Mismatched scoped execution identity");
+        checks[provider.id] = { inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, reusable: identity.reusable, attempts: [retained.attempt] };
+      } catch { throw new BlockedError([portableBlocker("portable_scoped_inputs_invalid", "Retained scoped inputs do not match the selected source, profile or policy.")]); }
+    }
+    scopedPlan = { version: "scoped-plan/1", candidate: { treeSha: bindingCandidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: bindingCandidate.workspaceId },
+      selectionDigest: digestCanonical(scopedProviders.map(p => ({ id: p.id, check: p.check })).sort((a, b) => a.id.localeCompare(b.id))), checks };
+  }
+  const checkBindings = await captureCheckBindings(rootDir, config, bindingCandidate, { readWiring, readReleaseInputs: read, ...(scopedPlan ? { scopedPlan } : {}),
     readOutput: async (repoPath, providerId) => {
       const evidence = record.claims.flatMap(claim => [
         ...(claim.evidence === undefined ? [] : [claim.evidence]),

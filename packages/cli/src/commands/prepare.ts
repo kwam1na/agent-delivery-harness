@@ -1,3 +1,5 @@
+import { ScopedChecks } from "../scoped-checks.ts";
+import { CheckSnapshotError } from "../check-snapshot.ts";
 /**
  * `prepare` — capture the candidate and publish its preparation receipt.
  *
@@ -32,6 +34,8 @@ export const prepareCommand: CommandDescriptor = {
     if (context.args.length > 1 || (context.args.length === 1 && context.args[0] !== "--refresh-record-neutral")) {
       return { kind: "usage", message: USAGE };
     }
+    if (context.config.providers.some(p => p.check?.scope) && !context.config.scopedExecution) throw new CheckSnapshotError("scoped_executor_required", "Scoped execution profiles are required before preparation commands may run.");
+    let scoped: ScopedChecks | undefined;
     const refreshRecordNeutral = context.args[0] === "--refresh-record-neutral";
     const wiring = await context.wire();
     let retainedAttemptId: string | undefined;
@@ -44,6 +48,18 @@ export const prepareCommand: CommandDescriptor = {
       let reusableFingerprint: string | undefined;
       let attemptId: string;
       try {
+        if (context.config.scopedExecution?.repairCommands?.length) {
+          ownedAttemptId = await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
+          const beforeRepair = await computePreparationFingerprint(context.rootDir, context.config, wiring.storageOptions);
+          for (const repair of context.config.scopedExecution.repairCommands) {
+            context.write(`repairing ${repair.id}`);
+            const result = await createExecPort().run({ command: repair.command[0], args: repair.command.slice(1), cwd: context.rootDir,
+              env: Object.fromEntries(Object.entries(context.env).filter((e): e is [string, string] => e[1] !== undefined)), timeoutMs: repair.timeoutMs, maxBuffer: 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) });
+            if (context.signal?.aborted) throw new CliInterruption();
+            if (result.code !== 0) throw new CheckSnapshotError("preparation_repair_failed", `Source repair ${repair.id} failed; fix it and prepare again.`);
+          }
+          if (beforeRepair !== await computePreparationFingerprint(context.rootDir, context.config, wiring.storageOptions)) throw new CheckSnapshotError("preparation_candidate_changed", "Repair changed preparation wiring; reload the configuration and prepare again.");
+        }
         capture = await wiring.captureCandidate();
         if (capture.ok && refreshRecordNeutral) {
           const previous = await evaluatePreparationReceipt(context.rootDir,
@@ -54,7 +70,7 @@ export const prepareCommand: CommandDescriptor = {
           }
         }
       } finally {
-        attemptId = retainedAttemptId ?? await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
+        attemptId = retainedAttemptId ?? ownedAttemptId ?? await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
         ownedAttemptId = attemptId;
       }
       if (!capture.ok) {
@@ -71,7 +87,7 @@ export const prepareCommand: CommandDescriptor = {
         ownedAttemptId = attemptId;
         retainedAttemptId = undefined;
       }
-      const validationDigest = await computeDeliverableIdentity({ rootDir: context.rootDir, treeSha: capture.candidate.treeSha,
+      let validationDigest = await computeDeliverableIdentity({ rootDir: context.rootDir, treeSha: capture.candidate.treeSha,
         config: { ...context.config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: context.config.recordNeutral } });
       if (reusable) context.write("reusing preparation checks: strict validation projection, base, policy and wiring unchanged");
       const exec = createExecPort();
@@ -111,12 +127,20 @@ export const prepareCommand: CommandDescriptor = {
           })],
         };
       }
+      if (context.config.scopedExecution) {
+        capture = finalCapture;
+        validationDigest = await computeDeliverableIdentity({ rootDir: context.rootDir, treeSha: capture.candidate.treeSha, config: { ...context.config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: context.config.recordNeutral } });
+        scoped = await ScopedChecks.create(context, capture.candidate);
+        await scoped?.satisfyMechanical();
+      }
       const published = await publishPreparationReceipt(
         context.rootDir,
         { config: context.config, candidate: capture.candidate, attemptId, validationDigest },
         wiring.storageOptions,
       );
       if (context.signal?.aborted) throw new CliInterruption();
+      await scoped?.submitMechanical();
+      await scoped?.cleanup();
       refreshed = true;
       // The labelled line exists so a reader — an operator or a review round
       // about to bind itself to this candidate — has one unambiguous token to
@@ -131,8 +155,9 @@ export const prepareCommand: CommandDescriptor = {
         ].join("\n"),
       };
     } finally {
-      if (ownedAttemptId !== undefined && !refreshed) {
-        await revokePreparationAttempt(context.rootDir, context.config, ownedAttemptId, wiring.storageOptions);
+      try { await scoped?.cleanup(); }
+      finally {
+        if (ownedAttemptId !== undefined && !refreshed) await revokePreparationAttempt(context.rootDir, context.config, ownedAttemptId, wiring.storageOptions);
       }
     }
   },

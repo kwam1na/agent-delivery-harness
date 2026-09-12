@@ -1,3 +1,5 @@
+import { CheckSnapshotError } from "./check-snapshot.ts";
+import { captureScopedCandidate } from "./scoped-candidate.ts";
 /**
  * The one boundary every CLI command runs behind.
  *
@@ -307,12 +309,13 @@ export async function importHarnessConfig(rootDir: string): Promise<HarnessConfi
 export async function wireRepo(rootDir: string, config: HarnessConfig): Promise<RepoWiring> {
   const storageOptions = { storageNamespace: config.storageNamespace };
   const storage = await resolveRecordStorage(rootDir, storageOptions);
-  const captureCandidate = createCandidateCapture({
+  const captureOptions = {
     rootDir,
     config,
     workspaceId: storage.workspaceId,
     computeIdentity: withDeliverableIdentity(),
-  });
+  };
+  const captureCandidate = config.scopedExecution ? () => captureScopedCandidate(captureOptions) : createCandidateCapture(captureOptions);
   const projectActivation = (candidate: CapturedCandidate): Promise<ReviewActivationProjection> =>
     evaluateCandidateActivation({ rootDir, candidate, config });
   return { rootDir, workspaceId: storage.workspaceId, captureCandidate, projectActivation, storageOptions };
@@ -458,6 +461,7 @@ async function runConfigFreeCommand(
       runtime.stderr(`${error.message}\n`);
       return EXIT_INTERRUPTED;
     }
+    if (error instanceof CheckSnapshotError) error = new BlockedError([commandBlocker({ code: error.code, sourceId: "delivery-harness.cli.scoped-check", summary: error.message, remediations: [{ id: "repair-scoped-execution", kind: "manual_action", summary: "Repair the scoped execution inputs or profile, prepare and retry." }] })]);
     if (error instanceof BlockedError) {
       runtime.stderr(`${renderBlockers(error.blockers)}\n`);
       return EXIT_POLICY;
@@ -602,6 +606,7 @@ async function runConfiguredCommand(
       runtime.stderr(`${error.message}\n`);
       return EXIT_INTERRUPTED;
     }
+    if (error instanceof CheckSnapshotError) error = new BlockedError([commandBlocker({ code: error.code, sourceId: "delivery-harness.cli.scoped-check", summary: error.message, remediations: [{ id: "repair-scoped-execution", kind: "manual_action", summary: "Repair the scoped execution inputs or profile, prepare and retry." }] })]);
     if (error instanceof BlockedError) {
       runtime.stderr(`${renderBlockers(error.blockers)}\n`);
       return EXIT_POLICY;

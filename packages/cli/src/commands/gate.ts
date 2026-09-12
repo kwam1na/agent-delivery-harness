@@ -1,3 +1,6 @@
+import { ScopedChecks } from "../scoped-checks.ts";
+import { CheckSnapshotError } from "../check-snapshot.ts";
+import { commandBlocker } from "../boundary.ts";
 import { runDeclaredCheck } from "../declared-checks.ts";
 /**
  * `gate` — evaluate the delivery gate and, under a TTY, offer a scoped waiver.
@@ -20,10 +23,15 @@ import { oneLine } from "../run-surface.ts";
  * through the same admission adapter. Configs without provider commands take
  * the pre-existing path unchanged.
  */
-export async function runProviderBackedAdmission(
+async function providerAdmission(
   context: CommandContext,
   options: { readonly allowPrompt: boolean; readonly includeInjectedLiveResults: boolean },
+  session?: ScopedChecks,
 ): Promise<AdmissionResult & { readonly observedLiveResults?: readonly LiveProviderResult[] }> {
+  const admit = async (input: Parameters<typeof runAdmission>[0], options: Parameters<typeof runAdmission>[1]) => runAdmission(input, { ...options, ...(session ? { scopedPlan: await session.plan(), readOutput: session.readOutput } : {}) });
+  if (session) {
+    await session.fenceNonReusable(context.config.providers.filter(p => p.check?.scope).map(p => p.id));
+  }
   const wiring = await context.wire();
   const admissionOptions = {
     captureCandidate: wiring.captureCandidate,
@@ -42,13 +50,14 @@ export async function runProviderBackedAdmission(
   };
 
   if (!context.config.providers.some((provider) => provider.command !== undefined || provider.check !== undefined)) {
-    return runAdmission(input, finalAdmissionOptions);
+    return admit(input, finalAdmissionOptions);
   }
 
   const liveResults: LiveProviderResult[] = options.includeInjectedLiveResults ? [...(context.liveResults ?? [])] : [];
   const attempted = new Set<string>();
   const attemptBlockers: Blocker[] = [];
-  let admission = await runAdmission(input, admissionOptions);
+  let admission = await admit(input, admissionOptions);
+  await session?.explainReuse((admission.decision?.resolutions ?? []).flatMap(r => r.kind === "satisfied_evidence" ? [r.providerId] : []));
 
   while (!admission.admitted && admission.decision !== undefined && admission.candidate !== undefined) {
     const requested = new Map<string, { obligationIds: string[]; requiresEvidence: boolean; needsLiveResult: boolean }>();
@@ -78,8 +87,14 @@ export async function runProviderBackedAdmission(
     attempted.add(providerId);
     const registration = context.config.providers.find(provider => provider.id === providerId)!;
     if (registration.check !== undefined) {
-      attemptBlockers.push(...await runDeclaredCheck(context, registration, request.obligationIds, admission.candidate));
-      admission = await runAdmission({ ...input, ...(liveResults.length === 0 ? {} : { liveResults }) }, admissionOptions);
+      if (registration.check.scope && session) {
+        try { await session.execute(registration, request.obligationIds); }
+        catch (error) {
+          if (!(error instanceof CheckSnapshotError)) throw error;
+          attemptBlockers.push(commandBlocker({ code: error.code, sourceId: "delivery-harness.cli.gate", summary: error.message, remediations: [{ id: "repair-scoped-check", kind: "manual_action", summary: "Repair the declared scoped check or its execution profile and run the gate again." }] }));
+        }
+      } else attemptBlockers.push(...await runDeclaredCheck(context, registration, request.obligationIds, admission.candidate));
+      admission = await admit({ ...input, ...(liveResults.length === 0 ? {} : { liveResults }) }, admissionOptions);
       continue;
     }
     const result = await context.invokeProvider?.({
@@ -103,20 +118,31 @@ export async function runProviderBackedAdmission(
       liveResults.push(result.liveResult);
     }
 
-    admission = await runAdmission(
+    admission = await admit(
       { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
       admissionOptions,
     );
   }
 
   if (admission.admitted) return { ...admission, observedLiveResults: liveResults };
-  const final = await runAdmission(
+  const final = await admit(
     { ...input, ...(liveResults.length === 0 ? {} : { liveResults }) },
     finalAdmissionOptions,
   );
   return attemptBlockers.length === 0 || final.admitted
     ? { ...final, observedLiveResults: liveResults }
     : { ...final, observedLiveResults: liveResults, blockers: [...attemptBlockers, ...final.blockers] };
+}
+
+export async function runProviderBackedAdmission(context: CommandContext, options: { readonly allowPrompt: boolean; readonly includeInjectedLiveResults: boolean }): Promise<AdmissionResult & { readonly observedLiveResults?: readonly LiveProviderResult[] }> {
+  let session: ScopedChecks | undefined;
+  try {
+    if (context.config.providers.some(p => p.check?.scope)) {
+      const capture = await (await context.wire()).captureCandidate();
+      if (capture.ok) session = await ScopedChecks.create(context, capture.candidate);
+    }
+    return await providerAdmission(context, options, session);
+  } finally { await session?.cleanup(); }
 }
 
 export const gateCommand: CommandDescriptor = {

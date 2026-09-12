@@ -1042,3 +1042,6 @@ export { projectRunActivities, runActivityTransitionError, DEFAULT_RUN_FRESHNESS
 export { captureRunArtifact, readRunArtifact, type RunArtifactMetadata, type RunArtifactResult } from "./checkpoint/run-artifacts.ts";
 
 export { MAX_PORTABLE_ARTIFACT_BYTES, MAX_PORTABLE_ARTIFACTS, MAX_PORTABLE_EVIDENCE_BYTES } from "./portable-limits.ts";
+
+export type { ScopedExecutionDefinition, ScopedExecutionProfile } from "./config.ts";
+export { scopedCheckIdentity, type ScopedRuntimeObservation } from "./scoped-inputs.ts";

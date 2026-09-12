@@ -34,7 +34,8 @@ import { captureCheckBindings } from "./checks.ts";
  *
  * appliesToCandidate IS DECIDED HERE. The evaluator judges freshness, but it is
  * the adapter that decides which discovered records are even *about* this
- * candidate. A well-formed record whose binding is not fresh for the candidate
+ * candidate. Scoped check records from the same workspace and identity version
+ * reach the evaluator for its per-check freshness decision. A legacy record whose binding is not fresh for the candidate
  * under evaluation is excluded — it resolves as absent, not as stale evidence,
  * because a record for another candidate is not this candidate's stale evidence,
  * it is simply not its evidence. A quarantined file is the opposite case: its
@@ -104,6 +105,7 @@ export interface AdmissionInput {
 
 export interface AdmissionOptions extends RecordStorageOptions {
   readonly scopedPlan?: import("./records.types.ts").ScopedCheckPlan;
+  readonly readOutput?: (repoPath: string, providerId: string) => Promise<Uint8Array>;
   /** How the candidate is observed. Injected: the adapter owns no repository dependency. */
   readonly captureCandidate: CaptureCandidate;
   /** The reviewable-change projection for the captured candidate. Injected for the same reason. */
@@ -236,12 +238,18 @@ async function mapStore(input: AdmissionInput, options: AdmissionOptions, candid
     const discovery = await discover(input.rootDir, input.config.gateId, obligation.id);
 
     for (const record of discovery.records) {
-      // appliesToCandidate. A well-formed record is forwarded only when its
-      // binding is fresh for the candidate under evaluation; a foreign or stale
-      // record is excluded, so the obligation resolves as absent rather than as
-      // stale evidence. (Falsification: force this to `true` and a foreign-
+      // appliesToCandidate. Legacy records are forwarded only when their
+      // binding is fresh; foreign or stale records resolve as absent rather
+      // than stale evidence. (Falsification: force this to `true` and a foreign-
       // candidate record surfaces as `stale_evidence`.)
-      const appliesToCandidate = isRecordFreshForCandidate(input.config, record.candidateBinding, candidate);
+      // Scoped evidence reaches the evaluator across source changes. Its current
+      // input/profile/attempt binding is checked there; legacy evidence retains
+      // the strict candidate filter.
+      const providerId = record.resolution.kind === "evidence" ? record.resolution.providerId : undefined;
+      const scoped = providerId !== undefined &&
+        input.config.providers.some(p => p.id === providerId && p.check?.scope !== undefined) &&
+        record.candidateBinding.workspaceId === candidate.workspaceId && record.candidateBinding.identityToken === candidate.deliverable.identity;
+      const appliesToCandidate = scoped || isRecordFreshForCandidate(input.config, record.candidateBinding, candidate);
       if (appliesToCandidate) records.push(record);
     }
 
