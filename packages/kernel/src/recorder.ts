@@ -90,6 +90,7 @@ export interface ExpectedProviderAttempt {
 
 export interface SubmissionOptions extends RecordStorageOptions {
   readonly scopedPlan?: import("./records.types.ts").ScopedCheckPlan;
+  readonly readOutput?: (repoPath: string, providerId: string) => Promise<Uint8Array>;
   /**
    * How the current candidate is observed (SUB-1). Injected rather than
    * defaulted to the git capture: the recorder must not own a repository

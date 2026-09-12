@@ -1,3 +1,6 @@
+import { scopedCheckIdentity, type ScopedRuntimeObservation } from "./scoped-inputs.ts";
+import { digestCanonical } from "./digest.ts";
+import type { ScopedCheckPlan, ScopedCheckAttempt } from "./records.types.ts";
 /** Capture verifier inputs from the selected tree, never a synthetic CI checkout. */
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -66,7 +69,37 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
   const preparationFingerprint = await computePreparationFingerprint(rootDir, config, { readWiring });
   const evidenceContext = await capturePortableEvidenceContext(config, read, preparationFingerprint);
   const compiledPolicy = await readCompiledRepositoryPolicy(read);
-  const checkBindings = await captureCheckBindings(rootDir, config, candidate, { readWiring, readReleaseInputs: read,
+  let scopedPlan: ScopedCheckPlan | undefined;
+  let bindingCandidate = candidate;
+  if (config.providers.some(p => p.check?.scope) && record.candidateBinding.treeSha !== candidate.treeSha) {
+    const validationConfig = { ...config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: config.recordNeutral };
+    const [recorded, current] = await Promise.all([record.candidateBinding.treeSha, candidate.treeSha].map(treeSha => computeDeliverableIdentity({ rootDir, treeSha, config: validationConfig }, { run })));
+    // Non-reusable executions may be verified after their record transport is
+    // staged. This proves strict byte equivalence; it never grants gate reuse.
+    if (recorded === current) bindingCandidate = { ...candidate, treeSha: record.candidateBinding.treeSha };
+  }
+  const scopedProviders = config.providers.filter(p => p.check?.scope);
+  if (scopedProviders.length) {
+    const listing = await run(["git", "ls-tree", "-r", "--name-only", "-z", candidate.treeSha], { cwd: rootDir });
+    if (listing.exitCode !== 0) throw new BlockedError([portableBlocker("portable_tree_unreadable", "Cannot enumerate scoped source inputs.")]);
+    const checks: Record<string, ScopedCheckPlan["checks"][string]> = {};
+    for (const provider of scopedProviders) {
+      const evidence = record.claims.flatMap(c => [...(c.evidence ? [c.evidence] : []), ...(c.supportingEvidence ?? [])]).find(e => e.resolution.kind === "evidence" && e.resolution.providerId === provider.id);
+      const portable = evidence?.resolution.kind === "evidence" ? evidence.resolution.portable : undefined;
+      const contents = portableArtifactContents(portable?.artifacts);
+      const raw = contents.artifacts.get("scoped-inputs.json");
+      if (!raw) throw new BlockedError([portableBlocker("portable_scoped_inputs_missing", "Scoped execution requires retained input observations and its originating attempt.")]);
+      try {
+        const retained = JSON.parse(raw) as { observation: ScopedRuntimeObservation; attempt: ScopedCheckAttempt };
+        const identity = await scopedCheckIdentity(config, provider, listing.stdout.split("\0").filter(Boolean), read, retained.observation);
+        if (retained.attempt.providerId !== provider.id || retained.attempt.status !== "passed" || retained.attempt.inputDigest !== identity.inputDigest || retained.attempt.profileDigest !== identity.profileDigest) throw new Error("Mismatched scoped execution identity");
+        checks[provider.id] = { inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, reusable: identity.reusable, attempts: [retained.attempt] };
+      } catch { throw new BlockedError([portableBlocker("portable_scoped_inputs_invalid", "Retained scoped inputs do not match the selected source, profile or policy.")]); }
+    }
+    scopedPlan = { version: "scoped-plan/1", candidate: { treeSha: bindingCandidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId },
+      selectionDigest: digestCanonical(scopedProviders.map(p => ({ id: p.id, check: p.check })).sort((a, b) => a.id.localeCompare(b.id))), checks };
+  }
+  const checkBindings = await captureCheckBindings(rootDir, config, bindingCandidate, { readWiring, readReleaseInputs: read, ...(scopedPlan ? { scopedPlan } : {}),
     readOutput: async (repoPath, providerId) => {
       const evidence = record.claims.flatMap(claim => [
         ...(claim.evidence === undefined ? [] : [claim.evidence]),

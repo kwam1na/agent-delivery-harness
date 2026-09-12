@@ -222,7 +222,32 @@ export function isScopedCheckDefinition(value: unknown): value is ScopedCheckDef
   const env = value["environment"];
   return paths(value["files"]) && paths(value["tests"]) && paths(value["memberships"], true) &&
     (value["cwd"] === "." || safePath(value["cwd"])) && typeof value["profile"] === "string" && /^[a-zA-Z0-9_.-]+$/.test(value["profile"]) &&
-    Array.isArray(env) && env.every(e => isRecord(e) && Object.keys(e).sort().join(",") === "kind,name" && typeof e["name"] === "string" && /^[A-Z_][A-Z0-9_]*$/.test(e["name"]) && (e["kind"] === "flag" || e["kind"] === "credential")) && new Set(env.map(e => e.name)).size === env.length;
+    Array.isArray(env) && env.every(e => isRecord(e) && Object.keys(e).sort().join(",") === "kind,name" && typeof e["name"] === "string" && /^[A-Z_][A-Z0-9_]*$/.test(e["name"]) && !/^(?:GIT_|DELIVERY_CHECK_)/.test(e["name"]) && !["PATH", "HOME", "TMPDIR", "TMP", "TEMP"].includes(e["name"]) && (e["kind"] === "flag" || e["kind"] === "credential")) && new Set(env.map(e => e.name)).size === env.length;
+}
+
+/** Supported private executor profiles; old runtimes reject this opt-in. */
+export interface ScopedExecutionProfile {
+  readonly id: string;
+  readonly dependencyInputs: readonly string[];
+  readonly dependencies?: { readonly command: NonEmptyTuple<string>; readonly timeoutMs: number };
+  readonly mutableOutputs: readonly string[];
+  readonly credentialIdentities: Readonly<Record<string, string>>;
+}
+export interface ScopedExecutionDefinition {
+  readonly version: "scoped-execution/1";
+  readonly profiles: readonly ScopedExecutionProfile[];
+  readonly mechanicalProviders: readonly string[];
+}
+function isScopedExecution(value: unknown): value is ScopedExecutionDefinition {
+  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "mechanicalProviders,profiles,version" || value["version"] !== "scoped-execution/1" || !Array.isArray(value["profiles"]) || !Array.isArray(value["mechanicalProviders"])) return false;
+  const safe = (v: unknown) => typeof v === "string" && v.length > 0 && !v.startsWith("/") && !v.includes("\\") && !v.includes("\0") && !v.replace(/\/$/, "").split("/").some(p => p === ".." || p === "." || p === "") && !v.split("/").includes(".git") && !v.split("/").includes("node_modules");
+  const list = (v: unknown) => Array.isArray(v) && new Set(v).size === v.length && v.every(safe);
+  return new Set(value["mechanicalProviders"]).size === value["mechanicalProviders"].length && value["mechanicalProviders"].every(v => typeof v === "string") &&
+    new Set(value["profiles"].map(p => isRecord(p) ? p["id"] : null)).size === value["profiles"].length && value["profiles"].every(p => {
+      if (!isRecord(p) || Object.keys(p).some(k => !["id", "dependencyInputs", "dependencies", "mutableOutputs", "credentialIdentities"].includes(k)) || typeof p["id"] !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(p["id"]) || !list(p["dependencyInputs"]) || !list(p["mutableOutputs"]) || !isRecord(p["credentialIdentities"]) || !Object.entries(p["credentialIdentities"]).every(([k, v]) => /^[A-Z_][A-Z0-9_]*$/.test(k) && typeof v === "string" && v.length > 0)) return false;
+      const dep = p["dependencies"];
+      return dep === undefined || (isRecord(dep) && Object.keys(dep).sort().join(",") === "command,timeoutMs" && Array.isArray(dep["command"]) && dep["command"].length > 0 && dep["command"].every(v => typeof v === "string" && v.length > 0 && !v.includes("\0")) && Number.isSafeInteger(dep["timeoutMs"]) && Number(dep["timeoutMs"]) > 0 && Number(dep["timeoutMs"]) <= 3600000);
+    });
 }
 
 export interface PreparationCommand {
@@ -339,6 +364,7 @@ export interface HarnessConfig {
    */
   readonly preparationWiringPaths: readonly string[];
   readonly preparationCommands?: readonly PreparationCommand[];
+  readonly scopedExecution?: ScopedExecutionDefinition;
   readonly additionalReviewLenses?: readonly AdditionalReviewLens[];
   readonly obligations: readonly ObligationPolicy[];
   readonly deliveryRecordPath: string;
@@ -848,13 +874,14 @@ const CONFIG_MEMBERS = [
   "preparationWiringPaths",
   "preparationCommands",
   "additionalReviewLenses",
+  "scopedExecution",
   "obligations",
   "deliveryRecordPath",
   "deliveryRecordVerification",
 ] as const;
 
 /** Members the author may omit. Optional extensions stay absent when unused. */
-const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification", "preparationCommands", "additionalReviewLenses"] as const;
+const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification", "preparationCommands", "additionalReviewLenses", "scopedExecution"] as const;
 
 function readAdditionalReviewLenses(findings: FindingList, value: unknown): readonly AdditionalReviewLens[] | undefined {
   const entries = readArray(findings, "additionalReviewLenses", value);
@@ -1066,6 +1093,15 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
   if (preparationWiringPaths !== undefined) checkDuplicateIds(findings, "preparationWiringPaths", preparationWiringPaths);
   const additionalReviewLenses = input["additionalReviewLenses"] === undefined ? undefined : readAdditionalReviewLenses(findings, input["additionalReviewLenses"]);
 
+  const scopedExecution = input["scopedExecution"];
+  if (scopedExecution !== undefined && !isScopedExecution(scopedExecution)) findings.add("config_invalid_member", "scopedExecution", "requires the supported scoped-execution/1 profiles");
+  if (isScopedExecution(scopedExecution)) {
+    for (const provider of providers ?? []) {
+      if (provider.check?.scope && !scopedExecution.profiles.some(p => p.id === provider.check!.scope!.profile)) findings.add("config_invalid_member", "scopedExecution.profiles", "every scoped check requires its declared execution profile");
+    }
+    if (scopedExecution.mechanicalProviders.some(id => !providers?.some(p => p.id === id && p.check?.scope))) findings.add("config_invalid_member", "scopedExecution.mechanicalProviders", "mechanical providers must name scoped check providers");
+  }
+
   let preparationCommands: PreparationCommand[] | undefined;
   if (input["preparationCommands"] !== undefined) {
     const entries = readArray(findings, "preparationCommands", input["preparationCommands"]);
@@ -1176,6 +1212,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
       [...new Set([...preparationWiringPaths, ...additionalReviewLenses.map((lens) => lens.charterPath)])],
     ...(additionalReviewLenses === undefined ? {} : { additionalReviewLenses }),
     ...(preparationCommands === undefined ? {} : { preparationCommands }),
+    ...(isScopedExecution(scopedExecution) ? { scopedExecution } : {}),
     obligations,
     deliveryRecordPath,
     deliveryRecordVerification,
