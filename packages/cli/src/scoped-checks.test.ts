@@ -170,7 +170,7 @@ it('logical cwd resolves repository executable',async()=>{
 },60000);
 it('executable mode drift invalidates executable proof',async()=>{
  const f=await fixture();f.env["FAIL"]='0';const script=path.join(f.dir,'check.cjs');await writeFile(script,`#!${process.execPath}\nrequire('fs').writeFileSync('result-a.json','{}');\n`);const fs=await import('node:fs');fs.chmodSync(script,0o755);
- const a=f.config.providers[0]!;f.setConfig({...f.config,providers:[{...a,check:{...a.check!,command:['./check.cjs'],scope:{...a.check!.scope!,files:['check.cjs']}}},f.config.providers[1]!]});
+ const a=f.config.providers[0]!;f.setConfig({...f.config,providers:[{...a,check:{...a.check!,command:['./check.cjs'],scope:{...a.check!.scope!,files:['source.txt']}}},f.config.providers[1]!]});
  expect(await f.run('prepare'),f.err.join('\n')).toBe(0);expect(await f.run('gate'),f.err.join('\n')).toBe(0);
  fs.chmodSync(script,0o644);expect(await f.run('prepare'),f.err.join('\n')).toBe(0);const gate=await f.run('gate');expect(gate).toBe(1);
 },60000);
@@ -302,3 +302,56 @@ it.each(["command", "wiring"])("refuses %s repair failure before validators and 
   await expect(readFile(path.join(f.dir, ".git/validator"))).rejects.toMatchObject({ code: "ENOENT" });
   expect(await f.run("review-context")).toBe(1);
 });
+
+it.each(['files', 'tests', 'memberships', 'dependencyInputs'])('a declared helper executable mode is a scoped input via %s',async selected=>{
+ const f=await fixture();f.env["FAIL"]='0';const fs=await import('node:fs');
+ await mkdir(path.join(f.dir,'helpers'));await writeFile(path.join(f.dir,'helpers/helper.cjs'),`#!${process.execPath}\nprocess.exit(0);\n`);fs.chmodSync(path.join(f.dir,'helpers/helper.cjs'),0o755);
+ const a=f.config.providers[0]!;f.setConfig({...f.config,scopedExecution:{...f.config.scopedExecution!,profiles:[{...f.config.scopedExecution!.profiles[0]!,dependencyInputs:selected==='dependencyInputs'?['helpers/helper.cjs']:[]}]},providers:[{...a,check:{...a.check!,command:[process.execPath,'-e',"if(require('child_process').spawnSync('./helpers/helper.cjs').status!==0)process.exit(7);require('fs').writeFileSync('result-a.json','{}')"],scope:{...a.check!.scope!,files:selected==='files'?['helpers/helper.cjs']:['source.txt'],tests:selected==='tests'?['helpers/helper.cjs']:[],memberships:selected==='memberships'?['helpers/']:[]}}},f.config.providers[1]!]});
+ expect(await f.run('prepare'),f.err.join('\n')).toBe(0);expect(await f.run('gate'),f.err.join('\n')).toBe(0);
+ fs.chmodSync(path.join(f.dir,'helpers/helper.cjs'),0o644);await expect(exec(process.execPath,f.config.providers[0]!.check!.command.slice(1),{cwd:f.dir})).rejects.toMatchObject({code:7});expect(await f.run('prepare'),f.err.join('\n')).toBe(0);const gate=await f.run('gate');expect(gate).toBe(1);
+},60000);
+it('repair cancellation preserves interrupted CLI outcome',async()=>{
+ const f=await fixture();f.setConfig({...f.config,scopedExecution:{...f.config.scopedExecution!,repairCommands:[{id:'repair-wait',command:[process.execPath,'-e','setTimeout(()=>{},10000)'],timeoutMs:20000}]}});
+ const controller=new AbortController();const code=await runCli(['prepare'],{...f.runtime,signal:controller.signal,stdout:(s:string)=>{f.out.push(s);if(s.includes('repairing repair-wait'))controller.abort();}});
+ expect(code).toBe(130);
+},60000);
+it('a declared symlink target is a scoped input',async()=>{
+ const f=await fixture();f.env["FAIL"]='0';const fs=await import('node:fs');await writeFile(path.join(f.dir,'other.txt'),'source');fs.symlinkSync('source.txt',path.join(f.dir,'alias'));
+ const a=f.config.providers[0]!;f.setConfig({...f.config,providers:[{...a,check:{...a.check!,command:[process.execPath,'-e',"if(require('fs').readlinkSync('alias')!=='source.txt')process.exit(7);require('fs').writeFileSync('result-a.json','{}')"],scope:{...a.check!.scope!,files:['alias']}}},f.config.providers[1]!]});
+ expect(await f.run('prepare'),f.err.join('\n')).toBe(0);expect(await f.run('gate'),f.err.join('\n')).toBe(0);
+ fs.unlinkSync(path.join(f.dir,'alias'));fs.symlinkSync('other.txt',path.join(f.dir,'alias'));await expect(exec(process.execPath,f.config.providers[0]!.check!.command.slice(1),{cwd:f.dir})).rejects.toMatchObject({code:7});expect(await f.run('prepare'),f.err.join('\n')).toBe(0);const gate=await f.run('gate');expect(gate).toBe(1);
+},60000);
+
+
+it("historical workspace refuses non-record-neutral narration drift", async () => {
+ const f=await fixture(); f.env["FAIL"]="0"; f.env["API_TOKEN"]="secret"; const a=f.config.providers[0]!;
+ f.setConfig({...f.config,providers:[{...a,check:{...a.check!,scope:{...a.check!.scope!,environment:[{name:"API_TOKEN",kind:"credential"}]}}},f.config.providers[1]!]});
+ expect(await f.run("prepare"),f.err.join("\n")).toBe(0);
+ expect(await f.run("record"),f.err.join("\n")).toBe(0);
+ await f.git("add",".");await f.git("-c","commit.gpgsign=false","commit","-qm","record");
+ const foreign=await mkdtemp(path.join(tmpdir(),"scoped-probe-foreign-"));dirs.push(foreign);
+ await exec("git",["clone","--no-local",f.dir,foreign]);await exec("git",["update-ref","refs/remotes/origin/main",await f.git("rev-parse","origin/main")],{cwd:foreign});
+ await mkdir(path.join(foreign,"docs/reports"),{recursive:true});await writeFile(path.join(foreign,"docs/reports/later.md"),"later narration");await exec("git",["add","."],{cwd:foreign});
+ expect(await runCli(["verify"],{...f.runtime,cwd:foreign}),f.err.join("\n")).toBe(1);
+},60000);
+it.each(["mode", "link"])("portable verification recomputes declared %s metadata", async kind => {
+  const { chmod, symlink, unlink, readdir } = await import("node:fs/promises");
+  const { capturePortableVerificationInputs, withDeliverableIdentity } = await import("@agent-delivery-harness/kernel");
+  const { captureScopedCandidate } = await import("./scoped-candidate.ts");
+  const f = await fixture(); f.env["FAIL"] = "0";
+  await writeFile(path.join(f.dir, "other.txt"), "source");
+  await symlink("source.txt", path.join(f.dir, "bridge"));
+  await symlink("bridge", path.join(f.dir, "alias"));
+  const a = f.config.providers[0]!;
+  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, scope: { ...a.check!.scope!, files: ["alias"] } } }, f.config.providers[1]!] });
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("record"), f.err.join("\n")).toBe(0); await f.git("add", ".");
+  expect(await f.run("verify"), f.err.join("\n")).toBe(0);
+  if (kind === "mode") await chmod(path.join(f.dir, "source.txt"), 0o755);
+  else { await unlink(path.join(f.dir, "bridge")); await symlink("other.txt", path.join(f.dir, "bridge")); }
+  const recordRoot = path.join(f.dir, path.dirname(f.config.deliveryRecordPath));
+  const record = JSON.parse(await readFile(path.join(recordRoot, (await readdir(recordRoot))[0]!), "utf8"));
+  const capture = await captureScopedCandidate({ rootDir: f.dir, config: f.config, workspaceId: "foreign-verifier", computeIdentity: withDeliverableIdentity() });
+  expect(capture.ok).toBe(true); if (!capture.ok) throw new Error("capture failed");
+  await expect(capturePortableVerificationInputs(f.dir, f.config, capture.candidate, record)).rejects.toMatchObject({ blockers: [expect.objectContaining({ code: "portable_scoped_inputs_invalid" })] });
+}, 60000);

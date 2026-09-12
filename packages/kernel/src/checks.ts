@@ -15,6 +15,8 @@ export interface ScopedInputCapturePorts {
   /** Enumerate and read the same pinned snapshot, never the authoring checkout. */
   readonly listFiles: () => Promise<readonly string[]>;
   readonly readFile: (repoPath: string) => Promise<Uint8Array | null>;
+  /** Prepared Git metadata matters for executable helpers and inspected links. */
+  readonly readMetadata?: (repoPath: string) => Promise<import("./portable-inputs.ts").CandidateTreeInputMetadata>;
   readonly command: readonly string[];
   readonly timeoutMs: number;
   readonly runtimeDigest: string;
@@ -30,7 +32,7 @@ export interface ScopedInputCapture {
   readonly version: "scoped-inputs/1";
   readonly inputDigest: string;
   readonly reusable: boolean;
-  readonly files: readonly { readonly path: string; readonly sha256: string | null }[];
+  readonly files: readonly { readonly path: string; readonly sha256: string | null; readonly metadata?: import("./portable-inputs.ts").CandidateTreeInputMetadata }[];
   readonly memberships: readonly { readonly prefix: string; readonly paths: readonly string[] }[];
   readonly environment: readonly { readonly name: string; readonly kind: "flag" | "credential"; readonly present: boolean; readonly value?: string; readonly identity?: string | null }[];
 }
@@ -51,7 +53,7 @@ export async function captureScopedCheckInputs(definition: ScopedCheckDefinition
     const bytes = await ports.readFile(file);
     if (definition.tests.includes(file) && bytes === null) throw new Error("Required test is absent");
     if ((bytes !== null) !== inventory.includes(file)) throw new Error("Snapshot membership and bytes disagree");
-    files.push({ path: file, sha256: bytes === null ? null : sha256Hex(bytes) });
+    files.push({ path: file, sha256: bytes === null ? null : sha256Hex(bytes), ...(ports.readMetadata ? { metadata: await ports.readMetadata(file) } : {}) });
   }
   const environment: ScopedInputCapture["environment"] = [...definition.environment].sort((a, b) => a.name.localeCompare(b.name)).map(entry => {
     const value = ports.environment[entry.name];

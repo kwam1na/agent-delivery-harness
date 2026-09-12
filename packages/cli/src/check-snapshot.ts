@@ -55,7 +55,7 @@ export function executionPath(root: string, value: string): string {
   return value.split(path.delimiter).filter(p => p && path.isAbsolute(p) && !inside(root, p) && !p.split(path.sep).includes("node_modules")).join(path.delimiter) || "/usr/bin:/bin";
 }
 export async function createCheckSnapshot(input: SnapshotRequest): Promise<CheckSnapshot> {
-  const rootDir = await mkdtemp(path.join(tmpdir(), "delivery-check-"));
+  const rootDir = await realpath(await mkdtemp(path.join(tmpdir(), "delivery-check-")));
   const cleanEnv = { ...input.environment, PATH: executionPath(input.rootDir, input.environment["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" };
   const git = async (...args: string[]) => (await exec("git", args, { cwd: rootDir, env: cleanEnv, maxBuffer: 128 * 1024 * 1024, ...(input.signal ? { signal: input.signal } : {}) })).stdout.trim();
   const cleanup = async () => {

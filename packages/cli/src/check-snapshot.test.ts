@@ -91,3 +91,12 @@ it.each(["index", "HEAD", "candidate", "base"])("rejects independent %s drift wi
     await expect(snapshot.verify()).rejects.toMatchObject({ code: "check_snapshot_drift" });
   } finally { await snapshot.cleanup(); }
 });
+it("accepts internal source and private dependency-bin symlinks under the default temporary root", async () => {
+  const f = await fixture(); await symlink("source.txt", path.join(f.root, "alias")); await f.git("add", "alias"); f.candidate.treeSha = await f.git("write-tree");
+  const snapshot = await createCheckSnapshot({ rootDir: f.root, candidate: f.candidate, outputs: [], environment: {}, dependencies: { command: [process.execPath, "-e", "const fs=require('fs');fs.mkdirSync('node_modules/.bin',{recursive:true});fs.writeFileSync('node_modules/tool','tool');fs.symlinkSync('../tool','node_modules/.bin/tool')"], timeoutMs: 5000 } });
+  try {
+    expect(await readFile(path.join(snapshot.rootDir, "alias"), "utf8")).toBe("prepared");
+    expect(await readFile(path.join(snapshot.rootDir, "node_modules/.bin/tool"), "utf8")).toBe("tool");
+    await expect(snapshot.verify()).resolves.toBeUndefined();
+  } finally { await snapshot.cleanup(); }
+});

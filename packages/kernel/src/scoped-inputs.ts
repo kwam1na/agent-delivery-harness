@@ -2,7 +2,8 @@
 import { captureScopedCheckInputs } from "./checks.ts";
 import { digestCanonical, sha256Hex } from "./digest.ts";
 import type { HarnessConfig, ProviderRegistration } from "./config.ts";
-import { readWorkflowRelease, type ReviewInputReader } from "./review-inputs.ts";
+import { readWorkflowRelease } from "./review-inputs.ts";
+import type { CandidateTreeInputReader } from "./portable-inputs.ts";
 import { BlockedError, createBlocker } from "./blockers.ts";
 const invalid = (code: string, summary: string) => new BlockedError([createBlocker({ code, source: { kind: "command", id: "delivery-harness.scoped-inputs" }, summary,
   remediations: [{ id: "repair-scoped-inputs", kind: "manual_action", summary: "Restore the declared dependency inputs or correct the execution profile, then prepare again." }] })]);
@@ -12,7 +13,7 @@ export interface ScopedRuntimeObservation {
   readonly flags: Readonly<Record<string, string>>;
   readonly credentials: Readonly<Record<string, { readonly present: boolean; readonly identity: string | null }>>;
 }
-export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: ReviewInputReader, observation: ScopedRuntimeObservation) {
+export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: CandidateTreeInputReader, observation: ScopedRuntimeObservation) {
   const scope = provider.check?.scope;
   const profile = config.scopedExecution?.profiles.find(p => p.id === scope?.profile);
   if (!scope || !profile || observation.version !== "scoped-runtime/1" || !/^[a-f0-9]{64}$/.test(observation.runtimeDigest)) throw invalid("check_identity_invalid", "Unsupported scoped execution identity.");
@@ -29,7 +30,7 @@ export async function scopedCheckIdentity(config: HarnessConfig, provider: Provi
   for (const file of [...profile.dependencyInputs].sort()) {
     const bytes = await read(file);
     if (bytes === null) throw invalid("check_dependency_input_missing", `Required dependency input ${file} is missing from the prepared tree.`);
-    dependencyInputs.push({ file, sha256: sha256Hex(bytes) });
+    dependencyInputs.push({ file, sha256: sha256Hex(bytes), metadata: await read.metadata(file) });
   }
   const dependencyDigest = digestCanonical({ inputs: dependencyInputs, setup: profile.dependencies ?? null });
   const releaseDigest = digestCanonical(await readWorkflowRelease(read));
@@ -38,7 +39,7 @@ export async function scopedCheckIdentity(config: HarnessConfig, provider: Provi
     mutableOutputs: profile.mutableOutputs.filter(m => provider.check!.outputs?.some(o => m.endsWith("/") ? o.startsWith(m) : o === m)),
     credentialIdentities: Object.fromEntries(credentials.filter(name => profile.credentialIdentities[name] !== undefined).map(name => [name, profile.credentialIdentities[name]])) };
   const profileDigest = digestCanonical({ profile: relevantProfile, runtimeDigest: observation.runtimeDigest, dependencyDigest, releaseDigest, policyDigest });
-  const capture = await captureScopedCheckInputs(scope, { listFiles: async () => inventory, readFile: read, command: provider.check!.command, timeoutMs: provider.check!.timeoutMs,
+  const capture = await captureScopedCheckInputs(scope, { listFiles: async () => inventory, readFile: read, readMetadata: read.metadata, command: provider.check!.command, timeoutMs: provider.check!.timeoutMs,
     runtimeDigest: observation.runtimeDigest, dependencyDigest, releaseDigest, policyDigest, environment, credentialIdentity: name => observation.credentials[name]?.identity ?? null });
   return { ...capture, profileDigest };
 }

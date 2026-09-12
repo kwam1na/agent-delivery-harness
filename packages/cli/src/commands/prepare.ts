@@ -55,7 +55,8 @@ export const prepareCommand: CommandDescriptor = {
             context.write(`repairing ${repair.id}`);
             const result = await createExecPort().run({ command: repair.command[0], args: repair.command.slice(1), cwd: context.rootDir,
               env: Object.fromEntries(Object.entries(context.env).filter((e): e is [string, string] => e[1] !== undefined)), timeoutMs: repair.timeoutMs, maxBuffer: 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) });
-            if (result.code !== 0 || context.signal?.aborted) throw new CheckSnapshotError("preparation_repair_failed", `Source repair ${repair.id} failed; fix it and prepare again.`);
+            if (context.signal?.aborted) throw new CliInterruption();
+            if (result.code !== 0) throw new CheckSnapshotError("preparation_repair_failed", `Source repair ${repair.id} failed; fix it and prepare again.`);
           }
           if (beforeRepair !== await computePreparationFingerprint(context.rootDir, context.config, wiring.storageOptions)) throw new CheckSnapshotError("preparation_candidate_changed", "Repair changed preparation wiring; reload the configuration and prepare again.");
         }

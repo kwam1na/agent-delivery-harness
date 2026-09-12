@@ -16,7 +16,9 @@ attempt history govern subsequent gate execution.
 A private Git repository receives the prepared tree and pinned history by object
 transfer. Its deterministic synthetic HEAD contains staged and new source, with
 the original HEAD retained separately. Explicit base/candidate refs are injected
-for changed-file checks. Source and dependencies never link to the authoring
+for changed-file checks. The shared tree reader binds declared input bytes,
+executable modes and symlink target chains for execution and portable verification.
+Source and dependencies never link to the authoring
 checkout. Dependencies install privately, prepared source is checked for drift,
 and the installed tree is hashed and checked after execution. Compatible checks
 share a snapshot; failed or changed snapshots are discarded before siblings run.

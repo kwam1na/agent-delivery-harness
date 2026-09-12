@@ -17,7 +17,12 @@ import { retainedCheckOutput } from "./validator/checks-passed.ts";
 import { readCompiledRepositoryPolicy, type ReviewInputReader } from "./review-inputs.ts";
 import { isSafeRelativePath } from "./validator/envelope.ts";
 
-export async function candidateTreeEvidenceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<ReviewInputReader> {
+export interface CandidateTreeInputMetadata {
+  readonly mode: string | null;
+  readonly links: readonly { readonly path: string; readonly target: string }[];
+}
+export type CandidateTreeInputReader = ReviewInputReader & { metadata(repoPath: string): Promise<CandidateTreeInputMetadata> };
+export async function candidateTreeEvidenceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<CandidateTreeInputReader> {
   const refusal = (message: string): never => { throw new BlockedError([portableBlocker("portable_tree_unreadable", message)]); };
   const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", treeSha], { cwd: rootDir });
   if (listing.exitCode !== 0) refusal("The target candidate tree cannot be enumerated.");
@@ -32,9 +37,10 @@ export async function candidateTreeEvidenceReader(rootDir: string, treeSha: stri
     if (actual !== sha) refusal("The target-tree reader did not preserve the exact blob bytes.");
     return bytes;
   };
-  return async (requested) => {
+  const resolve = async (requested: string) => {
     if (!isSafeRelativePath(requested)) refusal("An evidence input is not a safe repository-relative path.");
     let current = requested;
+    const links: { path: string; target: string }[] = [];
     for (let depth = 0; depth < 32; depth += 1) {
       const segments = current.split("/");
       let redirected = false;
@@ -43,6 +49,7 @@ export async function candidateTreeEvidenceReader(rootDir: string, treeSha: stri
         const entry = entries.get(prefix);
         if (entry?.mode !== "120000") continue;
         const target = (await readBlob(entry.objectSha)).toString("utf8");
+        links.push({ path: prefix, target });
         if (path.posix.isAbsolute(target) || target.includes("\\") || target.includes("\0")) refusal("An evidence input symlink escapes the repository.");
         current = path.posix.normalize(path.posix.join(path.posix.dirname(prefix), target, ...segments.slice(index + 1)));
         if (!isSafeRelativePath(current)) refusal("An evidence input symlink escapes the repository.");
@@ -51,12 +58,19 @@ export async function candidateTreeEvidenceReader(rootDir: string, treeSha: stri
       }
       if (redirected) continue;
       const entry = entries.get(current);
-      if (entry === undefined) return null;
+      if (entry === undefined) return { entry, links };
       if (!/^100(?:644|755)$/.test(entry.mode)) refusal("An evidence input is not a regular committed file.");
-      return readBlob(entry.objectSha);
+      return { entry, links };
     }
     return refusal("An evidence input symlink chain is cyclic or too deep.");
   };
+  return Object.assign(async (requested: string) => {
+    const { entry } = await resolve(requested);
+    return entry ? readBlob(entry.objectSha) : null;
+  }, { metadata: async (requested: string): Promise<CandidateTreeInputMetadata> => {
+    const { entry, links } = await resolve(requested);
+    return { mode: entry?.mode ?? null, links };
+  } });
 }
 
 export async function capturePortableVerificationInputs(rootDir: string, config: HarnessConfig, candidate: CapturedCandidate, record: DeliveryRecord, run: CandidateCommandRunner = runGitCommand) {
