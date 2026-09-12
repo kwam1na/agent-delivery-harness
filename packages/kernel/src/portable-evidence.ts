@@ -90,7 +90,12 @@ export function verifyPortableEvidence(config: HarnessConfig, portable: Portable
   const blockers: Blocker[] = [];
   if (!isRecord(portable) || portable.version !== "portable-evidence/1" || Object.keys(portable).sort().join(",") !== "artifacts,context,manifest,version" ||
       Buffer.byteLength(JSON.stringify(portable), "utf8") > MAX_PORTABLE_EVIDENCE_BYTES) return [portableBlocker("portable_evidence_invalid", "The portable evidence is missing, unsupported or oversized.")];
-  if (!isRecord(portable.context) || digestCanonical(portable.context) !== digestCanonical(expected)) blockers.push(portableBlocker("portable_context_mismatch", "Evidence policy, wiring, compatible release or resolved reviewer inputs changed."));
+  const manifestValue = portable.manifest;
+  const manifestProvider = isRecord(manifestValue) && isRecord(manifestValue["provider"]) ? manifestValue["provider"]["id"] : undefined;
+  const scoped = isRecord(manifestValue) && Array.isArray(manifestValue["claims"]) && manifestValue["claims"].length > 0 &&
+    config.providers.some(p => p.id === manifestProvider && p.check?.scope !== undefined) &&
+    manifestValue["claims"].every(c => isRecord(c) && c["payloadSpec"] === "checks.passed/1" && isRecord(c["payload"]) && isRecord(c["payload"]["binding"]) && c["payload"]["binding"]["scopedInputDigest"] !== undefined);
+  if (!isRecord(portable.context) || (scoped ? digestCanonical(portable.context.release) !== digestCanonical(expected.release) : digestCanonical(portable.context) !== digestCanonical(expected))) blockers.push(portableBlocker("portable_context_mismatch", "Evidence policy, wiring, compatible release or resolved reviewer inputs changed."));
   const read = portableArtifactContents(portable.artifacts);
   blockers.push(...read.blockers);
   const declared = declaredArtifacts(portable.manifest);

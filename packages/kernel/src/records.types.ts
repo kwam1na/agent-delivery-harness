@@ -62,6 +62,35 @@ export interface CheckBinding {
   readonly policyDigest: string;
   readonly wiringFingerprint: string;
   readonly outputsDigest: string;
+  /** Present only for opted-in scoped checks; all three fields travel together. */
+  readonly scopedInputDigest?: string;
+  readonly scopedAttemptDigest?: string;
+  readonly scopedProfileDigest?: string;
+}
+
+/** Allocated before execution by the executor's durable generation fence. */
+export interface ScopedCheckAttempt {
+  readonly version: "scoped-attempt/1";
+  readonly providerId: string;
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly inputDigest: string;
+  readonly profileDigest: string;
+  readonly status: "running" | "passed" | "failed" | "interrupted";
+  readonly origin: { readonly candidate: RecordCandidateBinding; readonly runId: string };
+}
+
+/** Current selection is separate from result identity and must be recomputed on base movement. */
+export interface ScopedCheckPlan {
+  readonly version: "scoped-plan/1";
+  readonly candidate: RecordCandidateBinding;
+  readonly selectionDigest: string;
+  readonly checks: Readonly<Record<string, {
+    readonly inputDigest: string;
+    readonly profileDigest: string;
+    readonly reusable: boolean;
+    readonly attempts: readonly ScopedCheckAttempt[];
+  }>>;
 }
 
 export interface EvidenceResolution {

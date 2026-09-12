@@ -1019,6 +1019,10 @@ export {
 
 export { captureCheckBindings, captureCheckOutputs, captureCheckOutputSnapshots, computeCheckWiringFingerprint, type CheckBindingOptions } from "./checks.ts";
 export type { CheckBinding } from "./records.types.ts";
+export type { ScopedCheckDefinition } from "./config.ts";
+export type { ScopedCheckAttempt, ScopedCheckPlan } from "./records.types.ts";
+export { captureScopedCheckInputs, type ScopedInputCapture, type ScopedInputCapturePorts } from "./checks.ts";
+export { selectScopedCheckAttempt } from "./evaluator.ts";
 export { retainedCheckOutput } from "./validator/checks-passed.ts";
 export { readCompiledRepositoryPolicy, resolveReviewCharters, readWorkflowRelease, ReviewInputError, type ResolvedCharter, type ReviewInputReader } from "./review-inputs.ts";
 

@@ -73,6 +73,19 @@ import { digestCanonical } from "./digest.ts";
 import type { ExecutionContext } from "./context.ts";
 import type { EvidenceRecord, EvidenceResolution, QuarantinedRecord, RecordCandidateBinding, WaiverScope, WaiverResolution } from "./records.types.ts";
 
+/** Completion order never overrides allocation order; ambiguous generations fail closed. */
+export function selectScopedCheckAttempt(providerId: string, inputDigest: string, profileDigest: string, attempts: readonly import("./records.types.ts").ScopedCheckAttempt[]): import("./records.types.ts").ScopedCheckAttempt | undefined {
+  const relevant = attempts.filter(a => a.providerId === providerId && a.inputDigest === inputDigest && a.profileDigest === profileDigest);
+  const generations = new Set<number>();
+  const ids = new Set<string>();
+  for (const a of relevant) {
+    if (a.version !== "scoped-attempt/1" || !Number.isSafeInteger(a.generation) || a.generation < 1 || !a.attemptId || !a.origin?.runId ||
+      !["running", "passed", "failed", "interrupted"].includes(a.status) || generations.has(a.generation) || ids.has(a.attemptId)) throw new Error("Invalid or ambiguous scoped attempt generation");
+    generations.add(a.generation); ids.add(a.attemptId);
+  }
+  return [...relevant].sort((a, b) => b.generation - a.generation)[0];
+}
+
 /**
  * The five kinds a config may permit, plus the one it cannot. Kept in this
  * order so the coherence check against `RESOLUTION_KINDS` reads as an equality
@@ -559,7 +572,11 @@ function scanEvidence(input: EvaluateGateInput, obligation: ObligationPolicy): E
       );
       continue;
     }
-    if (!isRecordFreshForCandidate(input.config, record.candidateBinding, input.candidate)) {
+    const check = input.config.providers.find(provider => provider.id === providerId)?.check;
+    const expectedScoped = input.checkBindings?.[providerId];
+    const scoped = check?.scope !== undefined && expectedScoped?.scopedInputDigest !== undefined && record.resolution.checkBinding?.scopedInputDigest !== undefined &&
+      record.candidateBinding.workspaceId === input.candidate.workspaceId && record.candidateBinding.identityToken === input.candidate.deliverable.identity;
+    if (!scoped && !isRecordFreshForCandidate(input.config, record.candidateBinding, input.candidate)) {
       invalid.push(
         finding(obligation, "stale_evidence", `Record ${record.recordId} is bound to a different candidate than the one under evaluation.`, {
           providerId,
@@ -571,7 +588,7 @@ function scanEvidence(input: EvaluateGateInput, obligation: ObligationPolicy): E
     if (input.config.providers.find(provider => provider.id === providerId)?.check !== undefined) {
       const expected = input.checkBindings?.[providerId];
       if (expected === undefined || record.resolution.checkBinding === undefined ||
-          Object.keys(expected).some(key => expected[key as keyof typeof expected] !== record.resolution.checkBinding?.[key as keyof typeof expected])) continue;
+          digestCanonical(expected) !== digestCanonical(record.resolution.checkBinding)) continue;
     }
     fresh.push(record);
   }

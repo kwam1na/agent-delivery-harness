@@ -201,7 +201,28 @@ export interface ProviderRegistration {
   /** Optional stdio provider-rail executable, expressed as argv and never a shell string. */
   readonly command?: NonEmptyTuple<string>;
   /** Deterministic bounded check executed by the product, not a provider protocol. */
-  readonly check?: { readonly command: NonEmptyTuple<string>; readonly timeoutMs: number; readonly outputs?: readonly string[] };
+  readonly check?: { readonly command: NonEmptyTuple<string>; readonly timeoutMs: number; readonly outputs?: readonly string[]; readonly scope?: ScopedCheckDefinition };
+}
+
+/** Explicit opt-in. Lists are repository-relative; memberships are directory prefixes. */
+export interface ScopedCheckDefinition {
+  readonly version: "scoped-check/1";
+  readonly files: readonly string[];
+  readonly memberships: readonly string[];
+  readonly tests: readonly string[];
+  readonly cwd: string;
+  readonly profile: string;
+  readonly environment: readonly { readonly name: string; readonly kind: "flag" | "credential" }[];
+}
+
+export function isScopedCheckDefinition(value: unknown): value is ScopedCheckDefinition {
+  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "cwd,environment,files,memberships,profile,tests,version" || value["version"] !== "scoped-check/1") return false;
+  const safePath = (p: unknown): p is string => typeof p === "string" && p.length > 0 && !p.includes("\\") && !p.includes("\0") && !p.startsWith("/") && !p.split("/").some(v => v === "." || v === ".." || v === "");
+  const paths = (v: unknown, prefix = false) => Array.isArray(v) && new Set(v).size === v.length && v.every(p => safePath(prefix && typeof p === "string" && p.endsWith("/") ? p.slice(0, -1) : p) && (!prefix || p.endsWith("/")));
+  const env = value["environment"];
+  return paths(value["files"]) && paths(value["tests"]) && paths(value["memberships"], true) &&
+    (value["cwd"] === "." || safePath(value["cwd"])) && typeof value["profile"] === "string" && /^[a-zA-Z0-9_.-]+$/.test(value["profile"]) &&
+    Array.isArray(env) && env.every(e => isRecord(e) && Object.keys(e).sort().join(",") === "kind,name" && typeof e["name"] === "string" && /^[A-Z_][A-Z0-9_]*$/.test(e["name"]) && (e["kind"] === "flag" || e["kind"] === "credential")) && new Set(env.map(e => e.name)).size === env.length;
 }
 
 export interface PreparationCommand {
@@ -967,13 +988,17 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
           const value = entry["check"];
           if (!isRecord(value)) { findings.add("config_invalid_member", `${at}.check`, "must be an object"); sound = false; }
           else {
-            checkClosed(findings, `${at}.check`, value, ["command", "timeoutMs", "outputs"]);
+            checkClosed(findings, `${at}.check`, value, ["command", "timeoutMs", "outputs", "scope"]);
             const argv = value["command"], timeout = value["timeoutMs"], outputs = value["outputs"];
             if (!Array.isArray(argv) || argv.length === 0 || typeof argv[0] !== "string" || argv[0].trim().length === 0 || argv.some(v => typeof v !== "string" || v.includes("\0")) ||
                 typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 3600000 ||
                 (outputs !== undefined && (!Array.isArray(outputs) || outputs.length > 64 || new Set(outputs).size !== outputs.length || outputs.some(v => typeof v !== "string" || v.length === 0 || v.startsWith("/") || v.includes("\\") || v.split("/").some((part: string) => part === ".." || part === "." || part === ""))))) {
               findings.add("config_invalid_member", `${at}.check`, "requires non-empty argv, timeoutMs from 1 to 3600000 and at most 64 unique safe relative output paths"); sound = false;
             } else check = { command: argv as unknown as NonEmptyTuple<string>, timeoutMs: timeout, ...(outputs === undefined ? {} : { outputs: outputs as string[] }) };
+            if (value["scope"] !== undefined) {
+              if (!isScopedCheckDefinition(value["scope"])) { findings.add("config_invalid_member", `${at}.check.scope`, "requires the supported scoped-check/1 contract"); sound = false; }
+              else if (check !== undefined) check = { ...check, scope: value["scope"] };
+            }
             if (command !== undefined) { findings.add("config_invalid_member", at, "command and check are mutually exclusive"); sound = false; }
           }
         }

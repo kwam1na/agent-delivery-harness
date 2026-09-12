@@ -103,6 +103,7 @@ export interface AdmissionInput {
 }
 
 export interface AdmissionOptions extends RecordStorageOptions {
+  readonly scopedPlan?: import("./records.types.ts").ScopedCheckPlan;
   /** How the candidate is observed. Injected: the adapter owns no repository dependency. */
   readonly captureCandidate: CaptureCandidate;
   /** The reviewable-change projection for the captured candidate. Injected for the same reason. */
