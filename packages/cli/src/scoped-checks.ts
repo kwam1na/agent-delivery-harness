@@ -1,6 +1,6 @@
 /** Invocation-scoped execution coordinator; durable truth remains per-check evidence. */
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { captureCheckBindings, captureCheckOutputSnapshots, candidateTreeEvidenceReader, createExecPort, digestCanonical, resolveRecordStorage, runGitCommand, scopedCheckIdentity, selectScopedCheckAttempt, sha256Hex, submitManifest,
   type CandidateBinding, type CapturedCandidate, type ProviderRegistration, type ScopedCheckPlan, type ScopedRuntimeObservation, type RecordCandidateBinding } from "@agent-delivery-harness/kernel";
@@ -10,9 +10,32 @@ import { CheckSnapshotError, createCheckSnapshot, executionPath, type CheckSnaps
 export function scopedCandidate(candidate: CandidateBinding): RecordCandidateBinding {
   return { treeSha: candidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId };
 }
-async function executableIdentity(command: string, root: string, searchPath: string) {
+async function executableIdentity(command: string, root: string, searchPath: string, cwd: string, treeSha: string, read: (file: string) => Promise<Uint8Array | null>) {
+  if (command.includes(path.sep) && !path.isAbsolute(command)) {
+    const file = path.posix.normalize(path.posix.join(cwd, command));
+    if (file === ".." || file.startsWith("../")) throw new CheckSnapshotError("check_runtime_unavailable", "A relative execution tool must stay inside the prepared tree.");
+    const bytes = await read(file);
+    if (bytes === null) throw new CheckSnapshotError("check_runtime_unavailable", "A relative execution tool is missing from the prepared tree.");
+    // Execution permission is an input even when executable bytes do not change.
+    let target = file;
+    for (let depth = 0; depth < 40; depth++) {
+      const row = await runGitCommand(["git", "ls-tree", treeSha, "--", target], { cwd: root });
+      const mode = row.stdout.slice(0, 6);
+      if (mode === "100644" || mode === "100755") return { command, sha256: sha256Hex(bytes), mode };
+      if (row.exitCode !== 0 || mode !== "120000") break;
+      const link = await runGitCommand(["git", "show", `${treeSha}:${target}`], { cwd: root });
+      if (link.exitCode !== 0) break;
+      target = path.posix.normalize(path.posix.join(path.posix.dirname(target), link.stdout));
+    }
+    throw new CheckSnapshotError("check_runtime_unavailable", "A relative execution tool must resolve to a prepared regular file.");
+  }
   const candidates = command.includes(path.sep) ? [path.resolve(root, command)] : searchPath.split(path.delimiter).map(p => path.join(p, command));
-  for (const file of candidates) { try { await access(file); return { command, sha256: sha256Hex(await readFile(file)) }; } catch { /* try next PATH entry */ } }
+  for (const file of candidates) {
+    try { await access(file); } catch { continue; }
+    const relative = path.relative(await realpath(root), await realpath(file));
+    if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) throw new CheckSnapshotError("check_runtime_author_path", "Repository execution tools must use a relative command so they run from the private prepared tree.");
+    return { command, sha256: sha256Hex(await readFile(file)), mode: (await stat(file)).mode & 0o111 };
+  }
   throw new CheckSnapshotError("check_runtime_unavailable", "A declared execution tool cannot be resolved and bound.");
 }
 export class ScopedChecks {
@@ -39,10 +62,10 @@ export class ScopedChecks {
     for (const provider of providers) {
       const scope = provider.check!.scope!, profile = context.config.scopedExecution.profiles.find(p => p.id === scope.profile)!;
       if (!profile) throw new CheckSnapshotError("scoped_executor_required", "A selected execution profile is unsupported.");
-      if (profile.mutableOutputs.some(o => inventory.some(f => o.endsWith("/") ? f.startsWith(o) : f === o))) throw new CheckSnapshotError("check_output_overlaps_source", "Mutable outputs overlap prepared source.");
+      if (profile.mutableOutputs.some(o => inventory.some(f => f === o.replace(/\/$/, "") || f.startsWith(`${o.replace(/\/$/, "")}/`)))) throw new CheckSnapshotError("check_output_overlaps_source", "Mutable outputs overlap prepared source.");
       if ((provider.check!.outputs ?? []).some(o => !profile.mutableOutputs.some(m => m.endsWith("/") ? o.startsWith(m) : o === m))) throw new CheckSnapshotError("check_output_undeclared", "Every retained output must be declared mutable in its profile.");
       const searchPath = executionPath(context.rootDir, context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin");
-      const tools = await Promise.all([process.execPath, provider.check!.command[0], ...(profile.dependencies ? [profile.dependencies.command[0]] : [])].map(c => executableIdentity(c, context.rootDir, searchPath)));
+      const tools = await Promise.all([[process.execPath, "."], [provider.check!.command[0], scope.cwd], ...(profile.dependencies ? [[profile.dependencies.command[0], "."]] : [])].map(([c, cwd]) => executableIdentity(c!, context.rootDir, searchPath, cwd!, candidate.treeSha, read)));
       const observation: ScopedRuntimeObservation = { version: "scoped-runtime/1", runtimeDigest: digestCanonical({ platform: process.platform, arch: process.arch, tools, searchPath }),
         flags: Object.fromEntries(scope.environment.filter(e => e.kind === "flag" && context.env[e.name] !== undefined).map(e => [e.name, context.env[e.name]!])),
         credentials: Object.fromEntries(scope.environment.filter(e => e.kind === "credential").map(e => {
@@ -113,6 +136,8 @@ export class ScopedChecks {
         this.snapshots.set(key, snapshot);
       }
       await snapshot.verify();
+      // A sibling or dependency setup cannot supply this command's result.
+      for (const output of check.outputs ?? []) await rm(path.join(snapshot.rootDir, output), { recursive: true, force: true });
       const injected = Object.fromEntries(check.scope!.environment.filter(e => this.context.env[e.name] !== undefined).map(e => [e.name, this.context.env[e.name]!]));
       this.context.write(`checking ${provider.id}: attempt ${attempt.attemptId}`);
       const commandHome = path.join(snapshot.rootDir, ".git/commands", attempt.attemptId, "home"), commandTemp = path.join(snapshot.rootDir, ".git/commands", attempt.attemptId, "tmp");

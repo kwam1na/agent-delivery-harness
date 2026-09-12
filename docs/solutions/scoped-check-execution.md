@@ -8,7 +8,8 @@ revision IDs. Existing configurations keep the strict execution path.
 
 Preparation captures scoped source through a temporary Git index. This includes
 untracked source and working edits without changing the author's index. Declared
-preparation commands run first; mechanical scoped checks then succeed before the
+`scopedExecution.repairCommands` run before capture. Existing preparation commands
+remain validators and source drift during them blocks the receipt. Mechanical scoped checks then succeed before the
 preparation receipt is published. The same per-check identity and retained
 attempt history govern subsequent gate execution.
 

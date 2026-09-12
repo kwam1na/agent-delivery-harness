@@ -71,12 +71,12 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
   const compiledPolicy = await readCompiledRepositoryPolicy(read);
   let scopedPlan: ScopedCheckPlan | undefined;
   let bindingCandidate = candidate;
-  if (config.providers.some(p => p.check?.scope) && record.candidateBinding.treeSha !== candidate.treeSha) {
+  if (config.providers.some(p => p.check?.scope)) {
     const validationConfig = { ...config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: config.recordNeutral };
     const [recorded, current] = await Promise.all([record.candidateBinding.treeSha, candidate.treeSha].map(treeSha => computeDeliverableIdentity({ rootDir, treeSha, config: validationConfig }, { run })));
     // Non-reusable executions may be verified after their record transport is
     // staged. This proves strict byte equivalence; it never grants gate reuse.
-    if (recorded === current) bindingCandidate = { ...candidate, treeSha: record.candidateBinding.treeSha };
+    if (recorded === current && record.candidateBinding.baseRef === candidate.base.ref && record.candidateBinding.baseTipSha === candidate.base.tipSha && record.candidateBinding.mergeBaseSha === candidate.base.mergeBaseSha) bindingCandidate = { ...candidate, treeSha: record.candidateBinding.treeSha, workspaceId: record.candidateBinding.workspaceId };
   }
   const scopedProviders = config.providers.filter(p => p.check?.scope);
   if (scopedProviders.length) {
@@ -96,7 +96,7 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
         checks[provider.id] = { inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, reusable: identity.reusable, attempts: [retained.attempt] };
       } catch { throw new BlockedError([portableBlocker("portable_scoped_inputs_invalid", "Retained scoped inputs do not match the selected source, profile or policy.")]); }
     }
-    scopedPlan = { version: "scoped-plan/1", candidate: { treeSha: bindingCandidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId },
+    scopedPlan = { version: "scoped-plan/1", candidate: { treeSha: bindingCandidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: bindingCandidate.workspaceId },
       selectionDigest: digestCanonical(scopedProviders.map(p => ({ id: p.id, check: p.check })).sort((a, b) => a.id.localeCompare(b.id))), checks };
   }
   const checkBindings = await captureCheckBindings(rootDir, config, bindingCandidate, { readWiring, readReleaseInputs: read, ...(scopedPlan ? { scopedPlan } : {}),

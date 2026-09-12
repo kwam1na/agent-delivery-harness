@@ -78,3 +78,16 @@ it("reports cleanup failure without hiding ownership of the retained snapshot", 
   try { await expect(snapshot.cleanup()).rejects.toMatchObject({ code: "check_snapshot_cleanup_failed" }); }
   finally { removal.fail = ""; await snapshot.cleanup(); }
 });
+it.each(["index", "HEAD", "candidate", "base"])("rejects independent %s drift with unchanged source bytes", async member => {
+  const f = await fixture();
+  const snapshot = await createCheckSnapshot({ rootDir: f.root, candidate: f.candidate, outputs: [], environment: {} });
+  try {
+    const git = async (...args: string[]) => (await exec("git", args, { cwd: snapshot.rootDir })).stdout.trim();
+    const head = await git("rev-parse", "HEAD");
+    if (member === "index") await git("read-tree", f.candidate.headSha);
+    else await git("update-ref", member === "candidate" ? "refs/delivery/candidate" : member === "base" ? "refs/delivery/base" : "HEAD", member === "base" ? head : f.candidate.headSha);
+    expect(await readFile(path.join(snapshot.rootDir, "source.txt"), "utf8")).toBe("prepared");
+    expect(await readFile(path.join(snapshot.rootDir, "new.txt"), "utf8")).toBe("staged new source");
+    await expect(snapshot.verify()).rejects.toMatchObject({ code: "check_snapshot_drift" });
+  } finally { await snapshot.cleanup(); }
+});

@@ -3,6 +3,9 @@ import { captureScopedCheckInputs } from "./checks.ts";
 import { digestCanonical, sha256Hex } from "./digest.ts";
 import type { HarnessConfig, ProviderRegistration } from "./config.ts";
 import { readWorkflowRelease, type ReviewInputReader } from "./review-inputs.ts";
+import { BlockedError, createBlocker } from "./blockers.ts";
+const invalid = (code: string, summary: string) => new BlockedError([createBlocker({ code, source: { kind: "command", id: "delivery-harness.scoped-inputs" }, summary,
+  remediations: [{ id: "repair-scoped-inputs", kind: "manual_action", summary: "Restore the declared dependency inputs or correct the execution profile, then prepare again." }] })]);
 export interface ScopedRuntimeObservation {
   readonly version: "scoped-runtime/1";
   readonly runtimeDigest: string;
@@ -12,20 +15,20 @@ export interface ScopedRuntimeObservation {
 export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: ReviewInputReader, observation: ScopedRuntimeObservation) {
   const scope = provider.check?.scope;
   const profile = config.scopedExecution?.profiles.find(p => p.id === scope?.profile);
-  if (!scope || !profile || observation.version !== "scoped-runtime/1" || !/^[a-f0-9]{64}$/.test(observation.runtimeDigest)) throw new Error("Unsupported scoped execution identity");
+  if (!scope || !profile || observation.version !== "scoped-runtime/1" || !/^[a-f0-9]{64}$/.test(observation.runtimeDigest)) throw invalid("check_identity_invalid", "Unsupported scoped execution identity.");
   const flags = scope.environment.filter(e => e.kind === "flag").map(e => e.name);
   const credentials = scope.environment.filter(e => e.kind === "credential").map(e => e.name);
-  if (Object.keys(observation.flags).some(k => !flags.includes(k) || typeof observation.flags[k] !== "string") || Object.keys(observation.credentials).sort().join("\0") !== credentials.sort().join("\0")) throw new Error("Invalid scoped environment observation");
+  if (Object.keys(observation.flags).some(k => !flags.includes(k) || typeof observation.flags[k] !== "string") || Object.keys(observation.credentials).sort().join("\0") !== credentials.sort().join("\0")) throw invalid("check_identity_invalid", "Invalid scoped environment observation.");
   const environment: Record<string, string> = { ...observation.flags };
   for (const name of credentials) {
     const entry = observation.credentials[name]!;
-    if (typeof entry.present !== "boolean" || entry.identity !== (entry.present ? profile.credentialIdentities[name] ?? null : null)) throw new Error("Invalid credential identity");
+    if (typeof entry.present !== "boolean" || entry.identity !== (entry.present ? profile.credentialIdentities[name] ?? null : null)) throw invalid("check_identity_invalid", "Invalid credential identity.");
     if (entry.present) environment[name] = "<credential-present>";
   }
   const dependencyInputs = [];
   for (const file of [...profile.dependencyInputs].sort()) {
     const bytes = await read(file);
-    if (bytes === null) throw new Error("Required dependency input is missing");
+    if (bytes === null) throw invalid("check_dependency_input_missing", `Required dependency input ${file} is missing from the prepared tree.`);
     dependencyInputs.push({ file, sha256: sha256Hex(bytes) });
   }
   const dependencyDigest = digestCanonical({ inputs: dependencyInputs, setup: profile.dependencies ?? null });

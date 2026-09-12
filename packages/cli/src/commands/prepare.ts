@@ -48,6 +48,17 @@ export const prepareCommand: CommandDescriptor = {
       let reusableFingerprint: string | undefined;
       let attemptId: string;
       try {
+        if (context.config.scopedExecution?.repairCommands?.length) {
+          ownedAttemptId = await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
+          const beforeRepair = await computePreparationFingerprint(context.rootDir, context.config, wiring.storageOptions);
+          for (const repair of context.config.scopedExecution.repairCommands) {
+            context.write(`repairing ${repair.id}`);
+            const result = await createExecPort().run({ command: repair.command[0], args: repair.command.slice(1), cwd: context.rootDir,
+              env: Object.fromEntries(Object.entries(context.env).filter((e): e is [string, string] => e[1] !== undefined)), timeoutMs: repair.timeoutMs, maxBuffer: 1024 * 1024, ...(context.signal ? { signal: context.signal } : {}) });
+            if (result.code !== 0 || context.signal?.aborted) throw new CheckSnapshotError("preparation_repair_failed", `Source repair ${repair.id} failed; fix it and prepare again.`);
+          }
+          if (beforeRepair !== await computePreparationFingerprint(context.rootDir, context.config, wiring.storageOptions)) throw new CheckSnapshotError("preparation_candidate_changed", "Repair changed preparation wiring; reload the configuration and prepare again.");
+        }
         capture = await wiring.captureCandidate();
         if (capture.ok && refreshRecordNeutral) {
           const previous = await evaluatePreparationReceipt(context.rootDir,
@@ -58,7 +69,7 @@ export const prepareCommand: CommandDescriptor = {
           }
         }
       } finally {
-        attemptId = retainedAttemptId ?? await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
+        attemptId = retainedAttemptId ?? ownedAttemptId ?? await invalidatePreparationReceipt(context.rootDir, context.config, wiring.storageOptions);
         ownedAttemptId = attemptId;
       }
       if (!capture.ok) {
@@ -103,8 +114,8 @@ export const prepareCommand: CommandDescriptor = {
       const finalCapture = await wiring.captureCandidate();
       if (!finalCapture.ok) return { kind: "blocked", blockers: [...finalCapture.blockers] };
       const after = finalCapture.candidate;
-      if ((!context.config.scopedExecution && (classifyCandidateDrift(capture.candidate, after).length > 0 ||
-          capture.candidate.headSha !== after.headSha || capture.candidate.mode !== after.mode)) ||
+      if (classifyCandidateDrift(capture.candidate, after).length > 0 ||
+          capture.candidate.headSha !== after.headSha || capture.candidate.mode !== after.mode ||
           fingerprint !== await computePreparationFingerprint(context.rootDir, context.config, wiring.storageOptions)) {
         return {
           kind: "blocked",
