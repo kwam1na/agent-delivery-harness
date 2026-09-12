@@ -23,13 +23,20 @@ export interface CandidateTreeInputMetadata {
 }
 export type CandidateTreeInputReader = ReviewInputReader & { metadata(repoPath: string): Promise<CandidateTreeInputMetadata> };
 export async function candidateTreeEvidenceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<CandidateTreeInputReader> {
+  return candidateTreeReader(rootDir, treeSha, run, MAX_PORTABLE_ARTIFACT_BYTES);
+}
+/** Source inputs are hashed from Git, not transported as portable artifacts. */
+export async function candidateTreeSourceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<CandidateTreeInputReader> {
+  return candidateTreeReader(rootDir, treeSha, run);
+}
+async function candidateTreeReader(rootDir: string, treeSha: string, run: CandidateCommandRunner, maxBytes?: number): Promise<CandidateTreeInputReader> {
   const refusal = (message: string): never => { throw new BlockedError([portableBlocker("portable_tree_unreadable", message)]); };
   const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", treeSha], { cwd: rootDir });
   if (listing.exitCode !== 0) refusal("The target candidate tree cannot be enumerated.");
   const entries = new Map(parseCandidateTreeListing(listing.stdout).map(entry => [entry.path, entry]));
   const readBlob = async (sha: string): Promise<Buffer> => {
     const size = await run(["git", "cat-file", "-s", sha], { cwd: rootDir });
-    if (size.exitCode !== 0 || !/^\d+\s*$/.test(size.stdout) || Number(size.stdout) > MAX_PORTABLE_ARTIFACT_BYTES) refusal("A target-tree evidence input is missing or oversized.");
+    if (size.exitCode !== 0 || !/^\d+\s*$/.test(size.stdout) || (maxBytes !== undefined && Number(size.stdout) > maxBytes)) refusal("A target-tree input is missing or oversized.");
     const result = await run(["git", "cat-file", "blob", sha], { cwd: rootDir, captureBytes: true });
     if (result.exitCode !== 0) refusal("A target-tree evidence input cannot be read.");
     const bytes = result.stdoutBase64 === undefined ? Buffer.from(result.stdout, "utf8") : Buffer.from(result.stdoutBase64, "base64");
@@ -114,6 +121,7 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
   }
   const scopedProviders = config.providers.filter(p => p.check?.scope);
   if (scopedProviders.length) {
+    const readSource = await candidateTreeSourceReader(rootDir, candidate.treeSha, run);
     const listing = await run(["git", "ls-tree", "-r", "--name-only", "-z", candidate.treeSha], { cwd: rootDir });
     if (listing.exitCode !== 0) throw new BlockedError([portableBlocker("portable_tree_unreadable", "Cannot enumerate scoped source inputs.")]);
     const checks: Record<string, ScopedCheckPlan["checks"][string]> = {};
@@ -130,7 +138,7 @@ export async function capturePortableVerificationInputs(rootDir: string, config:
         const manifestCandidate = (portable?.manifest as { candidate?: { headSha?: unknown } } | undefined)?.candidate;
         const identityCandidate = bindingCandidate.treeSha === record.candidateBinding.treeSha && bindingCandidate.workspaceId === record.candidateBinding.workspaceId && typeof manifestCandidate?.headSha === "string" && /^[a-f0-9]{40}$/.test(manifestCandidate.headSha) && await recordTransportFrom(manifestCandidate.headSha)
           ? { ...bindingCandidate, headSha: manifestCandidate.headSha } : candidate;
-        const identity = await scopedCheckIdentity(config, provider, listing.stdout.split("\0").filter(Boolean), read, retained.observation, identityCandidate);
+        const identity = await scopedCheckIdentity(config, provider, listing.stdout.split("\0").filter(Boolean), readSource, retained.observation, identityCandidate, read);
         if (retained.attempt.providerId !== provider.id || retained.attempt.status !== "passed" || retained.attempt.inputDigest !== identity.inputDigest || retained.attempt.profileDigest !== identity.profileDigest) throw new Error("Mismatched scoped execution identity");
         checks[provider.id] = { inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, reusable: identity.reusable, attempts: [retained.attempt] };
       } catch { throw new BlockedError([portableBlocker("portable_scoped_inputs_invalid", "Retained scoped inputs do not match the selected source, profile or policy.")]); }

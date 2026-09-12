@@ -541,7 +541,7 @@ describe("bundled scoped qualification completeness", () => {
     expect(SCOPED_RUNTIME_PROBES).toEqual([
       "partial-failure", "retry-reuse", "report-reuse", "source-invalidation",
       "setup-invalidation", "foreign-portable", "tamper-refusal", "base-invalidation",
-      "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations",
+      "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations", "large-source-portability",
     ]);
     const result = { runtimeSha256: "a".repeat(64), repositories: 3, probes: [...SCOPED_RUNTIME_PROBES], commands: [{ repository: "files", command: "prepare", code: 0, stdout: "prepared", stderr: "" }] };
     expect(() => assertScopedRuntimeQualification(result)).not.toThrow();

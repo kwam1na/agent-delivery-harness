@@ -2,7 +2,7 @@
 import { captureScopedCheckInputs } from "./checks.ts";
 import { digestCanonical, sha256Hex } from "./digest.ts";
 import type { HarnessConfig, ProviderRegistration } from "./config.ts";
-import { readWorkflowRelease } from "./review-inputs.ts";
+import { readWorkflowRelease, type ReviewInputReader } from "./review-inputs.ts";
 import type { CandidateTreeInputReader } from "./portable-inputs.ts";
 import type { CapturedCandidate } from "./candidate.types.ts";
 import { BlockedError, createBlocker } from "./blockers.ts";
@@ -14,7 +14,7 @@ export interface ScopedRuntimeObservation {
   readonly flags: Readonly<Record<string, string>>;
   readonly credentials: Readonly<Record<string, { readonly present: boolean; readonly identity: string | null }>>;
 }
-export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: CandidateTreeInputReader, observation: ScopedRuntimeObservation, candidate: Pick<CapturedCandidate, "base" | "headSha" | "treeSha">) {
+export async function scopedCheckIdentity(config: HarnessConfig, provider: ProviderRegistration, inventory: readonly string[], read: CandidateTreeInputReader, observation: ScopedRuntimeObservation, candidate: Pick<CapturedCandidate, "base" | "headSha" | "treeSha">, readEvidence: ReviewInputReader = read) {
   const scope = provider.check?.scope;
   const profile = config.scopedExecution?.profiles.find(p => p.id === scope?.profile);
   if (!scope || !profile || observation.version !== "scoped-runtime/1" || !/^[a-f0-9]{64}$/.test(observation.runtimeDigest)) throw invalid("check_identity_invalid", "Unsupported scoped execution identity.");
@@ -34,7 +34,7 @@ export async function scopedCheckIdentity(config: HarnessConfig, provider: Provi
     dependencyInputs.push({ file, sha256: sha256Hex(bytes), metadata: await read.metadata(file) });
   }
   const dependencyDigest = digestCanonical({ inputs: dependencyInputs, setup: profile.dependencies ?? null });
-  const releaseDigest = digestCanonical(await readWorkflowRelease(read));
+  const releaseDigest = digestCanonical(await readWorkflowRelease(readEvidence));
   const policyDigest = digestCanonical(config.obligations.filter(o => o.providers.includes(provider.id)).map(o => ({ ...o, providers: [provider.id] })));
   const relevantProfile = { ...profile,
     mutableOutputs: profile.mutableOutputs.filter(m => provider.check!.outputs?.some(o => m.endsWith("/") ? o.startsWith(m) : o === m)),

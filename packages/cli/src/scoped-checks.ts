@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { captureCheckBindings, captureCheckOutputSnapshots, candidateTreeEvidenceReader, createExecPort, digestCanonical, resolveRecordStorage, runGitCommand, scopedCheckIdentity, selectScopedCheckAttempt, sha256Hex, submitManifest,
+import { captureCheckBindings, captureCheckOutputSnapshots, candidateTreeEvidenceReader, candidateTreeSourceReader, createExecPort, digestCanonical, resolveRecordStorage, runGitCommand, scopedCheckIdentity, selectScopedCheckAttempt, sha256Hex, submitManifest,
   type CandidateBinding, type CapturedCandidate, type ProviderRegistration, type ScopedCheckPlan, type ScopedRuntimeObservation, type RecordCandidateBinding } from "@agent-delivery-harness/kernel";
 import type { CommandContext } from "./boundary.ts";
 import { AttemptStore, type AttemptPayload, type StoredAttempt } from "./scoped-attempts.ts";
@@ -44,7 +44,8 @@ export class ScopedChecks {
     if (context.config.scopedExecution?.version !== "scoped-execution/1") throw new CheckSnapshotError("scoped_executor_required", "Scoped checks require supported private execution profiles before preparation.");
     const session = new ScopedChecks(context, candidate);
     const storage = await resolveRecordStorage(context.rootDir, { storageNamespace: context.config.storageNamespace, leaf: "scoped-attempts" });
-    const read = await candidateTreeEvidenceReader(context.rootDir, candidate.treeSha);
+    const read = await candidateTreeSourceReader(context.rootDir, candidate.treeSha);
+    const readEvidence = await candidateTreeEvidenceReader(context.rootDir, candidate.treeSha);
     const listing = await runGitCommand(["git", "ls-tree", "-r", "--name-only", "-z", candidate.treeSha], { cwd: context.rootDir });
     if (listing.exitCode !== 0) throw new CheckSnapshotError("check_snapshot_unavailable", "Cannot enumerate the prepared source tree.");
     const inventory = listing.stdout.split("\0").filter(Boolean);
@@ -63,7 +64,7 @@ export class ScopedChecks {
           return [e.name, { present, identity }];
         })) };
       session.observations.set(provider.id, observation);
-      session.identities.set(provider.id, await scopedCheckIdentity(context.config, provider, inventory, read, observation, candidate));
+      session.identities.set(provider.id, await scopedCheckIdentity(context.config, provider, inventory, read, observation, candidate, readEvidence));
       session.stores.set(provider.id, new AttemptStore(path.join(storage.storageDir, digestCanonical({ gate: context.config.gateId, provider: provider.id }))));
     }
     return session;
