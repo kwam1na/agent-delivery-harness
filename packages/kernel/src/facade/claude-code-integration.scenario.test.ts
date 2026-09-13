@@ -28,7 +28,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
 import { PROJECTION_DIR } from "../host/projection.ts";
@@ -135,6 +135,27 @@ const restoreWritable = (dir: string): void => {
     /* removal surfaces the real failure */
   }
 };
+
+/**
+ * THE BUDGET EVERY ROW BELOW RUNS UNDER.
+ *
+ * Each row here opens one or more real delivery sessions: a `git worktree add`
+ * per session, a materialized projection, and in several rows a spawned hook
+ * interceptor. Idle, the rows land between 2 and 26 seconds. They declared no
+ * budget at all, so they inherited vitest's 5000 ms default — a number nobody
+ * chose for this work — and under the two-worker cap the majority of them
+ * failed on it while asserting nothing whatever about time.
+ *
+ * The ceiling below is deliberately NOT tuned to what the rows cost. Its only
+ * job is to end a row that has genuinely stopped, and a ceiling near the
+ * observed cost cannot do that job without also ending rows that were merely
+ * queued behind a busy runner. So it sits an order of magnitude above the
+ * heaviest legitimate row: reaching it means the work stalled, not that the
+ * machine was loaded. Nothing else about these rows changes — none waits on a
+ * duration, none asserts an elapsed time, and each still reaches its subject by
+ * awaiting the facade's own completions. `beforeAll` keeps its own budget below.
+ */
+vi.setConfig({ testTimeout: 300_000 });
 
 beforeAll(async () => {
   scratch = await mkdtemp(path.join(tmpdir(), "claude-code-integration-"));

@@ -161,6 +161,19 @@ const SHIPPED_PACKAGE_MANIFESTS = [
   "packages/mcp/package.json",
 ];
 
+/**
+ * The budget for the one row that packs this workspace for real.
+ *
+ * That row runs `npm pack` once per shipped package, each with its own prepack
+ * work, so it is five subprocesses deep before it asserts anything. It asserts
+ * nothing about time — only that the repository has no release findings — so
+ * the budget is a ceiling, not a subject, and it is set well clear of what a
+ * loaded two-worker runner costs rather than at the edge of an idle one. Every
+ * other row in this file runs in memory against a fixture tree and keeps the
+ * default.
+ */
+const REAL_PACK_ROW_TIMEOUT_MS = 180_000;
+
 describe("this repository is releasable", () => {
   // Real npm packing includes each package's prepack work on hosted runners.
   it("passes every release check", () => {
@@ -168,7 +181,7 @@ describe("this repository is releasable", () => {
     expect(formatReleaseFindings(result.findings)).toBe("");
     expect(result.findings).toEqual([]);
     expect(result.packageManifests).toEqual(SHIPPED_PACKAGE_MANIFESTS);
-  }, 30_000);
+  }, REAL_PACK_ROW_TIMEOUT_MS);
 
   // The sensor's text half reads the ROOT LICENSE, while npm packs each
   // package's OWN copy — so five of the six license files this workspace
