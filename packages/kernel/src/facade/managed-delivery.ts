@@ -3219,12 +3219,24 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       let ids: string[];
       try {
         ids = (await readdir(root)).sort();
-      } catch {
-        // An installation that has registered nothing has no directory at all.
-        // That is an EMPTY listing, not a refusal: "nothing is running" is a
-        // true and useful answer, and refusing it would make the one surface
-        // that reports installation-wide quiet unavailable exactly when the
-        // installation is quiet.
+      } catch (error) {
+        // ABSENCE ONLY. An installation that has registered nothing has no
+        // directory at all, and that is an EMPTY listing rather than a
+        // refusal: "nothing is running" is a true and useful answer, and
+        // refusing it would make the one surface that reports
+        // installation-wide quiet unavailable exactly when the installation is
+        // quiet. Every OTHER failure is the opposite situation — the directory
+        // exists and cannot be read — and answering it with the same empty
+        // listing would report a positive claim of quiet built out of an
+        // unreadable namespace, with not even an id left to reconcile by.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          return refuse(
+            "delivery_namespace_unreadable",
+            "The installation's deliveries directory exists but cannot be read.",
+            "Inspect the product namespace directory and its permissions; a listing that cannot read it reports nothing rather than nothing running.",
+          );
+        }
         return { ok: true, deliveries: [], unreadable: [] };
       }
 

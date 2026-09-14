@@ -121,6 +121,13 @@ beforeAll(async () => {
     })}\n`,
   );
 
+  // A directory with no registration record, beside them. The terminal must
+  // NAME it: `resolveManaged` counts this same directory as in flight, so a
+  // listing that dropped it silently would leave `managed status` saying three
+  // deliveries are in flight while the surface it points at shows two, with no
+  // id to reconcile the two counts by.
+  mkdirSync(path.join(namespace, "deliveries", "delivery-stray"), { recursive: true });
+
   // TWO deliveries, both in flight. This is the shape `managed status`
   // refuses, and the shape the listing exists to report.
   for (const deliveryId of ["delivery-one", "delivery-two"]) {
@@ -166,6 +173,12 @@ describe("managed deliveries", () => {
       pendingDecision: unknown;
     }[];
     expect(listed.map((candidate) => candidate.deliveryId)).toEqual(["delivery-one", "delivery-two"]);
+    // The stray is not a listing entry — it has no state — but its id reaches
+    // the operator, which is what turns "the counts disagree" into a question
+    // they can ask: `managed status --delivery delivery-stray`.
+    const summary = (result as { kind: "ok"; summary: string }).summary;
+    expect(summary).toContain("2 delivery(ies)");
+    expect(summary).toContain("1 unreadable (delivery-stray)");
     for (const candidate of listed) {
       expect(candidate.state).toBe("preparing");
       // No workspace is bound yet, so there is no heartbeat to age and the

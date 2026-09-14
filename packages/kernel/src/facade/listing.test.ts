@@ -19,7 +19,7 @@
  * delivery reading `active` from the same call.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -180,10 +180,24 @@ describe("the installation-scoped listing", () => {
       observation: { fence: 1, observedAt: "2026-09-14T11:59:00Z" },
     });
 
+    // The inventory declares this operation `read`, `absent-by-state`, `none`.
+    // A mutation that changes a RETURNED value is caught by every other row
+    // here; a write that changes nothing returned is caught only by this one.
+    const liveDir = path.join(namespace, "deliveries", "delivery-live");
+    const before = {
+      files: readdirSync(liveDir, { recursive: true }).map(String).sort(),
+      journal: readFileSync(path.join(liveDir, "journal.jsonl"), "utf8"),
+    };
+
     const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
     expect(listing.ok, JSON.stringify(listing)).toBe(true);
     if (!listing.ok) return;
     expect(listing.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-gone", "delivery-live"]);
+
+    // Not one byte, and not one file: no journal revision, no fabricated
+    // heartbeat, nothing stamped on the way past.
+    expect(readdirSync(liveDir, { recursive: true }).map(String).sort()).toEqual(before.files);
+    expect(readFileSync(path.join(liveDir, "journal.jsonl"), "utf8")).toBe(before.journal);
 
     const live = listing.deliveries.find((listed) => listed.deliveryId === "delivery-live");
     expect(live?.state).toBe("planning");
@@ -272,6 +286,20 @@ describe("the installation-scoped listing", () => {
       workspace: { observationLifetimeSeconds: DEFAULT_OBSERVATION_LIFETIME_SECONDS },
       observation: { fence: 1, observedAt: "2026-09-14T11:59:55Z" },
     });
+    // Re-fenced AND heard from since: its heartbeat stands for the fence that
+    // is current, so the stamp is evidence and IS reported. Without this the
+    // comparison would be pinned on its deny side alone, and a listing that
+    // withheld the stamp from every re-fenced delivery would pass.
+    await register(namespace, {
+      deliveryId: "delivery-rebound",
+      entries: [
+        ...opening("delivery-rebound", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+        refenced("delivery-rebound"),
+        entry("delivery-rebound", 7, "activity.observed", { activity: "active", fence: 2 }),
+      ],
+      workspace: { observationLifetimeSeconds: DEFAULT_OBSERVATION_LIFETIME_SECONDS },
+      observation: { fence: 2, observedAt: "2026-09-14T11:59:50Z" },
+    });
     await register(namespace, {
       deliveryId: "delivery-current",
       entries: [
@@ -298,6 +326,10 @@ describe("the installation-scoped listing", () => {
     // would fail here.
     expect(byId.get("delivery-current")?.lastActivity.activity).toBe("active");
     expect(byId.get("delivery-current")?.lastActivity.observedAt).toBe("2026-09-14T11:59:55Z");
+    // And the allow side at a fence ABOVE one: the rule is "the stamp the
+    // current fence was graded from", not "fence 1".
+    expect(byId.get("delivery-rebound")?.lastActivity.activity).toBe("active");
+    expect(byId.get("delivery-rebound")?.lastActivity.observedAt).toBe("2026-09-14T11:59:50Z");
   });
 
   it("names the pending decision a delivery is waiting on", async () => {
@@ -319,10 +351,34 @@ describe("the installation-scoped listing", () => {
       ],
     });
 
+    // The same journal, plus the typed voiding blocker a candidate change
+    // appends. The proposal is answered — an operator sent here would be sent
+    // to a delivery waiting on nothing.
+    await register(namespace, {
+      deliveryId: "delivery-decided",
+      entries: [
+        ...opening("delivery-decided", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+        entry("delivery-decided", 6, "transition.committed", { from: "preparing", to: "planning" }),
+        entry("delivery-decided", 7, "transition.committed", { from: "planning", to: "implementing" }),
+        entry("delivery-decided", 8, "transition.committed", { from: "implementing", to: "validating" }),
+        entry("delivery-decided", 9, "transition.committed", { from: "validating", to: "reviewing" }),
+        entry("delivery-decided", 10, "approval.request.recorded", {
+          requestKind: "waiver",
+          criterionId: "greeting-behavior",
+          actorId: "operator-1",
+          reason: "criterion discharged by upstream fix; waiver proposed",
+        }),
+        entry("delivery-decided", 11, "blocker.recorded", {
+          code: "approval.proposal-voided",
+          summary: "the candidate changed since the criterion was proposed; the stale proposal is void",
+        }),
+      ],
+    });
+
     const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
     expect(listing.ok, JSON.stringify(listing)).toBe(true);
     if (!listing.ok) return;
-    const [waiting] = listing.deliveries;
+    const waiting = listing.deliveries.find((listed) => listed.deliveryId === "delivery-waiting");
     expect(waiting?.state).toBe("reviewing");
     // The proposal itself, not a boolean: an operator deciding which delivery
     // to attend to needs to know WHAT is pending and against which criterion.
@@ -332,6 +388,11 @@ describe("the installation-scoped listing", () => {
       actorId: "operator-1",
       candidateTreeSha: OID,
     });
+    // Pinned beside it, from the same call: the ledger's answer, not merely
+    // "a proposal was once recorded".
+    const decided = listing.deliveries.find((listed) => listed.deliveryId === "delivery-decided");
+    expect(decided?.state).toBe("reviewing");
+    expect(decided?.pendingDecision).toBeUndefined();
   });
 
   it("names no delivery from another installation", async () => {
@@ -361,15 +422,42 @@ describe("the installation-scoped listing", () => {
     expect(other.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-elsewhere"]);
   });
 
+  it("refuses when the deliveries directory exists and cannot be read, rather than reporting quiet", async () => {
+    const { namespace, facade } = installation();
+    await register(namespace, {
+      deliveryId: "delivery-real",
+      entries: opening("delivery-real", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+    });
+    const deliveries = path.join(namespace, "deliveries");
+    chmodSync(deliveries, 0o000);
+    try {
+      const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+      // "Nothing is running" is a POSITIVE claim. An empty listing here would
+      // make it out of a directory the process cannot open — and unlike a
+      // delivery it cannot read, there is not even an id left to reconcile by.
+      expect(listing.ok, JSON.stringify(listing)).toBe(false);
+      if (listing.ok) return;
+      expect(listing.blockers.map((blocker) => blocker.code)).toEqual(["delivery_namespace_unreadable"]);
+    } finally {
+      chmodSync(deliveries, 0o700);
+    }
+  });
+
   it("names a directory it cannot read rather than listing it with an invented state or dropping it silently", async () => {
     const { namespace, facade } = installation();
     await register(namespace, {
       deliveryId: "delivery-real",
       entries: opening("delivery-real", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
     });
-    // No registration record: a stray directory, or the crash window between
-    // registration's two writes.
-    mkdirSync(path.join(namespace, "deliveries", "delivery-stray"), { recursive: true });
+    // No registration record but a PERFECTLY READABLE journal: the crash
+    // window between registration's two writes. Only the marker branch can
+    // catch this one — with a journal that reduces, the branch below would
+    // list it with a state it was never registered to have.
+    await register(namespace, {
+      deliveryId: "delivery-stray",
+      entries: opening("delivery-stray", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+    });
+    rmSync(path.join(namespace, "deliveries", "delivery-stray", "delivery.json"));
     // Registered, but its journal does not reduce. This is the branch that is
     // otherwise unreachable from any fixture, and the one whose silent drop
     // would contradict the CLI's own count of registered deliveries.

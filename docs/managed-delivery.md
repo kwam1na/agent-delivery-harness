@@ -381,7 +381,11 @@ but its id is returned in `unreadable`, and `managed deliveries` says how many
 and which. Dropping it silently would leave the CLI counting it as registered
 while the only surface that hands out ids denied it existed; naming it lets an
 operator run `managed status --delivery <id>` and get the refusal that says
-what is wrong.
+what is wrong. An installation that has registered nothing lists empty, but a
+namespace directory that exists and cannot be read is refused with
+`delivery_namespace_unreadable` rather than reported as quiet: "nothing is
+running" is a positive claim, and it must not be made out of a directory the
+process could not open.
 
 It is `read`-class in the inventory, binds no fence, moves no journal revision,
 and enumerates only its own installation's namespace directory: a delivery
