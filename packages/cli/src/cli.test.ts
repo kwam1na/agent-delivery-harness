@@ -56,38 +56,6 @@ import { runProviderBackedAdmission } from "./commands/gate.ts";
 import type { ProviderRailMessage, ProviderRailSession } from "./provider-rails.ts";
 import { runAction } from "../../action/src/main.ts";
 
-/**
- * THE BUDGET EVERY ROW BELOW RUNS UNDER.
- *
- * The loop tests in this file drive the real evidence-loop commands against
- * real temporary git repositories — `git init`, several commits, a packed
- * fixture composition, and repeated CLI invocations per row before a single
- * assertion is reached. Three rows had noticed the cost and declared their own
- * `}, 30_000` / `}, 60_000`; the other eighty silently inherited vitest's
- * 5000 ms default, which nobody chose for spawning git and a TypeScript-loading
- * CLI repeatedly. Under the two-worker cap, beside a process-heavy unit, this
- * whole file goes red on that default — every failure `Test timed out in
- * 5000ms`, none an assertion.
- *
- * The ceiling below is not tuned to what the rows cost. Its only job is to end
- * a row that has genuinely stopped, so it sits well above the heaviest
- * legitimate row rather than beside it. No row here waits on a duration or
- * asserts an elapsed time; each reaches its subject by awaiting the CLI's own
- * exit and reading the repository back off disk. The rows that DO exercise a
- * timeout — the argv checks that refuse a timed-out check — assert the
- * product's own typed outcome and are unaffected by this vitest budget, which
- * bounds the test rather than the subject. The three rows that declared their
- * own budgets are folded into this one declaration, so the file's heaviest rows
- * are no longer the ones carrying the tightest ceiling.
- *
- * `hookTimeout` is declared alongside it because `vi.setConfig` sets only the
- * row budget, and this file's `afterAll` removes every temporary repository the
- * run created; left on vitest's 10 000 ms hook default it can end the file red
- * in teardown with every row green — the same signature, one declaration
- * further down.
- */
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
-
 const run = promisify(execFile);
 const cleanups: string[] = [];
 afterAll(() => {
@@ -1780,7 +1748,7 @@ describe("unrecognized flags on the direct commands", () => {
     // exit 2 after wiring the repository.
     expect(err.join("")).not.toMatch(/^\[[a-z_]+\] /m);
     expect(err.join("")).not.toContain("Source: command:");
-  });
+  }, 30_000);
 
   it("accepts every direct command's real arguments", async () => {
     const dir = await initRepo();
@@ -1814,7 +1782,7 @@ describe("unrecognized flags on the direct commands", () => {
     expect(await runCli(["submit-evidence", "--manifest", manifestPath, "--bogus-flag"], runtime)).toBe(EXIT_USAGE);
     expect(await runCli(["verify", "--require-run-journal"], runtime)).not.toBe(EXIT_USAGE);
     expect(await runCli(["gate"], runtime)).toBe(EXIT_OK);
-  });
+  }, 60_000);
 
   it("neither records nor admits for a help request or a nonsense flag on record", async () => {
     const dir = await initRepo();
@@ -1841,5 +1809,5 @@ describe("unrecognized flags on the direct commands", () => {
     // refused, not that this fixture could never have recorded.
     expect(await runCli(["record"], runtime), out.join("")).toBe(EXIT_OK);
     expect(await records()).toHaveLength(1);
-  });
+  }, 60_000);
 });

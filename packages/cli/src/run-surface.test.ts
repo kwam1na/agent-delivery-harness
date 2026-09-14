@@ -15,7 +15,7 @@ import { realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   computeDeliverableIdentity,
   createRunStore,
@@ -33,34 +33,6 @@ import { READOUT_LABELS } from "./run-projection.ts";
 import { parseRunExport } from "./run-export.ts";
 import { DEFAULT_POLL_SECONDS, RUN_SERVER_CSP, escapeHtml, startRunServer, type RunServerHandle } from "./run-server.ts";
 import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface, resolveWorktreeRoot } from "./run-surface.ts";
-
-/**
- * THE BUDGET EVERY ROW BELOW RUNS UNDER.
- *
- * Every scenario in this file drives the real CLI as a subprocess against a
- * real temporary git repository — several `node --import tsx` starts per row
- * before a single assertion is reached. Three rows had noticed and declared
- * `}, 30_000`; the other seventy silently inherited vitest's 5000 ms default,
- * which is not a budget anyone chose for spawning a TypeScript-loading CLI
- * repeatedly. Under the two-worker cap, alongside a process-heavy unit, this
- * whole file goes red on that default — every row on `Test timed out in
- * 5000ms`, none on an assertion.
- *
- * The ceiling below is not tuned to what the rows cost. Its only job is to end
- * a row that has genuinely stopped, so it sits well above the heaviest
- * legitimate row rather than beside it. No row here waits on a duration or
- * asserts an elapsed time: each reaches its subject by awaiting the CLI's own
- * exit and reading the store back off disk. The three rows that declared
- * `}, 30_000` are folded into this one declaration, so the file's heaviest rows
- * are no longer the ones with the tightest ceiling.
- *
- * `hookTimeout` is declared alongside it because `vi.setConfig` sets only the
- * row budget. This file's `afterAll` removes up to seventy-six temporary git
- * repositories; left on vitest's 10 000 ms hook default it can end the file red
- * in teardown with every row green — the same signature, one declaration
- * further down.
- */
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 const exec = promisify(execFile);
 const cleanups: string[] = [];
@@ -1112,7 +1084,7 @@ describe("emit, the boundary wrap, and runs", () => {
     await writeFile(path.join(dir, "src.txt"), "changed source");
     await git(dir, "add", ".");
     expect(await gateDigest()).not.toBe(report);
-  });
+  }, 30_000);
 
   it("omits success digests for failed and interrupted actual gates", async () => {
     const dir = await initRepo();
@@ -1125,7 +1097,7 @@ describe("emit, the boundary wrap, and runs", () => {
     const gates = (await journalOf(dir, runId)).filter(event => event.kind === "command.completed" && event.payload["command"] === "gate");
     expect(gates.map(event => event.payload["outcome"])).toEqual(["policy", "interrupted"]);
     expect(gates.every(event => event.payload["digest"] === undefined)).toBe(true);
-  });
+  }, 30_000);
 
   it.each(["--help", "-h"])("keeps prepare %s out of the journal while recording actual preparation", async (flag) => {
     const dir = await initRepo();
@@ -1218,7 +1190,7 @@ describe("emit, the boundary wrap, and runs", () => {
     expect(completions).toHaveLength(1);
     expect(completions[0]).toMatchObject({ payload: { command: "record", outcome: "usage" } });
     expect(completions[0]!.payload["digest"]).toBeUndefined();
-  });
+  }, 30_000);
 
   it("retains distinct v2 completion event ids for separate wrapped invocations", async () => {
     const dir = await initRepo();
