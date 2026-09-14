@@ -283,6 +283,19 @@ describe("the external-operation authority matrix", () => {
     expect(
       codesOf(planExternalAction(planOf({ adapter: { capabilityId: "deploy.fly", kind: "deploy", hasCredential: true } }))),
     ).toContain("adapter_contract_mismatch");
+    // Both sides. `PolicyCapabilityKind` is an eight-member vocabulary compared
+    // here as a string, and "deploy" sorts BELOW "merge", so that probe alone
+    // leaves a relational mutant admitting every pair that sorts the other way
+    // — a deploy performed on the merge credential among them. This rule is the
+    // only thing tying an irreversible action to the capability whose
+    // credential performs it.
+    expect(
+      codesOf(
+        planExternalAction(
+          deployPlanOf({ adapter: { capabilityId: "merge.github", kind: "merge", hasCredential: true } }),
+        ),
+      ),
+    ).toContain("adapter_contract_mismatch");
     expect(
       codesOf(planExternalAction(planOf({ adapter: { capabilityId: "merge.github", kind: "merge", hasCredential: false } }))),
     ).toContain("adapter_credential_absent");
@@ -408,7 +421,7 @@ describe("the external-operation authority matrix", () => {
     // was consumed, so it must say so. `toEqual` and not a member read, so the
     // closed `action.intent.recorded` grammar also stays proven here: adding
     // `approverId` would make the entry unwritable.
-    expect(approved.ok === true && journalIntentPayload(approved.intent)).toEqual({
+    expect(approved.ok === true && journalIntentPayload(approved.intent)).toStrictEqual({
       intentId: "intent-2",
       action: "deploy",
       candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
@@ -520,8 +533,11 @@ describe("the external-operation authority matrix", () => {
     expect(JSON.stringify(intent)).not.toContain("credential");
     // By value, not by key set: a payload carrying the record digest where the
     // policy digest belongs has the right shape and the wrong content, and the
-    // adapter is handed this same object.
-    expect(journalIntentPayload(intent)).toEqual({
+    // adapter is handed this same object. `toStrictEqual`, because `toEqual`
+    // treats a key present with the value `undefined` as absent while the
+    // closed `action.intent.recorded` grammar walks `Object.keys` and refuses
+    // it — the entry this payload accepted would be one the journal would not.
+    expect(journalIntentPayload(intent)).toStrictEqual({
       intentId: "intent-1",
       action: "merge",
       candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
@@ -1210,6 +1226,15 @@ describe("reconcile before retry", () => {
       finding: "performed",
     });
     expect(codesOf(disposition)).toContain("reconciliation_not_applicable");
+    // The other side of the same compare. `EXTERNAL_ACTION_OUTCOMES` is
+    // ["succeeded","failed","indeterminate"], and "failed" sorts BELOW
+    // "indeterminate" where "succeeded" sorts above, so this guard needs both.
+    // Without it a relational mutant accepts a FAILED result as reconcilable,
+    // and `performed` then hands back a disposition reading
+    // `outcome: "succeeded"` for an action the adapter said it did not take.
+    expect(
+      codesOf(reconcileBeforeRetry({ indeterminate: { ...indeterminate, outcome: "failed" }, finding: "performed" })),
+    ).toContain("reconciliation_not_applicable");
   });
 });
 

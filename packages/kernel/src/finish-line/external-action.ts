@@ -26,9 +26,13 @@
  *      `status-reconciliation` observation, never by trying again to see what
  *      happens. Reconciliation that finds the action already performed forbids
  *      the replay outright; reconciliation that cannot tell also forbids it.
- *      Only a reconciliation that positively establishes the action did NOT
- *      happen authorizes a second intent, and that intent is a NEW intent with
- *      its own id — never the first one replayed.
+ *      Reconciliation that positively establishes the action did NOT happen
+ *      forbids it too, and that is the answer readers find surprising: the
+ *      frozen reducer admits a second `action.intent.recorded` only once every
+ *      prior intent is reconciled, which an indeterminate intent never becomes,
+ *      so an authorization here would be one the product refuses to honour. All
+ *      three findings end the delivery through policy-selected containment;
+ *      offering the indeterminate intent's own id keeps its sharper refusal.
  *   5. SUCCESS PLUS FAILED VERIFICATION IS ITS OWN STATE. An action that
  *      succeeded whose required post-action verification failed enters
  *      `action_succeeded_verification_failed`. The action is never replayed
