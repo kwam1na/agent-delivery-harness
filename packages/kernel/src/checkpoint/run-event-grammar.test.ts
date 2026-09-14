@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  RUN_CANDIDATE_TREE_SHA,
   RUN_EVENT_KINDS,
   RUN_EVENT_KINDS_V1,
   RUN_EVENT_SPEC,
   RUN_EVENT_SPEC_V2,
+  RUN_PROVIDER_ID,
+  RUN_STORE_ID,
+  RUN_TICKET,
   describeRunEventPayload,
   validateRunEvent,
   type RunEventKind,
@@ -286,11 +290,20 @@ describe("run-event payload grammar types and examples", () => {
       readonly kind: RunEventKind;
       readonly payload: Record<string, unknown>;
       readonly pointer: string;
+      /** What the published constraint adds after the refusal's own words. */
+      readonly extra?: string;
+      /** A value the check accepts and one it refuses, for a published pattern with no exported source. */
+      readonly sample?: { readonly accepted: string; readonly refused: string };
+      /** The shape word the constraint claims, checked against the boundary the check enforces. */
+      readonly names?: string;
       readonly describe: () => RunEventValueGrammar;
     }[] = [
-      { kind: "activity.observed", payload: { activityId: 5 }, pointer: "/payload/activityId", describe: member("activity.observed", "activityId") },
-      { kind: "activity.observed", payload: { candidateTreeSha: 5 }, pointer: "/payload/candidateTreeSha", describe: member("activity.observed", "candidateTreeSha") },
-      { kind: "ticket.read", payload: { ticket: 5, source: "linear" }, pointer: "/payload/ticket", describe: member("ticket.read", "ticket") },
+      { kind: "activity.observed", payload: { activityId: 5 }, pointer: "/payload/activityId", extra: `, matching ${RUN_STORE_ID.source}`,
+        describe: member("activity.observed", "activityId") },
+      { kind: "activity.observed", payload: { candidateTreeSha: 5 }, pointer: "/payload/candidateTreeSha", extra: `, matching ${RUN_CANDIDATE_TREE_SHA.source}`,
+        describe: member("activity.observed", "candidateTreeSha") },
+      { kind: "ticket.read", payload: { ticket: 5, source: "linear" }, pointer: "/payload/ticket", extra: `, matching ${RUN_TICKET.source}`,
+        describe: member("ticket.read", "ticket") },
       { kind: "activity.observed", payload: { owner: 5 }, pointer: "/payload/owner", describe: member("activity.observed", "owner") },
       { kind: "decision.recorded", payload: { fork: "f", choice: "c", cited: 5 }, pointer: "/payload/cited", describe: member("decision.recorded", "cited") },
       { kind: "gate.reported", payload: { durationMs: -1 }, pointer: "/payload/durationMs", describe: member("gate.reported", "durationMs") },
@@ -298,10 +311,19 @@ describe("run-event payload grammar types and examples", () => {
       { kind: "review.round.opened", payload: { grace: "yes" }, pointer: "/payload/grace", describe: member("review.round.opened", "grace") },
       { kind: "run.ended", payload: { result: "complete", cost: { unit: "u", total: "x", reportedBy: "r" } }, pointer: "/payload/cost/total",
         describe: () => variantMember("run.ended", "cost", 1, "total") },
-      { kind: "wait.started", payload: { reference: 5 }, pointer: "/payload/reference", describe: member("wait.started", "reference") },
+      { kind: "wait.started", payload: { reference: 5 }, pointer: "/payload/reference", extra: " that parses as an absolute http or https locator",
+        describe: member("wait.started", "reference") },
       { kind: "lens.selected", payload: { mandated: 5 }, pointer: "/payload/mandated", describe: member("lens.selected", "mandated") },
-      { kind: "lens.selected", payload: { mandated: ["Not An Id"] }, pointer: "/payload/mandated/0",
+      { kind: "lens.selected", payload: { mandated: ["Not An Id"] }, pointer: "/payload/mandated/0", extra: `, matching ${RUN_PROVIDER_ID.source}`,
         describe: () => member("lens.selected", "mandated")().items! },
+      { kind: "context.saved", payload: { policyDigest: 5 }, pointer: "/payload/policyDigest", extra: ", matching ^[0-9a-f]{64}$",
+        sample: { accepted: "f".repeat(64), refused: "f".repeat(63) }, names: "sha256", describe: member("context.saved", "policyDigest") },
+      { kind: "command.completed", payload: { command: "prepare", outcome: "ok", durationMs: 0, digest: 5 }, pointer: "/payload/digest",
+        extra: ", matching ^[0-9a-f]{64}$", sample: { accepted: "f".repeat(64), refused: "F".repeat(64) }, names: "sha256",
+        describe: member("command.completed", "digest") },
+      { kind: "context.saved", payload: { contract: { objective: "o", finishLine: "f", acceptanceCriteria: 5 } },
+        pointer: "/payload/contract/acceptanceCriteria",
+        describe: () => member("context.saved", "contract")().members!.find(item => item.name === "acceptanceCriteria")! },
     ];
 
     for (const probe of probes) {
@@ -312,7 +334,70 @@ describe("run-event payload grammar types and examples", () => {
       // a constraint that drifts from the check it describes stops matching.
       const stated = refused!.message.replace(/^expected /, "");
       const published = probe.describe().constraint;
-      expect(published.startsWith(stated), `${probe.kind}${probe.pointer}: published "${published}" does not restate refusal "${stated}"`).toBe(true);
+      // Equality, not a prefix: the clause a member appends after the refusal
+      // words is the only place a CLI-only caller learns the charset or the
+      // scheme rule, so it is pinned as tightly as the words themselves. The
+      // patterned members spell theirs out of the very pattern the check tests.
+      expect(published, `${probe.kind}${probe.pointer}: published "${published}" does not restate refusal "${stated}"`)
+        .toBe(`${stated}${probe.extra ?? ""}`);
+      if (probe.sample === undefined) continue;
+      // The words a digest publishes are a claim about its shape, so they are
+      // held to the boundary the check enforces rather than left as prose: the
+      // member that stops naming sha256 while refusing everything but 64
+      // lowercase hex characters has stopped describing itself.
+      expect(published, `${probe.kind}${probe.pointer} names its shape`).toContain(probe.names!);
+      // Two patterned members have no exported source to spell the tail from,
+      // so the pattern they publish is pinned to the check's own behaviour: it
+      // must accept what the validator accepts and refuse what it refuses.
+      const publishedPattern = new RegExp(published.slice(`${stated}, matching `.length));
+      expect(publishedPattern.test(probe.sample.accepted), `${probe.kind}${probe.pointer} published pattern refuses an accepted value`).toBe(true);
+      expect(publishedPattern.test(probe.sample.refused), `${probe.kind}${probe.pointer} published pattern accepts a refused value`).toBe(false);
+      const name = probe.pointer.slice("/payload/".length);
+      const complete = Object.fromEntries(describeRunEventPayload(probe.kind, RUN_EVENT_SPEC_V2)!.members
+        .map(item => [item.name, item.example]));
+      expect(validateRunEvent(event(probe.kind, RUN_EVENT_SPEC_V2, { ...complete, [name]: probe.sample.accepted })),
+        `${probe.kind}${probe.pointer} accepted sample`).toEqual({ ok: true });
+      expect(rejections(event(probe.kind, RUN_EVENT_SPEC_V2, { ...complete, [name]: probe.sample.refused }))
+        .some(rejection => rejection.pointer === probe.pointer && rejection.code === "malformed_member"),
+      `${probe.kind}${probe.pointer} refused sample`).toBe(true);
+    }
+
+    // `oneOf` refuses by naming its vocabulary rather than by restating its
+    // constraint, so it is pinned the other way round: the fixed phrase every
+    // closed vocabulary publishes, beside the vocabulary the refusal itself
+    // names. A constraint that stops saying the value is closed, or a published
+    // vocabulary that drifts from the accepted one, fails here.
+    const state = member("activity.observed", "state")();
+    const refusedState = rejections(event("activity.observed", RUN_EVENT_SPEC_V2, { state: 5 }))
+      .find(rejection => rejection.pointer === "/payload/state")!;
+    expect(state.constraint, "activity.observed.state constraint").toBe("one of a closed vocabulary");
+    expect(refusedState.message, "activity.observed.state vocabulary").toBe(`state accepts only: ${state.values!.join(", ")}`);
+
+    // The locator clause the URL constraint publishes is the clause the check
+    // enforces: a non-http scheme and a non-absolute reference are both refused.
+    for (const locator of ["javascript:alert(1)", "/relative/path"]) {
+      expect(rejections(event("wait.started", RUN_EVENT_SPEC_V2, { waitingOn: "human", scope: "s", reference: locator }))
+        .some(rejection => rejection.pointer === "/payload/reference" && rejection.code === "malformed_member"), locator).toBe(true);
+    }
+  });
+
+  /**
+   * A closed nested table publishes `a <member> object`, so each is pinned to
+   * the member it actually describes rather than to its length: a constraint
+   * that stops naming its own table stops matching here.
+   */
+  it("names its own table in every closed object's constraint", () => {
+    for (const [kind, name] of [
+      ["run.started", "workflow"],
+      ["context.saved", "contract"],
+      ["context.saved", "candidateBinding"],
+      ["context.saved", "release"],
+      ["review.round.closed", "findings"],
+    ] as const) {
+      const described = member(kind, name)();
+      expect(described.type, `${kind}.${name} type`).toBe("object");
+      expect(described.constraint, `${kind}.${name} constraint`).toBe(`a ${name} object`);
+      expect(described.members?.length ?? 0, `${kind}.${name} members`).toBeGreaterThan(0);
     }
   });
 
