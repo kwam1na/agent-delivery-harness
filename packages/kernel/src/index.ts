@@ -898,12 +898,53 @@ export {
 } from "./workflow/graph.ts";
 export {
   HOST_BINDING_BLOCKER_CODES,
+  claudeCodeBinding,
   composeClaudeCodeSession,
   materializeProjection,
   mintGrantAttestation,
   type HostBindingBlocker,
   type HostBindingBlockerCode,
 } from "./host/claude-code.ts";
+export type {
+  ComposeHostSessionInput,
+  ComposeHostSessionResult,
+  ComposedHostSession,
+  HostSessionGrant,
+  ManagedHostBinding,
+} from "./host/managed-host-binding.ts";
+export {
+  CODEX_APPLIED_MISMATCH_CODES,
+  CODEX_APP_SERVER_HOST_ID,
+  CODEX_CHARACTERIZED_HOST_VERSION,
+  CODEX_ESCALATION_REFUSAL_CODES,
+  CODEX_HOOK_EVENT,
+  CODEX_HOOK_EXECUTION_MODE,
+  CODEX_PINNED_HOST_VERSION,
+  CODEX_UNENFORCEABLE_TOOL_SOURCES,
+  codexAppServerBinding,
+  codexPermissionProfileOf,
+  codexSubagentPosture,
+  composeCodexAppServerThread,
+  evaluateCodexEscalation,
+  verifyAppliedCodexThreadConfiguration,
+  type CodexAppliedMismatchCode,
+  type CodexAppliedThreadConfiguration,
+  type CodexEscalationRefusalCode,
+  type CodexPermissionProfile,
+  type CodexThreadStartRequest,
+} from "./host/codex-app-server.ts";
+export {
+  codexHookTurn,
+  codexToolIsLocallyEnforceable,
+  decideCodexHookInvocation,
+  parseCodexHookInput,
+  renderCodexHookDecision,
+  type CodexHookInput,
+} from "./host/codex-app-server-hook.ts";
+export {
+  createCodexAppServerConformancePort,
+  faithfullyAppliedCodexConfiguration,
+} from "./host/codex-app-server-conformance.ts";
 export {
   PROJECTION_DIR,
   PROJECTION_RECEIPT_FILE,

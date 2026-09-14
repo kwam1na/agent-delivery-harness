@@ -32,6 +32,11 @@ import { digestCanonical, sha256Hex } from "../digest.ts";
 import type { AdmissionExpectation } from "../binding/host-admission.ts";
 import { listArchiveEntries, readArchiveEntry } from "../workflow/archive.ts";
 import type { ExecPort } from "./exec-port.ts";
+import type {
+  ComposeHostSessionInput,
+  ComposeHostSessionResult,
+  ManagedHostBinding,
+} from "./managed-host-binding.ts";
 import {
   CONSUMPTION_MARKER_FILE,
   PROJECTION_DIR,
@@ -649,3 +654,36 @@ export function mintGrantAttestation(input: MintGrantAttestationInput): Record<s
     activeProfile: input.expectation.activeProfile,
   };
 }
+
+// ── The seam instance ───────────────────────────────────────────────────────
+
+/**
+ * The Claude Code binding as the facade's host-neutral seam sees it. A pure
+ * adaptation of the composition above — the settings bytes, the CLI arguments
+ * and the digest are exactly what `composeClaudeCodeSession` already produced,
+ * renamed onto the neutral members. Nothing about this host's behavior changes
+ * by being reached through the seam, which is the property the seam was
+ * allowed to exist on.
+ */
+export const claudeCodeBinding: ManagedHostBinding = {
+  hostId: "claude-code",
+  async composeSession(input: ComposeHostSessionInput): Promise<ComposeHostSessionResult> {
+    const composed = await composeClaudeCodeSession(input);
+    if (!composed.ok) return composed;
+    return {
+      ok: true,
+      admissionConfigurationPath: composed.settingsPath,
+      hostAdmissionArguments: composed.cliArgs,
+      discoveryConfigurationDigest: composed.discoveryConfigurationDigest,
+    };
+  },
+  async recomputeDiscoveryConfigurationDigest(input: {
+    readonly admissionConfigurationPath: string;
+    readonly bindingDir: string;
+  }): Promise<string | undefined> {
+    return discoveryConfigurationDigestOf({ settingsPath: input.admissionConfigurationPath, bindingDir: input.bindingDir });
+  },
+  admissionConfigurationPath(bindingDir: string, fence: number): string {
+    return path.join(bindingDir, sessionSettingsFile(fence));
+  },
+};
