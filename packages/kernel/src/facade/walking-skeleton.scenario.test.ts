@@ -372,9 +372,13 @@ describe("the thin one-handoff walking skeleton", () => {
       // it: with the argument dropped, every row that reads the default still
       // passes. Deliberately ABOVE the default so the two are separable while
       // the fence stays live for every later checkpoint — see the block comment
-      // on `DECLARED_LIFETIME_SECONDS`. The one direction a scenario cannot
-      // declare, below the default, is pinned on the resolution rule itself in
-      // `liveness.test.ts`.
+      // on `DECLARED_LIFETIME_SECONDS`. The other direction, below the default,
+      // is pinned twice: on the resolution rule itself in `liveness.test.ts`,
+      // and through `bindWorkspace` at the TERMINAL rebind below, whose fence
+      // nothing afterwards grades (`SHORT_DECLARED_LIFETIME_SECONDS`). That
+      // second one is the only thing in either suite that catches a resolution
+      // which floors the declaration at the default, so it is not redundant
+      // with this one.
       observationLifetimeSeconds: DECLARED_LIFETIME_SECONDS,
       providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
     });
