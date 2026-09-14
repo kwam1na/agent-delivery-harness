@@ -286,8 +286,21 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     status: "present",
     // The finish-line reducer consumes the frozen result grammar and the
     // spine's own "a contract cannot request beyond policy" rule; it authors
-    // no authority model of its own.
-    d1Allowlist: ["digest.ts", "spine/finish-line.ts", "spine/contract.ts"],
+    // no authority model of its own. The external-actions unit consumes three
+    // further FROZEN SPINE CONTRACTS for the same reason the waiver lane does:
+    // the sensitive-approval assertion it must not re-author, the member
+    // grammar its own post-action result is written in, and the action
+    // outcome/verification vocabularies the journal already froze. It still
+    // imports no peer unit — the policy module's authorization recheck is
+    // passed to it as a function, never imported.
+    d1Allowlist: [
+      "digest.ts",
+      "spine/finish-line.ts",
+      "spine/contract.ts",
+      "spine/grammar.ts",
+      "spine/assertion.ts",
+      "spine/journal.ts",
+    ],
     d1SiblingAllowance: true,
   },
   { id: "kernel-checkpoint", path: "packages/kernel/src/checkpoint", kind: "dir", rules: ["e"], status: "present" },
