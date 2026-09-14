@@ -371,3 +371,39 @@ it("bounds the complete v2 archive including retained attachments and overhead",
   if (!rejected.ok)
     expect(rejected.reason).toBe("archive exceeds 16 MiB serialized limit");
 });
+
+/**
+ * AN ARCHIVE WRITTEN BEFORE THE READOUT EXPLAINED ITSELF IS STILL AN ARCHIVE.
+ *
+ * `parseRunExport` checks a stored export by recomputing the projection and
+ * comparing. The per-violation sentences are derived from the same events on
+ * every read, so they are recomputed rather than compared: an export written
+ * when the readout carried no `explanations` must still parse — and only the
+ * journals that carried a violation would have differed, which is exactly the
+ * run an operator reaches back for. Supplied sentences are discarded either
+ * way, so nothing forged survives the round trip.
+ */
+it("parses an export whose stored readout predates per-violation explanations", () => {
+  // `run.started` names no candidate, so the envelope carries none either:
+  // the grammar refuses an envelope tree sha its payload does not also carry.
+  const { candidateTreeSha: _bound, ...envelope } = event;
+  const started = { ...envelope, eventId: "e2", seq: 2, kind: "run.started",
+    payload: { host: "codex", workflow: { releaseId: "test", profile: "linear" } } } as RunEvent;
+  const built = buildRunExport({ runId: "run-1", events: [event, started] });
+  expect(built.readout.violations).toContain("run-started-not-first");
+  expect(built.readout.explanations?.length).toBe(built.readout.violations.length);
+
+  expect(parseRunExport(JSON.stringify(built)).ok).toBe(true);
+  const older = JSON.parse(JSON.stringify(built));
+  delete older.readout.explanations;
+  const parsedOlder = parseRunExport(JSON.stringify(older));
+  expect(parsedOlder.ok).toBe(true);
+  if (parsedOlder.ok) expect(parsedOlder.value.readout.explanations).toEqual(built.readout.explanations);
+
+  // And a supplied sentence is not what the reader gets back.
+  const forged = JSON.parse(JSON.stringify(built));
+  forged.readout.explanations = [{ violation: "run-started-not-first", because: "nothing is wrong", blocksAdmission: true }];
+  const parsedForged = parseRunExport(JSON.stringify(forged));
+  expect(parsedForged.ok).toBe(true);
+  if (parsedForged.ok) expect(parsedForged.value.readout.explanations).toEqual(built.readout.explanations);
+});

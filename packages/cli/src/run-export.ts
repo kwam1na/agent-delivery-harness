@@ -55,6 +55,22 @@ export function buildRunExport(input: {
   };
 }
 
+/**
+ * The readout members a stored export is CHECKED against.
+ *
+ * The per-violation sentences are derived from the same events by the same
+ * pass on every read, so an export never has to carry them and is never
+ * refused for lacking them: an archive written before the readout explained
+ * itself stays valid, and one carrying invented sentences gains nothing,
+ * because the value returned below is rebuilt from the recomputation either
+ * way. Compare what the events fix; recompute what they derive.
+ */
+function comparableReadout(readout: object): Record<string, unknown> {
+  const comparable: Record<string, unknown> = { ...readout };
+  delete comparable["explanations"];
+  return comparable;
+}
+
 export type DeliveryRunExport = ReturnType<typeof buildRunExport> & {
   readonly attachments?: RunAttachments;
 };
@@ -141,7 +157,8 @@ export function parseRunExport(text: string): RunExportParseResult {
     const { note, ...readout } = value["readout"];
     if (
       (note !== undefined && typeof note !== "string") ||
-      canonicalize(readout) !== canonicalize(expected.readout)
+      canonicalize(comparableReadout(readout)) !==
+        canonicalize(comparableReadout(expected.readout))
     )
       return invalid;
     return {

@@ -767,6 +767,13 @@ describe("emit, the boundary wrap, and runs", () => {
     // the third readout row is where the operator learns that.
     const violations = shown.out.split("\n").find((line) => line.includes("violations:")) ?? "";
     expect(violations).toContain("gate-reported-before-closed-round");
+    // And beneath it, why: the readout evaluates unbound to any record, so the
+    // reason it prints is about this journal's own ordering. The admission
+    // sentence sits under the warning it qualifies, because a list of violated
+    // constraints under the word `readout` otherwise reads as a verdict.
+    const why = shown.out.split("\n").find((line) => line.includes("gate-reported-before-closed-round:")) ?? "";
+    expect(why).toContain("has no closed round this row accepts");
+    expect(shown.out).toContain("admission: none of the above blocks admission; no gate, admission, or record decision reads a journal.");
   });
 
   it("names only the record completion when the gate completion is present", async () => {

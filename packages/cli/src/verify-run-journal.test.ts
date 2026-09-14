@@ -584,6 +584,12 @@ describe("verify's run-journal completeness row", () => {
     // The label that separates this caller from the viewer's: `verify` judged
     // the round constraints against THIS record's candidate.
     expect(row).toContain("bound to the record");
+    // And the binding is named on the healthy row too, not only where a
+    // projection widened it: an operator who sees the reviewed-tree sentence
+    // elsewhere can tell the two apart because both are always printed.
+    expect(row).toContain("round binding: the governing closed round binds the record's own candidate tree");
+    // Nothing was violated, so no reason and no admission sentence appear.
+    expect(row).not.toContain("admission:");
 
     // The opt-in agrees with the row it reads.
     const required = await harness.cli(["verify", "--require-run-journal"]);
@@ -773,16 +779,53 @@ describe("verify's run-journal completeness row", () => {
     // beside it, and whether any of it stops this candidate being admitted.
     expect(row).toContain("round binding: no closed round binds the record's candidate tree or any reviewed candidate it accepts");
     expect(row).toContain("round-not-bound-to-record: the governing round closed at seq");
-    expect(row).toContain("a consequence of round-not-bound-to-record, not a separate mistake");
     expect(row).toContain("admission: none of the above blocks admission");
     expect(row).toContain("Only --require-run-journal blocks, and only this verify invocation.");
 
     const required = await harness.cli(["verify", "--require-run-journal"]);
     expect(required.code).toBe(EXIT_POLICY);
     expect(required.err).toContain("round-not-bound-to-record");
-    // The refusal carries the same reasons, so nobody has to re-run the
-    // command with the flag dropped just to read why it refused.
-    expect(required.err).toContain("gate-before-closed-round: the governing gate completion at seq");
+    // The refusal carries the same reason, so nobody has to re-run the command
+    // with the flag dropped just to read why it refused.
+    expect(required.err).toContain("round-not-bound-to-record: the governing round closed at seq");
+    expect(required.err).toContain("none of the above blocks admission");
+  });
+
+  /**
+   * The shape this ticket was filed from: a round closed against an earlier
+   * tree, and a gate reported after it. Two warnings appear, and they are one
+   * fact — the gate warning exists only because no round this record accepts
+   * closed at all. A row that listed them as peers would send an operator
+   * looking for a mis-ordered gate that never happened.
+   */
+  it("names the gate warning as a consequence of the unaccepted round, not a second defect", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    await deliverRecord(harness);
+    await commitRecord(harness.dir);
+    await startRun(harness);
+    await emitAll(harness, [
+      ...prerequisites(),
+      roundOpened(OTHER_TREE_SHA),
+      roundClosed(OTHER_TREE_SHA),
+      ["gate.reported", { command: "npm run check", outcome: "pass", durationMs: 5 }],
+      ["pr.opened", { url: "https://example.invalid/pr/1", candidateTreeSha: harness.treeSha }],
+      ended(),
+    ]);
+
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    const row = rowOf(verified.out);
+    expect(row).toContain("round-not-bound-to-record");
+    expect(row).toContain("gate-reported-before-closed-round: the governing gate.reported at seq");
+    expect(row).toContain("a consequence of round-not-bound-to-record, not a separate mistake");
+    // The gate itself is not accused of preceding anything: there is no closed
+    // round this record accepts for it to have preceded.
+    expect(row).not.toContain("precedes the governing closed round");
+    expect(row).toContain("admission: none of the above blocks admission");
+
+    const required = await harness.cli(["verify", "--require-run-journal"]);
+    expect(required.code).toBe(EXIT_POLICY);
+    expect(required.err).toContain("gate-reported-before-closed-round: the governing gate.reported at seq");
     expect(required.err).toContain("(a consequence of round-not-bound-to-record)");
     expect(required.err).toContain("none of the above blocks admission");
   });
