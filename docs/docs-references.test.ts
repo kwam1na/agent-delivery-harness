@@ -609,28 +609,93 @@ describe("the computable counts the documentation states", () => {
  * with `pinned`: this guide is current documentation, and its gate claims are
  * recomputed here from the two artifacts that now hold them.
  *
- * WHY THE NEGATIVE ROW IS NOT REDUNDANT. The positive rows below pin what the
+ * WHY THE CLOSED-SET ROW IS NOT REDUNDANT. The positive rows below pin what the
  * guide must say. They say nothing about what else it may say, and the failure
  * this class actually produces is an *additional* stale sentence somewhere
- * further down the page. So the negative row scans the whole guide for the
- * claim rather than for the sentence: any clause that puts an operator step-in
- * together with a gating verb fails, unless that clause is itself denying it.
+ * further down the page. So the set of clauses this page states about an
+ * operator step-in is pinned whole: a new claim about one fails because it is
+ * not in the set, whatever words it chooses.
  *
  * WHY CLAUSES AND NOT SENTENCES. The wording this replaces sat in a sentence
  * whose *other* half already carried a "must not", so a sentence-level scan
- * with a negation escape hatch passes the very text this row exists to refuse.
- * Splitting on clause punctuation puts "the milestone gate compares
+ * with a negation escape hatch passes the very text this block exists to
+ * refuse. Splitting on clause punctuation puts "the milestone gate compares
  * intervention counts" on its own, where it has no negation to borrow.
  *
- * WHAT THIS DOES NOT CATCH, stated so the next reader does not over-trust it:
- * it is a prose scan over a fixed verb list, and a claim phrased entirely
- * outside that list reaches the page. The list covers the shapes seen so far —
- * the original wording, and the "should be lower than" near-miss a V26-1511
- * lens showed slips past a single-keyword scan. A claim is not caught by being
- * wrong; it is caught by being phrased as gating.
+ * WHY NOT A VERB SCAN. That is what this block shipped first, and the round-1
+ * adversarial lens escaped it nine ways — negative-form requirements, verbs
+ * outside the list, inflections of verbs inside it, synonyms of "intervention",
+ * claims inside inline code, and claims split across the page's hard wrap.
+ * `PINNED_STEP_IN_CLAUSES` records why an open-world scan cannot close that
+ * class and a closed set can.
  */
 describe("the milestone gate claims docs/managed-delivery.md makes", () => {
   const GUIDE = "docs/managed-delivery.md";
+
+  /**
+   * Every term this page uses for an operator step-in. The page uses both
+   * `intervention` and `step-in` for the same thing, so a scan keyed on the
+   * first cannot see a claim written with the second.
+   */
+  const STEP_IN = /\b(interventions?|step-ins?|operator (actions?|involvement|input)|hand-offs?|manual input)\b/i;
+
+  /**
+   * This page's clauses that have an operator step-in as their subject.
+   *
+   * Three normalizations, each closing a way a claim walked out of the first
+   * version of this scan:
+   *   - inline code is UNWRAPPED rather than deleted, so a claim written as
+   *     `interventionCounts` still carries the word it is about;
+   *   - soft line wraps are joined, because this page is hard-wrapped at ~78
+   *     columns and splitting on every newline cut most sentences in half,
+   *     leaving the subject in one fragment and the verb in the next;
+   *   - only real clause punctuation and paragraph breaks split.
+   */
+  const stepInClauses = (): readonly string[] =>
+    textOf(GUIDE)
+      .replace(/`([^`]*)`/g, " $1 ")
+      .replace(/([^\n])\n(?!\n)/g, "$1 ")
+      .split(/[.;:,]|\n\n+|—/)
+      .map((clause) => clause.replace(/\s+/g, " ").trim())
+      .filter((clause) => clause !== "" && STEP_IN.test(clause));
+
+  /**
+   * Those clauses, pinned verbatim.
+   *
+   * WHY A CLOSED SET AND NOT A KEYWORD SCAN. The first version of this pin
+   * scanned for a gating verb and excused any clause that also carried a
+   * negation. That is an open-world test over free prose, and a round-1 lens
+   * walked out of it nine ways: a negative-form requirement ("must not be
+   * higher than the baseline's") reads as a denial while stating a gate;
+   * `blocks` and `exceeds` were not in the verb list, and neither were the
+   * `scoring` and `regressing` inflections of verbs that were; and a claim
+   * written with `step-in`, or inside inline code, or split across the hard
+   * wrap, was never inspected at all. Each widening buys one mutation and
+   * leaves the next one open, because the wording is the attacker's choice.
+   *
+   * So the set is closed instead, and wording stops being the attacker's
+   * choice: a claim about an operator step-in reaches this page only by being
+   * added here. That makes an ordinary prose edit to this part of the page
+   * fail — deliberately. Re-stamping a row is the moment to check it against
+   * `.agents/policy/shadow-milestone-gate-record.json`, which is the point.
+   *
+   * WHAT THIS STILL DOES NOT CATCH, stated so the next reader does not
+   * over-trust it: a gating claim that names an operator step-in with a term
+   * outside `STEP_IN` above is not in the set and so does not have to be
+   * pinned. That residue is one closed list of nouns, not an open list of
+   * verbs and negations.
+   */
+  const PINNED_STEP_IN_CLAUSES: readonly string[] = [
+    "and never as an operator **intervention**",
+    "but not because interventions decide anything",
+    "a design that requires an operator to press a key must not be able to flatter its own reported figures by calling that key an intervention",
+    "Operator interventions are reported in full and gate nothing",
+    "and are never counted as interventions",
+    "Interventions no longer gate because the criterion never had headroom",
+    "The baseline's own intervention counts are **2**",
+    "every step-in the baseline's rubric counts is still counted and still reported",
+    "and it holds the exact set of clauses this page states about an operator step-in",
+  ];
 
   const gateRecord = (): { gateMetrics: { gatingCriterion: string } } =>
     JSON.parse(readFileSync(path.join(REPO_ROOT, ".agents/policy/shadow-milestone-gate-record.json"), "utf8")) as {
@@ -663,11 +728,19 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
       baseline.interventionCounts.length,
       "the verdict's baseline no longer reports exactly three intervention counts; the guide's sentence has to be restated, not re-stamped",
     ).toBe(3);
-    const stated = /baseline's own intervention counts are \*\*(\d+)\*\*, \*\*(\d+)\*\* and \*\*(\d+)\*\*/.exec(textOf(GUIDE));
-    expect(stated, `${GUIDE} no longer states the baseline's intervention counts`).not.toBeNull();
-    expect(stated!.slice(1, 4).map(Number), `${GUIDE} states baseline intervention counts the verdict does not compute`).toEqual([
-      ...baseline.interventionCounts,
-    ]);
+    // EVERY statement, not the first. `.exec` stops at one match, so a second,
+    // contradicting sentence further down the page went unchecked — which is
+    // the very failure the closed-set row below exists to catch, arriving
+    // through the row that recomputes the figure.
+    const stated = [
+      ...textOf(GUIDE).matchAll(/baseline's own intervention counts are \*\*(\d+)\*\*, \*\*(\d+)\*\* and \*\*(\d+)\*\*/g),
+    ];
+    expect(stated.length, `${GUIDE} no longer states the baseline's intervention counts`).toBeGreaterThan(0);
+    for (const match of stated) {
+      expect(match.slice(1, 4).map(Number), `${GUIDE} states baseline intervention counts the verdict does not compute`).toEqual([
+        ...baseline.interventionCounts,
+      ]);
+    }
     everyStatementAgrees("the baseline's median intervention count", /a median of\n?\*\*(\d+)\*\*/g, String(baseline.medianOperatorInterventions));
   });
 
@@ -679,37 +752,51 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
     documentStates(GUIDE, "are never counted as interventions");
   });
 
-  it("makes no clause anywhere on the page that gates on an operator intervention", () => {
+  it("says nothing about an operator step-in beyond the clauses pinned here", () => {
+    expect(stepInClauses()).toEqual(PINNED_STEP_IN_CLAUSES);
+  });
+
+  it("states no gating requirement in any of those clauses", () => {
+    // Defence in depth behind the closed set above. The set stops a claim
+    // arriving unnoticed; this stops one arriving in a re-stamp, by refusing
+    // the two shapes a gating clause takes: a requirement over a step-in, and
+    // a gating verb with nothing denying it.
     /** Verbs that turn a measurement into a criterion. */
     const GATES =
-      /\b(gates?|gating|compares?|compared|criterion|criteria|threshold|regress(es|ed)?|lower|higher|decides?|scored?|counts? against|counted against|weighed)\b/i;
+      /\b(gates?|gating|compar(es?|ed|ing)|criterion|criteria|thresholds?|regress(es|ed|ing)?|lower|higher|decides?|scor(es?|ed|ing)|counts? against|counted against|counting against|weigh(s|ed|ing)?|blocks?|exceeds?|bars?|caps?|limits?|ceiling|tolerance|worse|better|improves?|beats?)\b/i;
     /** A clause denying the gating it mentions. */
     const DENIES = /\b(never|not|no|nothing|nor|neither|cannot|without|instead|ceasing|longer)\b/i;
+    /**
+     * A clause stating a requirement rather than reporting one. Without this,
+     * `must not be higher than the baseline's` reads as a denial — it carries
+     * `not` — while stating exactly the gate this page says was dropped.
+     */
+    const REQUIRES = /\b(must|should|shall|has to|have to|needs? to|required to)\b/i;
 
-    // Inline code first: a criterion identifier is not prose, and `[2, 0, 0]`
-    // would otherwise split into clause fragments that mean nothing.
-    const prose = textOf(GUIDE).replace(/`[^`]*`/g, " ");
-    const clauses = prose
-      .split(/[.;:,\n]|—/)
-      .map((clause) => clause.trim())
-      .filter((clause) => clause !== "");
-    const aboutInterventions = clauses.filter((clause) => /intervention/i.test(clause));
-    // Anti-vacuity, both halves. A page that stopped discussing interventions
-    // satisfies the loop below for free, and so does a splitter that stopped
-    // splitting. The floor is the count this delivery landed; it is a floor
-    // rather than an equality so ordinary prose edits do not fail here.
-    expect(aboutInterventions.length, `${GUIDE} no longer discusses operator interventions at all`).toBeGreaterThanOrEqual(6);
-    // The list must also actually contain the denials, or `DENIES` could be
-    // matching nothing and the loop would be passing on an empty intersection.
+    const gating = stepInClauses().filter((clause) => GATES.test(clause));
+    // Anti-vacuity: with no gating clause at all the loop below passes on an
+    // empty set, and this row would stop exercising its predicate.
     expect(
-      aboutInterventions.some((clause) => GATES.test(clause)),
-      "no clause about interventions mentions gating at all; this row is no longer exercising its predicate",
-    ).toBe(true);
-
-    for (const clause of aboutInterventions) {
-      if (!GATES.test(clause)) continue;
-      expect(DENIES.test(clause), `${GUIDE} gates on an operator intervention: "${clause}"`).toBe(true);
+      gating.length,
+      `no clause on ${GUIDE} mentions gating and a step-in together; this row is no longer exercising its predicate`,
+    ).toBeGreaterThan(0);
+    for (const clause of gating) {
+      expect(REQUIRES.test(clause), `${GUIDE} states a requirement over an operator step-in: "${clause}"`).toBe(false);
+      expect(DENIES.test(clause), `${GUIDE} gates on an operator step-in: "${clause}"`).toBe(true);
     }
+  });
+
+  it("resolves every link in the solution-note index", () => {
+    // `scannedDocuments()` excludes `docs/solutions/` as narration, and the
+    // index inherits that exclusion without deserving it: its whole job is to
+    // route a reader off the narration and onto current documentation, so a
+    // dead route defeats the one thing it is for. Only the routes are checked
+    // here. The prose around them stays unpinned, which is the posture the
+    // file itself declares.
+    const index = "docs/solutions/README.md";
+    const references = referencesOf(index);
+    expect(references.length, `${index} states no links at all`).toBeGreaterThan(0);
+    expect(references.filter((reference) => !isTracked(reference.inTree)).map((reference) => reference.target)).toEqual([]);
   });
 });
 
