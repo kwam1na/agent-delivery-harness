@@ -106,6 +106,58 @@ describe("the Claude binding reached through the seam", () => {
     expect(actual.admissionConfigurationPath).toBe(
       claudeCodeBinding.admissionConfigurationPath(throughSeam.bindingDir, throughSeam.fence),
     );
+    // THE DIGEST IS PART OF "NO DRIFT". It is what the attestation binds and
+    // what every recheck compares against, so a seam that composed the same
+    // bytes and reported a different digest would void the session at the
+    // first recheck while every byte comparison above stayed green. The two
+    // compositions above stand in different disposable bases, and the digest
+    // covers absolute paths, so the comparison is made over ONE input: the
+    // seam recomposes exactly what the direct call composed.
+    const reachedThroughSeam = await claudeCodeBinding.composeSession(direct);
+    expect(reachedThroughSeam.ok).toBe(true);
+    if (!reachedThroughSeam.ok) return;
+    expect(reachedThroughSeam.discoveryConfigurationDigest).toBe(expected.discoveryConfigurationDigest);
+    expect(reachedThroughSeam.admissionConfigurationPath).toBe(expected.settingsPath);
+
+    // Both sides are composed by the same code, so comparing them to each
+    // other cannot see a change that moves BOTH. These rows say what the bytes
+    // must CONTAIN, independently of the other side.
+    const settings = JSON.parse(actualBytes) as Record<string, any>;
+    expect(settings["permissions"].allow).toEqual([...throughSeam.grant.allowedCapabilities]);
+    expect(settings["sandbox"]).toMatchObject({
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+    });
+    expect(settings["sandbox"].filesystem.allowWrite).toEqual(
+      expect.arrayContaining([path.join(throughSeam.workspaceRoot, "src")]),
+    );
+    expect(settings["sandbox"].filesystem.denyWrite).toEqual(
+      expect.arrayContaining([throughSeam.commonGitDir, throughSeam.authorityDir]),
+    );
+    expect(settings["sandbox"].filesystem.denyRead).toEqual(
+      expect.arrayContaining([throughSeam.commonGitDir, throughSeam.authorityDir]),
+    );
+    expect(Object.keys(settings["hooks"])).toContain("PreToolUse");
+    // This session's own fence, baked into the hook command.
+    expect(JSON.stringify(settings["hooks"])).toContain(String(throughSeam.fence));
+    expect(JSON.stringify(settings["hooks"])).toContain(throughSeam.statePath);
+  });
+
+  it("is reachable as one binding through the published surface, not only through the module path", async () => {
+    // A consumer outside this package holds the barrel. A binding exported
+    // from the module but missing from `index.ts` is a seam with one
+    // implementation in practice, whatever this file proves about two.
+    const barrel = await import("../index.ts");
+    expect(barrel.claudeCodeBinding).toBe(claudeCodeBinding);
+    expect(barrel.codexAppServerBinding).toBe(codexAppServerBinding);
+    expect(barrel.claudeCodeBinding.hostId).toBe("claude-code");
+    expect(barrel.codexAppServerBinding.hostId).toBe("codex-cli");
+    for (const binding of [barrel.claudeCodeBinding, barrel.codexAppServerBinding]) {
+      expect(typeof binding.composeSession).toBe("function");
+      expect(typeof binding.recomputeDiscoveryConfigurationDigest).toBe("function");
+      expect(typeof binding.admissionConfigurationPath).toBe("function");
+    }
   });
 
   it("recomputes the digest through the one definition every recheck site uses", async () => {

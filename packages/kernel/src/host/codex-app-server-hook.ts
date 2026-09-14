@@ -21,7 +21,11 @@
  * caller below turns into a refusal rather than a continuation.
  */
 import { decideHookInvocation, type HookBindingState, type HookDecision, type HookToolInput } from "./hook-main.ts";
-import { CODEX_UNENFORCEABLE_TOOL_SOURCES } from "./codex-app-server.ts";
+import {
+  CODEX_UNENFORCEABLE_TOOL_SOURCES,
+  codexEscalationTokens,
+  codexHostTool,
+} from "./codex-app-server.ts";
 
 /** The host's own spelling of this event inside the decision document. */
 export const CODEX_HOOK_EVENT_NAME = "PreToolUse";
@@ -51,15 +55,36 @@ export interface CodexHookInput {
  * the second half, because a boundary resting only on configuration the
  * binding cannot re-verify per invocation is not a boundary.
  *
- * Case-folded and substring-matched in the closed direction: an unrecognized
- * spelling of a hosted source denies, and a name that merely resembles one is
- * denied rather than admitted. Nothing here can widen a grant — a tool that
- * passes still faces the full admission re-evaluation.
+ * THE TWO HALVES MATCH DIFFERENTLY, ON PURPOSE.
+ *
+ * The host's own `tool_source` — its classification of where a tool came from
+ * — is matched by SUBSTRING in the closed direction: an unrecognized spelling
+ * such as `mcp-server` or `app_tool` must deny, and there the cost of a false
+ * deny is one tool call.
+ *
+ * The tool NAME is matched by whole token, with the same splitter the
+ * escalation refusal uses. A substring test on the name is not conservative,
+ * it is wrong: `app` is a substring of `apply_patch`, the host's own patch
+ * tool, so a substring test permanently denies the primary file-mutation tool
+ * on every invocation while reporting that it is "served by a surface the
+ * synchronous local hook cannot adjudicate" — a false statement about a
+ * first-party local tool. Namespaced names (`__`, `/`, `:`) still deny outright,
+ * which is how MCP and app tools actually arrive.
+ *
+ * Nothing here can widen a grant — a tool that passes still faces the full
+ * admission re-evaluation.
  */
 export function codexToolIsLocallyEnforceable(toolName: string, toolSource?: unknown): boolean {
   if (toolName.length === 0) return false;
   const folded = toolName.toLowerCase();
-  if (CODEX_UNENFORCEABLE_TOOL_SOURCES.some((source) => folded.includes(source))) return false;
+  const nameTokens = codexEscalationTokens(toolName);
+  if (
+    nameTokens.some((token) =>
+      CODEX_UNENFORCEABLE_TOOL_SOURCES.some((source) => token === source || token === `${source}s`),
+    )
+  ) {
+    return false;
+  }
   // A namespaced tool name is how MCP and app tools arrive; the local hook
   // cannot tell which server answered one.
   if (folded.includes("__") || folded.includes("/") || folded.includes(":")) return false;
@@ -91,12 +116,76 @@ export function decideCodexHookInvocation(
       reason: `unenforceable_tool_surface: "${toolName}" is served by a surface the synchronous local hook cannot adjudicate`,
     };
   }
+  const host = codexHostTool(toolName);
+  if (host === undefined) {
+    return {
+      allowed: false,
+      reason: `unmapped_host_tool: "${toolName}" is not one of the characterized Codex tools, so this hook cannot read its operands`,
+    };
+  }
+  const toolInput =
+    typeof input.tool_input === "object" && input.tool_input !== null && !Array.isArray(input.tool_input)
+      ? (input.tool_input as Record<string, unknown>)
+      : undefined;
+  const writes = codexWrittenPaths(host.writePathMembers, toolInput);
+  if (host.writes === "paths" && writes.length === 0) {
+    // The tool writes by contract and named nothing this hook could read.
+    // Proceeding would hand the shared decision an empty write set, which it
+    // would correctly adjudicate as "writes nothing" — about an invocation
+    // that writes. Deny instead.
+    return {
+      allowed: false,
+      reason: `unreadable_write_operands: "${toolName}" writes files but named none this hook could read`,
+    };
+  }
   const shared: HookToolInput = {
-    tool_name: toolName,
-    tool_input: typeof input.tool_input === "object" && input.tool_input !== null ? (input.tool_input as Record<string, unknown>) : undefined,
+    // Translated into the kernel's vocabulary: the capability the grant is
+    // spelled in, and the write paths under the member name the shared
+    // decision's own table reads for that capability.
+    tool_name: host.capability,
+    tool_input: host.writes === "paths" ? { file_path: writes[0], ...(toolInput ?? {}) } : toolInput,
     tool_use_id: typeof input.tool_use_id === "string" ? input.tool_use_id : undefined,
   };
+  if (host.writes === "paths" && writes.length > 1) {
+    // Every written path faces containment, not just the first: a patch that
+    // writes one admitted path and one denied path is a denied patch.
+    for (const written of writes) {
+      const decision = decideHookInvocation(
+        state,
+        { ...shared, tool_input: { ...(toolInput ?? {}), file_path: written } },
+        observedAt,
+        sessionFence,
+      );
+      if (!decision.allowed) return decision;
+    }
+    return { allowed: true };
+  }
   return decideHookInvocation(state, shared, observedAt, sessionFence);
+}
+
+/**
+ * The paths a host tool says it writes, read from the members the map names.
+ * A member may be an array of paths, a single path, or — as the host's own
+ * apply-patch surface spells it — an object KEYED by path. Anything else
+ * contributes nothing, which for a `paths` tool is a denial above rather than
+ * an empty write set handed onward.
+ */
+export function codexWrittenPaths(
+  members: readonly string[],
+  toolInput: Record<string, unknown> | undefined,
+): readonly string[] {
+  if (toolInput === undefined) return [];
+  const found: string[] = [];
+  for (const member of members) {
+    const value = toolInput[member];
+    if (typeof value === "string" && value.length > 0) found.push(value);
+    else if (Array.isArray(value)) {
+      for (const entry of value) if (typeof entry === "string" && entry.length > 0) found.push(entry);
+    } else if (typeof value === "object" && value !== null) {
+      for (const key of Object.keys(value as Record<string, unknown>)) if (key.length > 0) found.push(key);
+    }
+  }
+  return [...new Set(found)];
 }
 
 /**

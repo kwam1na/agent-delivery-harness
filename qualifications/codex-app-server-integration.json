@@ -10,7 +10,7 @@
     "versionClaim": "The binding was characterized against the INSTALLED host, 0.147.0. 0.151 is the version the tracked item pins and is NOT installed here; it was never observed, so this record makes no claim about it whatsoever. A version that was not observed is recorded as uncharacterized rather than assumed to behave like the one that was.",
     "tier": 0,
     "gradeSource": "qualifications/host-admission-capabilities.json, keyed on host id and exact host version. That record grades codex-cli 0.147.0 at Tier 0, and this record does not restate, promote, or reinterpret it.",
-    "admissionSurface": "thread/start carrying an ephemeral per-thread config layer: a per-fence named permission profile (sandbox_mode workspace-write, writable_roots exactly the grant's writable paths, network_access false, exclude_tmpdir_env_var and exclude_slash_tmp true, deny_read and deny_write covering the shared Git authority and the installation authority under both path spellings), a synchronous pre_tool_use command hook carrying this session's own fence, and every tool surface the synchronous local hook cannot adjudicate switched off (mcp_servers empty, apps/tool_registry/multi_agent_v2 false, web_search false)."
+    "admissionSurface": "thread/start carrying an ephemeral per-thread config layer: a per-fence named permission profile (sandbox_mode workspace-write, writable_roots exactly the grant's writable paths, network_access false, exclude_tmpdir_env_var and exclude_slash_tmp true, plus a filesystem block whose deny_read and deny_write name the workspace root, every protected path, ambient temp, the shared Git authority and the installation authority under both path spellings), a synchronous pre_tool_use command hook carrying this session's own fence and the codex-pre-tool-use subcommand that renders the host's own decision document, enabled_tools spelled in the HOST's tool vocabulary rather than the kernel's, and every tool surface the synchronous local hook cannot adjudicate switched off (mcp_servers empty, apps/tool_registry/multi_agent_v2 false, web_search false)."
   },
   "characterization": {
     "method": "model-free, read-only, and performed BEFORE any binding byte was written: `codex app-server generate-json-schema --out <scratch>` against the installed host, plus a read-only string inventory of the installed binary. No thread was started, no turn ran, no credential was read, and no configuration file was written.",
@@ -23,8 +23,13 @@
       },
       {
         "id": "named-permission-profiles",
-        "observation": "permission_profile, allowed_permission_profiles, and the workspace-write members writable_roots, network_access, exclude_tmpdir_env_var, exclude_slash_tmp, deny_read are present.",
-        "consequence": "a grant can be projected onto the host's own controls by name rather than by argument-passing at each turn."
+        "observation": "permission_profile and allowed_permission_profiles are present. The app-server schema's SandboxWorkspaceWrite carries EXACTLY four members — writable_roots, network_access, exclude_tmpdir_env_var, exclude_slash_tmp — and no deny member of any kind. The config-layer permission-profile struct in the installed binary's inventory carries a filesystem block, and deny_read appears in that struct. The filesystem special-path tokens root, minimal, project_roots, subpath, tmpdir and slash_tmp are present, as is the FileSystemAccessMode enum read/write/deny.",
+        "consequence": "a grant can be projected onto the host's own controls by name rather than by argument-passing at each turn, and the WRITE boundary is the positive writable_roots list rather than a deny list — workspace-write opens write to the listed roots and nothing else, which is the only part of the boundary this characterization actually establishes."
+      },
+      {
+        "id": "unobserved-filesystem-deny-members",
+        "observation": "filesystem.read and filesystem.deny_write were observed in NEITHER the app-server JSON schemas nor the string inventory of the installed binary. deny_write does not appear anywhere in the inventory at all.",
+        "consequence": "the filesystem block this binding composes carries two members with no recorded evidence behind them. They are emitted as defence in depth — a host that honours them narrows the boundary further, a host that ignores them leaves the characterized writable_roots boundary intact — and no acceptance criterion in this record rests on them. They are recorded here as uncharacterized rather than assumed, and they are listed under knownLimitations."
       },
       {
         "id": "synchronous-pre-tool-use-hook",
@@ -65,7 +70,7 @@
   },
   "subagents": {
     "capability": "removed",
-    "reason": "exact permission-profile, hook, and fence inheritance into a Codex subagent is unproved by the characterization: the probed surface reports subagentStart/subagentStop but says nothing about whether the per-thread profile and the synchronous hook are carried into a child. The rule for an unproved inheritance is monotone removal, never compensation, so the binding does not supervise, launch, or wrap agents."
+    "reason": "exact permission-profile, hook, and fence inheritance into a Codex subagent is unproved; the capability is removed rather than supervised. The probed surface reports subagentStart/subagentStop but says nothing about whether the per-thread profile and the synchronous hook are carried into a child. The rule for an unproved inheritance is monotone removal, never compensation, so the binding does not supervise, launch, or wrap agents."
   },
   "terminationProvenance": {
     "descendantTeardown": "unverified",
@@ -75,7 +80,7 @@
   },
   "acceptanceCriteria": [
     {
-      "statement": "the fence-scoped profile opens write for exactly the grant's writable paths and nothing wider, with the workspace root, every protected path, the shared Git authority and the installation authority denied",
+      "statement": "the fence-scoped profile opens write for exactly the grant's writable paths and nothing wider, through the characterized sandbox_workspace_write.writable_roots list; the workspace root, every protected path, the shared Git authority and the installation authority are additionally named in the composed deny sets, which rest on partly uncharacterized keys and are defence in depth rather than the boundary",
       "outcome": "held",
       "leg": "model-free",
       "evidence": "packages/kernel/src/host/codex-app-server.test.ts — 'the per-fence permission profile'"
@@ -136,6 +141,9 @@
     "The applied-configuration report is supplied by the caller in the model-free lane. It is the exact seam a live operator-owned lane would fill with the host's own answer, and the verification it feeds is the same code in both lanes — but no host has answered through it here.",
     "The characterization is schema-and-inventory only: it establishes that the primitives exist and how they are spelled, not that the host enforces them.",
     "The host id is the graded record's key, so the grade lookup resolves; it resolves to Tier 0 with descendant teardown unsupported, which is why this record's resume position is fresh-worktree-only.",
-    "No confirmation producer is claimed. Codex exposes no opaque pre-registration operator-confirmation primitive in the probed surface, so the Tier 1 floor is unmet and the lane stays Tier 0."
+    "No confirmation producer is claimed. Codex exposes no opaque pre-registration operator-confirmation primitive in the probed surface, so the Tier 1 floor is unmet and the lane stays Tier 0.",
+    "The composed permissions block emits filesystem.read and filesystem.deny_write, and neither key was observed in the app-server schemas or the installed binary's inventory. They are redundant narrowing on top of the characterized sandbox_workspace_write.writable_roots boundary; no claim in this record rests on them, and a host that ignores them is left with exactly the boundary that WAS characterized. filesystem.deny_read was observed in the config-layer profile struct.",
+    "The Codex tool vocabulary this binding maps — apply_patch, shell, exec_command, unified_exec, write_stdin, view_image, update_plan — comes from the string inventory of the installed binary. The pre-invocation hook's own tool_input shape was NOT characterized: the written-path members the hook reads for apply_patch are taken from the host's apply-patch APPROVAL schema (fileChanges, keyed by path) plus the defensive spellings file_path and path. A patch that names its paths some other way is denied rather than admitted with an empty write set, so the unknown fails closed.",
+    "graph.claudeCodeBinding and the seam are exercised through the facade only by the seam's own injection test; no delivery in this repository is driven through the Codex binding."
   ]
 }

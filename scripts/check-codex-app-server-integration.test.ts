@@ -33,6 +33,25 @@ const readJson = (relative: string): any => JSON.parse(readFileSync(path.join(RE
 const record = readJson("qualifications/codex-app-server-integration.json");
 const admissionRecord = readJson("qualifications/host-admission-capabilities.json");
 
+const escapeForRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A named case must be a LIVE declaration, not merely a string present in the
+ * file. A substring test is satisfied by a header comment, a commented-out
+ * block, an `it.todo`, or — the case that actually matters — a `describe.skip`
+ * around the very case the record cites as its evidence. Switching a named
+ * case off would then leave the criterion reading `held` with a sensor that no
+ * longer runs, which is exactly the failure this file's header names.
+ */
+function expectLiveCase(absolute: string, caseName: string): void {
+  const source = readFileSync(absolute, "utf8");
+  const name = escapeForRegExp(caseName);
+  const declared = new RegExp(String.raw`\b(?:it|test|describe)\(\s*["'\`]${name}`);
+  const disabled = new RegExp(String.raw`\b(?:it|test|describe)\.(?:skip|todo|fails|skipIf)\(\s*["'\`]${name}`);
+  expect(declared.test(source), `${absolute}: no live case declares ${JSON.stringify(caseName)}`).toBe(true);
+  expect(disabled.test(source), `${absolute}: ${JSON.stringify(caseName)} is declared but disabled`).toBe(false);
+}
+
 describe("the Codex app-server integration record", () => {
   it("keys the host exactly as the graded capability record does, at the version actually characterized", () => {
     expect(record.schemaVersion).toBe("codex-app-server-integration/1");
@@ -66,7 +85,12 @@ describe("the Codex app-server integration record", () => {
     expect(record.liveProbes).toBeUndefined();
     for (const criterion of record.acceptanceCriteria as any[]) {
       expect(criterion.leg, criterion.statement).toBe("model-free");
-      expect(criterion.outcome, criterion.statement).toBe("held");
+      // The OUTCOME vocabulary is open in both directions on purpose. Pinning
+      // it to "held" makes an honest `not-held` fail this sensor, which leaves
+      // a later delivery two ways to go green — falsify the outcome, or delete
+      // the criterion — and both are the "record that quietly outgrows its
+      // evidence" this file exists to prevent.
+      expect(["held", "not-held"], criterion.statement).toContain(criterion.outcome);
     }
   });
 
@@ -82,7 +106,11 @@ describe("the Codex app-server integration record", () => {
   it("removes the subagent capability with the binding's own reason, not a softer one", () => {
     expect(record.subagents.capability).toBe(codexSubagentPosture().capability);
     expect(record.subagents.capability).toBe("removed");
-    expect(record.subagents.reason.length).toBeGreaterThan(0);
+    // The BINDING'S OWN reason, verbatim — not merely a non-empty string. A
+    // test that promises "not a softer one" in its name and checks only that a
+    // string exists reads as covered while covering nothing: a later edit
+    // softening this to a compensation claim would keep it green.
+    expect(record.subagents.reason).toContain(codexSubagentPosture().reason);
   });
 
   it("names the host primitives by the spellings the binding actually composes", () => {
@@ -107,13 +135,37 @@ describe("the Codex app-server integration record", () => {
       const { file, caseName } = evidenceOf(criterion.evidence);
       const absolute = path.join(REPO_ROOT, file);
       expect(existsSync(absolute), file).toBe(true);
-      if (caseName !== undefined) {
-        expect(readFileSync(absolute, "utf8").includes(caseName), `${file}: ${caseName}`).toBe(true);
-      }
+      if (caseName !== undefined) expectLiveCase(absolute, caseName);
     }
     const ordering = record.attestationOrdering;
     expect(existsSync(path.join(REPO_ROOT, ordering.sensor))).toBe(true);
-    expect(readFileSync(path.join(REPO_ROOT, ordering.sensor), "utf8")).toContain(ordering.caseName);
+    expectLiveCase(path.join(REPO_ROOT, ordering.sensor), ordering.caseName);
+  });
+
+  it("carries a non-empty claim in every field that states one", () => {
+    // Every field below asserts something about the binding, the host, or the
+    // characterization. None of them was defended by any other case in this
+    // file, so all nine could be emptied with the sensor green — a record that
+    // says nothing while reading as a record.
+    const claims: Readonly<Record<string, unknown>> = {
+      description: record.description,
+      platform: record.platform,
+      "host.admissionSurface": record.host.admissionSurface,
+      "host.gradeSource": record.host.gradeSource,
+      "characterization.method": record.characterization.method,
+      "modelFreeLane.launchesNothing": record.modelFreeLane.launchesNothing,
+      "liveLane.whatALiveLaneWouldAdd": record.liveLane.whatALiveLaneWouldAdd,
+      "deliveryLaneBinding.meaning": record.deliveryLaneBinding.meaning,
+      "attestationOrdering.property": record.attestationOrdering.property,
+    };
+    for (const [field, claim] of Object.entries(claims)) {
+      expect(typeof claim, field).toBe("string");
+      expect((claim as string).length, field).toBeGreaterThan(0);
+    }
+    // Two of them are tied to the tree rather than to themselves, so a claim
+    // that drifts away from what the binding composes fails here.
+    expect(record.host.admissionSurface).toContain(CODEX_HOOK_EVENT);
+    expect(record.host.gradeSource).toContain("qualifications/host-admission-capabilities.json");
   });
 
   it("states what was NOT exercised, and what it still does not know", () => {

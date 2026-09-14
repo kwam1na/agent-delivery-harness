@@ -6,9 +6,11 @@
  *
  * Written RED before `hook-main.ts` existed.
  */
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { digestCanonical } from "../digest.ts";
 import {
@@ -68,6 +70,88 @@ const state: HookBindingState = {
   workspaceRoot: "/work/tree",
   observationPath: "/ns/observation.json",
 };
+
+describe("the Codex subcommand of this same entry", () => {
+  /**
+   * THE SECOND HALF OF THE WIRE, DRIVEN AS A PROCESS. Every other assertion
+   * about the Codex hook calls `codexHookTurn` directly. If this entry never
+   * routed `codex-pre-tool-use`, that function would be reachable from no
+   * process at all — the composed hook command would name a subcommand this
+   * binary rejects with a usage error, and the host would receive exit code 2
+   * on every tool call instead of a decision.
+   */
+  const runEntry = (
+    args: readonly string[],
+    stdin: string,
+  ): { readonly status: number; readonly stdout: string; readonly stderr: string } => {
+    const entry = fileURLToPath(new URL("./hook-main.ts", import.meta.url));
+    const result = spawnSync(process.execPath, ["--import", "tsx", entry, ...args], {
+      input: stdin,
+      encoding: "utf8",
+    });
+    return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  };
+
+  const writeState = (dir: string, expiry: string): string => {
+    const statePath = path.join(dir, "state.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({ ...state, workspaceRoot: dir, attestation: { ...attestation, expiry } }),
+      { mode: 0o600 },
+    );
+    return statePath;
+  };
+
+  it("routes the composed subcommand to the Codex wire and renders a deny the host accepts", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-entry-"));
+    try {
+      const statePath = writeState(dir, "2099-01-01T00:00:00Z");
+      const denied = runEntry(
+        ["codex-pre-tool-use", statePath, String(SESSION_FENCE)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, ".git", "config") } }),
+      );
+      expect(denied.status, denied.stderr).toBe(0);
+      const document = JSON.parse(denied.stdout) as {
+        hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string };
+      };
+      expect(document.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+      expect(document.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(document.hookSpecificOutput.permissionDecisionReason.length).toBeGreaterThan(0);
+
+      // An in-grant write renders NOTHING — the host's own "no opinion".
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      const allowed = runEntry(
+        ["codex-pre-tool-use", statePath, String(SESSION_FENCE)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, "src", "a.ts") } }),
+      );
+      expect(allowed.status, allowed.stderr).toBe(0);
+      expect(allowed.stdout.trim()).toBe("");
+
+      // An expired attestation denies again, through the same entry.
+      const expiredPath = writeState(dir, "2000-01-01T00:00:00Z");
+      const expired = runEntry(
+        ["codex-pre-tool-use", expiredPath, String(SESSION_FENCE)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, "src", "a.ts") } }),
+      );
+      expect(expired.status, expired.stderr).toBe(0);
+      expect(JSON.parse(expired.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it("rejects a subcommand it does not implement, and says which it does", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-entry-usage-"));
+    try {
+      const statePath = writeState(dir, "2099-01-01T00:00:00Z");
+      const refused = runEntry(["codex-pre-tool-uses", statePath, String(SESSION_FENCE)], "{}");
+      expect(refused.status).toBe(2);
+      expect(refused.stderr).toContain("codex-pre-tool-use");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
 
 describe("decideHookInvocation", () => {
   it("allows a granted capability writing inside the grant", () => {

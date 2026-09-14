@@ -43,6 +43,8 @@ import { maintainTrustState } from "../substrate/lifecycle.ts";
 import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec-port.ts";
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
+import { claudeCodeBinding } from "../host/claude-code.ts";
+import type { HostSessionGrant, ManagedHostBinding } from "../host/managed-host-binding.ts";
 import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
 import { DEFAULT_OBSERVATION_LIFETIME_SECONDS } from "./liveness.ts";
 import { OBSERVED_HEAVIEST_VALIDATION_SECONDS } from "./liveness.fixture.ts";
@@ -814,6 +816,81 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(appended.ok, JSON.stringify(appended)).toBe(true);
     const counted = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
     expect(counted.ok && counted.status.operatorInterventions === 1).toBe(true);
+  });
+
+  it("composes the host session THROUGH the binding seam it was handed, not through a binding of its own", async () => {
+    // THE SEAM'S ONLY LOAD-BEARING CLAIM, driven end to end. Every other
+    // assertion about `ManagedHostBinding` compares two bindings to each
+    // other; none of them observes the facade USING one. A facade that kept
+    // calling `composeClaudeCodeSession` directly — or that read the seam's
+    // result and then recomposed — would satisfy all of them, and the second
+    // host would be unreachable in the only place a host is admitted.
+    const calls: { readonly fence: number; readonly workspaceRoot: string; readonly grant: HostSessionGrant }[] = [];
+    const MARKER = "--composed-through-the-seam";
+    const recording: ManagedHostBinding = {
+      hostId: claudeCodeBinding.hostId,
+      async composeSession(composeInput) {
+        calls.push({
+          fence: composeInput.fence,
+          workspaceRoot: composeInput.workspaceRoot,
+          grant: composeInput.grant,
+        });
+        const composed = await claudeCodeBinding.composeSession(composeInput);
+        if (!composed.ok) return composed;
+        // A value only this stub can produce: if it reaches the caller, the
+        // caller read THIS binding's answer.
+        return { ...composed, hostAdmissionArguments: [...composed.hostAdmissionArguments, MARKER] };
+      },
+      recomputeDiscoveryConfigurationDigest: (digestInput) =>
+        claudeCodeBinding.recomputeDiscoveryConfigurationDigest(digestInput),
+      admissionConfigurationPath: (bindingDir, fence) => claudeCodeBinding.admissionConfigurationPath(bindingDir, fence),
+    };
+
+    const seamFacade = createManagedDeliveryFacade({
+      repoDir,
+      policyBinding: disposablePolicyBindingForInstallation(installationPath),
+      installation: { installationPath, receiptDir },
+      hostVersion: "2.1.97",
+      exec: recordingExecPort(),
+      hostBinding: recording,
+    });
+    const presented = await seamFacade.presentContract({
+      contract: { ...DISPOSABLE_CONTRACT, contractId: "contract-greeting-3" },
+      expiry: EXPIRY,
+    });
+    expect(presented.ok, JSON.stringify(presented)).toBe(true);
+    if (!presented.ok) return;
+    const confirmed = await seamFacade.confirmContract({
+      intakeId: presented.intakeId,
+      echo: operatorEcho(presented.channelPath),
+    });
+    expect(confirmed.ok, JSON.stringify(confirmed)).toBe(true);
+    if (!confirmed.ok) return;
+
+    const worktreeE = path.join(scratch, "worktree-e");
+    git(repoDir, "worktree", "add", "--quiet", "-b", "delivery-e", worktreeE, "main");
+    const bound = await seamFacade.bindWorkspace({
+      deliveryId: confirmed.deliveryId,
+      worktreeDir: worktreeE,
+      hostTaskId: "host-task-seam",
+      observedAt: NOW,
+      attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
+    });
+    expect(bound.ok, JSON.stringify(bound)).toBe(true);
+    if (!bound.ok) return;
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.workspaceRoot).toBe(worktreeE);
+    expect(calls[0]!.fence).toBe(bound.fence);
+    // The grant handed across the seam is the stage grant, not a wider one.
+    expect(calls[0]!.grant.protectedPaths).toContain(".git");
+    expect(calls[0]!.grant.allowedCapabilities.length).toBeGreaterThan(0);
+    // The operator's arguments are the ones THIS binding answered with.
+    expect(bound.cliArgs).toContain(MARKER);
+    expect(bound.settingsPath).toBe(
+      recording.admissionConfigurationPath(path.dirname(bound.statePath), bound.fence),
+    );
   });
 });
 

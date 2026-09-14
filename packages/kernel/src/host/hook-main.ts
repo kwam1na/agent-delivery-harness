@@ -437,8 +437,16 @@ function nowInstant(): string {
 
 async function main(argv: readonly string[]): Promise<number> {
   const [subcommand, statePath, fenceArg] = argv;
-  if (statePath === undefined || (subcommand !== "pre-tool-use" && subcommand !== "post-tool-use" && subcommand !== "session-end")) {
-    process.stderr.write("usage: hook-main.ts <pre-tool-use|post-tool-use|session-end> <state-path> <session-fence>\n");
+  if (
+    statePath === undefined ||
+    (subcommand !== "pre-tool-use" &&
+      subcommand !== "codex-pre-tool-use" &&
+      subcommand !== "post-tool-use" &&
+      subcommand !== "session-end")
+  ) {
+    process.stderr.write(
+      "usage: hook-main.ts <pre-tool-use|codex-pre-tool-use|post-tool-use|session-end> <state-path> <session-fence>\n",
+    );
     return 2;
   }
   // The session's own fence, baked into the command at admission. A malformed
@@ -450,6 +458,28 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const state = loadState(statePath);
+
+  if (subcommand === "codex-pre-tool-use") {
+    // The Codex wire's entry point. Deliberately the SAME binary and the same
+    // state file as the Claude branch: the admission decision is shared, and
+    // only the host-specific surface refusal and the rendered decision
+    // document differ. Without this branch `codexHookTurn` is reachable from
+    // no process, and the "second half" the binding's own comments call
+    // required would never run.
+    let raw = "";
+    try {
+      raw = readFileSync(0, "utf8");
+    } catch {
+      raw = "";
+    }
+    // Imported lazily: `./codex-app-server-hook.ts` imports the shared
+    // decision from THIS module, so a static import here would be a cycle.
+    // The Claude branch must not pay for the Codex module either.
+    const { codexHookTurn } = await import("./codex-app-server-hook.ts");
+    const rendered = codexHookTurn({ state, rawInput: raw, observedAt: nowInstant(), sessionFence });
+    if (rendered.length > 0) process.stdout.write(`${rendered}\n`);
+    return 0;
+  }
 
   if (subcommand === "pre-tool-use") {
     let input: HookToolInput = {};

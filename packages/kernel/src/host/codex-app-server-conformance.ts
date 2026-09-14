@@ -107,6 +107,8 @@ export function faithfullyAppliedCodexConfiguration(
     permissionProfileId: composed.profile.id,
     sandboxMode: composed.profile.sandboxMode,
     writableRoots: composed.profile.writableRoots,
+    deniedWriteRoots: composed.profile.denyWriteRoots,
+    deniedReadRoots: composed.profile.denyReadRoots,
     networkAccess: false,
     excludeTmpdirEnvVar: true,
     excludeSlashTmp: true,

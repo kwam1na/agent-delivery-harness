@@ -19,8 +19,14 @@
  *     per-session configuration layer, so the admission below never touches
  *     shared user, project, or managed configuration;
  *   - named permission profiles exist, with the filesystem tokens this file's
- *     profile is spelled in, and workspace-write carries `writable_roots`,
- *     `network_access`, `exclude_tmpdir_env_var` and `exclude_slash_tmp`;
+ *     profile is spelled in; the app-server schema's `SandboxWorkspaceWrite`
+ *     carries EXACTLY `writable_roots`, `network_access`,
+ *     `exclude_tmpdir_env_var` and `exclude_slash_tmp` — no deny member — and
+ *     the config-layer profile struct carries a `filesystem` block whose
+ *     `deny_read` member was observed in the installed binary's inventory.
+ *     `filesystem.read` and `filesystem.deny_write` were NOT observed in
+ *     either surface; see the WRITE BOUNDARY note on the composed config
+ *     below and `knownLimitations` in the qualification record;
  *   - the `pre_tool_use` hook runs with execution mode `sync`, which is what
  *     makes it an interceptor rather than a notification; and
  *   - the PreToolUse decision wire is DENY-ONLY (see
@@ -96,10 +102,130 @@ export const codexPermissionProfileId = (workspaceRoot: string, fence: number): 
  * composition disables those surfaces and the hook denies anything that
  * arrives from them anyway. Both halves are required: disabling alone would
  * leave the boundary resting on configuration the binding cannot re-verify per
- * invocation.
+ * invocation. The second half runs through `CODEX_HOOK_SUBCOMMAND` below,
+ * which is the subcommand composition actually bakes into the hook command.
  */
 export const CODEX_UNENFORCEABLE_TOOL_SOURCES = Object.freeze(["mcp", "app", "hosted", "dynamic", "plugin"] as const);
 export type CodexUnenforceableToolSource = (typeof CODEX_UNENFORCEABLE_TOOL_SOURCES)[number];
+
+/**
+ * The surfaces composition switches off that have NO member in
+ * `CODEX_UNENFORCEABLE_TOOL_SOURCES` — spelled from the composed config's own
+ * feature keys. Without these, an escalation into `tool_registry`,
+ * `multi_agent_v2` or `web_search` is not refused, and the operator can re-open
+ * by approval exactly what the composition closed by configuration. Kept
+ * separate from the list above so the hook's tool-NAME predicate is unaffected:
+ * these are feature switches, not tool sources.
+ */
+export const CODEX_DISABLED_FEATURE_KEYS = Object.freeze(["tool_registry", "multi_agent_v2", "web_search"] as const);
+export type CodexDisabledFeatureKey = (typeof CODEX_DISABLED_FEATURE_KEYS)[number];
+
+/**
+ * THE TOOL VOCABULARY IS THE HOST'S, AND IT IS TRANSLATED ONCE, HERE.
+ *
+ * The shared decision procedure in `./hook-main.ts` reads a tool name two
+ * ways: as the capability, matched by exact string equality against the
+ * grant's `allowedCapabilities`; and as the key into its write-path member
+ * table. Both of those are spelled in the KERNEL's vocabulary. Codex's tools
+ * are spelled in Codex's. Handing one to the other unchanged has two failure
+ * modes and no success mode: either every real Codex tool is denied as an
+ * ungranted capability, or a granted Codex name reaches the decision, matches
+ * no write-path member, and is adjudicated as writing nothing — which is
+ * exactly the "absent operands read as `writes nothing`" failure the hook's
+ * pre-check exists to prevent.
+ *
+ * So this is a CLOSED map from the tool names actually observed in the
+ * installed host's inventory onto the neutral capability and where that tool
+ * names the paths it writes. A name not in the map is denied: an unmapped tool
+ * is a tool whose operands this binding cannot read.
+ *
+ * `writes` is load-bearing. For a `paths` tool the hook must be able to
+ * enumerate the paths; if it cannot, it denies rather than proceeding with an
+ * empty write set. For a `none` tool there is nothing to enumerate and the
+ * sandbox's own `writable_roots` is the containment.
+ */
+export interface CodexHostTool {
+  /** The host's own tool name, as observed in the installed binary. */
+  readonly hostName: string;
+  /** The neutral capability the grant is spelled in. */
+  readonly capability: string;
+  readonly writes: "none" | "paths";
+  /** The `tool_input` members that name written paths, for a `paths` tool. */
+  readonly writePathMembers: readonly string[];
+}
+
+export const CODEX_HOST_TOOLS: readonly CodexHostTool[] = Object.freeze([
+  // The patch tool. `fileChanges` is a map keyed by path in the host's own
+  // apply-patch approval schema; `file_path` and `path` are accepted beside it
+  // because the pre-invocation hook's input shape was NOT characterized and a
+  // deny-on-unreadable-operands tool must still read the spellings it can.
+  Object.freeze({
+    hostName: "apply_patch",
+    capability: "Write",
+    writes: "paths",
+    writePathMembers: Object.freeze(["fileChanges", "file_path", "path"]),
+  }),
+  Object.freeze({ hostName: "shell", capability: "Bash", writes: "none", writePathMembers: Object.freeze([]) }),
+  Object.freeze({ hostName: "exec_command", capability: "Bash", writes: "none", writePathMembers: Object.freeze([]) }),
+  Object.freeze({ hostName: "unified_exec", capability: "Bash", writes: "none", writePathMembers: Object.freeze([]) }),
+  Object.freeze({ hostName: "write_stdin", capability: "Bash", writes: "none", writePathMembers: Object.freeze([]) }),
+  Object.freeze({ hostName: "view_image", capability: "Read", writes: "none", writePathMembers: Object.freeze([]) }),
+  // Touches no filesystem and runs no command: admitted at the read tier.
+  Object.freeze({ hostName: "update_plan", capability: "Read", writes: "none", writePathMembers: Object.freeze([]) }),
+] as const);
+
+export const codexHostTool = (hostName: string): CodexHostTool | undefined =>
+  CODEX_HOST_TOOLS.find((entry) => entry.hostName === hostName);
+
+/**
+ * The host tools this grant actually reaches — the host's OWN names, not the
+ * kernel's. Composing `enabled_tools` from `allowedCapabilities` verbatim would
+ * name tools the characterized host does not have, which enables nothing and
+ * hides the vocabulary mismatch behind a plausible-looking list.
+ */
+export const codexEnabledToolsFor = (allowedCapabilities: readonly string[]): readonly string[] =>
+  CODEX_HOST_TOOLS.filter((entry) => allowedCapabilities.includes(entry.capability))
+    .map((entry) => entry.hostName)
+    .sort(compareUtf16CodeUnits);
+
+/**
+ * The escalation kind split into whole words across every spelling the host's
+ * approvals surface uses — `snake_case`, `kebab-case`, `camelCase` and the
+ * acronym form `MCPServerAdd`, which the plain camel rule alone cannot split
+ * because `MCP` is an initialism and is normally written uppercase.
+ *
+ * Whole words rather than substrings, because the source names are short and
+ * ordinary: a bare substring test reads "approve" as the "app" surface and
+ * refuses every one-shot approval, which does not tighten the boundary — it
+ * deletes the host-native approval lane the binding deliberately keeps.
+ */
+export const codexEscalationTokens = (kind: string): readonly string[] =>
+  kind
+    // `MCPServer` → `MCP Server`: an acronym run followed by a capitalised word.
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter((token) => token.length > 0)
+    .map((token) => token.toLowerCase());
+
+/**
+ * True when the kind names one of the surfaces this binding disabled. Matched
+ * by stem so the host's own plural spelling — the composed config's key for
+ * that surface is `features.apps` — is not a hole, and the feature keys are
+ * matched against the underscore-joined token run so a multi-word key such as
+ * `multi_agent_v2` is seen however it was spelled.
+ */
+export const codexNamesDisabledSurface = (kind: string): boolean => {
+  const tokens = codexEscalationTokens(kind);
+  const joined = tokens.join("_");
+  return (
+    tokens.some((token) =>
+      (CODEX_UNENFORCEABLE_TOOL_SOURCES as readonly string[]).some(
+        (source) => token === source || token === `${source}s`,
+      ),
+    ) || CODEX_DISABLED_FEATURE_KEYS.some((key) => joined.includes(key))
+  );
+};
 
 /**
  * Subagent posture. Exact profile, hook, and fence inheritance into a Codex
@@ -222,8 +348,17 @@ export interface ComposeCodexAppServerThreadResult {
   readonly discoveryConfigurationDigest: string;
 }
 
+/**
+ * The host's own subcommand for this wire. NOT `pre-tool-use`: that branch
+ * renders the Claude decision document and performs no unadjudicable-surface
+ * refusal, so composing it would leave the boundary resting entirely on
+ * configuration — which is exactly what the module header says is insufficient
+ * on its own.
+ */
+export const CODEX_HOOK_SUBCOMMAND = "codex-pre-tool-use";
+
 const hookCommandOf = (input: ComposeHostSessionInput): string =>
-  [...input.hookCommand, "pre-tool-use", input.statePath, String(input.fence)]
+  [...input.hookCommand, CODEX_HOOK_SUBCOMMAND, input.statePath, String(input.fence)]
     .map((part) => JSON.stringify(part))
     .join(" ");
 
@@ -248,6 +383,23 @@ export async function composeCodexAppServerThread(
     grant: input.grant,
   });
 
+  /**
+   * THE WRITE BOUNDARY IS `writable_roots`, NOT A DENY LIST.
+   *
+   * `SandboxWorkspaceWrite` in the host's own published schema carries exactly
+   * four members and none of them is a deny; `workspace-write` opens write to
+   * the listed roots and nothing else, so the positive list IS the boundary and
+   * it is fully characterized. The `filesystem` block below is defence in depth
+   * on top of that, and it is only PARTLY characterized: `deny_read` was
+   * observed in the installed binary's config-layer profile struct, while
+   * `read` and `deny_write` were observed in neither the schema nor the
+   * inventory. They are emitted because a host that honours them narrows the
+   * boundary further and a host that ignores them is left with exactly the
+   * characterized `writable_roots` boundary — but no claim in this file or in
+   * the qualification record rests on them, and the record says so under
+   * `knownLimitations`. An uncharacterized key carrying the boundary would be
+   * the defect; an uncharacterized key carrying redundancy is disclosed.
+   */
   const config: Record<string, unknown> = {
     permission_profile: profile.id,
     permissions: {
@@ -283,7 +435,7 @@ export async function composeCodexAppServerThread(
     // Only the grant's capabilities are enabled, and every surface whose calls
     // the synchronous local hook cannot adjudicate is switched off.
     tools: {
-      enabled_tools: [...input.grant.allowedCapabilities],
+      enabled_tools: codexEnabledToolsFor(input.grant.allowedCapabilities),
       web_search: false,
     },
     mcp_servers: {},
@@ -326,6 +478,8 @@ export const CODEX_APPLIED_MISMATCH_CODES = Object.freeze([
   "permission_profile_mismatch",
   "sandbox_mode_mismatch",
   "writable_roots_mismatch",
+  "deny_write_roots_mismatch",
+  "deny_read_roots_mismatch",
   "network_access_enabled",
   "ambient_temp_not_excluded",
   "hook_missing",
@@ -345,6 +499,16 @@ export interface CodexAppliedThreadConfiguration {
   readonly permissionProfileId?: unknown;
   readonly sandboxMode?: unknown;
   readonly writableRoots?: unknown;
+  /**
+   * The deny sets the composed `filesystem` block carries. Verified for the
+   * same reason every other member is: a host that reports the writable roots
+   * faithfully and silently drops every deny has applied a wider boundary than
+   * the one the attestation is about to bind, and the digest comparison below
+   * cannot catch it — that digest is over bytes this binding canonicalized, and
+   * no characterization says the host reproduces it.
+   */
+  readonly deniedWriteRoots?: unknown;
+  readonly deniedReadRoots?: unknown;
   readonly networkAccess?: unknown;
   readonly excludeTmpdirEnvVar?: unknown;
   readonly excludeSlashTmp?: unknown;
@@ -368,7 +532,7 @@ const sameStrings = (applied: unknown, expected: readonly string[]): boolean =>
   Array.isArray(applied) &&
   applied.length === expected.length &&
   applied.every((entry) => typeof entry === "string") &&
-  unique(applied as string[]).join(" ") === unique(expected).join(" ");
+  unique(applied as string[]).join("\0") === unique(expected).join("\0");
 
 /**
  * The gate in front of the attestation. NOTHING may be minted and no
@@ -404,6 +568,18 @@ export function verifyAppliedCodexThreadConfiguration(
     mismatches.push({
       code: "writable_roots_mismatch",
       message: "the applied writable roots are not exactly the grant's writable paths",
+    });
+  }
+  if (!sameStrings(applied.deniedWriteRoots, expected.profile.denyWriteRoots)) {
+    mismatches.push({
+      code: "deny_write_roots_mismatch",
+      message: "the applied write denies are not the composed ones; a dropped deny is a widened boundary",
+    });
+  }
+  if (!sameStrings(applied.deniedReadRoots, expected.profile.denyReadRoots)) {
+    mismatches.push({
+      code: "deny_read_roots_mismatch",
+      message: "the applied read denies are not the composed ones; the authority roots must stay unreadable",
     });
   }
   if (applied.networkAccess !== false) {
@@ -471,23 +647,6 @@ export interface CodexEscalationRequest {
  * boundary the attestation already bound — and an attestation that binds a
  * boundary the session can widen binds nothing.
  */
-/**
- * The escalation kind split into whole words, across both the host's camel-case
- * and snake-case spellings. Whole words rather than substrings, because the
- * source names are short and ordinary: a bare substring test reads "approve" as
- * the "app" surface and refuses every one-shot approval, which does not
- * tighten the boundary — it deletes the host-native approval lane the binding
- * deliberately keeps. The tool-name predicate in `./codex-app-server-hook.ts`
- * keeps its substring test for the opposite reason: there an unrecognized
- * spelling must deny, and denying costs a tool call rather than the lane.
- */
-const escalationTokens = (kind: string): readonly string[] =>
-  kind
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .split(/[^A-Za-z0-9]+/)
-    .filter((token) => token.length > 0)
-    .map((token) => token.toLowerCase());
-
 export function evaluateCodexEscalation(
   request: CodexEscalationRequest,
   profile: CodexPermissionProfile,
@@ -516,7 +675,7 @@ export function evaluateCodexEscalation(
       };
     }
   }
-  if (escalationTokens(request.kind).some((token) => (CODEX_UNENFORCEABLE_TOOL_SOURCES as readonly string[]).includes(token))) {
+  if (codexNamesDisabledSurface(request.kind)) {
     return {
       refused: true,
       code: "unenforceable_tool_source_refused",

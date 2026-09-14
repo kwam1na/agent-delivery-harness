@@ -26,7 +26,7 @@ import {
   parseCodexHookInput,
   renderCodexHookDecision,
 } from "./codex-app-server-hook.ts";
-import { CODEX_UNENFORCEABLE_TOOL_SOURCES } from "./codex-app-server.ts";
+import { CODEX_HOST_TOOLS, CODEX_UNENFORCEABLE_TOOL_SOURCES } from "./codex-app-server.ts";
 import type { HookBindingState } from "./hook-main.ts";
 
 const grant = {
@@ -107,11 +107,103 @@ describe("which tools the synchronous local hook can adjudicate", () => {
   });
 });
 
+describe("the host's own tool vocabulary", () => {
+  it("pins the event name the host sends, independently of our own constant", () => {
+    // The host matches by ITS spelling. Every other row reads this constant on
+    // both sides, so a rename would keep them green while the host stopped
+    // recognizing the document we render.
+    expect(CODEX_HOOK_EVENT_NAME).toBe("PreToolUse");
+  });
+
+  it("adjudicates the tools Codex actually calls, not the capability names we use internally", () => {
+    // `Write` and `Read` are OUR words. What arrives on this wire is
+    // `apply_patch` and `shell`, and a hook that only knows the internal
+    // vocabulary adjudicates nothing the host ever sends.
+    for (const tool of CODEX_HOST_TOOLS) {
+      expect(codexToolIsLocallyEnforceable(tool.hostName), tool.hostName).toBe(true);
+    }
+  });
+
+  it("allows a patch inside the grant's writable paths and denies one outside them", () => {
+    const allowed = decideCodexHookInvocation(
+      state,
+      { tool_name: "apply_patch", tool_input: { file_path: "/work/tree/src/a.ts" } },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    // THE POSITIVE ROW. Without one, a hook that denied EVERY invocation would
+    // satisfy every other assertion in this file: the whole wire could be
+    // broken shut and read as maximally safe.
+    expect(allowed.allowed, JSON.stringify(allowed)).toBe(true);
+
+    const denied = decideCodexHookInvocation(
+      state,
+      { tool_name: "apply_patch", tool_input: { file_path: "/work/tree/.git/config" } },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(denied.allowed).toBe(false);
+  });
+
+  it("reads EVERY path a multi-path patch names, not merely the first", () => {
+    // `apply_patch` carries its operands keyed by path. A hook that adjudicated
+    // one of them would let a patch touching `src/a.ts` carry `.git/config`
+    // along with it.
+    const decision = decideCodexHookInvocation(
+      state,
+      {
+        tool_name: "apply_patch",
+        tool_input: { fileChanges: { "/work/tree/src/a.ts": {}, "/work/tree/.git/config": {} } },
+      },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("denies a write whose operands it cannot read, and a tool it has never heard of", () => {
+    const unreadable = decideCodexHookInvocation(
+      state,
+      { tool_name: "apply_patch", tool_input: {} },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(unreadable.allowed).toBe(false);
+    if (!unreadable.allowed) expect(unreadable.reason).toContain("unreadable_write_operands");
+
+    const unmapped = decideCodexHookInvocation(
+      state,
+      { tool_name: "some_future_tool", tool_input: { file_path: "/work/tree/src/a.ts" } },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(unmapped.allowed).toBe(false);
+    if (!unmapped.allowed) expect(unmapped.reason).toContain("unmapped_host_tool");
+
+    // A reported source this hook cannot see through denies even a mapped tool.
+    for (const source of CODEX_UNENFORCEABLE_TOOL_SOURCES) {
+      const decision = decideCodexHookInvocation(
+        state,
+        { tool_name: "apply_patch", tool_source: `${source}_server`, tool_input: { file_path: "/work/tree/src/a.ts" } },
+        OBSERVED_AT,
+        SESSION_FENCE,
+      );
+      expect(decision.allowed, source).toBe(false);
+    }
+  });
+});
+
 describe("the rendered decision document", () => {
   it("renders NOTHING for an allowed invocation — the host's own 'no opinion'", () => {
     expect(renderCodexHookDecision({ allowed: true })).toBe("");
     expect(
-      turn(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "/work/tree/src/a.ts" } })),
+      turn(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "apply_patch",
+          tool_input: { file_path: "/work/tree/src/a.ts" },
+        }),
+      ),
     ).toBe("");
   });
 
