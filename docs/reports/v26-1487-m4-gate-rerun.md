@@ -46,6 +46,17 @@ using the same `execFile` helper the suites use:
 That probe is the whole explanation for the red rows. It was run as a
 throwaway test file, read once, and deleted; the worktree is clean.
 
+**The host then recovered, and the missing prerequisite appeared.** Two
+conditions changed while this delivery was in review, and both are load-bearing
+for the rows below, so the table above is kept as the record of what was
+measured and the outcomes are restated against the recovered host. First, the
+swap pressure cleared: `npm run sensor:standalone` went from 652 s red to 15 s
+green on the same tree. Second, **Python 3.13.15 is now installed on this host**
+under `/opt/homebrew/opt/python@3.13/libexec/bin`, which is not on the default
+`PATH` and supplies the `python` name the substrate preflight looks for. With
+that directory prepended, the legs this page previously recorded as "not
+runnable here" run. Rows that changed say so explicitly.
+
 ## The legs, with their actual outcomes
 
 | Leg | Command | Outcome | What it means |
@@ -55,10 +66,10 @@ throwaway test file, read once, and deleted; the worktree is clean.
 | CLI inventory | `npm run sensor:cli` | **green** (17 s / 1 s, 15 commands) | — |
 | Policy projection | `npm run sensor:policy` | **green** (16 s / <1 s) | The layered policy projection still matches the live delivery authority and the frozen pre-cutover oracle. This is the leg that proves the widened union did not move this repository's compiled posture. |
 | Scoped suites | `npx vitest run <file>`, 18 files | **green** | Every test file the diff touches, plus every test file importing `policy/compile.ts`, `policy/fixtures.ts`, `facade/status.ts`, `facade/managed-delivery.ts` or `index.ts`. 533 s while the host was degraded, 30 s after it recovered. |
-| Facade scenario suites | `npx vitest run packages/kernel/src/facade/*.scenario.test.ts` | **not runnable here** | Six suites, including `walking-skeleton.scenario.test.ts`, abort in `beforeAll` with `preflight_failed: python: Python 3.9.6 is below the preflighted prerequisite >=3.11`. Same host gap as `qualify:product` below. This delivery adds one assertion to `walking-skeleton.scenario.test.ts` — the only row anywhere that reads the tracker posture off a real facade rather than off a composed status fixture — and **that row has therefore not been executed on this host**. It executes wherever Python ≥3.11 is present, which on a normal day is the hosted matrix; hosted checks are disabled for a billing reason during this wave. Recorded here rather than left implied. |
-| Full suite | `DELIVERY_HARNESS_MAX_WORKERS=4 npm run check` | **red** (5,306 s) | 602 failed / 2,287 passed / 92 skipped of 2,981; 50 of 120 files. **Every** failure is a vitest timeout at its boundary to the millisecond (5,000–5,009 ms, 10,00x ms, 30,00x ms, 60,003 ms, 300,010 ms). No assertion failed anywhere, and no failing file is one this change touches. See "Host conditions" — the failing suites are exactly the ones that spawn `git` or the CLI. Confirmed by re-running `packages/kernel/src/admission.test.ts` file-scoped and alone: still red at 5 s per case, and one case passes in **109 s** when given a 120 s budget. |
+| Facade scenario suites | `npx vitest run packages/kernel/src/facade/*.scenario.test.ts` | **green**, once `python` resolves to 3.13 | All six suites pass when run one file per invocation with the homebrew Python 3.13 directory on `PATH`: `walking-skeleton` 7, `checkpoint-recovery` 15, `claude-code-integration` 25, `evidence-admission` 23, `security-lifecycle` 8, `workflow-intake` 7. **This is the row that matters for this delivery**: the assertion added here to `walking-skeleton.scenario.test.ts` — the only row anywhere that reads the tracker posture off a real facade rather than off a composed status fixture — has now actually executed and passed. Both review rounds were conducted while it could not, and the adversarial lens's mutation M11 (the facade substituting a constant) therefore survived every suite it could run; that mutation is now covered by a row that runs. Under the default `PATH`, where `python` is absent and `/usr/bin/python3` is 3.9.6, all six still abort in `beforeAll` with `preflight_failed`. |
+| Full suite | `DELIVERY_HARNESS_MAX_WORKERS=4 npm run check` | **red** (1,469,000 ms in the merge tail; 5,306 s in the earlier degraded run) | The tail run on the rebased candidate `4660c2d`: 48 failed / 2,779 passed / 85 skipped of 2,912; 21 of 136 files. Every one of those 21 files was rerun alone with a 120 s timeout: **16 go green alone** (including all six facade scenario suites and both files that had only failed to start a worker at all). The five that still fail alone fail on **subprocess settlement**, and `packages/cli/src/cli.test.ts` was rerun on the untouched base `712d95c` in a separate worktree: **the base fails 8 cases, this candidate fails 7, and the candidate's set is a strict subset of the base's**. No failure anywhere is an assertion about this change, and no failing file is one this change touches. |
 | Standalone install | `npm run sensor:standalone` | **red** (652 s) while degraded, **green** (15 s) once the host recovered | While the host was thrashing: `spawnSync …/node ETIMEDOUT` on the sixth CLI smoke case, with the anti-vacuity rule then correctly refusing the other five ("only 5 of 6 CLI smoke case(s) ran to completion"). Rerun unchanged on the same tree after the host recovered: clean, 5 packages, 5 sibling edges, 6 CLI smoke cases, in 15 s instead of 652 s. That 43x is the measurement of the degradation, and it is why the red row above is read as the host rather than the code. |
-| Composition closure and install/update/rollback | `npm run qualify:product` | **red** (178 s) | The first finding is `composition-failed install`: `preflight_failed` — "python: no Python runtime was found; Python >=3.11 is a preflighted prerequisite". This host has `/usr/bin/python3` at **3.9.6** and no `python` on `PATH`. No disposable repository therefore reached merge-ready, and the remaining 12 findings are all anti-vacuity refusals cascading from that: 6 negative probes and 4 lifecycle steps "did not run to [their] expected refusal; an unrun probe is not a passing one". **This is a host prerequisite gap, not a product defect** — and the refusal to score unrun probes as passes is the qualifier behaving correctly. |
+| Composition closure and install/update/rollback | `npm run qualify:product` | **green** (94 s), with Python 3.13 on `PATH` | Previously red at the first finding — `composition-failed install`: `preflight_failed`, "python: no Python runtime was found; Python >=3.11 is a preflighted prerequisite" — with the remaining 12 findings all anti-vacuity refusals cascading from it. With `python` resolving to 3.13.15 the qualifier reports **zero findings**: 7 negative probes satisfied (`receipt-listed-repository-refusal`, `closure-detects-missing-staged-hook-entry`, `bind-refuses-generation-missing-staged-hook-entry`, `qualification-flag-required`, `qualification-flag-refused-on-production`, `revoked-generation-fences-live-work`, `revoked-rollback-target-rejected`) and 4 lifecycle steps proven (`update-1`, `update-2`, `resume-through-pinned-generation`, `rollback-to-retained-generation`). The earlier red was a host prerequisite gap and is now shown to have been exactly that. |
 | Provider-rail qualification | `npm run qualify:provider -- <out>` | **red** (50 s) | `qualification failed: immutable input provider-rails.ts differs`. The qualifier pins `packages/cli/src/provider-rails.ts` by digest; the tracked file was last changed by **#115 (V26-1848)**, long before this branch, and this delivery does not touch it. The pin is therefore stale against `origin/main` itself and this leg fails identically on the base. It is not this candidate's finding. |
 | Release install | `npm run sensor:product-install` | **not rerun** | It requires `--archive` / `--metadata` and performs an agent-skills release install. Cutting or installing an agent-skills release is off limits for this delivery — `.agent-skills/` belongs to another in-flight delivery (V26-2067) — so this leg was not run rather than run and reported. |
 | Qualification paths with a tracker **configured** | — | **not runnable here** | Requires a repository that actually binds a tracker adapter with a credential. This repository binds none, and `qualifications/` is off limits to this delivery, so the configured-tracker path cannot be exercised from here. What *is* proven here is the compile-time half: a bound credential-less tracker descriptor compiles to `degraded`, the same descriptor with `credentialId` compiles to `available`, and no tracker at all compiles to `absent` (`packages/kernel/src/policy/compile.test.ts`). |
@@ -66,18 +77,29 @@ throwaway test file, read once, and deleted; the worktree is clean.
 
 ## What an activation decision may and may not rest on
 
-- **May**: the typed posture itself. Its three entry conditions, the 3×2 grid
+- **May**: the typed posture itself. Its three entry conditions, the 3x2 grid
   against `TRACKER_ABSENCE_FALLBACKS`, the distinct refusal messages, and the
-  verbatim carriage through `status()` are each pinned by a named test, and the
-  policy projection sensor is green.
-- **May not**: composition closure, install/update/rollback, the provider rail,
-  the configured-tracker qualification path, and Athena parity. Five of the M4
-  gate's legs did not produce a pass here — two because this host lacks a
-  prerequisite or is degraded, three because they are out of this delivery's
-  reach. **Activation anywhere still requires those five legs to be rerun, on a
-  host with Python ≥3.11 and without the exec-latency degradation, by whoever
-  takes the activation decision.** This page is the record that they have not
-  been.
+  carriage through `status()` — now including one row on a **real facade**,
+  executed — are each pinned by a named test, and the policy projection sensor
+  is green.
+- **May**: composition closure and install/update/rollback. `qualify:product`
+  is green on this candidate with zero findings. This leg moved from "not
+  provable here" to proven while the delivery was in flight, because the
+  missing prerequisite was installed; it is recorded as proven, with the
+  condition (Python >=3.11 on `PATH`) named.
+- **May not**: the provider rail, the configured-tracker qualification path,
+  and Athena parity. Three of the M4 gate's legs still did not produce a pass
+  here — one because the qualifier's digest pin is stale against `origin/main`
+  itself, two because they are out of this delivery's reach. **Activation
+  anywhere still requires those three legs to be rerun by whoever takes the
+  activation decision**, and the provider-rail pin refreshed by whoever owns
+  it. This page is the record that they have not been.
+- **A note on what changed under this delivery's feet.** Two legs on this page
+  were red for host reasons and are now green, and the page was amended rather
+  than rewritten so that both states stay visible. An activation decision that
+  reads only a summary would not see that the facade row proving the posture
+  reaches callers went unexecuted through both review rounds; it is stated here
+  because that is the kind of fact a later reader needs and cannot recover.
 
 ## The two spellings of "available"
 
