@@ -218,6 +218,33 @@ describe("the host's own tool vocabulary", () => {
     if (!denied.allowed) expect(denied.reason).not.toContain("unreadable_write_operands");
   });
 
+  it("adjudicates the ORDINARY one-file patch, the one that carries no `file_path` at all", () => {
+    // The commonest real `apply_patch` invocation names its single write in
+    // `fileChanges` and carries no `file_path` member beside it. Every other
+    // row on this branch supplies an alias, so an injection made conditional
+    // on an alias being present would leave this shape adjudicated by nothing
+    // and a protected one-file patch would be ALLOWED with the suite green.
+    const denied = decideCodexHookInvocation(
+      state,
+      { tool_name: "apply_patch", tool_input: { fileChanges: { "/work/tree/.git/config": {} } } },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(denied.allowed, JSON.stringify(denied)).toBe(false);
+    // A hook that read no path out of `fileChanges` at all also refuses this
+    // input, so the refusal must be the CONTAINMENT one, not an unreadable-
+    // operand one.
+    if (!denied.allowed) expect(denied.reason).not.toContain("unreadable_write_operands");
+
+    const allowed = decideCodexHookInvocation(
+      state,
+      { tool_name: "apply_patch", tool_input: { fileChanges: { "/work/tree/src/a.ts": {} } } },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(allowed.allowed, JSON.stringify(allowed)).toBe(true);
+  });
+
   it("denies a write whose operands it cannot read, and a tool it has never heard of", () => {
     const unreadable = decideCodexHookInvocation(
       state,
