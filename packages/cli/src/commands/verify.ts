@@ -114,12 +114,26 @@ function runJournalBlocker(row: RunJournalRow) {
   // the missing list and the admission sentence all precede the per-warning
   // reasons, which are the right thing to lose to the cap — the row on stdout,
   // which is written line by line and is not bounded this way, always carries
-  // all of them. The per-reason bound moves with the ordering: at 120
-  // characters four warnings' reasons plus their `(a consequence of …)`
-  // clauses still fit inside 600 after the leading segments.
+  // all of them. Inside a warning's own segment the `(a consequence of …)`
+  // clause goes before the reason for the same arithmetic: the reason is the
+  // long part, so a clause written after it is the first thing the cap
+  // destroys. With the clause after the reason it vanished from the
+  // reproduction shape once the run id reached 36 characters, and `runId` is
+  // accepted up to 128; with it before, it survives at every run id length
+  // through 128, as do the missing list and the admission sentence. Two
+  // warnings that restate one fact, printed as peers with nothing saying so,
+  // are the exact misreading this row exists to prevent.
+  //
+  // Do not read the 120 as making the whole detail fit: on the reproduction's
+  // two warnings the detail renders at 733 characters against a 600-character
+  // cut whatever this bound is, and the second warning's reason is always lost
+  // — that is what the unbounded stdout row is for. What 120 buys, measured,
+  // is that the second warning's IDENTIFIER begins inside the cut; at 160 and
+  // at 400 the whole remaining budget goes to the first warning's reason and
+  // the second warning does not appear at all.
   const why = (row.explanations ?? []).map(
     (explanation) =>
-      `; ${oneLine(explanation.violation, 64)}: ${oneLine(explanation.because, 120)}${explanation.consequenceOf === undefined ? "" : ` (a consequence of ${oneLine(explanation.consequenceOf, 64)})`}`,
+      `; ${oneLine(explanation.violation, 64)}${explanation.consequenceOf === undefined ? "" : ` (a consequence of ${oneLine(explanation.consequenceOf, 64)})`}: ${oneLine(explanation.because, 120)}`,
   ).join("");
   return commandBlocker({
     code: "run_journal_incomplete",

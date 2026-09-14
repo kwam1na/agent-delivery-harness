@@ -1235,6 +1235,23 @@ describe("explaining a journal's warnings", () => {
     ]);
   });
 
+  it("inherits nothing on an unbound reading, where the cause was never raised", () => {
+    // The inheritance is guarded twice: no accepted round AND a record that
+    // supplied the trees which could have accepted one. Only the first half is
+    // obvious; drop the second and an UNBOUND reading - the one `runs show`,
+    // `buildRunExport` and the run server all take - starts naming
+    // `round-not-bound-to-record` as the cause of its gate warning, while that
+    // violation is not in the list beside it and cannot be, because it is only
+    // ever raised against a record. A readout that points at a warning it does
+    // not carry is worse than one that explains nothing.
+    const noRound = [started, ticketRead, posture, lenses(), completed("gate"), completed("record"), prOpened, ended];
+    expect(evaluate(noRound).violations).not.toContain("round-not-bound-to-record");
+    expect(by(explain(noRound), "gate-before-closed-round")?.consequenceOf).toBeUndefined();
+    const reportedNoRound = [started, ticketRead, posture, lenses(), gateReported, prOpened, ended];
+    expect(evaluate(reportedNoRound).violations).not.toContain("round-not-bound-to-record");
+    expect(by(explain(reportedNoRound), "gate-reported-before-closed-round")?.consequenceOf).toBeUndefined();
+  });
+
   it("says nothing about a round binding when no record bound the reading", () => {
     // The readout evaluates unbound, and an unbound reading has no record whose
     // candidate a round could have bound. Naming one anyway would answer a

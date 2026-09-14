@@ -825,9 +825,21 @@ describe("verify's run-journal completeness row", () => {
 
     const required = await harness.cli(["verify", "--require-run-journal"]);
     expect(required.code).toBe(EXIT_POLICY);
-    expect(required.err).toContain("gate-reported-before-closed-round: the governing gate.reported at seq");
-    expect(required.err).toContain("(a consequence of round-not-bound-to-record)");
+    // The clause naming the other warning as this one's cause is ADJACENT to
+    // the identifier, ahead of the reason. The reason is the part the refusal's
+    // per-warning bound truncates, so a clause written after it is the first
+    // thing the 600-character cap destroys — and two warnings printed as peers
+    // with nothing saying one restates the other are the misreading this row
+    // exists to prevent.
+    expect(required.err).toContain("gate-reported-before-closed-round (a consequence of round-not-bound-to-record): the governing gate.reported at seq");
     expect(required.err).toContain("none of the above blocks admission");
+    // Three sightings of the second warning: the violations list, the clause
+    // naming it as the first warning's cause, and the start of its own
+    // segment. The third is the whole reason the per-warning reason bound is
+    // 120 rather than the stdout row's 400 - a larger bound spends the last of
+    // the 600-character budget on the first warning's reason and this warning
+    // never appears in the refusal under its own name at all.
+    expect(required.err.split("round-not-bou").length - 1).toBeGreaterThanOrEqual(3);
     // The remediation says to emit the run events this delivery did not
     // journal; this list is the only place the refusal names them, so it has
     // to survive the 600-character cap on a detail with two warnings in it.
