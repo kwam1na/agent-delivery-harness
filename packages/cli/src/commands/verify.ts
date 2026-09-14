@@ -126,16 +126,18 @@ function runJournalBlocker(row: RunJournalRow) {
   //
   // Do not read the 120 as making the whole detail fit. It never does on a
   // journal with more than one warning: the reproduction's two render 733
-  // characters at this bound (753 at 130, 813 at 160, 892 at 400) against a
-  // 600-character cut, and the later warnings' reasons are lost at every one of
-  // them — that is what the unbounded stdout row is for.
+  // characters at this bound (753 at 130, 813 at 160, and 1045 at 400 and at
+  // every larger bound — the longer of its two reasons is 315 characters, so
+  // nothing above that is binding) against a 600-character cut, and the later
+  // warnings' reasons are lost at every one of them — that is what the
+  // unbounded stdout row is for.
   //
   // What 120 buys is narrower than it looks, and the narrowness is the point,
   // because two earlier rounds of this delivery each shipped a confident and
   // wrong statement about this budget. Measured on the reproduction's two
   // warnings at the run id this store actually mints (`run-` + 16 hex = 20
   // characters), the second warning's identifier begins inside the cut — as
-  // `round-not-bou…`, 13 of its 25 characters — and at 130 and above it does
+  // `round-not-bou…`, 13 of its 25 characters — and at 121 and above it does
   // not. That is the whole of it. The margin is one character: at a 21-
   // character run id, which `isLegalRunId` admits up to 128, it is already
   // gone, and a journal carrying a third warning loses the later segments

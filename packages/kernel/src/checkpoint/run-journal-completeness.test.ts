@@ -1102,7 +1102,7 @@ describe("explaining a journal's warnings", () => {
     expect(diagnostics.roundBinding).toBe("unbound");
   });
 
-  it("counts the accepted projection it actually got, not always zero", () => {
+  it("counts the accepted projection it actually got at both sentences that state it, not always zero", () => {
     // The sentence tells the operator how many trees the record's verified
     // review-neutral projection accepts, so that a round bound to none of them
     // reads as a fact they can check. Every other fixture here passes an empty
@@ -1112,6 +1112,14 @@ describe("explaining a journal's warnings", () => {
     // an operator a record accepting one reviewed tree accepts none.
     expect(by(explain(ATHENA, RECORDED, [OTHER_TREE]), "gate-before-closed-round")?.because).toContain(
       "is not among the 1 the record's verified review-neutral projection accepts",
+    );
+    // TWO sentences state this count, raised from two different places, and
+    // pinning one leaves the other free to say anything. This is the more
+    // prominent of them: it is the reason `round-not-bound-to-record` gives,
+    // the warning this whole delivery is about and the one the refusal names
+    // first. Nothing else in the repository asserts any part of its tail.
+    expect(by(explain(ATHENA, RECORDED, [OTHER_TREE]), "round-not-bound-to-record")?.because).toContain(
+      "and the 1 reviewed tree(s) its verified review-neutral projection accepts",
     );
   });
 
