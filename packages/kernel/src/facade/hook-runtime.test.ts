@@ -5,6 +5,10 @@
  * deny-only battery exactly as well as a working one, so each refusal here is
  * paired with the acceptance it is supposed to leave alone.
  */
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { liveHookRuntimeProbes, resolveHookRuntimeArgs, STRIP_TYPES_FLAG, type HookRuntimeProbes } from "./hook-runtime.ts";
 
@@ -172,6 +176,39 @@ describe("liveHookRuntimeProbes", () => {
     // ...and the restore took: the real process is Node again.
     expect(resolveHookRuntimeArgs(liveHookRuntimeProbes()).ok).toBe(true);
   });
+
+  it("names a flag that actually makes THIS runtime run a TypeScript entry", () => {
+    // The only assertion in this file that does not read `STRIP_TYPES_FLAG` on
+    // BOTH sides. Every other row — and the scenario suite's command
+    // assertion — compares the product's output against the same constant, so
+    // retargeting it to any other `NODE_OPTIONS`-permitted flag leaves all of
+    // them green while the emitted command stops being able to run the staged
+    // `.ts` entry at all: the interceptor never starts, and a
+    // deny-until-attested boundary that does not start fails OPEN. `acceptsFlag`
+    // cannot object either — it asks whether the runtime PERMITS the flag, not
+    // what the flag does.
+    //
+    // Spawning is the wrong shape for the PRODUCT probe (a timeout under load
+    // becomes a fail-closed refusal caused by machine contention, which is why
+    // the probe reads the in-process enumeration instead); as EVIDENCE it only
+    // costs a process.
+    const resolution = resolveHookRuntimeArgs(liveHookRuntimeProbes());
+    expect(resolution.ok, JSON.stringify(resolution)).toBe(true);
+    if (!resolution.ok) return;
+    const dir = mkdtempSync(path.join(tmpdir(), "hook-runtime-"));
+    try {
+      const entry = path.join(dir, "probe.ts");
+      writeFileSync(entry, 'const ran: string = "ran";\nprocess.stdout.write(ran);\n');
+      expect(
+        execFileSync(resolution.execPath, [...resolution.args, entry], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }),
+      ).toBe("ran");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it("resolves the running runtime, which is the one the emitted command would name", () => {
     const resolution = resolveHookRuntimeArgs(liveHookRuntimeProbes());

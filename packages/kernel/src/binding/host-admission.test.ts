@@ -136,10 +136,11 @@ describe("evaluateToolInvocation path scoping", () => {
     // `U+01F0` has no precomposed uppercase form, so the uppercase spelling of
     // this one file is necessarily decomposed, and a fold that lowercases
     // without normalizing FIRST lets the two spellings diverge again — the
-    // same permit, one case-mapping away. This pair pins the LEADING
-    // normalize only: both of its spellings denormalize identically under the
-    // rest of the fold, so deleting the trailing normalize leaves it green.
-    // The `U+0390` pair below is what pins the trailing one.
+    // same permit, one case-mapping away. Note what this pair does NOT pin:
+    // it merges under every single-step mutant of the fold as written, so it
+    // speaks only against the pre-delivery `toLowerCase`-only baseline. The
+    // `U+0390` pair below pins the trailing normalize and the `U+0345` pair
+    // the leading one.
     const lowerPrecomposed = "src/\u01f0-secrets";
     const upperDecomposed = "src/J\u030c-secrets";
     expect(lowerPrecomposed.normalize("NFC").toLowerCase()).not.toBe(upperDecomposed.normalize("NFC").toLowerCase());
@@ -169,6 +170,22 @@ describe("evaluateToolInvocation path scoping", () => {
       decomposedTonos.normalize("NFC").toLowerCase().toUpperCase().toLowerCase(),
     );
 
+    // And the LEADING normalize, which the trailing one cannot stand in for.
+    // Case mapping does not canonically REORDER, and `U+0345` (combining
+    // ypogegrammeni, class 240) sorts after the class-230 marks — so two
+    // spellings that NFC makes identical are case-mapped to DIFFERENT code
+    // points before the trailing normalize ever runs, and it has nothing left
+    // to recompose them from.
+    const reordered = "src/a\u0345\u0300-secrets";
+    const canonical = "src/\u00e0\u0345-secrets";
+    expect(reordered.normalize("NFC")).toBe(canonical.normalize("NFC"));
+    expect(reordered).not.toBe(canonical);
+    // ...and the pin itself: everything the fold does EXCEPT the leading
+    // normalize still leaves these two apart.
+    const withoutLeading = (value: string): string =>
+      value.toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
+    expect(withoutLeading(reordered)).not.toBe(withoutLeading(canonical));
+
     for (const [declared, written] of [
       [composed, `${decomposed}/key.pem`],
       [decomposed, `${composed}/key.pem`],
@@ -187,6 +204,9 @@ describe("evaluateToolInvocation path scoping", () => {
       // The trailing normalize, both directions.
       [composedTonos, `${decomposedTonos}/key.pem`],
       [decomposedTonos, `${composedTonos}/key.pem`],
+      // The leading normalize, both directions.
+      [reordered, `${canonical}/key.pem`],
+      [canonical, `${reordered}/key.pem`],
     ] as const) {
       const scopedGrant = { ...grant, protectedPaths: [declared] };
       const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };
