@@ -139,8 +139,8 @@ describe("evaluateToolInvocation path scoping", () => {
     // same permit, one case-mapping away. Note what this pair does NOT pin:
     // it merges under every single-step mutant of the fold as written, so it
     // speaks only against the pre-delivery `toLowerCase`-only baseline. The
-    // `U+0390` pair below pins the trailing normalize and the `U+0345` pair
-    // the leading one.
+    // `U+0345` pair below pins the fold's INNER normalize and the `U+00CC`
+    // pair its trailing one.
     const lowerPrecomposed = "src/\u01f0-secrets";
     const upperDecomposed = "src/J\u030c-secrets";
     expect(lowerPrecomposed.normalize("NFC").toLowerCase()).not.toBe(upperDecomposed.normalize("NFC").toLowerCase());
@@ -153,24 +153,18 @@ describe("evaluateToolInvocation path scoping", () => {
     const plainS = "src/secrets";
     expect(longS.normalize("NFC").toLowerCase()).not.toBe(plainS.normalize("NFC").toLowerCase());
 
-    // And one step past the LEADING normalize: case mapping denormalizes its
-    // own input, so the fold normalizes a second time at the END. Lowercasing
+    // A pair where case mapping DENORMALIZES ITS OWN INPUT, which is the
+    // reason the fold normalizes after case-mapping at all: lowercasing
     // `U+03AA` (capital iota with dialytika) and recomposing yields the
     // precomposed `U+0390`, while lowercasing `U+0390` itself leaves a
-    // DECOMPOSED sequence behind — so without that trailing normalize the two
-    // spellings of one file fold apart and the permit re-opens. 8 code points
-    // behave this way (`U+0390`, `U+03B0`, and six of the Greek
-    // `U+1FD2`-`U+1FE7` block); `U+0390` stands for all of them here.
+    // DECOMPOSED sequence behind. What this pair pins is the ALIAS, not one
+    // step of the fold — the leading lowercase merges it too. The `U+00CC`
+    // pair below is the one that kills the trailing normalize.
     const composedTonos = "src/\u0390-secrets";
     const decomposedTonos = "src/\u03aa\u0301-secrets";
     expect(composedTonos.normalize("NFC").toLowerCase()).not.toBe(decomposedTonos.normalize("NFC").toLowerCase());
-    // ...and the pin itself: everything the fold does EXCEPT the trailing
-    // normalize still leaves these two apart.
-    expect(composedTonos.normalize("NFC").toLowerCase().toUpperCase().toLowerCase()).not.toBe(
-      decomposedTonos.normalize("NFC").toLowerCase().toUpperCase().toLowerCase(),
-    );
 
-    // And the LEADING normalize, which the trailing one cannot stand in for.
+    // The INNER normalize, which neither of the others can stand in for.
     // Case mapping does not canonically REORDER, and `U+0345` (combining
     // ypogegrammeni, class 240) sorts after the class-230 marks — so two
     // spellings that NFC makes identical are case-mapped to DIFFERENT code
@@ -180,11 +174,26 @@ describe("evaluateToolInvocation path scoping", () => {
     const canonical = "src/\u00e0\u0345-secrets";
     expect(reordered.normalize("NFC")).toBe(canonical.normalize("NFC"));
     expect(reordered).not.toBe(canonical);
-    // ...and the pin itself: everything the fold does EXCEPT the leading
+    // ...and the pin itself: everything the fold does EXCEPT the inner
     // normalize still leaves these two apart.
-    const withoutLeading = (value: string): string =>
-      value.toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
-    expect(withoutLeading(reordered)).not.toBe(withoutLeading(canonical));
+    const withoutInner = (value: string): string =>
+      value.toLowerCase().toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
+    expect(withoutInner(reordered)).not.toBe(withoutInner(canonical));
+
+    // And the TRAILING normalize. Once the fold lowercases first, no
+    // canonically-equivalent pair survives to the end denormalized — what the
+    // last normalize still buys is that the folded value is CANONICAL, so the
+    // comparison key for one path is one string. `U+0131` (dotless i) maps to
+    // `i` through the round-trip, and `U+0131 U+0300` therefore folds to a
+    // DECOMPOSED `i` + grave that the trailing normalize composes into
+    // `U+00EC` — the same key the protected path `U+00CC` folds to. Drop it
+    // and these two spellings compare apart, re-opening the permit; the fold
+    // also stops being idempotent.
+    const dotless = "src/\u0131\u0300-secrets";
+    const precomposedGrave = "src/\u00cc-secrets";
+    const withoutTrailing = (value: string): string =>
+      value.toLowerCase().normalize("NFC").toLowerCase().toUpperCase().toLowerCase();
+    expect(withoutTrailing(dotless)).not.toBe(withoutTrailing(precomposedGrave));
 
     for (const [declared, written] of [
       [composed, `${decomposed}/key.pem`],
@@ -201,7 +210,7 @@ describe("evaluateToolInvocation path scoping", () => {
       // ...and the false DENY the round-trip buys, which the comment claims
       // and nothing pinned: "\u00df" and "ss" compare as one path.
       ["src/\u00df-secrets", "src/ss-secrets/key.pem"],
-      // The trailing normalize, both directions.
+      // The case-mapping-denormalizes-its-own-input alias, both directions.
       [composedTonos, `${decomposedTonos}/key.pem`],
       [decomposedTonos, `${composedTonos}/key.pem`],
       // ...and the rest of the class the fold's header names: `toLowerCase`
@@ -210,9 +219,21 @@ describe("evaluateToolInvocation path scoping", () => {
       // every row while re-opening the permit for 26 more pairs.
       ["src/\u00b5-secrets", "src/\u03bc-secrets/key.pem"],
       ["src/\u03c2-secrets", "src/\u03c3-secrets/key.pem"],
-      // The leading normalize, both directions.
+      // A denial the PRE-DELIVERY `toLowerCase` ALREADY made, and the class
+      // the fold must not lose: NFC composition is CASE-SENSITIVE, so
+      // `U+1FB3 U+0342` composes while the uppercase spelling of the same
+      // file, `U+1FBC U+0342`, has no precomposed form and stays decomposed.
+      // A fold that normalized before lowercasing splits these two and turns
+      // a denial the old code made into a PERMIT — the one direction this
+      // delivery must never move. Three classes behave this way.
+      ["src/\u1fbc\u0342-secrets", "src/\u1fb3\u0342-secrets/key.pem"],
+      ["src/\u1fb3\u0342-secrets", "src/\u1fbc\u0342-secrets/key.pem"],
+      // The inner normalize, both directions.
       [reordered, `${canonical}/key.pem`],
       [canonical, `${reordered}/key.pem`],
+      // The trailing normalize, both directions.
+      [precomposedGrave, `${dotless}/key.pem`],
+      [dotless, `${precomposedGrave}/key.pem`],
     ] as const) {
       const scopedGrant = { ...grant, protectedPaths: [declared] };
       const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };
@@ -229,6 +250,37 @@ describe("evaluateToolInvocation path scoping", () => {
         expect(decision.denials[0]?.message).toContain(written);
       }
     }
+
+    // THE CLASS THE FOLD CLAIMS, ENUMERATED RATHER THAN SAMPLED. Every code
+    // point whose `toLowerCase` is not fixed by its own upper round-trip is
+    // two spellings of one file on a case-insensitive volume. Rows naming
+    // individual members are satisfied by a fold that special-cases exactly
+    // those members — that mutation survived a two-member table and a
+    // four-member one — so the whole class is driven through the real
+    // decision here.
+    let classMembers = 0;
+    for (let cp = 0; cp <= 0x10ffff; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const ch = String.fromCodePoint(cp);
+      const lowered = ch.toLowerCase();
+      const rounded = lowered.toUpperCase().toLowerCase();
+      if (rounded === lowered) continue;
+      classMembers += 1;
+      const declared = `src/${ch}-secrets`;
+      const memberGrant = { ...grant, protectedPaths: [declared] };
+      const memberAttestation = { ...attestation, grantDigest: digestCanonical(memberGrant) };
+      const decision = evaluateToolInvocation(expectation, memberGrant, memberAttestation, {
+        capability: "fs.write",
+        writes: [`src/${rounded}-secrets/key.pem`],
+      });
+      expect(decision.allowed, `U+${cp.toString(16).toUpperCase()}`).toBe(false);
+      if (!decision.allowed) expect(decision.denials[0]?.code).toBe("protected_path");
+    }
+    // ...and the loop is not vacuously satisfied by a `continue` that always
+    // fires. A lower bound rather than an exact count: the class size is an
+    // ICU property, and pinning it exactly would make this row break on a
+    // Node upgrade instead of on a defect.
+    expect(classMembers).toBeGreaterThan(100);
 
     // The deny side did not widen into a match-everything: a sibling inside
     // the same writable root, protected under neither spelling, is allowed.

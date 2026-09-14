@@ -337,9 +337,12 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * denormalize its own input: `U+01F0` has no precomposed uppercase form, so
  * the uppercase spelling of that one file is necessarily `"J\u030c"`, and
  * lowercasing it yields the decomposed `"j\u030c"` rather than `U+01F0`. A
- * single leading NFC therefore leaves 124 code points whose two spellings
- * still compare unequal — a PERMIT on exactly the class this check exists to
- * deny. Normalizing the folded result closes that.
+ * single NFC before the case mapping therefore leaves 124 code points whose
+ * two spellings still compare unequal — a PERMIT on exactly the class this
+ * check exists to deny. Normalizing the folded result closes that, and makes
+ * the folded value CANONICAL, so one path has one comparison key and the fold
+ * is idempotent: without it `U+0131 U+0300` folds to a decomposed `i` + grave
+ * that never meets the `U+00EC` its own protected path folds to.
  *
  * `toLowerCase` ALONE is not case folding, and the gap is a permit of exactly
  * the same shape. `U+017F` (LATIN SMALL LETTER LONG S) is already lowercase and
@@ -348,9 +351,26 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * to `"s"` and opens the file the policy meant to protect. 101 code points sit
  * in that class (`"\u03c2"`/`"\u03c3"`, `"\u00b5"`/`"\u03bc"`, the Greek symbol
  * variants). Routing through `toUpperCase` first collapses every one of them:
- * the fold becomes idempotent, leaves ASCII byte-identical, and — verified over
- * all 0x110000 code points — merges no fewer pairs than it did before, so no
- * existing denial is weakened.
+ * the fold becomes idempotent and leaves ASCII byte-identical. The test
+ * enumerates that class rather than sampling it, so a fold that special-cased
+ * the members a comment happens to name gets a red row.
+ *
+ * IT LOWERCASES BEFORE ITS FIRST NORMALIZE, AND THAT ORDER IS LOAD-BEARING.
+ * NFC composition is case-sensitive: `U+1FB3 U+0342` composes to `U+1FB7`,
+ * while the uppercase spelling of the same file, `U+1FBC U+0342`, has no
+ * precomposed form and stays decomposed. A fold that normalized first would
+ * drive the two spellings into different shapes BEFORE the case round-trip
+ * ran, and the round-trip cannot bring them back — so it would split three
+ * classes the plain `toLowerCase` it replaces already merged, introducing a
+ * permit rather than closing one. Lowercasing first removes the case
+ * distinction the composition is sensitive to.
+ *
+ * The non-weakening property is therefore verified over code point SEQUENCES,
+ * not over single code points: `folded` is a function on strings, and every
+ * defect in this paragraph lives in a two-code-point string. Over a corpus of
+ * every cased code point below `U+30000` against every single-code-point
+ * combining mark, the fold merges no fewer pairs than `toLowerCase` does, so
+ * no existing denial is weakened.
  *
  * The boundary this holds to, stated rather than implied: the fold is a
  * comparison that ERRS TOWARD DENYING. Case-mapping through upper and back
@@ -360,7 +380,7 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * price of closing the permits above.
  */
 const folded = (value: string): string =>
-  value.normalize("NFC").toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
+  value.toLowerCase().normalize("NFC").toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
 
 export const underAnyFolded = (p: string, prefixes: readonly string[]): boolean =>
   underAny(folded(p), prefixes.map(folded));
