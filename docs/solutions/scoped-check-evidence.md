@@ -1,3 +1,8 @@
+---
+title: Scoped check proof and final delivery binding
+date: 2026-09-12
+---
+
 # Scoped check proof and final delivery binding
 
 V26-2064 separates a check's input identity from the current selection and final

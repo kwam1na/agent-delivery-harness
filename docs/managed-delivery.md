@@ -100,10 +100,52 @@ consumption rejects on any mismatch — so a stale session cannot race a resumed
 one. Same-worktree reuse is not offered at this grade.
 
 That single authorization is counted as a policy-required **interruption**, and
-never as an operator **intervention**. The distinction is load-bearing: the
-milestone gate compares intervention counts, and a design that requires an
-operator to press a key must not be able to improve its own score by calling
-that key an intervention, nor inflate it by the reverse.
+never as an operator **intervention**. The distinction is still load-bearing,
+but not because interventions decide anything: a design that requires an
+operator to press a key must not be able to flatter its own reported figures by
+calling that key an intervention, nor inflate them by the reverse.
+
+**What the milestone gate actually gates on.** The sole gating criterion is
+`blockedVersusProgressingShare`, which must not regress against the frozen
+manual-choreography baseline's. Operator interventions are reported in full and
+gate nothing. Policy-required interruptions are recorded and reported alongside
+them, and are never counted as interventions.
+
+Interventions no longer gate because the criterion never had headroom. The
+baseline's own intervention counts are **2**, **0** and **0** — a median of
+**0**, which is the floor of the metric — so no non-negative shadow count can be
+strictly lower, and a baseline sitting at the floor cannot demonstrate
+improvement in either direction. The baseline's limitations block concedes its
+figures are self-declared lower bounds: transcripts do not record silently
+granted host permission prompts. Relaxing the comparison to "not higher" was
+rejected for the same reason, because tying a self-declared lower bound proves
+close to nothing. Blocked share has real room to move and is measured from the
+same transcripts under the same rubric, so it carries the gate alone. Ceasing to
+gate on the figure is not licence to stop measuring it: every step-in the
+baseline's rubric counts is still counted and still reported, and the figure
+becomes gating again only once the baseline is re-recorded under a rubric wide
+enough to have headroom.
+
+Those declarations live in
+[`.agents/policy/shadow-milestone-gate-record.json`](../.agents/policy/shadow-milestone-gate-record.json)
+and the scored outcome in
+[`qualifications/shadow-milestone-gate-verdict.json`](../qualifications/shadow-milestone-gate-verdict.json).
+Those two artifacts are where the gate's criteria now live: the harness shadow
+guard and the milestone scorer script have been retired, so there is no script
+to read them out of.
+
+**This page's gate claims are pinned, and this corpus is current
+documentation.** `docs/docs-references.test.ts` recomputes the gating criterion
+and the baseline figures above from those two artifacts and fails on
+disagreement, and it holds the exact set of clauses this page states about an
+operator step-in, so a claim that calls one an intervention, an interruption or
+a step-in reaches this page only by being re-stamped there, in whatever verb or
+form it chooses. The pin is bounded by those words: a claim that calls the same
+thing an authorization or a takeover is outside it, which is the price of
+pinning a closed set rather than scanning open prose for a verb. Prose
+elsewhere under `docs/` carries no such pin unless a sensor names it; the
+historical narration under `docs/solutions/` is deliberately unpinned and
+unmaintained, for the reason [its index](solutions/README.md) states.
 
 ## The facade's operation contract
 
