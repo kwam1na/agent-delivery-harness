@@ -351,14 +351,24 @@ describe("the external-operation authority matrix", () => {
       planOf({ policy: widened, evidence: { externalVerification: "passed", completedObligations: ["review-green"] } }),
     );
     expect(codesOf(refused)).toContain("obligation_unsatisfied");
-    expect(
-      planExternalAction(
-        planOf({
-          policy: widened,
-          evidence: { externalVerification: "passed", completedObligations: ["review-green", "security-scan"] },
-        }),
-      ).ok,
-    ).toBe(true);
+    // This is the ONLY plan in the suite that succeeds with a completed set
+    // other than the fixture's, and it threw the result away — so `evidence`
+    // could be bound to the literal ["review-green"] in the product and every
+    // row stayed green, while a delivery that satisfied a two-obligation policy
+    // bound an intent claiming it completed one. The ticket names the current
+    // hosted and local evidence among the things an intent binds, so the bound
+    // value is asserted rather than the plan merely being allowed.
+    const widenedOk = planExternalAction(
+      planOf({
+        policy: widened,
+        evidence: { externalVerification: "passed", completedObligations: ["review-green", "security-scan"] },
+      }),
+    );
+    expect(widenedOk.ok).toBe(true);
+    expect(widenedOk.ok === true && widenedOk.intent.evidence).toStrictEqual({
+      externalVerification: "passed",
+      completedObligations: ["review-green", "security-scan"],
+    });
   });
 
   it("binds a deploy as a deploy, all the way through the adapter call and both journal payloads", () => {
