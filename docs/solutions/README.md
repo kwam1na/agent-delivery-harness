@@ -85,6 +85,7 @@ sometimes one and sometimes the other.
 
 | Date | Note |
 | --- | --- |
+| 2026-09-14 | [Pin a documentation claim as a closed set, not as a scan for a verb](pinning-a-documentation-claim-as-a-closed-set-2026-09-14.md) |
 | 2026-09-12 | [Qualify the executable boundary and retained review coordinates](bundled-cli-cancellation-and-review-transport.md) |
 | 2026-09-12 | [Scoped check proof and final delivery binding](scoped-check-evidence.md) |
 | 2026-09-12 | [Scoped checks execute from private prepared source](scoped-check-execution.md) |
