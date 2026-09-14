@@ -157,7 +157,7 @@ so they can be checked:
 > THIS INVENTORY GRANTS NOTHING. It describes what an operation costs and where
 > it is reachable.
 
-Each of the **38** operations in `FACADE_OPERATIONS` declares four things:
+Each of the **39** operations in `FACADE_OPERATIONS` declares four things:
 
 | Axis | Values |
 |---|---|
@@ -342,6 +342,39 @@ A repository whose heaviest single operation is heavier than the recorded ones
 does not re-derive this default: `bindWorkspace` takes a per-fence
 `observationLifetimeSeconds`, and declaring it is a declaration, not machinery.
 No visibility surface, no polling, no daemon.
+
+### Listing an installation's deliveries
+
+`status` answers about one delivery a caller already knows the id of. The
+question it cannot answer is *what is running across this installation right
+now*, because the caller asking it has no delivery id to ask with — so the
+answer cannot be a member of the per-delivery status model, and that model is
+unchanged by it. `listDeliveries` is the installation-scoped **mode** of the
+same read surface (`managed deliveries` at the terminal, `deliveries` on the
+MCP tool), and it reports exactly four things per delivery:
+
+| Member | What it carries |
+|---|---|
+| `deliveryId` | The delivery's identity, and the id `status` takes for everything else. |
+| `state` | The reduced delivery state, terminal states included. |
+| `lastActivity` | The graded host activity and the heartbeat stamp it was graded from. |
+| `pendingDecision` | The waiver or amendment proposal awaiting a decision, if one stands. |
+
+**It stays four.** A listing that grows obligations, candidate detail or trust
+posture becomes a second status model that can disagree with the first, and a
+reader who needs any of those has a delivery id by then.
+
+**Liveness is the same rule, not a second one.** Each listed delivery's
+activity comes from `gradeHostActivity` — the function `status` calls —
+resolved lazily on the read: a Tier 2 clean end reads `paused`, a Tier 1
+disappearance reads `unknown`, and nothing here polls or stamps a heartbeat of
+its own. Carrying the stamp beside the grade is what lets an operator see *how*
+stale an `unknown` is without ageing the timestamp themselves against a
+lifetime they would have to guess.
+
+It is `read`-class in the inventory, binds no fence, moves no journal revision,
+and enumerates only its own installation's namespace directory: a delivery
+another installation registered has no path into the result.
 
 ## The policy compiler
 

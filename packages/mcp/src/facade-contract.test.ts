@@ -41,6 +41,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  */
 const CLI_OPERATION_MAP: Readonly<Record<string, string>> = Object.freeze({
   status: "status",
+  deliveries: "listDeliveries",
   next: "nextCheckpoint",
   blockers: "blockerInventory",
   "explain-blocker": "explainBlocker",

@@ -1089,6 +1089,7 @@ export {
 export {
   composeManagedStatus,
   type AssertionSourceView,
+  type ListedDelivery,
   type ManagedDeliveryStatus,
   type ManagedStatusInput,
   type MigrationPath,

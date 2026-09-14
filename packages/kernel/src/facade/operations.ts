@@ -106,6 +106,14 @@ const entry = (
 export const FACADE_OPERATIONS: readonly FacadeOperation[] = Object.freeze([
   // Read.
   entry("status", "read", "absent-by-state", "none", ["cli", "mcp"], "The one typed status model for a registered delivery."),
+  entry(
+    "listDeliveries",
+    "read",
+    "absent-by-state",
+    "none",
+    ["cli", "mcp"],
+    "Lists this installation's deliveries: identity, state, graded last activity, pending decision.",
+  ),
   entry("nextCheckpoint", "read", "absent-by-state", "none", ["cli", "mcp"], "The next valid checkpoint the delivery will accept."),
   entry("explainBlocker", "read", "absent-by-state", "none", ["cli", "mcp"], "The current blocker and its declared remediation."),
   entry("blockerInventory", "read", "absent-by-state", "none", ["cli", "mcp"], "Every blocker this delivery journaled and whether it was left."),

@@ -153,6 +153,7 @@ import { evaluateMigrationConsumption } from "./migration.ts";
 import {
   composeManagedStatus,
   type AssertionSourceView,
+  type ListedDelivery,
   type ManagedCheckpoint,
   type ManagedDeliveryStatus,
   type ManagedStatusInput,
@@ -717,6 +718,32 @@ export interface ManagedDeliveryFacade {
    */
   status(input: { readonly deliveryId: string; readonly observedAt: string }): Promise<
     { readonly ok: true; readonly status: ManagedDeliveryStatus } | FacadeFailure
+  >;
+
+  /**
+   * The INSTALLATION-SCOPED listing mode of the same status surface: every
+   * delivery this installation registered, four members each.
+   *
+   * WHY THIS IS A MODE AND NOT A DASHBOARD. `status` answers about one
+   * delivery a caller already knows the id of. Nothing answered "what is
+   * running across this installation right now", and the caller that needs it
+   * has no delivery id to ask with — so it cannot be a member of the
+   * per-delivery model, and the per-delivery model is unchanged by it. What it
+   * returns stays deliberately four members wide (`ListedDelivery`); every
+   * further question has a delivery id by then and belongs to `status`.
+   *
+   * LIVENESS IS THE SAME GRADED RULE. Each listed delivery's activity comes
+   * from `gradeHostActivity` in ./liveness.ts, the function `status` calls,
+   * resolved lazily on this read. There is no heartbeat of its own and no
+   * polling: listing reads what the binding already stamped.
+   *
+   * READ-CLASS AND INSTALLATION-SCOPED. It writes nothing, advances no
+   * journal revision, binds no fence, and enumerates only this installation's
+   * own namespace directory — a delivery registered by another installation
+   * has no path into this result.
+   */
+  listDeliveries(input: { readonly observedAt: string }): Promise<
+    { readonly ok: true; readonly deliveries: readonly ListedDelivery[] } | FacadeFailure
   >;
 
   nextCheckpoint(input: { readonly deliveryId: string }): Promise<{ readonly ok: true; readonly checkpoint: ManagedCheckpoint } | FacadeFailure>;
@@ -3170,6 +3197,73 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       };
 
       return { ok: true, status: composeManagedStatus(composed) };
+    },
+
+    async listDeliveries({ observedAt }) {
+      const root = path.join(await namespaceDir(), "deliveries");
+      let ids: string[];
+      try {
+        ids = (await readdir(root)).sort();
+      } catch {
+        // An installation that has registered nothing has no directory at all.
+        // That is an EMPTY listing, not a refusal: "nothing is running" is a
+        // true and useful answer, and refusing it would make the one surface
+        // that reports installation-wide quiet unavailable exactly when the
+        // installation is quiet.
+        return { ok: true, deliveries: [] };
+      }
+
+      const listed: ListedDelivery[] = [];
+      for (const deliveryId of ids) {
+        const dir = path.join(root, deliveryId);
+        const meta = await readJson<DeliveryMeta>(path.join(dir, "delivery.json"));
+        // A directory without a registration record is not a delivery this
+        // installation registered. Skipping it is deliberate: the alternative
+        // is listing an identity with no state, which is the one thing a
+        // listing must never do.
+        if (meta === undefined) continue;
+        const store = await journalStoreFor(deliveryId);
+        const reduced = await store.state();
+        const read = await store.read();
+        // A journal that does not reduce has no state to report. The
+        // per-delivery `status` refuses for this delivery and says why; the
+        // listing omits it rather than inventing a state for it, and the
+        // refusal stays reachable through `status` with this id.
+        if (!reduced.ok || !read.ok) continue;
+
+        const views = viewsOf(read.entries);
+        const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
+        const observation =
+          workspace === undefined
+            ? undefined
+            : await readJson<{ fence: number; observedAt: string }>(path.join(dir, "binding", "observation.json"));
+        const lastActivity = lastOf(views, "activity.observed");
+        listed.push({
+          deliveryId,
+          state: reduced.state.state,
+          lastActivity: {
+            // The SAME rule the per-delivery status model applies, called
+            // rather than re-derived: two surfaces that grade liveness
+            // separately are two surfaces that eventually disagree.
+            activity: gradeHostActivity({
+              currentFence: reduced.state.lastFence,
+              lastObservedActivity:
+                lastActivity === undefined
+                  ? undefined
+                  : {
+                      activity: lastActivity.payload["activity"] as HostActivity,
+                      fence: lastActivity.payload["fence"] as number,
+                    },
+              observationLifetimeSeconds: workspace?.observationLifetimeSeconds,
+              observation,
+              observedAt,
+            }),
+            observedAt: observation?.observedAt,
+          },
+          pendingDecision: waiverLedgerOf(views).pending[0],
+        });
+      }
+      return { ok: true, deliveries: listed };
     },
 
     async nextCheckpoint({ deliveryId }) {

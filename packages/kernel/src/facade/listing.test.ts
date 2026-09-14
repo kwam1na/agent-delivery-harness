@@ -1,0 +1,307 @@
+/**
+ * The installation-scoped listing mode of the status surface.
+ *
+ * WHAT THIS PINS, AND WHY IT IS NOT A SCENARIO. The listing reads durable
+ * state that already exists: one registration marker, one reduced journal, the
+ * bound workspace's declared lifetime, and the binding's freshness heartbeat.
+ * Driving a delivery through the whole skeleton to produce those bytes would
+ * pin the skeleton, not the listing, and would make the two cases this mode
+ * exists for — an installation with NOTHING registered, and one with SEVERAL
+ * deliveries — the two hardest cases to reach. So the journals here are built
+ * through the real append path (`createJournalStore`, the frozen reducer
+ * judging every entry), and the listing is asked about them.
+ *
+ * EVERY ROW ASSERTS WHAT THE LISTING CONTAINS. An assertion that something is
+ * absent passes for free when the mechanism is missing entirely, so an absence
+ * row here always stands beside the presence it is distinguished from: the
+ * cross-installation row asserts the OTHER installation's delivery is missing
+ * AND this one's is present, and the aged row asserts `unknown` beside a fresh
+ * delivery reading `active` from the same call.
+ */
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { createJournalStore } from "../checkpoint/journal-store.ts";
+import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";
+import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
+import { disposablePolicyBinding } from "./disposable-repository.fixture.ts";
+import { DEFAULT_OBSERVATION_LIFETIME_SECONDS } from "./liveness.ts";
+
+const DIGEST = "a".repeat(64);
+const DIGEST2 = "c".repeat(64);
+const OID = "b".repeat(40);
+
+const scratchRoots: string[] = [];
+
+/** A scratch git repository and the facade bound to it. Nothing is shared between two of them. */
+function installation(): { readonly repoDir: string; readonly namespace: string; readonly facade: ManagedDeliveryFacade } {
+  const repoDir = mkdtempSync(path.join(tmpdir(), "listing-"));
+  scratchRoots.push(repoDir);
+  execFileSync("git", ["init", "--quiet", repoDir]);
+  const facade = createManagedDeliveryFacade({
+    repoDir,
+    policyBinding: disposablePolicyBinding(),
+    installation: { installationPath: path.join(repoDir, "installation"), receiptDir: path.join(repoDir, "receipts") },
+    hostVersion: "listing-test",
+  });
+  return { repoDir, namespace: path.join(repoDir, ".git", "managed-delivery"), facade };
+}
+
+const entry = (deliveryId: string, revision: number, kind: string, payload: Record<string, unknown>) => ({
+  spec: JOURNAL_ENTRY_SPEC,
+  journal: "delivery" as const,
+  subjectId: deliveryId,
+  expectedRevision: revision,
+  idempotencyKey: `key-${revision}-${kind}`,
+  kind,
+  payload,
+});
+
+/**
+ * The entries every delivery below opens with: registered, policy bound,
+ * generation pinned, into `preparing`, workspace bound, and fenced at fence 1
+ * declaring `lifetimeSeconds`. Revision stands at 6 afterwards.
+ */
+const opening = (deliveryId: string, lifetimeSeconds: number) => [
+  entry(deliveryId, 0, "delivery.registered", {
+    contractDigest: DIGEST,
+    intakeId: "intake-1",
+    confirmationNonce: "nonce-1",
+    activeCompositionProfile: "core",
+    registeringInstallationId: "install-1",
+  }),
+  entry(deliveryId, 1, "policy.snapshot.bound", { policyDigest: DIGEST, repositoryAuthorityEpoch: 4 }),
+  entry(deliveryId, 2, "generation.pinned", { generationDigest: DIGEST2, releaseId: "core-v1", profile: "core" }),
+  entry(deliveryId, 3, "transition.committed", { from: "accepted", to: "preparing" }),
+  entry(deliveryId, 4, "workspace.bound", {
+    workspaceId: "workspace-1",
+    repositoryId: "repo-1",
+    baseRef: "refs/heads/main",
+    baseTipSha: OID,
+    branchRef: `refs/heads/${deliveryId}`,
+    branchRefValue: OID,
+    worktreeId: "worktree-1",
+    baselineClassification: "clean",
+  }),
+  entry(deliveryId, 5, "invocation.fenced", {
+    fence: 1,
+    hostTaskId: "task-1",
+    worktreeId: "worktree-1",
+    candidateTreeSha: OID,
+    candidateBranchRefValue: OID,
+    policyDigest: DIGEST,
+    authorityEpoch: 4,
+    observationLifetimeSeconds: lifetimeSeconds,
+  }),
+];
+
+interface RegisterInput {
+  readonly deliveryId: string;
+  readonly entries: readonly ReturnType<typeof entry>[];
+  /** Written only when given; absent means no workspace is bound. */
+  readonly workspace?: { readonly observationLifetimeSeconds: number };
+  /** The binding's freshness heartbeat, written only when given. */
+  readonly observation?: { readonly fence: number; readonly observedAt: string };
+}
+
+/**
+ * Stamps one delivery into an installation's namespace through the real
+ * append path: every entry below is judged by the frozen reducer, so a journal
+ * this helper writes is one the product could have written.
+ *
+ * `delivery.json` is the registration marker the listing reads to tell a
+ * registered delivery from a stray directory; its contents are the facade's
+ * business and nothing in the listing reads them.
+ */
+async function register(namespace: string, input: RegisterInput): Promise<void> {
+  const dir = path.join(namespace, "deliveries", input.deliveryId);
+  mkdirSync(path.join(dir, "binding"), { recursive: true });
+  writeFileSync(path.join(dir, "delivery.json"), `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: DIGEST })}\n`);
+  const store = createJournalStore(path.join(dir, "journal.jsonl"));
+  for (const candidate of input.entries) {
+    const appended = await store.append(candidate);
+    expect(appended.ok, `${input.deliveryId} ${candidate.kind}: ${JSON.stringify(appended)}`).toBe(true);
+  }
+  if (input.workspace !== undefined) {
+    writeFileSync(
+      path.join(dir, "workspace.json"),
+      `${JSON.stringify({ worktreeDir: path.join(namespace, "wt"), workspaceId: "workspace-1", fence: 1, ...input.workspace })}\n`,
+    );
+  }
+  if (input.observation !== undefined) {
+    writeFileSync(path.join(dir, "binding", "observation.json"), `${JSON.stringify(input.observation)}\n`);
+  }
+}
+
+afterAll(() => {
+  // Only directories this file itself created, by the paths it recorded.
+  for (const root of scratchRoots) execFileSync("rm", ["-rf", root]);
+});
+
+describe("the installation-scoped listing", () => {
+  it("lists empty for an installation that has registered nothing", async () => {
+    const { facade } = installation();
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(true);
+    if (!listing.ok) return;
+    // Quiet is an ANSWER, not a refusal: the one surface that reports
+    // installation-wide quiet must be available when the installation is quiet.
+    expect(listing.deliveries).toEqual([]);
+  });
+
+  it("lists an active delivery and a terminal one, each with its own state", async () => {
+    const { namespace, facade } = installation();
+    await register(namespace, {
+      deliveryId: "delivery-live",
+      entries: [
+        ...opening("delivery-live", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+        entry("delivery-live", 6, "activity.observed", { activity: "active", fence: 1 }),
+        entry("delivery-live", 6, "transition.committed", { from: "preparing", to: "planning" }),
+      ],
+      workspace: { observationLifetimeSeconds: DEFAULT_OBSERVATION_LIFETIME_SECONDS },
+      observation: { fence: 1, observedAt: "2026-09-14T11:59:00Z" },
+    });
+    await register(namespace, {
+      deliveryId: "delivery-gone",
+      entries: [
+        ...opening("delivery-gone", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+        entry("delivery-gone", 6, "transition.committed", { from: "preparing", to: "cancellation_requested" }),
+        entry("delivery-gone", 7, "workspace.disposition.recorded", { workspaceId: "workspace-1", disposition: "quarantined" }),
+        entry("delivery-gone", 8, "transition.committed", { from: "cancellation_requested", to: "cancelled" }),
+      ],
+    });
+
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(true);
+    if (!listing.ok) return;
+    expect(listing.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-gone", "delivery-live"]);
+
+    const live = listing.deliveries.find((listed) => listed.deliveryId === "delivery-live");
+    expect(live?.state).toBe("planning");
+    expect(live?.lastActivity.activity).toBe("active");
+    expect(live?.lastActivity.observedAt).toBe("2026-09-14T11:59:00Z");
+    expect(live?.pendingDecision).toBeUndefined();
+
+    // Exactly four members, and it stays four: this row is what fails when the
+    // listing starts growing, one plausible member at a time, into a second
+    // status model that can disagree with the first.
+    expect(Object.keys(live as object).sort()).toEqual(["deliveryId", "lastActivity", "pendingDecision", "state"]);
+
+    const gone = listing.deliveries.find((listed) => listed.deliveryId === "delivery-gone");
+    expect(gone?.state).toBe("cancelled");
+    // No workspace was ever written for it, so there is no heartbeat to
+    // report — which is a different thing from a heartbeat that is old.
+    expect(gone?.lastActivity.observedAt).toBeUndefined();
+    expect(gone?.lastActivity.activity).toBe("unknown");
+  });
+
+  it("reads an observation aged past its declared lifetime as unknown, beside a fresh one reading active", async () => {
+    const { namespace, facade } = installation();
+    const lifetimeSeconds = 30;
+    for (const [deliveryId, observedAt] of [
+      ["delivery-fresh", "2026-09-14T11:59:45Z"],
+      ["delivery-aged", "2026-09-14T11:50:00Z"],
+    ] as const) {
+      await register(namespace, {
+        deliveryId,
+        entries: [
+          ...opening(deliveryId, lifetimeSeconds),
+          entry(deliveryId, 6, "activity.observed", { activity: "active", fence: 1 }),
+        ],
+        workspace: { observationLifetimeSeconds: lifetimeSeconds },
+        observation: { fence: 1, observedAt },
+      });
+    }
+
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(true);
+    if (!listing.ok) return;
+    const byId = new Map(listing.deliveries.map((listed) => [listed.deliveryId, listed]));
+    // Both journals say `active` and both are graded on THIS read. The only
+    // difference between them is the age of the heartbeat, which is the
+    // lazily-resolved aging rule the per-delivery status model applies.
+    expect(byId.get("delivery-fresh")?.lastActivity.activity).toBe("active");
+    expect(byId.get("delivery-aged")?.lastActivity.activity).toBe("unknown");
+    // The stamp is still reported for the aged one: an operator is told HOW
+    // stale, not merely that the answer is unknown.
+    expect(byId.get("delivery-aged")?.lastActivity.observedAt).toBe("2026-09-14T11:50:00Z");
+    expect(byId.get("delivery-aged")?.state).toBe("preparing");
+  });
+
+  it("names the pending decision a delivery is waiting on", async () => {
+    const { namespace, facade } = installation();
+    await register(namespace, {
+      deliveryId: "delivery-waiting",
+      entries: [
+        ...opening("delivery-waiting", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+        entry("delivery-waiting", 6, "transition.committed", { from: "preparing", to: "planning" }),
+        entry("delivery-waiting", 7, "transition.committed", { from: "planning", to: "implementing" }),
+        entry("delivery-waiting", 8, "transition.committed", { from: "implementing", to: "validating" }),
+        entry("delivery-waiting", 9, "transition.committed", { from: "validating", to: "reviewing" }),
+        entry("delivery-waiting", 10, "approval.request.recorded", {
+          requestKind: "waiver",
+          criterionId: "greeting-behavior",
+          actorId: "operator-1",
+          reason: "criterion discharged by upstream fix; waiver proposed",
+        }),
+      ],
+    });
+
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(true);
+    if (!listing.ok) return;
+    const [waiting] = listing.deliveries;
+    expect(waiting?.state).toBe("reviewing");
+    // The proposal itself, not a boolean: an operator deciding which delivery
+    // to attend to needs to know WHAT is pending and against which criterion.
+    expect(waiting?.pendingDecision).toEqual({
+      requestKind: "waiver",
+      criterionId: "greeting-behavior",
+      actorId: "operator-1",
+      candidateTreeSha: OID,
+    });
+  });
+
+  it("names no delivery from another installation", async () => {
+    const here = installation();
+    const elsewhere = installation();
+    await register(here.namespace, {
+      deliveryId: "delivery-here",
+      entries: opening("delivery-here", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+    });
+    await register(elsewhere.namespace, {
+      deliveryId: "delivery-elsewhere",
+      entries: opening("delivery-elsewhere", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+    });
+
+    const listing = await here.facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(true);
+    if (!listing.ok) return;
+    // Presence and absence in the same assertion: a listing that returned
+    // nothing at all would satisfy the absence half for free.
+    expect(listing.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-here"]);
+
+    // And the other installation sees only its own, so the separation is a
+    // property of each namespace rather than of one lucky read.
+    const other = await elsewhere.facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(other.ok).toBe(true);
+    if (!other.ok) return;
+    expect(other.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-elsewhere"]);
+  });
+
+  it("omits a directory that is not a registered delivery rather than listing an identity with no state", async () => {
+    const { namespace, facade } = installation();
+    await register(namespace, {
+      deliveryId: "delivery-real",
+      entries: opening("delivery-real", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+    });
+    mkdirSync(path.join(namespace, "deliveries", "delivery-stray"), { recursive: true });
+
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok).toBe(true);
+    if (!listing.ok) return;
+    expect(listing.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-real"]);
+  });
+});

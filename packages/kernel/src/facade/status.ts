@@ -148,6 +148,49 @@ export interface ManagedDeliveryStatus {
   readonly operatorInterventions: number;
 }
 
+/**
+ * ONE LISTED DELIVERY, in the installation-scoped listing mode of this same
+ * status surface.
+ *
+ * FOUR MEMBERS, AND IT STAYS FOUR. The per-delivery model above answers "how
+ * is THIS delivery doing" and is deliberately large: obligations, trust
+ * posture, candidate detail, authorized next actions. The listing answers a
+ * different and much smaller question — "what is running across this
+ * installation right now" — and the failure mode it exists to avoid is
+ * growing, one plausible member at a time, into a second status model that can
+ * disagree with the first. So the members below are the whole contract:
+ * identity, delivery state, last activity, and the one pending decision. A
+ * reader who needs more has a delivery id and should ask `status` for it.
+ *
+ * THE PER-DELIVERY MODEL IS NOT TOUCHED BY THIS. `ManagedDeliveryStatus` gains
+ * no member here; the listing is a separate, smaller projection over the same
+ * facts, and that separation is what keeps the narrow contract narrow.
+ */
+export interface ListedDelivery {
+  readonly deliveryId: string;
+  readonly state: DeliveryState;
+  /**
+   * Liveness and the stamp it was graded from, as ONE member.
+   *
+   * WHY THEY TRAVEL TOGETHER. A bare timestamp invites every reader to age it
+   * itself, against a lifetime it would have to guess, and two readers guessing
+   * differently is exactly the disagreement `gradeHostActivity` exists to
+   * prevent. A bare grade, conversely, tells an operator that a delivery is
+   * `unknown` without telling them how stale it is. Carried as one member the
+   * listing reports the graded answer AND the evidence it was graded from, and
+   * the grade is the same rule the per-delivery status model applies — a
+   * Tier 2 clean end reads `paused`, a Tier 1 disappearance reads `unknown`,
+   * resolved lazily on this read.
+   *
+   * `observedAt` is the binding's freshness heartbeat, and it is `undefined`
+   * exactly when no workspace is bound: there is then no heartbeat to report
+   * and none to age, which is a different thing from a heartbeat that is old.
+   */
+  readonly lastActivity: { readonly activity: HostActivityState; readonly observedAt: string | undefined };
+  /** The waiver or amendment proposal awaiting a decision, if one stands. */
+  readonly pendingDecision: WaiverProposal | undefined;
+}
+
 const TERMINAL_STATES: readonly DeliveryState[] = ["completed", "cancelled", "failed"];
 
 /**

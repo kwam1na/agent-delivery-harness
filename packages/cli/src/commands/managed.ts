@@ -35,6 +35,7 @@ const SOURCE_ID = "delivery-harness.cli.managed";
 /** Every operation this command answers, in the order its usage lists them. */
 const MANAGED_OPERATIONS: readonly string[] = Object.freeze([
   "status",
+  "deliveries",
   "next",
   "operations",
   "blockers",
@@ -112,7 +113,28 @@ interface ResolvedManaged {
  * derived from the worktree, and a delivery named by flag would not be the one
  * that worktree is bound to.
  */
-async function resolveManaged(context: CommandContext, requested?: string): Promise<ResolvedManaged | CommandResult> {
+interface ResolvedInstallation {
+  readonly facade: ManagedDeliveryFacade;
+  readonly namespace: string;
+  /** Every delivery this installation registered, sorted. */
+  readonly deliveries: readonly string[];
+  /** Those whose journal has not committed a transition into a terminal state. */
+  readonly active: readonly string[];
+}
+
+/**
+ * Resolves the INSTALLATION this invocation runs against, without resolving a
+ * delivery.
+ *
+ * WHY THE SPLIT EXISTS. Delivery resolution refuses when a repository has zero
+ * registered deliveries or more than one in flight — correct for every
+ * checkpoint operation, which drives exactly one. But those are precisely the
+ * situations the installation-scoped listing exists to report, so a listing
+ * built on top of delivery resolution would refuse in the two cases it is for.
+ * Everything above delivery selection is shared and lives here; selection and
+ * the fence stay below.
+ */
+async function resolveInstallation(context: CommandContext): Promise<ResolvedInstallation | CommandResult> {
   const common = await gitCommonDir(context.rootDir);
   if (common === undefined) {
     return blocked("not_a_repository", "The working directory is not a git repository.", "Run from the delivery worktree.");
@@ -161,26 +183,6 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
       active.push(candidate);
     }
   }
-  let deliveryId: string | undefined;
-  if (requested !== undefined) {
-    if (!deliveries.includes(requested)) {
-      return blocked(
-        "delivery_unresolved",
-        `No delivery ${requested} is registered for this repository.`,
-        "Name a delivery this repository registered; `managed status` reports the current one.",
-      );
-    }
-    deliveryId = requested;
-  } else {
-    deliveryId = active[0] ?? deliveries[deliveries.length - 1];
-    if (deliveryId === undefined || active.length > 1) {
-      return blocked(
-        "delivery_unresolved",
-        active.length > 1 ? "Several deliveries are in flight; the skeleton drives one." : "No registered delivery exists.",
-        "Register exactly one delivery for this repository, or name one with --delivery for export and delete.",
-      );
-    }
-  }
   let policyBinding: CompiledAdopterPolicyBinding | undefined = context.policyBinding;
   if (policyBinding === undefined) {
     try {
@@ -206,6 +208,34 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
     installation: { installationPath: pointer.installationPath, receiptDir: pointer.receiptDir },
     hostVersion: pointer.hostVersion,
   });
+  return { facade, namespace, deliveries, active };
+}
+
+async function resolveManaged(context: CommandContext, requested?: string): Promise<ResolvedManaged | CommandResult> {
+  const installation = await resolveInstallation(context);
+  if (isCommandResult(installation)) return installation;
+  const { facade, namespace, deliveries, active } = installation;
+
+  let deliveryId: string | undefined;
+  if (requested !== undefined) {
+    if (!deliveries.includes(requested)) {
+      return blocked(
+        "delivery_unresolved",
+        `No delivery ${requested} is registered for this repository.`,
+        "Name a delivery this repository registered; `managed status` reports the current one.",
+      );
+    }
+    deliveryId = requested;
+  } else {
+    deliveryId = active[0] ?? deliveries[deliveries.length - 1];
+    if (deliveryId === undefined || active.length > 1) {
+      return blocked(
+        "delivery_unresolved",
+        active.length > 1 ? "Several deliveries are in flight; the skeleton drives one." : "No registered delivery exists.",
+        "Register exactly one delivery for this repository, or name one with --delivery for export and delete, or list them all with `managed deliveries`.",
+      );
+    }
+  }
 
   let fence: number | undefined;
   try {
@@ -222,7 +252,7 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
   return { facade, deliveryId, fence };
 }
 
-const isCommandResult = (value: ResolvedManaged | CommandResult): value is CommandResult => "kind" in value;
+const isCommandResult = (value: ResolvedManaged | ResolvedInstallation | CommandResult): value is CommandResult => "kind" in value;
 
 export const managedCommand: CommandDescriptor = {
   name: "managed",
@@ -253,6 +283,27 @@ export const managedCommand: CommandDescriptor = {
     if (operation === "operations") {
       context.write(`${JSON.stringify(FACADE_OPERATIONS, null, 2)}\n`);
       return { kind: "ok", summary: `${FACADE_OPERATIONS.length} facade operations` };
+    }
+
+    // The installation-scoped listing mode of the status surface. It answers
+    // HERE, above delivery resolution, for the same reason `operations` does:
+    // the two situations it exists to report — no delivery registered, and
+    // several in flight — are exactly the two that delivery resolution
+    // refuses, so a listing resolved through it would be unavailable whenever
+    // it had something to say. It names no delivery and binds no fence.
+    //
+    // It still requires an INSTALLATION. A repository with no product
+    // namespace pointer has registered nothing at all, and there is then no
+    // installation to scope a listing to — which is a different answer from an
+    // installation whose registered deliveries happen to number zero, and the
+    // facade reports that one as an empty listing.
+    if (operation === "deliveries") {
+      const installation = await resolveInstallation(context);
+      if (isCommandResult(installation)) return installation;
+      const listing = await installation.facade.listDeliveries({ observedAt: nowInstant() });
+      if (!listing.ok) return { kind: "blocked", blockers: [...listing.blockers] };
+      context.write(`${JSON.stringify(listing.deliveries, null, 2)}\n`);
+      return { kind: "ok", summary: `${listing.deliveries.length} delivery(ies) registered for this installation` };
     }
 
     // Only the retention operations may name a delivery; everything else binds

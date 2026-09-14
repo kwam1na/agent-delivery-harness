@@ -281,6 +281,7 @@ const TOOL_NAMES_SENTENCE = (): string => TOOLS.map((tool) => tool.name).join(",
  */
 export const MANAGED_READ_OPERATIONS: readonly string[] = Object.freeze([
   "status",
+  "deliveries",
   "next",
   "explain-blocker",
   "blockers",
