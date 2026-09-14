@@ -201,8 +201,17 @@ the one that sets the number:
   the call, so no extra emission the binding could make — a PostToolUse stamp
   included — lands inside it.
 
-The `activity.observed` journal entry is a different signal: it is appended
-only at session end, carrying `paused`. It was never a heartbeat.
+The `activity.observed` journal entry is a different signal, and it is not a
+heartbeat either. Three emitters append it, none of them periodic:
+`bindWorkspace` writes `active` once, when the fence opens
+(`managed-delivery.ts:2910`); cancellation writes `cancellation_pending`
+(`managed-delivery.ts:4893`); and session end writes `paused`, from
+`sessionEnded` and from `recordTerminationProvenance`
+(`managed-delivery.ts:4531`, `:4567`, reached from the SessionEnd hook in
+`host/hook-main.ts`). The `active` marker from the first of those is precisely
+what the aging rule reads as the fence's claim, so a fence with no
+`activity.observed` naming it grades `unknown` however fresh the heartbeat file
+underneath happens to be.
 
 So the lifetime has to exceed the longest single tool invocation a delivery
 actually performs, and that is a measurement rather than a preference.
@@ -253,11 +262,26 @@ load a busy machine adds to any of these figures — the 807s above was itself
 taken under concurrent load.
 
 The direction of the error matters too. Too short misreports a healthy delivery
-as `unknown`, which an operator sees constantly and learns to ignore; too long
-delays the moment a genuinely vanished host is called `unknown`, and nothing
-downstream reads `active` as permission — `unknown` is already the safe
-direction, and resume eligibility is gated on termination provenance rather
-than on activity.
+as `unknown`, which an operator sees constantly and learns to ignore. Too long
+has a real cost, and it is worth naming rather than waving away: three readers
+branch on `active` before any provenance is consulted. `status()` short-circuits
+resume to `none` while the host reads `active`
+(`managed-delivery.ts:3015`); `deriveMutationVerification` returns
+`not-applicable`, which carries `deriveRetrySafety` to `safe` (`status.ts:180`);
+and the takeover-first suppression of fence-carrying next actions is off
+(`status.ts:231`). So for a host that dies silently at the start of its fence,
+the window in which the surface still says `active`, `resume: none`,
+`retrySafety: safe` grows with this change from 900s to 3600s — fifteen minutes
+to an hour.
+
+The trade is still taken, because the alternative is worse in a way that is not
+recoverable by looking harder. A 900s lifetime ages out a *living* host in the
+middle of a single legitimate tool call — the 1731s validation above would trip
+it twice over — and an operator who is shown `unknown` for healthy deliveries
+every day stops reading the field at all, which costs the signal everywhere
+rather than in one hour-long window. The stale-`active` window is also bounded,
+visible, and closed the moment any termination provenance or `paused` marker
+lands; the desensitized operator is not.
 
 Both figures live in
 [`packages/kernel/src/facade/liveness.fixture.ts`](../packages/kernel/src/facade/liveness.fixture.ts)

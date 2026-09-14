@@ -54,6 +54,25 @@ export type HostActivity = "active" | "paused" | "unknown" | "cancellation_pendi
  */
 export const DEFAULT_OBSERVATION_LIFETIME_SECONDS = 3600;
 
+/**
+ * The lifetime a bind runs under: the caller's declaration when it made one,
+ * the derived default otherwise.
+ *
+ * A ONE-LINE RULE WITH ITS OWN FUNCTION, deliberately. The declaration is the
+ * only escape hatch a repository whose heaviest single operation is heavier —
+ * or lighter — than the measured one has, and the interesting failure is
+ * silent: a resolution that floors the declaration at the default, or ignores
+ * it outright, keeps returning a plausible number and every reader that takes
+ * the default stays green. Below the default is the direction that cannot be
+ * exercised through `bindWorkspace` in a long scenario (the value governs the
+ * whole fence and would expire the binding mid-run), so it is asserted here
+ * instead, against the rule itself.
+ *
+ * The declaration is honoured EXACTLY, in both directions. It is not clamped.
+ */
+export const resolveObservationLifetimeSeconds = (declaredSeconds: number | undefined): number =>
+  declaredSeconds ?? DEFAULT_OBSERVATION_LIFETIME_SECONDS;
+
 /** The freshness heartbeat the binding rewrites on every allowed PreToolUse. */
 export interface HostObservationStamp {
   readonly fence: number;

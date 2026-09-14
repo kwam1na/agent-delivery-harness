@@ -20,7 +20,12 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_OBSERVATION_LIFETIME_SECONDS, gradeHostActivity, type HostActivity } from "./liveness.ts";
+import {
+  DEFAULT_OBSERVATION_LIFETIME_SECONDS,
+  gradeHostActivity,
+  resolveObservationLifetimeSeconds,
+  type HostActivity,
+} from "./liveness.ts";
 import { MEASURED_HEAVIEST_INVOCATION_SECONDS, OBSERVED_HEAVIEST_VALIDATION_SECONDS } from "./liveness.fixture.ts";
 
 const FENCE = 7;
@@ -127,6 +132,26 @@ describe("the graded host-liveness rule", () => {
     // loosened or tightened by one without failing.
     expect(grade({ observedAt: after(DEFAULT_OBSERVATION_LIFETIME_SECONDS) })).toBe("active");
     expect(grade({ observedAt: after(DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1) })).toBe("unknown");
+  });
+
+  it("honours a declared lifetime EXACTLY, including one below the default", () => {
+    // The resolution a bind runs through, asserted in the direction
+    // `bindWorkspace` itself cannot be asked for in a scenario: a declaration
+    // below the default governs the whole fence and would expire the binding
+    // mid-run, so a scenario can only ever declare upward. That leaves a
+    // resolution which FLOORS the declaration at the default — `Math.max(
+    // declared ?? 0, DEFAULT)` — indistinguishable from the real one through
+    // the facade: every upward declaration survives the clamp unchanged. This
+    // row is the one place that clamp fails.
+    expect(resolveObservationLifetimeSeconds(30)).toBe(30);
+    expect(resolveObservationLifetimeSeconds(DEFAULT_OBSERVATION_LIFETIME_SECONDS - 1)).toBe(
+      DEFAULT_OBSERVATION_LIFETIME_SECONDS - 1,
+    );
+    expect(resolveObservationLifetimeSeconds(DEFAULT_OBSERVATION_LIFETIME_SECONDS * 2)).toBe(
+      DEFAULT_OBSERVATION_LIFETIME_SECONDS * 2,
+    );
+    // And no declaration is the only case the default answers.
+    expect(resolveObservationLifetimeSeconds(undefined)).toBe(DEFAULT_OBSERVATION_LIFETIME_SECONDS);
   });
 
   it("ages against the declared lifetime rather than the default", () => {

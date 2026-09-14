@@ -991,6 +991,7 @@ export {
 export {
   DEFAULT_OBSERVATION_LIFETIME_SECONDS,
   gradeHostActivity,
+  resolveObservationLifetimeSeconds,
   type GradeHostActivityInput,
   type HostActivity,
   type HostObservationStamp,

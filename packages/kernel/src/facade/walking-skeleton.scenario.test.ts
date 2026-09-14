@@ -359,13 +359,28 @@ describe("the thin one-handoff walking skeleton", () => {
       // than the measured one uses, and it is the only thing distinguishing
       // `bindWorkspace` honouring its argument from `bindWorkspace` discarding
       // it: with the argument dropped, every row that reads the default still
-      // passes. Deliberately far below the default so the two are separable.
+      // passes. Deliberately ABOVE the default so the two are separable while
+      // the fence stays live for every later checkpoint — see the block comment
+      // on `DECLARED_LIFETIME_SECONDS`. The one direction a scenario cannot
+      // declare, below the default, is pinned on the resolution rule itself in
+      // `liveness.test.ts`.
       observationLifetimeSeconds: DECLARED_LIFETIME_SECONDS,
       providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
     });
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
     if (!rebound.ok) return;
     expect(rebound.fence).toBe(2); // monotonic supersession
+
+    // The declaration is PERSISTED, unaltered. Read as an equality on the
+    // workspace record rather than inferred from a grade: a grade only ever
+    // reports one of four words, so a resolution that altered the number on
+    // the way in — clamping it, rounding it, substituting the default — could
+    // still produce `active` at every instant the rows below read at. This is
+    // the assertion that says which NUMBER the fence runs under.
+    const reboundWorkspace = JSON.parse(
+      readFileSync(path.join(await facade.namespaceDir(), "deliveries", deliveryId, "workspace.json"), "utf8"),
+    ) as { readonly observationLifetimeSeconds: number };
+    expect(reboundWorkspace.observationLifetimeSeconds).toBe(DECLARED_LIFETIME_SECONDS);
 
     // ── The declared lifetime, through the real facade ──
     // The instant that separates the two facades: one second past the DEFAULT,

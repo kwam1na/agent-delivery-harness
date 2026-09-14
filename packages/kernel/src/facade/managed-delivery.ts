@@ -101,7 +101,7 @@ import {
   type WaiverProposal,
 } from "../evidence/waiver.ts";
 import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence/blocker-inventory.ts";
-import { DEFAULT_OBSERVATION_LIFETIME_SECONDS, gradeHostActivity, type HostActivity } from "./liveness.ts";
+import { gradeHostActivity, resolveObservationLifetimeSeconds, type HostActivity } from "./liveness.ts";
 import { decideFinishLine, type ExternalVerification } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
@@ -2850,7 +2850,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         })}\n`,
       );
       await writeOwned(observationPath, `${JSON.stringify({ fence, observedAt })}\n`);
-      const lifetime = observationLifetimeSeconds ?? DEFAULT_OBSERVATION_LIFETIME_SECONDS;
+      const lifetime = resolveObservationLifetimeSeconds(observationLifetimeSeconds);
       const grantDigest = stageGrantDigest;
       const providerReviewBinding: CapabilityBinding = {
         id: providerReviewBindingCapability.id,
