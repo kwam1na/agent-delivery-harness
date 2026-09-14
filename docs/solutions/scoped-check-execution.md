@@ -1,3 +1,8 @@
+---
+title: Scoped checks execute from private prepared source
+date: 2026-09-12
+---
+
 # Scoped checks execute from private prepared source
 
 V26-2065 extends the kernel's scoped check contract with the CLI executor. The

@@ -598,6 +598,122 @@ describe("the computable counts the documentation states", () => {
 });
 
 /**
+ * The shadow milestone gate, as `docs/managed-delivery.md` describes it.
+ *
+ * WHY THIS BLOCK EXISTS. Three artifacts described this gate — the scorer and
+ * its verdict, the gate record, and this guide — and they disagreed silently
+ * for weeks. V26-1511 pinned the record to the scorer. Nothing pinned the
+ * guide to either, so the guide went on saying the gate "compares intervention
+ * counts" long after interventions stopped gating anything, and it is the
+ * artifact an operator reads first. V26-1513 answers the standing question
+ * with `pinned`: this guide is current documentation, and its gate claims are
+ * recomputed here from the two artifacts that now hold them.
+ *
+ * WHY THE NEGATIVE ROW IS NOT REDUNDANT. The positive rows below pin what the
+ * guide must say. They say nothing about what else it may say, and the failure
+ * this class actually produces is an *additional* stale sentence somewhere
+ * further down the page. So the negative row scans the whole guide for the
+ * claim rather than for the sentence: any clause that puts an operator step-in
+ * together with a gating verb fails, unless that clause is itself denying it.
+ *
+ * WHY CLAUSES AND NOT SENTENCES. The wording this replaces sat in a sentence
+ * whose *other* half already carried a "must not", so a sentence-level scan
+ * with a negation escape hatch passes the very text this row exists to refuse.
+ * Splitting on clause punctuation puts "the milestone gate compares
+ * intervention counts" on its own, where it has no negation to borrow.
+ *
+ * WHAT THIS DOES NOT CATCH, stated so the next reader does not over-trust it:
+ * it is a prose scan over a fixed verb list, and a claim phrased entirely
+ * outside that list reaches the page. The list covers the shapes seen so far —
+ * the original wording, and the "should be lower than" near-miss a V26-1511
+ * lens showed slips past a single-keyword scan. A claim is not caught by being
+ * wrong; it is caught by being phrased as gating.
+ */
+describe("the milestone gate claims docs/managed-delivery.md makes", () => {
+  const GUIDE = "docs/managed-delivery.md";
+
+  const gateRecord = (): { gateMetrics: { gatingCriterion: string } } =>
+    JSON.parse(readFileSync(path.join(REPO_ROOT, ".agents/policy/shadow-milestone-gate-record.json"), "utf8")) as {
+      gateMetrics: { gatingCriterion: string };
+    };
+
+  const verdict = (): { baseline: { interventionCounts: readonly number[]; medianOperatorInterventions: number } } =>
+    JSON.parse(readFileSync(path.join(REPO_ROOT, "qualifications/shadow-milestone-gate-verdict.json"), "utf8")) as {
+      baseline: { interventionCounts: readonly number[]; medianOperatorInterventions: number };
+    };
+
+  it("names the gating criterion the gate record declares", () => {
+    // Agreement, not presence: the criterion is read out of the record, so
+    // renaming it there re-stamps this sentence instead of leaving the guide
+    // describing a criterion nothing applies.
+    everyStatementAgrees(
+      "the milestone gate's sole gating criterion",
+      /The sole gating criterion is\s+`([A-Za-z]+)`/g,
+      gateRecord().gateMetrics.gatingCriterion,
+    );
+  });
+
+  it("states the baseline figures the verdict computed, which are why interventions stopped gating", () => {
+    // The headroom reasoning is the part a reader needs and the part most
+    // likely to rot, because it is three numbers. They come from the verdict
+    // artifact, so a re-recorded baseline fails here rather than leaving the
+    // guide explaining a floor the baseline no longer sits on.
+    const baseline = verdict().baseline;
+    expect(
+      baseline.interventionCounts.length,
+      "the verdict's baseline no longer reports exactly three intervention counts; the guide's sentence has to be restated, not re-stamped",
+    ).toBe(3);
+    const stated = /baseline's own intervention counts are \*\*(\d+)\*\*, \*\*(\d+)\*\* and \*\*(\d+)\*\*/.exec(textOf(GUIDE));
+    expect(stated, `${GUIDE} no longer states the baseline's intervention counts`).not.toBeNull();
+    expect(stated!.slice(1, 4).map(Number), `${GUIDE} states baseline intervention counts the verdict does not compute`).toEqual([
+      ...baseline.interventionCounts,
+    ]);
+    everyStatementAgrees("the baseline's median intervention count", /a median of\n?\*\*(\d+)\*\*/g, String(baseline.medianOperatorInterventions));
+  });
+
+  it("says interventions are reported and gate nothing, and that interruptions are never counted as interventions", () => {
+    // Presence pins, because these two are rules rather than values. Both were
+    // stated only in the record before this delivery; the guide is where an
+    // operator meets them.
+    documentStates(GUIDE, "Operator interventions are reported in full and\ngate nothing.");
+    documentStates(GUIDE, "are never counted as interventions");
+  });
+
+  it("makes no clause anywhere on the page that gates on an operator intervention", () => {
+    /** Verbs that turn a measurement into a criterion. */
+    const GATES =
+      /\b(gates?|gating|compares?|compared|criterion|criteria|threshold|regress(es|ed)?|lower|higher|decides?|scored?|counts? against|counted against|weighed)\b/i;
+    /** A clause denying the gating it mentions. */
+    const DENIES = /\b(never|not|no|nothing|nor|neither|cannot|without|instead|ceasing|longer)\b/i;
+
+    // Inline code first: a criterion identifier is not prose, and `[2, 0, 0]`
+    // would otherwise split into clause fragments that mean nothing.
+    const prose = textOf(GUIDE).replace(/`[^`]*`/g, " ");
+    const clauses = prose
+      .split(/[.;:,\n]|—/)
+      .map((clause) => clause.trim())
+      .filter((clause) => clause !== "");
+    const aboutInterventions = clauses.filter((clause) => /intervention/i.test(clause));
+    // Anti-vacuity, both halves. A page that stopped discussing interventions
+    // satisfies the loop below for free, and so does a splitter that stopped
+    // splitting. The floor is the count this delivery landed; it is a floor
+    // rather than an equality so ordinary prose edits do not fail here.
+    expect(aboutInterventions.length, `${GUIDE} no longer discusses operator interventions at all`).toBeGreaterThanOrEqual(6);
+    // The list must also actually contain the denials, or `DENIES` could be
+    // matching nothing and the loop would be passing on an empty intersection.
+    expect(
+      aboutInterventions.some((clause) => GATES.test(clause)),
+      "no clause about interventions mentions gating at all; this row is no longer exercising its predicate",
+    ).toBe(true);
+
+    for (const clause of aboutInterventions) {
+      if (!GATES.test(clause)) continue;
+      expect(DENIES.test(clause), `${GUIDE} gates on an operator intervention: "${clause}"`).toBe(true);
+    }
+  });
+});
+
+/**
  * Prose that carries a rule, rather than a number.
  *
  * WHY THIS BLOCK EXISTS. Everything above pins a documented *value* against

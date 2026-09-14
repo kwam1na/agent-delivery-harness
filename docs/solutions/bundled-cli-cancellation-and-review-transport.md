@@ -1,3 +1,8 @@
+---
+title: Qualify the executable boundary and retained review coordinates
+date: 2026-09-12
+---
+
 # Qualify the executable boundary and retained review coordinates
 
 API fixtures can inject an `AbortSignal` while the shipped command has no signal
