@@ -101,6 +101,7 @@ import {
   type WaiverProposal,
 } from "../evidence/waiver.ts";
 import { composeBlockerInventory, type BlockerInventoryEntry } from "../evidence/blocker-inventory.ts";
+import { DEFAULT_OBSERVATION_LIFETIME_SECONDS, gradeHostActivity, type HostActivity } from "./liveness.ts";
 import { decideFinishLine, type ExternalVerification } from "../finish-line/merge-ready.ts";
 import {
   GENERATION_SKILLS_ARCHIVE,
@@ -2849,7 +2850,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         })}\n`,
       );
       await writeOwned(observationPath, `${JSON.stringify({ fence, observedAt })}\n`);
-      const lifetime = observationLifetimeSeconds ?? 900;
+      const lifetime = observationLifetimeSeconds ?? DEFAULT_OBSERVATION_LIFETIME_SECONDS;
       const grantDigest = stageGrantDigest;
       const providerReviewBinding: CapabilityBinding = {
         id: providerReviewBindingCapability.id,
@@ -2965,23 +2966,33 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
 
       // Host activity: the trusted lifecycle observations, aged lazily by the
-      // fence's declared observation lifetime — timeout never proves
-      // termination, so an aged `active` becomes `unknown`, never `ended`.
-      type HostActivity = "active" | "paused" | "unknown" | "cancellation_pending";
+      // fence's declared observation lifetime. The rule itself is
+      // `gradeHostActivity` in ./liveness.ts, shared with every other reader
+      // of liveness so two surfaces cannot disagree about whether one delivery
+      // is alive — timeout never proves termination, so an aged `active`
+      // becomes `unknown`, never `ended`.
       const lastActivity = lastOf(views, "activity.observed");
-      let activity: HostActivity =
-        lastActivity !== undefined && lastActivity.payload["fence"] === reduced.state.lastFence
-          ? (lastActivity.payload["activity"] as HostActivity)
-          : "unknown";
-      if (activity === "active" && workspace !== undefined) {
-        const observation = await readJson<{ fence: number; observedAt: string }>(path.join(dir, "binding", "observation.json"));
-        if (observation === undefined || observation.fence !== reduced.state.lastFence) {
-          activity = "unknown";
-        } else {
-          const ageSeconds = instantSeconds(observedAt) - instantSeconds(observation.observedAt);
-          if (Number.isNaN(ageSeconds) || ageSeconds > workspace.observationLifetimeSeconds) activity = "unknown";
-        }
-      }
+      const activity: HostActivity = gradeHostActivity({
+        currentFence: reduced.state.lastFence,
+        lastObservedActivity:
+          lastActivity === undefined
+            ? undefined
+            : {
+                activity: lastActivity.payload["activity"] as HostActivity,
+                fence: lastActivity.payload["fence"] as number,
+              },
+        observationLifetimeSeconds: workspace?.observationLifetimeSeconds,
+        // Read whenever a workspace is bound rather than only when the journal
+        // last said `active`, so the rule stays a pure function of its inputs
+        // instead of the caller re-deriving half of it to decide what to read.
+        // The cost is one small JSON read on a path that already reduces the
+        // whole journal.
+        observation:
+          workspace === undefined
+            ? undefined
+            : await readJson<{ fence: number; observedAt: string }>(path.join(dir, "binding", "observation.json")),
+        observedAt,
+      });
 
       const confirmations = views.filter((view) => view.kind === "operator.confirmation.recorded").length;
       const interventions = views.filter(
@@ -5355,20 +5366,4 @@ async function captureFor(
     return { ok: false, failure: { ok: false, blockers: capture.blockers } };
   }
   return { ok: true, candidate: capture.candidate, captureCandidate };
-}
-
-/** Seconds since epoch for the spine's fixed-width UTC instant (shape-checked upstream). */
-function instantSeconds(instant: string): number {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/.exec(instant);
-  if (match === null) return Number.NaN;
-  return (
-    Date.UTC(
-      Number(match[1]),
-      Number(match[2]) - 1,
-      Number(match[3]),
-      Number(match[4]),
-      Number(match[5]),
-      Number(match[6]),
-    ) / 1000
-  );
 }

@@ -44,6 +44,8 @@ import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
 import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
+import { DEFAULT_OBSERVATION_LIFETIME_SECONDS } from "./liveness.ts";
+import { OBSERVED_HEAVIEST_VALIDATION_SECONDS } from "./liveness.fixture.ts";
 import {
   DISPOSABLE_CONTRACT,
   GREET_RIGHT,
@@ -61,6 +63,10 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..", "..");
 const FIXTURES = path.join(REPO_ROOT, "qualifications", "fixtures");
+
+/** An instant `seconds` after `instant`, in the spine's fixed-width UTC shape. */
+const instantAfter = (instant: string, seconds: number): string =>
+  `${new Date(Date.parse(instant) + seconds * 1000).toISOString().slice(0, 19)}Z`;
 
 const NOW = "2026-08-30T12:00:00Z";
 const LATER = "2026-08-30T12:00:30Z";
@@ -255,6 +261,31 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Plan checkpoint ──
     const statusPlanning = await facade.status({ deliveryId, observedAt: LATER });
     expect(statusPlanning.ok && statusPlanning.status.delivery.state === "planning" && statusPlanning.status.hostActivity === "active").toBe(true);
+
+    // ── The heaviest recorded single tool invocation, through the real facade ──
+    // The binding stamps its heartbeat BEFORE the tool runs, so a delivery that
+    // starts that invocation emits nothing for its whole duration. Read at its
+    // last second, against the workspace this bind actually wrote, the status
+    // model must still say `active` — the composed fixture cannot show this,
+    // because the value under test is the lifetime `bindWorkspace` wrote.
+    const duringLongCall = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(NOW, OBSERVED_HEAVIEST_VALIDATION_SECONDS),
+    });
+    expect(duringLongCall.ok, JSON.stringify(duringLongCall)).toBe(true);
+    if (!duringLongCall.ok) return;
+    expect(duringLongCall.status.hostActivity).toBe("active");
+    // And the other direction, which a raised lifetime must not buy off: a host
+    // that has genuinely gone away still ages to `unknown` rather than staying
+    // `active` forever. Same delivery, same heartbeat, one second past the
+    // default lifetime.
+    const vanished = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(NOW, DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1),
+    });
+    expect(vanished.ok, JSON.stringify(vanished)).toBe(true);
+    if (!vanished.ok) return;
+    expect(vanished.status.hostActivity).toBe("unknown");
     const planned = await facade.submitStageResult({
       deliveryId,
       stageId: "plan",
