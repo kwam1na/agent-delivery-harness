@@ -313,7 +313,7 @@ const booleanValue: MemberCheck = describedAs(
   (value, at, collector) => {
     if (typeof value !== "boolean") malformed(collector, at, "expected a boolean");
   },
-  () => ({ type: "boolean", constraint: "true or false", example: true }),
+  () => ({ type: "boolean", constraint: "a boolean", example: true }),
 );
 
 const idList = (maximum: number, example: readonly string[]): MemberCheck =>
@@ -356,7 +356,7 @@ const httpUrl: MemberCheck = describedAs(
   },
   () => ({
     type: "string",
-    constraint: `an absolute http or https URL of at most ${MAX_RUN_URL} characters`,
+    constraint: `a non-empty URL of at most ${MAX_RUN_URL} characters that parses as an absolute http or https locator`,
     example: "https://github.com/example/repository/pull/1",
   }),
 );
@@ -686,7 +686,12 @@ export interface RunEventPayloadGrammar {
   readonly version: RunEventVersion;
   readonly kind: RunEventKind;
   readonly members: readonly RunEventPayloadMemberGrammar[];
-  /** The minimal emittable payload: every required member, nothing else. */
+  /**
+   * The minimal emittable payload: every required member, plus any optional
+   * member a combination rule makes mandatory for the values published here —
+   * see `EXAMPLE_COMBINATION_MEMBERS`, which is why `report.referenced`'s
+   * example carries `artifactId`.
+   */
   readonly example: Record<string, unknown>;
 }
 

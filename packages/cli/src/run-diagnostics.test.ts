@@ -371,7 +371,19 @@ describe("constructing events from grammar discovery alone", () => {
     expect(shaped.err).toContain("accepted members: releaseId, profile");
   });
 
-  it("renders nested members, item shapes and the example in the human grammar", async () => {
+  /**
+   * The whole-payload example the human render writes under its own `example:`
+   * label — parsed rather than matched, because every member line carries an
+   * `example:` of its own and a substring cannot tell them apart.
+   */
+  function exampleBlock(out: string): unknown {
+    const marker = "\n  example:\n";
+    const at = out.indexOf(marker);
+    expect(at, "the human grammar wrote no whole-payload example block").toBeGreaterThan(-1);
+    return JSON.parse(out.slice(at + marker.length));
+  }
+
+  it("renders nested members, item shapes and the emittable example in the human grammar", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "run-grammar-human-"));
     roots.push(root);
     const human = await cli(root, ["runs", "grammar", "run.started", "--version", "2"]);
@@ -380,11 +392,32 @@ describe("constructing events from grammar discovery alone", () => {
     expect(human.out).toContain("workflow");
     expect(human.out).toContain("releaseId");
     expect(human.out).toContain("profile");
-    expect(human.out).toContain("example:");
+    // The human reader and the --json reader are handed the same payload.
+    expect(exampleBlock(human.out)).toEqual((await grammarOf(root, "run.started", "2")).example);
 
     const lenses = await cli(root, ["runs", "grammar", "lens.selected", "--version", "2"]);
     expect(lenses.code, lenses.err).toBe(EXIT_OK);
     expect(lenses.out).toContain("array");
     expect(lenses.out).toContain("items");
+  });
+
+  it("renders both arms of a member whose shape has variants", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "run-grammar-variants-"));
+    roots.push(root);
+    const completed = await cli(root, ["runs", "grammar", "command.completed", "--version", "2"]);
+    expect(completed.code, completed.err).toBe(EXIT_OK);
+    expect(completed.out).toContain("variant 1");
+    expect(completed.out).toContain("variant 2");
+    // The reused arm's vocabulary is reachable ONLY through the second variant,
+    // so a render that drops variants stops publishing it at all.
+    expect(completed.out).toContain("validation-equivalent");
+    expect(completed.out).toContain("receipt-not-reusable");
+    expect(exampleBlock(completed.out)).toEqual((await grammarOf(root, "command.completed", "2")).example);
+
+    const ended = await cli(root, ["runs", "grammar", "run.ended", "--version", "2"]);
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+    expect(ended.out).toContain("variant 1");
+    expect(ended.out).toContain("variant 2");
+    expect(ended.out).toContain("subagent-tokens");
   });
 });

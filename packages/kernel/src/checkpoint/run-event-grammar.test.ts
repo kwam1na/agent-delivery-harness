@@ -154,6 +154,23 @@ describe("run-event payload grammar discovery", () => {
 describe("run-event payload grammar types and examples", () => {
   const VALUE_TYPES = ["string", "number", "boolean", "array", "object"];
 
+  /** The JSON type of a published example, in the vocabulary `type` publishes. */
+  function jsonTypeOf(value: unknown): string {
+    if (Array.isArray(value)) return "array";
+    if (value !== null && typeof value === "object") return "object";
+    return typeof value;
+  }
+
+  /** The described member of a kind's v2 table, by name. */
+  function member(kind: RunEventKind, name: string): () => RunEventValueGrammar {
+    return () => describeRunEventPayload(kind, RUN_EVENT_SPEC_V2)!.members.find(item => item.name === name)!;
+  }
+
+  /** The described member of one variant of a kind's v2 table. */
+  function variantMember(kind: RunEventKind, name: string, variant: number, nested: string): RunEventValueGrammar {
+    return member(kind, name)().variants![variant]!.members!.find(item => item.name === nested)!;
+  }
+
   function walk(value: RunEventValueGrammar, visit: (value: RunEventValueGrammar) => void): void {
     visit(value);
     for (const member of value.members ?? []) walk(member, visit);
@@ -169,10 +186,16 @@ describe("run-event payload grammar types and examples", () => {
       for (const kind of kinds) {
         const grammar = describeRunEventPayload(kind, version)!;
         expect(grammar.spec, `${version} ${kind} spec`).toBe("run-event-payload-grammar/2");
-        for (const member of grammar.members) {
-          walk(member, described => {
-            expect(VALUE_TYPES, `${version} ${kind}.${member.name} type`).toContain(described.type);
-            expect(described.constraint.length, `${version} ${kind}.${member.name} constraint`).toBeGreaterThan(0);
+        for (const entry of grammar.members) {
+          walk(entry, described => {
+            expect(VALUE_TYPES, `${version} ${kind}.${entry.name} type`).toContain(described.type);
+            expect(described.constraint.length, `${version} ${kind}.${entry.name} constraint`).toBeGreaterThan(0);
+            // The published type is checked against the published example rather
+            // than against a list of type names: every example below is emitted
+            // through the validator, so a type that stops matching the value the
+            // validator accepts is a type that stops being true.
+            expect(jsonTypeOf(described.example), `${version} ${kind}.${entry.name} type vs its own example`)
+              .toBe(described.type);
           });
         }
         // The published minimal example carries every required member, nothing
@@ -250,6 +273,85 @@ describe("run-event payload grammar types and examples", () => {
     for (const variant of cost.variants!) {
       expect(validateRunEvent(event("run.ended", RUN_EVENT_SPEC_V2, { result: "complete", cost: variant.example }))).toEqual({ ok: true });
     }
+  });
+
+  /**
+   * `constraint` is published as the constraint in the validator's own words, so
+   * it is pinned against the words the validator actually refuses with rather
+   * than against a remembered copy: each probe supplies a value the check
+   * rejects and asserts the described constraint restates that refusal.
+   */
+  it("states each constraint in the words the validator refuses with", () => {
+    const probes: readonly {
+      readonly kind: RunEventKind;
+      readonly payload: Record<string, unknown>;
+      readonly pointer: string;
+      readonly describe: () => RunEventValueGrammar;
+    }[] = [
+      { kind: "activity.observed", payload: { activityId: 5 }, pointer: "/payload/activityId", describe: member("activity.observed", "activityId") },
+      { kind: "activity.observed", payload: { candidateTreeSha: 5 }, pointer: "/payload/candidateTreeSha", describe: member("activity.observed", "candidateTreeSha") },
+      { kind: "ticket.read", payload: { ticket: 5, source: "linear" }, pointer: "/payload/ticket", describe: member("ticket.read", "ticket") },
+      { kind: "activity.observed", payload: { owner: 5 }, pointer: "/payload/owner", describe: member("activity.observed", "owner") },
+      { kind: "decision.recorded", payload: { fork: "f", choice: "c", cited: 5 }, pointer: "/payload/cited", describe: member("decision.recorded", "cited") },
+      { kind: "gate.reported", payload: { durationMs: -1 }, pointer: "/payload/durationMs", describe: member("gate.reported", "durationMs") },
+      { kind: "activity.observed", payload: { round: 0 }, pointer: "/payload/round", describe: member("activity.observed", "round") },
+      { kind: "review.round.opened", payload: { grace: "yes" }, pointer: "/payload/grace", describe: member("review.round.opened", "grace") },
+      { kind: "run.ended", payload: { result: "complete", cost: { unit: "u", total: "x", reportedBy: "r" } }, pointer: "/payload/cost/total",
+        describe: () => variantMember("run.ended", "cost", 1, "total") },
+      { kind: "wait.started", payload: { reference: 5 }, pointer: "/payload/reference", describe: member("wait.started", "reference") },
+      { kind: "lens.selected", payload: { mandated: 5 }, pointer: "/payload/mandated", describe: member("lens.selected", "mandated") },
+      { kind: "lens.selected", payload: { mandated: ["Not An Id"] }, pointer: "/payload/mandated/0",
+        describe: () => member("lens.selected", "mandated")().items! },
+    ];
+
+    for (const probe of probes) {
+      const refused = rejections(event(probe.kind, RUN_EVENT_SPEC_V2, probe.payload))
+        .find(rejection => rejection.pointer === probe.pointer);
+      expect(refused?.code, `${probe.kind}${probe.pointer}`).toBe("malformed_member");
+      // The refusal's own words, minus its verb, open the published constraint:
+      // a constraint that drifts from the check it describes stops matching.
+      const stated = refused!.message.replace(/^expected /, "");
+      const published = probe.describe().constraint;
+      expect(published.startsWith(stated), `${probe.kind}${probe.pointer}: published "${published}" does not restate refusal "${stated}"`).toBe(true);
+    }
+  });
+
+  /**
+   * `preparation`'s reason vocabulary follows its `checks` value, so each arm is
+   * pinned the way `cost`'s arms are: its own member names and vocabularies, and
+   * its own example emitted through the validator.
+   */
+  it("describes command.completed's preparation arms and emits each one", () => {
+    const preparation = describeRunEventPayload("command.completed", RUN_EVENT_SPEC_V2)!
+      .members.find(item => item.name === "preparation")!;
+    expect(preparation.type).toBe("object");
+    expect(preparation.variants?.map(variant => variant.members?.map(item => item.name))).toEqual([
+      ["checks", "reason"],
+      ["checks", "reason"],
+    ]);
+    expect(preparation.variants?.map(variant => variant.members?.find(item => item.name === "reason")?.values)).toEqual([
+      ["ordinary", "receipt-not-reusable", "preparation-fingerprint-changed"],
+      ["validation-equivalent"],
+    ]);
+    expect(preparation.variants?.map(variant => (variant.example as Record<string, unknown>)["checks"])).toEqual([
+      "executed",
+      "reused",
+    ]);
+    for (const variant of preparation.variants!) {
+      expect(validateRunEvent(event("command.completed", RUN_EVENT_SPEC_V2, {
+        command: "prepare",
+        outcome: "ok",
+        durationMs: 0,
+        preparation: variant.example,
+      })), JSON.stringify(variant.example)).toEqual({ ok: true });
+    }
+  });
+
+  it("names a nested table's members exactly once when a non-object is supplied", () => {
+    const refused = rejections(event("run.started", RUN_EVENT_SPEC_V2, { host: "claude-code", workflow: "linear" }))
+      .find(rejection => rejection.pointer === "/payload/workflow")!;
+    expect(refused.message.match(/accepted members:/g)).toHaveLength(1);
+    expect(refused.message).toContain("accepted members: releaseId, profile");
   });
 
   it("keeps the described shapes out of reach of consumer mutation", () => {

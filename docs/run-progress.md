@@ -26,8 +26,9 @@ in the validator's own words, a closed vocabulary as `values`, a nested table as
 `members`, an array element as `items`, and — where which table applies depends
 on a sibling member, as `cost` and `preparation` do — the arms as `variants`.
 Every member carries an `example` the same validator accepts, and the document
-carries a whole-payload `example` that is emittable as it stands: it is the
-minimal valid payload, so
+carries a whole-payload `example` that is emittable as it stands: every required
+member, plus any optional member a combination rule makes mandatory for the
+values published there, so
 `emit run.started --version 2 --event-id start-1 --json '<that example>'`
 starts a run without reading the kernel. The document's spec is
 `run-event-payload-grammar/2`; `/1` carried names, requiredness and vocabularies
