@@ -132,9 +132,20 @@ describe("evaluateToolInvocation path scoping", () => {
     expect(composed).not.toBe(decomposed);
     expect(composed.toLowerCase()).not.toBe(decomposed.toLowerCase());
 
+    // One step past that pair, where case and normalization differ TOGETHER.
+    // `U+01F0` has no precomposed uppercase form, so the uppercase spelling of
+    // this one file is necessarily decomposed, and a fold that normalizes only
+    // before lowercasing lets the two spellings diverge again — the same
+    // permit, one case-mapping away.
+    const lowerPrecomposed = "src/\u01f0-secrets";
+    const upperDecomposed = "src/J\u030c-secrets";
+    expect(lowerPrecomposed.normalize("NFC").toLowerCase()).not.toBe(upperDecomposed.normalize("NFC").toLowerCase());
+
     for (const [declared, written] of [
       [composed, `${decomposed}/key.pem`],
       [decomposed, `${composed}/key.pem`],
+      [lowerPrecomposed, `${upperDecomposed}/key.pem`],
+      [upperDecomposed, `${lowerPrecomposed}/key.pem`],
     ] as const) {
       const scopedGrant = { ...grant, protectedPaths: [declared] };
       const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };

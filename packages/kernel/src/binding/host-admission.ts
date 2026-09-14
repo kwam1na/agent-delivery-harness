@@ -332,8 +332,22 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * digested is normalized, because a digest over a normalized path would no
  * longer match the bytes on disk. ASCII has a single normalization form, so
  * every existing protected set compares exactly as before.
+ *
+ * The fold NORMALIZES AGAIN AFTER LOWERCASING, because case mapping can
+ * denormalize its own input: `U+01F0` has no precomposed uppercase form, so
+ * the uppercase spelling of that one file is necessarily `"J\u030c"`, and
+ * lowercasing it yields the decomposed `"j\u030c"` rather than `U+01F0`. A
+ * single leading NFC therefore leaves 124 code points whose two spellings
+ * still compare unequal — a PERMIT on exactly the class this check exists to
+ * deny. Normalizing the folded result closes that.
+ *
+ * The boundary this holds to, stated rather than implied: canonically
+ * equivalent spellings of one path compare equal, case-mapped with
+ * `toLowerCase`, which is NOT full Unicode case folding — `"\u00df"` and
+ * `"SS"`, `"\u0131"` and `"I"`, `"\u03c2"` and `"\u03a3"` remain distinct here, as
+ * they did before this delivery.
  */
-const folded = (value: string): string => value.normalize("NFC").toLowerCase();
+const folded = (value: string): string => value.normalize("NFC").toLowerCase().normalize("NFC");
 
 export const underAnyFolded = (p: string, prefixes: readonly string[]): boolean =>
   underAny(folded(p), prefixes.map(folded));

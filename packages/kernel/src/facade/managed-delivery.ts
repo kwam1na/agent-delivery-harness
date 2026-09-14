@@ -2724,6 +2724,25 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           "Have the host create a fresh high-entropy capability outside the model process before binding.",
         );
       }
+
+      // What the emitted command may assume about this runtime is PROBED, not
+      // baked in: a runtime that rejects the type-stripping flag, or that is
+      // not Node at all, would be handed a Node-shaped command it cannot run,
+      // and an interceptor that never starts is a deny-until-attested boundary
+      // failing OPEN. Refusing here is the closed direction.
+      //
+      // It is a PURE OBSERVATION of this process, so it is taken here, before
+      // anything is written: a refusal on this ground must not land after the
+      // predecessor's binding states have been voided, a `workspace.bound`
+      // append has happened, or the projection has been materialized.
+      const hookRuntime = resolveHookRuntimeArgs(input.hookRuntime ?? liveHookRuntimeProbes());
+      if (!hookRuntime.ok) {
+        return refuse(
+          "hook_runtime_unsupported",
+          `The running executable cannot run the emitted hook command: ${hookRuntime.reason}.`,
+          "Run the delivery on a Node runtime that accepts the type-stripping flag; the activation preflight declares the floor.",
+        );
+      }
       const takeover = await readJson<PendingTakeover>(path.join(await deliveryDir(deliveryId), "takeover.json"));
       if (guarded.state !== "preparing" && takeover === undefined) {
         return refuse(
@@ -2828,20 +2847,6 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // left for this branch is a race after that verification, and nothing
       // falsifies it; it keeps the resolution total, and it is recorded as
       // unexercised in qualifications/product-qualification.json.
-      // What the emitted command may assume about this runtime is PROBED, not
-      // baked in: a runtime that rejects the type-stripping flag, or that is
-      // not Node at all, would be handed a Node-shaped command it cannot run,
-      // and an interceptor that never starts is a deny-until-attested
-      // boundary failing OPEN. Refusing here is the closed direction.
-      const hookRuntime = resolveHookRuntimeArgs(input.hookRuntime ?? liveHookRuntimeProbes());
-      if (!hookRuntime.ok) {
-        return refuse(
-          "hook_runtime_unsupported",
-          `The running executable cannot run the emitted hook command: ${hookRuntime.reason}.`,
-          "Run the delivery on a Node runtime that accepts the type-stripping flag; the activation preflight declares the floor.",
-        );
-      }
-
       const hookEntry = await resolveStagedHookEntry(path.join(guarded.generationRoot, ...GENERATION_HOOK_ENTRY.split("/")));
       if (hookEntry === undefined) {
         return refuse(
@@ -2854,7 +2859,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const composed = await hostBinding.composeSession({
         bindingDir,
         statePath,
-        hookCommand: [process.execPath, ...hookRuntime.args, hookEntry],
+        // The executable that was PROBED, not a second read of the process:
+        // validating one runtime and then naming another is the seam this
+        // resolution exists to close.
+        hookCommand: [hookRuntime.execPath, ...hookRuntime.args, hookEntry],
         // The session's own identity, baked into its hook command: a later
         // invocation overwrites the shared binding state, and this is how a
         // superseded-but-still-running session recognizes that it has been.

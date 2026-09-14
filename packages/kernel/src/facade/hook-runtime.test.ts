@@ -29,6 +29,9 @@ describe("resolveHookRuntimeArgs", () => {
     expect(resolution.ok, JSON.stringify(resolution)).toBe(true);
     if (!resolution.ok) return;
     expect(resolution.args).toEqual([STRIP_TYPES_FLAG]);
+    // The resolution carries the executable it PROBED, so the caller can
+    // compose the command around that one rather than re-reading the process.
+    expect(resolution.execPath).toBe("/usr/bin/node");
     // The executable is asked about the flag the command would carry, and
     // about nothing else.
     expect(asked).toEqual([STRIP_TYPES_FLAG]);
@@ -88,7 +91,45 @@ describe("liveHookRuntimeProbes", () => {
     // runtime floor is built around is accepted, and an invented flag is not —
     // so the probe reports what the executable lists rather than a constant.
     expect(probes.acceptsFlag(STRIP_TYPES_FLAG)).toBe(true);
-    expect(probes.acceptsFlag("--no-such-flag-anywhere")).toBe(false);
+    // The negative witness is chosen INSIDE the shape a guess would accept: a
+    // probe that answered `flag.startsWith("--experimental-")` — reading
+    // nothing from the runtime at all — rejects `--no-such-flag-anywhere` for
+    // the same reason the real enumeration does, and would pass a row written
+    // that way.
+    expect(probes.acceptsFlag("--experimental-no-such-flag-anywhere")).toBe(false);
+  });
+
+  it("answers the NODE_OPTIONS-allowlist question, which is NARROWER than the command line's", () => {
+    // Node has always accepted `--eval` on the command line; it is simply not
+    // permitted in NODE_OPTIONS, and this enumeration is the NODE_OPTIONS
+    // allowlist. So a `true` implies CLI acceptance and only a `false` can be
+    // over-strict. Any flag the emitted command carries must be one this
+    // enumeration lists — a CLI-only flag would refuse a runtime that runs the
+    // command fine, and nothing else in the suite would say so.
+    expect(liveHookRuntimeProbes().acceptsFlag("--eval")).toBe(false);
+    expect(liveHookRuntimeProbes().acceptsFlag(STRIP_TYPES_FLAG)).toBe(true);
+  });
+
+  it("reports UNSUPPORTED when the runtime's own flag enumeration cannot be read", () => {
+    // The fail-closed branch: an undetectable runtime is a refusal, never a
+    // silently Node-shaped command. It is the one refusal in this module that
+    // does not run through `resolveHookRuntimeArgs`'s own rules.
+    const original = Object.getOwnPropertyDescriptor(process, "allowedNodeEnvironmentFlags");
+    expect(original).toBeDefined();
+    Object.defineProperty(process, "allowedNodeEnvironmentFlags", {
+      configurable: true,
+      get() {
+        throw new TypeError("unobservable");
+      },
+    });
+    try {
+      expect(liveHookRuntimeProbes().acceptsFlag(STRIP_TYPES_FLAG)).toBe(false);
+      expect(resolveHookRuntimeArgs(liveHookRuntimeProbes()).ok).toBe(false);
+    } finally {
+      Object.defineProperty(process, "allowedNodeEnvironmentFlags", original!);
+    }
+    // ...and the restore really restored: the next reader sees the runtime.
+    expect(liveHookRuntimeProbes().acceptsFlag(STRIP_TYPES_FLAG)).toBe(true);
   });
 
   it("resolves the running runtime, which is the one the emitted command would name", () => {
@@ -96,5 +137,6 @@ describe("liveHookRuntimeProbes", () => {
     expect(resolution.ok, JSON.stringify(resolution)).toBe(true);
     if (!resolution.ok) return;
     expect(resolution.args).toEqual([STRIP_TYPES_FLAG]);
+    expect(resolution.execPath).toBe(process.execPath);
   });
 });
