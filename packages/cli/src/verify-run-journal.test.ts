@@ -802,7 +802,7 @@ describe("verify's run-journal completeness row", () => {
     const harness = await makeHarness();
     await deliverRecord(harness);
     await commitRecord(harness.dir);
-    await startRun(harness);
+    const runId = await startRun(harness);
     await emitAll(harness, [
       ...prerequisites(),
       roundOpened(OTHER_TREE_SHA),
@@ -835,10 +835,19 @@ describe("verify's run-journal completeness row", () => {
     expect(required.err).toContain("none of the above blocks admission");
     // Three sightings of the second warning: the violations list, the clause
     // naming it as the first warning's cause, and the start of its own
-    // segment. The third is the whole reason the per-warning reason bound is
-    // 120 rather than the stdout row's 400 - a larger bound spends the last of
-    // the 600-character budget on the first warning's reason and this warning
-    // never appears in the refusal under its own name at all.
+    // segment. The third is what the per-warning reason bound of 120 buys over
+    // the stdout row's 400 - a larger bound spends the last of the
+    // 600-character budget on the first warning's reason, and this warning
+    // keeps only its `violations:` entry and the consequence clause without
+    // ever beginning a segment of its own.
+    //
+    // This holds at the run id the store mints (`run-` + 16 hex = 20
+    // characters) and has no margin above it: one more character ahead of the
+    // explanations - a longer run id, another `missing:` entry, a third
+    // warning - takes the third sighting away. So read a red here as
+    // "something grew ahead of the explanations", not as "the bound
+    // regressed", and check which before changing the bound.
+    expect(runId).toHaveLength(20);
     expect(required.err.split("round-not-bou").length - 1).toBeGreaterThanOrEqual(3);
     // The remediation says to emit the run events this delivery did not
     // journal; this list is the only place the refusal names them, so it has

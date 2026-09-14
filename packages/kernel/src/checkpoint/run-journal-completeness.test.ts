@@ -1102,6 +1102,19 @@ describe("explaining a journal's warnings", () => {
     expect(diagnostics.roundBinding).toBe("unbound");
   });
 
+  it("counts the accepted projection it actually got, not always zero", () => {
+    // The sentence tells the operator how many trees the record's verified
+    // review-neutral projection accepts, so that a round bound to none of them
+    // reads as a fact they can check. Every other fixture here passes an empty
+    // accepted set and pins the literal "the 0", which a hard-coded zero would
+    // satisfy; this passes a non-empty one that still does not contain the
+    // round's tree, so the count has to be computed. A wrong count would tell
+    // an operator a record accepting one reviewed tree accepts none.
+    expect(by(explain(ATHENA, RECORDED, [OTHER_TREE]), "gate-before-closed-round")?.because).toContain(
+      "is not among the 1 the record's verified review-neutral projection accepts",
+    );
+  });
+
   it("keeps a genuinely mis-ordered gate a defect of its own, with no inherited cause", () => {
     // The round binds the record's own tree, so nothing about the binding is
     // wrong: the gate simply ran before the round closed. This is the arm the
