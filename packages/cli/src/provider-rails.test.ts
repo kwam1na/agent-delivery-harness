@@ -409,13 +409,19 @@ describe("provider invocation lifecycle", () => {
     // floor, or a multiple of the configured value — still expires eventually
     // and still records the cancel, so every assertion above survives it.
     //
-    // This row catches strictly more than the stalled-negotiation row can,
-    // because its bound is ten times larger. Three times 5 000 ms leaves
-    // ten seconds of slack over the ~5.1 s this window actually costs — the
-    // child is already up before the clock starts, so only the negotiation
-    // round trip and the rail's own expiry are inside it — while still
-    // refusing a timer multiplied by four, which at a 500 ms bound would need
-    // a ceiling back down at the tuned figure this delivery removed.
+    // The two rows catch different halves of that, and neither catch-set
+    // contains the other. This row's bound is ten times larger, so three times
+    // it still refuses a timer multiplied by four — which at a 500 ms bound
+    // would need a ceiling back down at the tuned figure this delivery removed,
+    // so the row above admits it. The row above in exchange carries the larger
+    // proportional slack, sixteen times its bound against three times this one,
+    // so it refuses a timer clamped to a floor between ten and fifteen seconds
+    // that this row admits. Read them as a pair.
+    //
+    // Three times 5 000 ms leaves ten seconds of slack over the ~5.1 s this
+    // window actually costs. The child is already up before the clock starts,
+    // so only the negotiation round trip and the rail's own expiry are inside
+    // it, and what load inflates — spawning the child — is outside it.
     expect(Date.now() - started).toBeLessThan(3 * WARM_EXPIRY_DEADLINE_MS);
     await rm(dir, { recursive: true, force: true });
   }, PROCESS_ROW_TIMEOUT_MS);
