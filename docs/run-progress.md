@@ -18,11 +18,24 @@ payload is refused. Start a new linked run when upgrading, naming the old ID in
 the v2 `run.started` payload's `predecessorRunId`; retain the original history.
 New readers accept both versions. Old readers may refuse v2 and must not erase it.
 
-Discover a kind's accepted members before emitting it with
+Discover a kind's payload before emitting it with
 `delivery-harness runs grammar <kind> --version 2 --json` (use `--version 1`
-for a legacy run). This read-only view derives members, requiredness and
-vocabularies from the validator's definitions. Validation still refuses unknown
-or missing members and identifies the accepted member set.
+for a legacy run). This read-only view derives everything from the validator's
+own member checks: each member's name, requiredness, `type`, the `constraint`
+in the validator's own words, a closed vocabulary as `values`, a nested table as
+`members`, an array element as `items`, and — where which table applies depends
+on a sibling member, as `cost` and `preparation` do — the arms as `variants`.
+Every member carries an `example` the same validator accepts, and the document
+carries a whole-payload `example` that is emittable as it stands: every required
+member, plus any optional member a combination rule makes mandatory for the
+values published there, so
+`emit run.started --version 2 --event-id start-1 --json '<that example>'`
+starts a run without reading the kernel. The document's spec is
+`run-event-payload-grammar/2`; `/1` carried names, requiredness and vocabularies
+only. Validation is unchanged: it still refuses unknown or missing members,
+identifies the accepted member set, and now names that set when a non-object
+reaches a member that holds one — `workflow` supplied as a string is still
+refused at `/payload/workflow`, and the refusal names `releaseId` and `profile`.
 
 An explicit `--json` payload never reads stdin. Omitting `--json` reads JSON
 from stdin until EOF:

@@ -90,7 +90,7 @@ describe("current-run and grammar diagnostics", () => {
       readonly kind: string;
       readonly members: readonly { readonly name: string; readonly required: boolean; readonly values?: readonly string[] }[];
     };
-    expect(grammar).toMatchObject({ spec: "run-event-payload-grammar/1", version: "run-event/2", kind: "gate.reported" });
+    expect(grammar).toMatchObject({ spec: "run-event-payload-grammar/2", version: "run-event/2", kind: "gate.reported" });
     expect(grammar.members.find(member => member.name === "outcome")?.values).toEqual(RUN_GATE_REPORTED_OUTCOMES);
     expect(grammar.members.find(member => member.name === "ticket")?.required).toBe(false);
 
@@ -284,4 +284,140 @@ describe("emit stdin payload discovery", () => {
     expect(observed.stderr).toContain("stdin is interactive");
     expect(observed.stderr).toContain("use --json <payload>");
   }, 10_000);
+});
+
+/**
+ * V26-2058 / V26-2039. Everything below is constructed from what
+ * `runs grammar` prints and nothing else — no source inspection, no
+ * trial-and-error emit — because that is the whole claim of the discovery
+ * surface.
+ */
+describe("constructing events from grammar discovery alone", () => {
+  interface DescribedValue {
+    readonly type: string;
+    readonly constraint: string;
+    readonly required?: boolean;
+    readonly name?: string;
+    readonly values?: readonly string[];
+    readonly members?: readonly DescribedValue[];
+    readonly items?: DescribedValue;
+    readonly variants?: readonly DescribedValue[];
+    readonly example: unknown;
+  }
+  interface DescribedGrammar {
+    readonly spec: string;
+    readonly version: string;
+    readonly kind: string;
+    readonly members: readonly DescribedValue[];
+    readonly example: Record<string, unknown>;
+  }
+
+  async function grammarOf(root: string, kind: string, version: "1" | "2"): Promise<DescribedGrammar> {
+    const described = await cli(root, ["runs", "grammar", kind, "--version", version, "--json"]);
+    expect(described.code, described.err).toBe(EXIT_OK);
+    return JSON.parse(described.out) as DescribedGrammar;
+  }
+
+  it("starts a version-2 run and appends every named kind from the published examples", async () => {
+    const root = await repository();
+
+    const start = await grammarOf(root, "run.started", "2");
+    expect(start.spec).toBe("run-event-payload-grammar/2");
+    const workflow = start.members.find(member => member.name === "workflow")!;
+    expect(workflow.type).toBe("object");
+    expect(workflow.members?.map(member => [member.name, member.required, member.type])).toEqual([
+      ["releaseId", true, "string"],
+      ["profile", true, "string"],
+    ]);
+
+    const started = await cli(root, ["emit", "run.started", "--version", "2", "--event-id", "start",
+      "--json", JSON.stringify(start.example)]);
+    expect(started.code, started.err).toBe(EXIT_OK);
+    const resolved = await resolveRunSurface(root);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    const current = await resolved.surface.store.current(resolved.surface.worktreeKey);
+    const runId = current.ok ? current.runId! : undefined;
+    expect(runId).toBeDefined();
+
+    // Each of the three kinds the ticket names, emitted verbatim from its own
+    // published example against the active version-2 run.
+    for (const [index, kind] of ["lens.selected", "decision.recorded", "activity.observed"].entries()) {
+      const grammar = await grammarOf(root, kind, "2");
+      const appended = await cli(root, ["emit", kind, "--event-id", `from-grammar-${index + 1}`,
+        "--json", JSON.stringify(grammar.example)]);
+      expect(appended.code, `${kind}: ${appended.err}`).toBe(EXIT_OK);
+    }
+    expect(await journal(root, runId!)).toHaveLength(4);
+  });
+
+  it("types the legacy writer's members and names the expected type when one is wrong", async () => {
+    const root = await repository();
+    const legacy = await grammarOf(root, "decision.recorded", "1");
+    expect(legacy.version).toBe("run-event/1");
+    const cited = legacy.members.find(member => member.name === "cited")!;
+    expect(cited).toMatchObject({ required: false, type: "string" });
+    expect(Object.keys(legacy.example).sort()).toEqual(["choice", "fork"]);
+
+    await start(root, "1");
+    const refused = await cli(root, ["emit", "decision.recorded", "--json",
+      JSON.stringify({ ...legacy.example, cited: ["V26-2058"] })]);
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect(refused.err).toContain("/payload/cited");
+    expect(refused.err).toContain("expected bounded free text");
+
+    const shaped = await cli(root, ["emit", "run.started", "--force", "--json",
+      JSON.stringify({ host: "claude-code", workflow: "linear" })]);
+    expect(shaped.code).toBe(EXIT_POLICY);
+    expect(shaped.err).toContain("accepted members: releaseId, profile");
+  });
+
+  /**
+   * The whole-payload example the human render writes under its own `example:`
+   * label — parsed rather than matched, because every member line carries an
+   * `example:` of its own and a substring cannot tell them apart.
+   */
+  function exampleBlock(out: string): unknown {
+    const marker = "\n  example:\n";
+    const at = out.indexOf(marker);
+    expect(at, "the human grammar wrote no whole-payload example block").toBeGreaterThan(-1);
+    return JSON.parse(out.slice(at + marker.length));
+  }
+
+  it("renders nested members, item shapes and the emittable example in the human grammar", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "run-grammar-human-"));
+    roots.push(root);
+    const human = await cli(root, ["runs", "grammar", "run.started", "--version", "2"]);
+    expect(human.code, human.err).toBe(EXIT_OK);
+    expect(human.out).toContain("run.started (run-event/2)");
+    expect(human.out).toContain("workflow");
+    expect(human.out).toContain("releaseId");
+    expect(human.out).toContain("profile");
+    // The human reader and the --json reader are handed the same payload.
+    expect(exampleBlock(human.out)).toEqual((await grammarOf(root, "run.started", "2")).example);
+
+    const lenses = await cli(root, ["runs", "grammar", "lens.selected", "--version", "2"]);
+    expect(lenses.code, lenses.err).toBe(EXIT_OK);
+    expect(lenses.out).toContain("array");
+    expect(lenses.out).toContain("items");
+  });
+
+  it("renders both arms of a member whose shape has variants", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "run-grammar-variants-"));
+    roots.push(root);
+    const completed = await cli(root, ["runs", "grammar", "command.completed", "--version", "2"]);
+    expect(completed.code, completed.err).toBe(EXIT_OK);
+    expect(completed.out).toContain("variant 1");
+    expect(completed.out).toContain("variant 2");
+    // The reused arm's vocabulary is reachable ONLY through the second variant,
+    // so a render that drops variants stops publishing it at all.
+    expect(completed.out).toContain("validation-equivalent");
+    expect(completed.out).toContain("receipt-not-reusable");
+    expect(exampleBlock(completed.out)).toEqual((await grammarOf(root, "command.completed", "2")).example);
+
+    const ended = await cli(root, ["runs", "grammar", "run.ended", "--version", "2"]);
+    expect(ended.code, ended.err).toBe(EXIT_OK);
+    expect(ended.out).toContain("variant 1");
+    expect(ended.out).toContain("variant 2");
+    expect(ended.out).toContain("subagent-tokens");
+  });
 });
