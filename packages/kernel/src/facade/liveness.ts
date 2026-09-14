@@ -63,10 +63,11 @@ export const DEFAULT_OBSERVATION_LIFETIME_SECONDS = 3600;
  * or lighter — than the measured one has, and the interesting failure is
  * silent: a resolution that floors the declaration at the default, or ignores
  * it outright, keeps returning a plausible number and every reader that takes
- * the default stays green. Below the default is the direction that cannot be
- * exercised through `bindWorkspace` in a long scenario (the value governs the
- * whole fence and would expire the binding mid-run), so it is asserted here
- * instead, against the rule itself.
+ * the default stays green. Below the default is the direction that catches a
+ * floor, and it is asserted twice — here against the rule itself, and through
+ * `bindWorkspace` at the terminal rebind in
+ * `walking-skeleton.scenario.test.ts`, which is the one bind in that scenario
+ * whose fence nothing afterwards grades.
  *
  * The declaration is honoured EXACTLY, in both directions. It is not clamped.
  */

@@ -82,6 +82,17 @@ const instantAfter = (instant: string, seconds: number): string =>
  */
 const DECLARED_LIFETIME_SECONDS = DEFAULT_OBSERVATION_LIFETIME_SECONDS * 2;
 
+/**
+ * The lifetime the TERMINAL rebind declares: below the default, deliberately.
+ *
+ * The pair matters more than either value. A resolution that floors the
+ * declaration at the default is invisible to every upward declaration, so
+ * `DECLARED_LIFETIME_SECONDS` above cannot see it; this one can, and it is
+ * safe to declare here because the fence it opens is the last one and nothing
+ * after it reads a liveness grade.
+ */
+const SHORT_DECLARED_LIFETIME_SECONDS = 30;
+
 const NOW = "2026-08-30T12:00:00Z";
 const LATER = "2026-08-30T12:00:30Z";
 const EXPIRY = "2026-08-31T12:00:00Z";
@@ -752,9 +763,28 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-4",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      // BELOW the default, which is the direction the earlier rebind cannot
+      // take: there the declaration governs the rest of the scenario and a
+      // short one expires the binding mid-run. Here it governs a fence nothing
+      // after this point grades — the bind and the status below both read at
+      // `LATER`, age zero, and every later assertion reads journal-reduced
+      // state rather than a liveness grade. So this is the one place the
+      // facade can be asked for a shorter lifetime, and it is the only thing
+      // that fails when the resolution FLOORS the declaration at the default:
+      // an upward declaration survives a clamp unchanged, so every other row
+      // here stays green under one.
+      observationLifetimeSeconds: SHORT_DECLARED_LIFETIME_SECONDS,
       providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
     });
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
+    expect(SHORT_DECLARED_LIFETIME_SECONDS).toBeLessThan(DEFAULT_OBSERVATION_LIFETIME_SECONDS);
+    const shortWorkspace = JSON.parse(
+      readFileSync(
+        path.join(await facade.namespaceDir(), "deliveries", confirmed.deliveryId, "workspace.json"),
+        "utf8",
+      ),
+    ) as { readonly observationLifetimeSeconds: number };
+    expect(shortWorkspace.observationLifetimeSeconds).toBe(SHORT_DECLARED_LIFETIME_SECONDS);
     const resumedStatus = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
     expect(resumedStatus.ok, JSON.stringify(resumedStatus)).toBe(true);
     if (!resumedStatus.ok) return;
