@@ -144,11 +144,28 @@ both, the refusal and the later success, on either side of the fix landing.
 
 ```sh
 npx vitest run packages/kernel/src/foo.test.ts          # while iterating
-DELIVERY_HARNESS_MAX_WORKERS=4 npm run check            # the gate
+npm run typecheck && npm run sensor && npm run sensor:cli   # before every round
+npx vitest run <every test file the diff touches or that imports a changed module>
+DELIVERY_HARNESS_MAX_WORKERS=4 npm run check            # once, in the serialized tail
 ```
 
-`npm run check` is typecheck, the import-boundary sensor, the CLI-inventory
-sensor, then the suite. Time it: `gate.reported` wants `durationMs` and you
+**Scoped checks during implementation and review rounds; the full suite once,
+in the tail.** `npm run check` is typecheck, the import-boundary sensor, the
+CLI-inventory sensor, then the whole suite. The suite spawns the CLI hundreds of
+times, and on a shared machine it took 1.5 to 2.7 hours per delivery in the
+2026-09-13 wave without once finishing green: every red was a bare timeout in a
+suite the candidate did not touch. Nothing in the product asks for it before the
+tail. The harness gate admits on review evidence, `prepare` runs typecheck
+alone, and `gate.reported` is observability. So before opening a round, and
+after each fix inside one, run typecheck, the two sensors, and `npx vitest run`
+over the test files your diff touches plus every test file that imports a
+module you changed (`grep -rl` over `'*.test.ts'` finds them). Lenses run the
+same scoped set in their lens worktrees. Emit `gate.reported` for the scoped run
+with the command string you actually ran. Run the full suite exactly once per
+delivery, inside the serialized tail of §6 after the rebase and `npm install`,
+where it has the machine to itself.
+
+Time whichever you run: `gate.reported` wants `durationMs` and you
 cannot recover it afterwards. Completeness requires that manual observation
 only when no CLI `command.completed` entries exist; the workflow still asks for
 the standalone check's timing because the CLI does not observe that process.
@@ -161,8 +178,10 @@ policy, packaging or the provider: `npm run sensor:policy`,
 Several deliveries share this machine, and the suite's git-heavy fixtures sit
 against a hard 5000 ms per-test default. Under load they cross it. The worker
 cap helps with starvation and does nothing for a per-test bound, so **one capped
-rerun is not enough to believe a red**. Work down this ladder and stop at the
-first step that clears:
+rerun is not enough to believe a red**. This is the other reason the full suite
+belongs in the tail only: a tail gate runs alone, so a red there is worth
+attributing, while a red under six concurrent gates is mostly noise. Work down
+this ladder and stop at the first step that clears:
 
 1. Grep the log. `Error: Test timed out in 5000ms` with no `AssertionError`
    anywhere is the load signature; an assertion failure never is.
