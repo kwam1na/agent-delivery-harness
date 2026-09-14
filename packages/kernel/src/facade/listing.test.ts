@@ -149,6 +149,7 @@ describe("the installation-scoped listing", () => {
     // Quiet is an ANSWER, not a refusal: the one surface that reports
     // installation-wide quiet must be available when the installation is quiet.
     expect(listing.deliveries).toEqual([]);
+    expect(listing.unreadable).toEqual([]);
   });
 
   it("lists an active delivery and a terminal one, each with its own state", async () => {
@@ -171,6 +172,12 @@ describe("the installation-scoped listing", () => {
         entry("delivery-gone", 7, "workspace.disposition.recorded", { workspaceId: "workspace-1", disposition: "quarantined" }),
         entry("delivery-gone", 8, "transition.committed", { from: "cancellation_requested", to: "cancelled" }),
       ],
+      // A heartbeat file is left on disk but NO workspace is bound. The stamp
+      // must not be reported: a heartbeat belonging to a workspace that is gone
+      // is not this delivery's freshness. Without this the `workspace ===
+      // undefined` gate would be satisfied by an absent file rather than by the
+      // gate itself.
+      observation: { fence: 1, observedAt: "2026-09-14T11:59:00Z" },
     });
 
     const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
@@ -200,15 +207,20 @@ describe("the installation-scoped listing", () => {
   it("reads an observation aged past its declared lifetime as unknown, beside a fresh one reading active", async () => {
     const { namespace, facade } = installation();
     const lifetimeSeconds = 30;
-    for (const [deliveryId, observedAt] of [
-      ["delivery-fresh", "2026-09-14T11:59:45Z"],
-      ["delivery-aged", "2026-09-14T11:50:00Z"],
+    for (const [deliveryId, activity, observedAt] of [
+      ["delivery-fresh", "active", "2026-09-14T11:59:45Z"],
+      ["delivery-aged", "active", "2026-09-14T11:50:00Z"],
+      // Stale by exactly the same margin as the aged one, and reported as
+      // `paused` rather than `unknown`: a host that ended cleanly SAID so, and
+      // aging a clean end into "we don't know" would lose the one liveness
+      // answer an operator can act on without investigating.
+      ["delivery-paused", "paused", "2026-09-14T11:50:00Z"],
     ] as const) {
       await register(namespace, {
         deliveryId,
         entries: [
           ...opening(deliveryId, lifetimeSeconds),
-          entry(deliveryId, 6, "activity.observed", { activity: "active", fence: 1 }),
+          entry(deliveryId, 6, "activity.observed", { activity, fence: 1 }),
         ],
         workspace: { observationLifetimeSeconds: lifetimeSeconds },
         observation: { fence: 1, observedAt },
@@ -228,6 +240,64 @@ describe("the installation-scoped listing", () => {
     // stale, not merely that the answer is unknown.
     expect(byId.get("delivery-aged")?.lastActivity.observedAt).toBe("2026-09-14T11:50:00Z");
     expect(byId.get("delivery-aged")?.state).toBe("preparing");
+    // The third grade the surface can report, beside the other two from the
+    // same call: aging applies to `active` alone.
+    expect(byId.get("delivery-paused")?.lastActivity.activity).toBe("paused");
+    expect(byId.get("delivery-paused")?.lastActivity.observedAt).toBe("2026-09-14T11:50:00Z");
+  });
+
+  it("reports no stamp for a heartbeat written under a superseded fence, beside a fresh one that reports its own", async () => {
+    const { namespace, facade } = installation();
+    const refenced = (deliveryId: string) =>
+      entry(deliveryId, 6, "invocation.fenced", {
+        fence: 2,
+        hostTaskId: "task-2",
+        worktreeId: "worktree-1",
+        candidateTreeSha: OID,
+        candidateBranchRefValue: OID,
+        policyDigest: DIGEST,
+        authorityEpoch: 4,
+        observationLifetimeSeconds: DEFAULT_OBSERVATION_LIFETIME_SECONDS,
+      });
+    // Its journal says `active` and its heartbeat is SECONDS old — but both
+    // belong to fence 1, and the delivery now stands at fence 2. Nothing has
+    // reported under the fence that is current.
+    await register(namespace, {
+      deliveryId: "delivery-refenced",
+      entries: [
+        ...opening("delivery-refenced", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+        entry("delivery-refenced", 6, "activity.observed", { activity: "active", fence: 1 }),
+        refenced("delivery-refenced"),
+      ],
+      workspace: { observationLifetimeSeconds: DEFAULT_OBSERVATION_LIFETIME_SECONDS },
+      observation: { fence: 1, observedAt: "2026-09-14T11:59:55Z" },
+    });
+    await register(namespace, {
+      deliveryId: "delivery-current",
+      entries: [
+        ...opening("delivery-current", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+        entry("delivery-current", 6, "activity.observed", { activity: "active", fence: 1 }),
+      ],
+      workspace: { observationLifetimeSeconds: DEFAULT_OBSERVATION_LIFETIME_SECONDS },
+      observation: { fence: 1, observedAt: "2026-09-14T11:59:55Z" },
+    });
+
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(true);
+    if (!listing.ok) return;
+    const byId = new Map(listing.deliveries.map((listed) => [listed.deliveryId, listed]));
+    // The grade the shared rule already returns: a superseded fence is not
+    // evidence of anything.
+    expect(byId.get("delivery-refenced")?.lastActivity.activity).toBe("unknown");
+    // And the stamp is withheld with it, so the surface never pairs "unknown"
+    // with a reassuringly recent time. Without the fence comparison in the
+    // listing this reads "2026-09-14T11:59:55Z".
+    expect(byId.get("delivery-refenced")?.lastActivity.observedAt).toBeUndefined();
+    // Beside an identical delivery that was NOT re-fenced: the difference is
+    // the fence and nothing else, so a listing that simply dropped every stamp
+    // would fail here.
+    expect(byId.get("delivery-current")?.lastActivity.activity).toBe("active");
+    expect(byId.get("delivery-current")?.lastActivity.observedAt).toBe("2026-09-14T11:59:55Z");
   });
 
   it("names the pending decision a delivery is waiting on", async () => {
@@ -291,17 +361,31 @@ describe("the installation-scoped listing", () => {
     expect(other.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-elsewhere"]);
   });
 
-  it("omits a directory that is not a registered delivery rather than listing an identity with no state", async () => {
+  it("names a directory it cannot read rather than listing it with an invented state or dropping it silently", async () => {
     const { namespace, facade } = installation();
     await register(namespace, {
       deliveryId: "delivery-real",
       entries: opening("delivery-real", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
     });
+    // No registration record: a stray directory, or the crash window between
+    // registration's two writes.
     mkdirSync(path.join(namespace, "deliveries", "delivery-stray"), { recursive: true });
+    // Registered, but its journal does not reduce. This is the branch that is
+    // otherwise unreachable from any fixture, and the one whose silent drop
+    // would contradict the CLI's own count of registered deliveries.
+    const brokenDir = path.join(namespace, "deliveries", "delivery-broken");
+    mkdirSync(brokenDir, { recursive: true });
+    writeFileSync(path.join(brokenDir, "delivery.json"), `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: DIGEST })}\n`);
+    writeFileSync(path.join(brokenDir, "journal.jsonl"), "not a journal entry\n");
 
     const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
     expect(listing.ok).toBe(true);
     if (!listing.ok) return;
+    // Neither appears as a delivery: a listing entry carries a state, and
+    // neither of these has one.
     expect(listing.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-real"]);
+    // But both are NAMED. An id an operator can pass to `managed status` is
+    // what turns "the counts disagree" into a refusal that says why.
+    expect([...listing.unreadable].sort()).toEqual(["delivery-broken", "delivery-stray"]);
   });
 });

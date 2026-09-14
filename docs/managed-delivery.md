@@ -370,7 +370,18 @@ resolved lazily on the read: a Tier 2 clean end reads `paused`, a Tier 1
 disappearance reads `unknown`, and nothing here polls or stamps a heartbeat of
 its own. Carrying the stamp beside the grade is what lets an operator see *how*
 stale an `unknown` is without ageing the timestamp themselves against a
-lifetime they would have to guess.
+lifetime they would have to guess. The stamp reported is only the one the grade
+itself accepted: a heartbeat written under a fence that has since been
+superseded is not evidence of anything, so it is withheld rather than paired
+with an `unknown` to make a dead host look barely-missed.
+
+**What it cannot read, it names.** A directory with no registration record, or
+one whose journal does not reduce, has no state and so is not a listing entry —
+but its id is returned in `unreadable`, and `managed deliveries` says how many
+and which. Dropping it silently would leave the CLI counting it as registered
+while the only surface that hands out ids denied it existed; naming it lets an
+operator run `managed status --delivery <id>` and get the refusal that says
+what is wrong.
 
 It is `read`-class in the inventory, binds no fence, moves no journal revision,
 and enumerates only its own installation's namespace directory: a delivery

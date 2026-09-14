@@ -182,9 +182,15 @@ export interface ListedDelivery {
    * Tier 2 clean end reads `paused`, a Tier 1 disappearance reads `unknown`,
    * resolved lazily on this read.
    *
-   * `observedAt` is the binding's freshness heartbeat, and it is `undefined`
-   * exactly when no workspace is bound: there is then no heartbeat to report
-   * and none to age, which is a different thing from a heartbeat that is old.
+   * `observedAt` IS ONLY THE STAMP THE GRADE ACCEPTED. It carries the binding's
+   * freshness heartbeat when that heartbeat stands for the delivery's current
+   * fence, and is `undefined` otherwise — no workspace bound, no heartbeat
+   * written yet, or a heartbeat left behind by a fence that has since been
+   * superseded. That last case is the one worth stating: `gradeHostActivity`
+   * discards a superseded stamp as evidence and returns `unknown`, so
+   * reporting it here anyway would pair "unknown" with a reassuringly recent
+   * time and describe a host as barely-missed when nothing has reported under
+   * the fence that is actually current.
    */
   readonly lastActivity: { readonly activity: HostActivityState; readonly observedAt: string | undefined };
   /** The waiver or amendment proposal awaiting a decision, if one stands. */

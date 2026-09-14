@@ -99,20 +99,6 @@ interface ResolvedManaged {
   readonly fence: number | undefined;
 }
 
-/**
- * Resolves the delivery this invocation addresses.
- *
- * `requested` exists for the retention operations alone. The skeleton's rule —
- * one delivery in flight per repository — is right for every checkpoint
- * operation, but it makes the retention lane unusable the moment a repository
- * has finished more than one delivery: `active[0] ?? deliveries.at(-1)` then
- * addresses only the newest, and every earlier terminal delivery's durable
- * detail becomes unreachable from the CLI even though the facade can export and
- * delete it. Naming one explicitly is the whole remedy, and it is deliberately
- * NOT offered to the checkpoint operations: those bind an invocation fence
- * derived from the worktree, and a delivery named by flag would not be the one
- * that worktree is bound to.
- */
 interface ResolvedInstallation {
   readonly facade: ManagedDeliveryFacade;
   readonly namespace: string;
@@ -211,6 +197,20 @@ async function resolveInstallation(context: CommandContext): Promise<ResolvedIns
   return { facade, namespace, deliveries, active };
 }
 
+/**
+ * Resolves the delivery this invocation addresses.
+ *
+ * `requested` exists for the retention operations alone. The skeleton's rule —
+ * one delivery in flight per repository — is right for every checkpoint
+ * operation, but it makes the retention lane unusable the moment a repository
+ * has finished more than one delivery: `active[0] ?? deliveries.at(-1)` then
+ * addresses only the newest, and every earlier terminal delivery's durable
+ * detail becomes unreachable from the CLI even though the facade can export and
+ * delete it. Naming one explicitly is the whole remedy, and it is deliberately
+ * NOT offered to the checkpoint operations: those bind an invocation fence
+ * derived from the worktree, and a delivery named by flag would not be the one
+ * that worktree is bound to.
+ */
 async function resolveManaged(context: CommandContext, requested?: string): Promise<ResolvedManaged | CommandResult> {
   const installation = await resolveInstallation(context);
   if (isCommandResult(installation)) return installation;
@@ -303,7 +303,18 @@ export const managedCommand: CommandDescriptor = {
       const listing = await installation.facade.listDeliveries({ observedAt: nowInstant() });
       if (!listing.ok) return { kind: "blocked", blockers: [...listing.blockers] };
       context.write(`${JSON.stringify(listing.deliveries, null, 2)}\n`);
-      return { kind: "ok", summary: `${listing.deliveries.length} delivery(ies) registered for this installation` };
+      // An unreadable delivery is NAMED, not dropped. Delivery resolution below
+      // counts the same directory as registered, so a listing that quietly
+      // omitted it would leave `managed status` saying several deliveries are in
+      // flight while the surface it points at shows fewer — with no id to
+      // reconcile the two by. The id here is enough to ask `managed status
+      // --delivery <id>` and get the refusal that says what is wrong.
+      const unreadable =
+        listing.unreadable.length === 0 ? "" : `; ${listing.unreadable.length} unreadable (${listing.unreadable.join(", ")})`;
+      return {
+        kind: "ok",
+        summary: `${listing.deliveries.length} delivery(ies) registered for this installation${unreadable}`,
+      };
     }
 
     // Only the retention operations may name a delivery; everything else binds

@@ -741,9 +741,24 @@ export interface ManagedDeliveryFacade {
    * journal revision, binds no fence, and enumerates only this installation's
    * own namespace directory — a delivery registered by another installation
    * has no path into this result.
+   *
+   * `unreadable` NAMES WHAT IT COULD NOT LIST, rather than dropping it. A
+   * directory with no registration record, or one whose journal does not
+   * reduce, has no state to report — but this is the only installation-wide
+   * surface an operator has, and a delivery that silently vanishes from it is
+   * worse than one reported as unreadable: the CLI's own delivery resolution
+   * counts that same directory as in flight, so a silent omission leaves two
+   * surfaces contradicting each other with no id to reconcile them by. The id
+   * is returned here; `status` with that id gives the refusal and says why.
    */
   listDeliveries(input: { readonly observedAt: string }): Promise<
-    { readonly ok: true; readonly deliveries: readonly ListedDelivery[] } | FacadeFailure
+    | {
+        readonly ok: true;
+        readonly deliveries: readonly ListedDelivery[];
+        /** Delivery ids present in the namespace that have no state to report. */
+        readonly unreadable: readonly string[];
+      }
+    | FacadeFailure
   >;
 
   nextCheckpoint(input: { readonly deliveryId: string }): Promise<{ readonly ok: true; readonly checkpoint: ManagedCheckpoint } | FacadeFailure>;
@@ -3210,34 +3225,43 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         // true and useful answer, and refusing it would make the one surface
         // that reports installation-wide quiet unavailable exactly when the
         // installation is quiet.
-        return { ok: true, deliveries: [] };
+        return { ok: true, deliveries: [], unreadable: [] };
       }
 
       const listed: ListedDelivery[] = [];
+      const unreadable: string[] = [];
       for (const deliveryId of ids) {
         const dir = path.join(root, deliveryId);
         const meta = await readJson<DeliveryMeta>(path.join(dir, "delivery.json"));
-        // A directory without a registration record is not a delivery this
-        // installation registered. Skipping it is deliberate: the alternative
-        // is listing an identity with no state, which is the one thing a
-        // listing must never do.
-        if (meta === undefined) continue;
+        // No registration record: either a stray directory, or the crash
+        // window between registration's two writes. Either way there is no
+        // state to report, so the id goes to `unreadable` rather than into a
+        // listing entry with an invented state — and rather than nowhere.
+        if (meta === undefined) {
+          unreadable.push(deliveryId);
+          continue;
+        }
         const store = await journalStoreFor(deliveryId);
         const reduced = await store.state();
         const read = await store.read();
-        // A journal that does not reduce has no state to report. The
-        // per-delivery `status` refuses for this delivery and says why; the
-        // listing omits it rather than inventing a state for it, and the
-        // refusal stays reachable through `status` with this id.
-        if (!reduced.ok || !read.ok) continue;
+        // A journal that does not reduce has no state either. `status` with
+        // this id refuses and says why; the listing names the id so an
+        // operator can ask.
+        if (!reduced.ok || !read.ok) {
+          unreadable.push(deliveryId);
+          continue;
+        }
 
         const views = viewsOf(read.entries);
         const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
+        // Read only when a workspace is bound: a heartbeat file left behind by
+        // a workspace that is gone is not this delivery's freshness.
         const observation =
           workspace === undefined
             ? undefined
             : await readJson<{ fence: number; observedAt: string }>(path.join(dir, "binding", "observation.json"));
         const lastActivity = lastOf(views, "activity.observed");
+        const currentFence = reduced.state.lastFence;
         listed.push({
           deliveryId,
           state: reduced.state.state,
@@ -3246,7 +3270,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             // rather than re-derived: two surfaces that grade liveness
             // separately are two surfaces that eventually disagree.
             activity: gradeHostActivity({
-              currentFence: reduced.state.lastFence,
+              currentFence,
               lastObservedActivity:
                 lastActivity === undefined
                   ? undefined
@@ -3258,12 +3282,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
               observation,
               observedAt,
             }),
-            observedAt: observation?.observedAt,
+            // ONLY the stamp the grade itself accepted as evidence for this
+            // fence. A heartbeat stamped under a SUPERSEDED fence is not this
+            // invocation's freshness — `gradeHostActivity` discards it and
+            // returns `unknown` — and reporting it anyway would tell an
+            // operator "unknown, seen five seconds ago" during exactly the
+            // re-fence window where no heartbeat for the current fence exists
+            // at all. The fence advances on `invocation.fenced`; the heartbeat
+            // is only rewritten on the host's next allowed PreToolUse.
+            observedAt: observation?.fence === currentFence ? observation.observedAt : undefined,
           },
           pendingDecision: waiverLedgerOf(views).pending[0],
         });
       }
-      return { ok: true, deliveries: listed };
+      return { ok: true, deliveries: listed, unreadable };
     },
 
     async nextCheckpoint({ deliveryId }) {

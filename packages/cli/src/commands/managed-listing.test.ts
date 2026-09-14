@@ -72,6 +72,34 @@ const opening = (deliveryId: string) => [
   entry(deliveryId, 3, "transition.committed", { from: "accepted", to: "preparing" }),
 ];
 
+const scratchRoots: string[] = [];
+
+/**
+ * A repository carrying the product namespace pointer and the retained binding
+ * and NOTHING else — no deliveries directory at all. `digestOverride` writes a
+ * pointer that disagrees with the binding it sits beside, which is the drift
+ * the surface refuses on.
+ */
+function bareInstallation(digestOverride?: string): string {
+  const root = mkdtempSync(path.join(tmpdir(), "managed-listing-bare-"));
+  scratchRoots.push(root);
+  execFileSync("git", ["init", "--quiet", root]);
+  const namespace = path.join(root, ".git", "managed-delivery");
+  mkdirSync(namespace, { recursive: true });
+  const binding = disposablePolicyBinding();
+  writeFileSync(path.join(namespace, "policy-binding.json"), `${JSON.stringify(binding)}\n`);
+  writeFileSync(
+    path.join(namespace, "facade.json"),
+    `${JSON.stringify({
+      installationPath: path.join(root, "installation"),
+      receiptDir: path.join(root, "receipts"),
+      hostVersion: "managed-listing-test",
+      policyBindingDigest: digestOverride ?? compiledAdopterPolicyBindingDigest(binding),
+    })}\n`,
+  );
+  return root;
+}
+
 beforeAll(async () => {
   repoDir = mkdtempSync(path.join(tmpdir(), "managed-listing-"));
   execFileSync("git", ["init", "--quiet", repoDir]);
@@ -109,6 +137,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await rm(repoDir, { recursive: true, force: true }).catch(() => undefined);
+  // Only the directories this file itself created, by the paths it recorded.
+  for (const root of scratchRoots) await rm(root, { recursive: true, force: true }).catch(() => undefined);
 });
 
 describe("managed deliveries", () => {
@@ -151,6 +181,27 @@ describe("managed deliveries", () => {
     for (const candidate of listed) {
       expect(Object.keys(candidate).sort()).toEqual(["deliveryId", "lastActivity", "state"]);
     }
+  });
+
+  it("reaches the terminal with an empty listing when the installation has registered nothing", async () => {
+    // The empty listing is the answer the facade's own suite pins; this row
+    // pins that it SURVIVES the CLI — that the surface answers `ok` and writes
+    // `[]` instead of refusing, which is what an installation-wide surface
+    // unavailable exactly when the installation is quiet would do.
+    const { result, written } = await run(["deliveries"], bareInstallation());
+    expect(result.kind, JSON.stringify(result)).toBe("ok");
+    expect(JSON.parse(written)).toEqual([]);
+    expect((result as { kind: "ok"; summary: string }).summary).toContain("0 delivery(ies)");
+  });
+
+  it("refuses on binding drift, exactly like every other operation on this surface", async () => {
+    // The listing answers ABOVE delivery resolution, so it is the one
+    // operation that could have been moved above the installation checks too.
+    // It was not: a pointer that disagrees with the binding beside it is the
+    // installation being untrustworthy, and a listing is not an exemption.
+    const { result } = await run(["deliveries"], bareInstallation("d".repeat(64)));
+    expect(result.kind, JSON.stringify(result)).toBe("blocked");
+    expect(result.kind === "blocked" ? result.blockers.map((blocker) => blocker.code) : []).toContain("policy_binding_mismatch");
   });
 
   it("names no delivery and binds no fence: it is refused outside a repository, like every read here", async () => {
