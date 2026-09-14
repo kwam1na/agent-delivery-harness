@@ -1117,7 +1117,8 @@ describe("explaining a journal's warnings", () => {
     // pinning one leaves the other free to say anything. This is the more
     // prominent of them: it is the reason `round-not-bound-to-record` gives,
     // the warning this whole delivery is about and the one the refusal names
-    // first. Nothing else in the repository asserts any part of its tail.
+    // first. The only other assertion touching this sentence is the
+    // anchoring phrase above, which pins its closing clause and not the count.
     expect(by(explain(ATHENA, RECORDED, [OTHER_TREE]), "round-not-bound-to-record")?.because).toContain(
       "and the 1 reviewed tree(s) its verified review-neutral projection accepts",
     );
