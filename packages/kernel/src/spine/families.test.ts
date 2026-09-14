@@ -48,7 +48,7 @@ const compositionPin = (): Record<string, unknown> => ({
     run: "journal-entry/1",
     workflowResult: "stage-result-ref/1",
     event: "journal-entry/1",
-    controlPlane: "reserved/0",
+    controlPlane: "control-plane-coordination/1",
   },
   productTrustLabel: PRODUCT_TRUST_LABEL,
 });

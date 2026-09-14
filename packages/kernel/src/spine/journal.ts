@@ -57,6 +57,26 @@ export const WORKSPACE_DISPOSITIONS = Object.freeze([
 export const APPROVAL_REQUEST_KINDS = Object.freeze(["waiver", "amendment"] as const);
 
 /**
+ * What an optional control plane can claim about a delivery, frozen here
+ * because the MIRROR RECORD is a durable journal payload and every durable
+ * payload's vocabulary belongs to the spine. The coordination unit's wire
+ * grammar imports this list rather than restating it, so the wire can never
+ * express a claim the journal cannot record, and the journal can never record
+ * one the wire cannot express.
+ */
+export const CONTROL_PLANE_CLAIM_KINDS = Object.freeze([
+  "enqueued",
+  "advanced",
+  "completed",
+  "cancelled",
+  "approval-notified",
+  "host-start-requested",
+] as const);
+
+/** How the local delivery reconciled the claim. Three outcomes, no fourth. */
+export const CONTROL_PLANE_DISPOSITIONS = Object.freeze(["mirror-only", "blocker", "coalesced"] as const);
+
+/**
  * The maintenance journal's frozen action vocabulary. The sensitive subset
  * (update, rollback, pin, revoke, unrevoke, advance-high-water-mark) is
  * consumable only under a maintenance-lane assertion; first install and
@@ -515,6 +535,33 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "delivery/trust.epoch.observed": table([
     { name: "productTrustEpoch", check: nonNegativeInt },
     { name: "repositoryAuthorityEpoch", check: nonNegativeInt },
+  ]),
+  // The control-plane mirror: one minimally redacted projection of one
+  // ADMITTED remote claim, and the only durable payload whose content
+  // originates outside this installation.
+  //
+  // What it deliberately does NOT carry is the point of the shape. No state,
+  // no transition, no evidence reference, no obligation, no fence, no
+  // digest of anything local — there is no member here through which a remote
+  // claim could be mistaken for a local fact, because the grammar is closed
+  // and offers none. What it does carry is enough to audit the claim later:
+  // who said it (`messageId` on a named channel), what they said (`claim`),
+  // where it sat in their sequence (`remoteSequence`), which local fact epoch
+  // it was judged against (`localFactEpoch`), how it was reconciled
+  // (`disposition`), and one bounded sentence of detail.
+  //
+  // `summary` is named `summary` on purpose: it is the durable path's
+  // redactable free-text member, so a control plane that puts a credential in
+  // its claim detail has it redacted rather than stored, and a credential in
+  // any other member is rejected outright.
+  "delivery/control.plane.mirror.recorded": table([
+    { name: "messageId", check: spineId },
+    { name: "channelKeyId", check: spineId },
+    { name: "claim", check: oneOf(CONTROL_PLANE_CLAIM_KINDS) },
+    { name: "remoteSequence", check: nonNegativeInt },
+    { name: "localFactEpoch", check: nonNegativeInt },
+    { name: "disposition", check: oneOf(CONTROL_PLANE_DISPOSITIONS) },
+    { name: "summary", check: boundedText },
   ]),
   "delivery/blocker.recorded": table([
     { name: "code", check: spineId },

@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { JOURNAL_ENTRY_SPEC, validateJournalEntry } from "./journal.ts";
+import { EVENT_VOCABULARY } from "./vocabulary.ts";
 
 const DIGEST = "a".repeat(64);
 const OID = "b".repeat(40);
@@ -46,15 +47,15 @@ describe("the journal-entry envelope", () => {
     expect(codesOf(value)).toContain("missing_member");
   });
 
-  it("rejects a reserved kind WITH a payload", () => {
-    const codes = codesOf(entry({ kind: "control.plane.mirror.recorded", payload: { anything: 1 } }));
-    expect(codes).toContain("reserved_kind");
-  });
-
-  it("rejects a reserved kind WITHOUT a payload", () => {
-    const value = entry({ kind: "control.plane.mirror.recorded" });
-    delete value["payload"];
-    expect(codesOf(value)).toContain("reserved_kind");
+  // The mirror kind is no longer reserved: the control-plane coordination
+  // unit defined it out of reservation, and the two rows that pinned its
+  // reserved rejection now live in that unit's promotion suite alongside the
+  // payload table that replaced them. What is pinned here instead is that the
+  // enumeration carries no reserved pair at all — so a future `reserved_kind`
+  // rejection can only come from a pair a later tranche adds, never from one
+  // silently left behind.
+  it("carries no reserved pair today — every enumerated pair has been defined by its owning unit", () => {
+    expect(EVENT_VOCABULARY.filter((candidate) => candidate.status === "reserved")).toEqual([]);
   });
 
   it("rejects an out-of-vocabulary kind as unknown", () => {

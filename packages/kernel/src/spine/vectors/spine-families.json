@@ -461,7 +461,9 @@
                   "baseTipSha": "ffffffffffffffffffffffffffffffffffffffff"
                 },
                 "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "completedObligations": ["review-green"],
+                "completedObligations": [
+                  "review-green"
+                ],
                 "trackedRecordDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "externalVerification": "passed",
                 "productTrustLabel": "local-digest / operator-pinned",
@@ -532,39 +534,6 @@
               "verification": "passed",
               "externalReference": "absent-by-state"
             }
-          }
-        },
-        {
-          "name": "a reserved kind carrying a payload",
-          "verdict": "reject",
-          "codes": [
-            "reserved_kind"
-          ],
-          "value": {
-            "spec": "journal-entry/1",
-            "journal": "delivery",
-            "subjectId": "delivery-1",
-            "expectedRevision": 3,
-            "idempotencyKey": "dk-3",
-            "kind": "control.plane.mirror.recorded",
-            "payload": {
-              "action": "merge"
-            }
-          }
-        },
-        {
-          "name": "a reserved kind without a payload",
-          "verdict": "reject",
-          "codes": [
-            "reserved_kind"
-          ],
-          "value": {
-            "spec": "journal-entry/1",
-            "journal": "delivery",
-            "subjectId": "delivery-1",
-            "expectedRevision": 0,
-            "idempotencyKey": "dk-9",
-            "kind": "control.plane.mirror.recorded"
           }
         },
         {
@@ -897,6 +866,52 @@
               "resumeEligibility": "fresh-worktree-only"
             }
           }
+        },
+        {
+          "name": "a control-plane mirror record — an admitted remote claim, projected",
+          "verdict": "accept",
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 6,
+            "idempotencyKey": "dk-mirror-1",
+            "kind": "control.plane.mirror.recorded",
+            "payload": {
+              "messageId": "message-42",
+              "channelKeyId": "connector-key-1",
+              "claim": "completed",
+              "remoteSequence": 11,
+              "localFactEpoch": 6,
+              "disposition": "blocker",
+              "summary": "the control plane claims completion against local evidence that contradicts it"
+            }
+          }
+        },
+        {
+          "name": "a control-plane mirror record carrying a delivery state — the grammar offers no such member",
+          "verdict": "reject",
+          "codes": [
+            "unknown_member"
+          ],
+          "value": {
+            "spec": "journal-entry/1",
+            "journal": "delivery",
+            "subjectId": "delivery-1",
+            "expectedRevision": 6,
+            "idempotencyKey": "dk-mirror-2",
+            "kind": "control.plane.mirror.recorded",
+            "payload": {
+              "messageId": "message-43",
+              "channelKeyId": "connector-key-1",
+              "claim": "completed",
+              "remoteSequence": 12,
+              "localFactEpoch": 6,
+              "disposition": "mirror-only",
+              "summary": "a claim that tries to carry a state",
+              "state": "completed"
+            }
+          }
         }
       ]
     },
@@ -1209,7 +1224,7 @@
       "family": "policy-snapshot",
       "vectors": [
         {
-          "name": "the golden snapshot \u2014 the digest recomputes from its own members",
+          "name": "the golden snapshot — the digest recomputes from its own members",
           "verdict": "accept",
           "value": {
             "spec": "policy-snapshot/1",
@@ -1277,7 +1292,7 @@
           }
         },
         {
-          "name": "a lens with no bound charter \u2014 a category label alone does not qualify a review",
+          "name": "a lens with no bound charter — a category label alone does not qualify a review",
           "verdict": "reject",
           "codes": [
             "missing_member"
@@ -1373,7 +1388,7 @@
           }
         },
         {
-          "name": "a missing context digest \u2014 independence must stay falsifiable",
+          "name": "a missing context digest — independence must stay falsifiable",
           "verdict": "reject",
           "codes": [
             "missing_member"
@@ -1387,7 +1402,7 @@
           }
         },
         {
-          "name": "a missing persona digest \u2014 the charter the reviewer was handed must be bound",
+          "name": "a missing persona digest — the charter the reviewer was handed must be bound",
           "verdict": "reject",
           "codes": [
             "missing_member"
@@ -1456,7 +1471,7 @@
       "family": "grant-attestation",
       "vectors": [
         {
-          "name": "the golden intake attestation \u2014 absent-by-state, not omitted",
+          "name": "the golden intake attestation — absent-by-state, not omitted",
           "verdict": "accept",
           "value": {
             "spec": "grant-attestation/1",
@@ -1634,7 +1649,9 @@
               "baseTipSha": "ffffffffffffffffffffffffffffffffffffffff"
             },
             "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "completedObligations": ["review-green"],
+            "completedObligations": [
+              "review-green"
+            ],
             "trackedRecordDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "externalVerification": "passed",
             "productTrustLabel": "local-digest / operator-pinned",
@@ -1661,7 +1678,9 @@
               "baseTipSha": "ffffffffffffffffffffffffffffffffffffffff"
             },
             "policyDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "completedObligations": ["review-green"],
+            "completedObligations": [
+              "review-green"
+            ],
             "trackedRecordDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "externalVerification": "passed",
             "productTrustLabel": "local-digest / operator-pinned",

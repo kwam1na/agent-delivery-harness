@@ -58,9 +58,11 @@ export const CONFIRMATION_FIXTURE_PROFILE: CompositionProfile = "confirmation-fi
 
 /**
  * The supported contract-version families the pin binds, at the versions the
- * frozen spine ships today. `controlPlane` is deliberately `reserved/0`: the
- * control-plane port has no defined contract yet, and claiming one would
- * claim more than was verified.
+ * frozen spine ships today. `controlPlane` names the coordination wire
+ * contract this product implements, which is now defined and qualified
+ * against a deterministic simulator. It claims exactly that and no more: the
+ * pin says which message grammar a peer must speak, never that a hosted
+ * control plane exists, is reachable, or has been run against.
  */
 export const SUPPORTED_CONTRACT_VERSIONS = Object.freeze({
   policy: "policy-snapshot/1",
@@ -68,7 +70,7 @@ export const SUPPORTED_CONTRACT_VERSIONS = Object.freeze({
   run: "journal-entry/1",
   workflowResult: "stage-result-ref/1",
   event: "journal-entry/1",
-  controlPlane: "reserved/0",
+  controlPlane: "control-plane-coordination/1",
 } as const);
 
 export interface CompositionInventoryEntry {

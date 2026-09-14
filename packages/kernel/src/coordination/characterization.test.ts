@@ -12,13 +12,16 @@
  *    all invariants. If this unit breaks one of them it has moved authority,
  *    which is the one thing the ticket forbids.
  *
- *  - **The reservation, pinned as it stands.** `control.plane.mirror.recorded`
- *    is enumerated `reserved` with `observationOnly: true` and the owner
- *    string "control-plane coordination" — this unit. Reserved pairs reject
- *    with or without a payload. These rows are pinned here so the promotion
- *    out of reservation is a visible, reviewed diff rather than a silent
- *    widening, and they are the rows this delivery deliberately moves. The
- *    post-promotion behaviour is pinned in `journal.promotion.test.ts`.
+ *  - **The reservation, as it was found.** `control.plane.mirror.recorded`
+ *    was enumerated `reserved` with `observationOnly: true` and the owner
+ *    string "control-plane coordination" — this unit — and rejected with or
+ *    without a payload. Those rows were committed GREEN against the
+ *    unmodified tree in `9cbf3a1`, before a line of the unit existed, which
+ *    is what makes the promotion a reviewed diff rather than a silent
+ *    widening. They are deliberately not carried forward here: their
+ *    successors, asserting the payload table that replaced the reservation,
+ *    live in `journal.promotion.test.ts`. A characterization row kept alive
+ *    by editing its expected value to match the change pins nothing.
  *
  * Nothing in this file imports the new unit; it characterizes the tree as it
  * was found.
@@ -27,13 +30,10 @@ import { describe, expect, it } from "vitest";
 import { applySecretDiscipline, FREE_TEXT_MEMBERS } from "../checkpoint/redaction.ts";
 import { JOURNAL_ENTRY_SPEC, validateJournalEntry } from "../spine/journal.ts";
 import { reduceDeliveryJournal } from "../spine/reducer.ts";
-import { SUPPORTED_CONTRACT_VERSIONS } from "../substrate/manifest.ts";
-import { classifyEventKind, EVENT_VOCABULARY, OBSERVATION_ONLY_KINDS } from "../spine/vocabulary.ts";
 
 const DIGEST = "a".repeat(64);
 const DIGEST2 = "c".repeat(64);
 const OID = "b".repeat(40);
-const MIRROR = "control.plane.mirror.recorded";
 
 type Entry = Record<string, unknown>;
 
@@ -79,41 +79,6 @@ const codesOf = (value: unknown): string[] => {
   const verdict = validateJournalEntry(value);
   return verdict.ok ? [] : verdict.rejections.map((rejection) => rejection.code);
 };
-
-// ── The reservation, as found ──────────────────────────────────────────────
-
-describe("the control-plane mirror pair before promotion", () => {
-  it("is enumerated reserved, observation-only, and owned by this unit", () => {
-    const found = EVENT_VOCABULARY.filter((entry) => entry.kind === MIRROR);
-    expect(found.length).toBe(1);
-    expect(found[0]).toEqual({
-      journal: "delivery",
-      kind: MIRROR,
-      status: "reserved",
-      observationOnly: true,
-      owner: "control-plane coordination",
-    });
-  });
-
-  it("classifies as reserved — the observation-only bit is not even reported while reserved", () => {
-    expect(classifyEventKind("delivery", MIRROR)).toEqual({ status: "reserved" });
-  });
-
-  it("rejects the reserved kind with a payload and without one, both as reserved_kind", () => {
-    expect(codesOf(deliveryEntry(3, MIRROR, { anything: 1 }))).toEqual(["reserved_kind"]);
-    const bare = deliveryEntry(3, MIRROR, {});
-    delete bare["payload"];
-    expect(codesOf(bare)).toEqual(["reserved_kind"]);
-  });
-
-  it("sits in the three-kind exemption list even while reserved", () => {
-    expect([...OBSERVATION_ONLY_KINDS]).toEqual(["activity.observed", "trust.epoch.observed", MIRROR]);
-  });
-
-  it("pins the contract-version slot as reserved/0", () => {
-    expect(SUPPORTED_CONTRACT_VERSIONS.controlPlane).toBe("reserved/0");
-  });
-});
 
 // ── Invariants this unit must not move ─────────────────────────────────────
 
