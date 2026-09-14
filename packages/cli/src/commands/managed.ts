@@ -138,7 +138,15 @@ async function resolveInstallation(context: CommandContext): Promise<ResolvedIns
   }
   let deliveries: string[];
   try {
-    deliveries = (await readdir(path.join(namespace, "deliveries"))).sort();
+    // Directories only, the same rule the facade's listing applies. A stray
+    // FILE in the namespace is not a delivery, and counting one as in flight is
+    // the two-surfaces-contradict state the listing exists to prevent: `status`
+    // would refuse with "several deliveries are in flight" while `deliveries`
+    // named it in neither list, leaving no id to reconcile the two counts by.
+    deliveries = (await readdir(path.join(namespace, "deliveries"), { withFileTypes: true }))
+      .filter((candidate) => candidate.isDirectory())
+      .map((candidate) => candidate.name)
+      .sort();
   } catch {
     deliveries = [];
   }

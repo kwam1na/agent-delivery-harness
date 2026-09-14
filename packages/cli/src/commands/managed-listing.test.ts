@@ -109,6 +109,21 @@ function bareInstallation(digestOverride?: string): string {
   return root;
 }
 
+/** One registered, in-flight delivery, written the way registration leaves it. */
+async function registerDelivery(namespace: string, deliveryId: string): Promise<void> {
+  const dir = path.join(namespace, "deliveries", deliveryId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, "delivery.json"),
+    `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: BINDING_DIGEST })}\n`,
+  );
+  const store = createJournalStore(path.join(dir, "journal.jsonl"));
+  for (const candidate of opening(deliveryId)) {
+    const appended = await store.append(candidate);
+    expect(appended.ok, JSON.stringify(appended)).toBe(true);
+  }
+}
+
 beforeAll(async () => {
   repoDir = mkdtempSync(path.join(tmpdir(), "managed-listing-"));
   execFileSync("git", ["init", "--quiet", repoDir]);
@@ -136,22 +151,14 @@ beforeAll(async () => {
   // deliveries are in flight while the surface it points at shows two, with no
   // id to reconcile the two counts by.
   mkdirSync(path.join(namespace, "deliveries", "delivery-stray"), { recursive: true });
+  // A stray FILE, beside it. This one is not a delivery at all: it must change
+  // neither the listing nor the unreadable clause, AND neither surface's count
+  // — delivery resolution reads the same directory this listing does.
+  writeFileSync(path.join(namespace, "deliveries", ".DS_Store"), "");
 
   // TWO deliveries, both in flight. This is the shape `managed status`
   // refuses, and the shape the listing exists to report.
-  for (const deliveryId of ["delivery-one", "delivery-two"]) {
-    const dir = path.join(namespace, "deliveries", deliveryId);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      path.join(dir, "delivery.json"),
-      `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: BINDING_DIGEST })}\n`,
-    );
-    const store = createJournalStore(path.join(dir, "journal.jsonl"));
-    for (const candidate of opening(deliveryId)) {
-      const appended = await store.append(candidate);
-      expect(appended.ok, JSON.stringify(appended)).toBe(true);
-    }
-  }
+  for (const deliveryId of ["delivery-one", "delivery-two"]) await registerDelivery(namespace, deliveryId);
 });
 
 afterAll(async () => {
@@ -191,6 +198,9 @@ describe("managed deliveries", () => {
     const summary = (result as { kind: "ok"; summary: string }).summary;
     expect(summary).toContain("2 delivery(ies)");
     expect(summary).toContain("1 unreadable (delivery-stray)");
+    // Exactly one unreadable id: the stray FILE is named nowhere, and the
+    // refusal below proves the same file is not counted as in flight either.
+    expect(summary).not.toContain(".DS_Store");
     for (const candidate of listed) {
       expect(candidate.state).toBe("preparing");
       // No workspace is bound yet, so there is no heartbeat to age and the
@@ -227,6 +237,30 @@ describe("managed deliveries", () => {
     const { result } = await run(["deliveries"], bareInstallation("d".repeat(64)));
     expect(result.kind, JSON.stringify(result)).toBe("blocked");
     expect(result.kind === "blocked" ? result.blockers.map((blocker) => blocker.code) : []).toContain("policy_binding_mismatch");
+  });
+
+  it("does not count a stray file as a delivery in flight, on the surface that resolves one either", async () => {
+    // The listing's own directory filter is pinned in the facade's suite. This
+    // row pins the OTHER half of the same claim: delivery resolution reads the
+    // same directory, so without the same filter a `.DS_Store` makes a
+    // repository with exactly ONE delivery refuse with "several deliveries are
+    // in flight" — while `managed deliveries`, which the refusal points at,
+    // names the file in neither list. That is the contradiction with no id to
+    // reconcile it by that this whole mode exists to prevent.
+    const root = bareInstallation();
+    const namespace = path.join(root, ".git", "managed-delivery");
+    await registerDelivery(namespace, "delivery-only");
+    writeFileSync(path.join(namespace, "deliveries", ".DS_Store"), "");
+
+    const status = await run(["status"], root);
+    expect(status.result.kind === "blocked" ? status.result.blockers.map((blocker) => blocker.code) : []).not.toContain(
+      "delivery_unresolved",
+    );
+
+    const { result, written } = await run(["deliveries"], root);
+    expect(result.kind, JSON.stringify(result)).toBe("ok");
+    expect((JSON.parse(written) as { deliveryId: string }[]).map((candidate) => candidate.deliveryId)).toEqual(["delivery-only"]);
+    expect((result as { kind: "ok"; summary: string }).summary).toBe("1 delivery(ies) registered for this installation");
   });
 
   it("judges the installation before the delivery, for the operations that were already here", async () => {

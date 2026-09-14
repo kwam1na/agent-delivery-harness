@@ -464,6 +464,26 @@ describe("the installation-scoped listing", () => {
       markerBindingDigest: "d".repeat(64),
     });
 
+    // The case that actually happens: a delivery registered before the adopter
+    // policy changed. Its two durable records AGREE with each other and both
+    // disagree with the facade — so a comparison that only checked the two
+    // records against each other would list it with full state while `status`
+    // refuses it.
+    const foreign = "e".repeat(64);
+    await register(namespace, {
+      deliveryId: "delivery-stale-policy",
+      entries: opening("delivery-stale-policy", DEFAULT_OBSERVATION_LIFETIME_SECONDS).map((candidate) =>
+        candidate.kind === "policy.snapshot.bound"
+          ? { ...candidate, payload: { ...candidate.payload, policyBindingDigest: foreign } }
+          : candidate,
+      ),
+      markerBindingDigest: foreign,
+    });
+
+    const stale = await facade.status({ deliveryId: "delivery-stale-policy", observedAt: "2026-09-14T12:00:00Z" });
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(stale.blockers.map((blocker) => blocker.code)).toEqual(["policy_binding_mismatch"]);
+
     const drifted = await facade.status({ deliveryId: "delivery-drifted", observedAt: "2026-09-14T12:00:00Z" });
     expect(drifted.ok).toBe(false);
     if (!drifted.ok) expect(drifted.blockers.map((blocker) => blocker.code)).toEqual(["policy_binding_mismatch"]);
@@ -474,7 +494,7 @@ describe("the installation-scoped listing", () => {
     // Beside one that DOES bind, from the same call: the separation is the
     // binding comparison, not an empty listing.
     expect(listing.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-bound"]);
-    expect(listing.unreadable).toEqual(["delivery-drifted"]);
+    expect([...listing.unreadable].sort()).toEqual(["delivery-drifted", "delivery-stale-policy"]);
   });
 
   it("refuses when the deliveries directory exists and cannot be read, rather than reporting quiet", async () => {
