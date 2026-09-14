@@ -41,6 +41,7 @@ import { decideHookInvocation, type HookBindingState } from "../host/hook-main.t
 import { installComposition, packComposition } from "../substrate/installer.ts";
 import { CONFIRMATION_FIXTURE_PROFILE } from "../substrate/manifest.ts";
 import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
+import { STRIP_TYPES_FLAG } from "./hook-runtime.ts";
 import {
   DISPOSABLE_CONTRACT,
   GREET_RIGHT,
@@ -327,6 +328,52 @@ describe("the pre-admission binding layer", () => {
       expect(path.join(session.worktree, writable).startsWith(await facade.namespaceDir())).toBe(false);
     }
     expect(grant.protectedPaths).toContain(PROJECTION_DIR);
+  });
+
+  it("emits a hook command built from THIS runtime's probed support, and refuses a runtime that cannot run it", async () => {
+    const session = await openSession();
+    const settings = JSON.parse(readFileSync(await settingsPathOf(session.deliveryId), "utf8")) as {
+      hooks: Record<string, { hooks: { command: string }[] }[]>;
+    };
+    const command = settings.hooks["PreToolUse"]?.[0]?.hooks[0]?.command;
+    expect(command, JSON.stringify(settings.hooks)).toBeTypeOf("string");
+    // The emitted command names the running executable and the flag the probe
+    // observed it accepting — not a constant, and not a second runtime.
+    expect(command).toContain(process.execPath);
+    expect(command).toContain(STRIP_TYPES_FLAG);
+    expect(command).toContain("hook-main.ts");
+
+    // And the refusal is reachable: a facade told the runtime cannot run the
+    // command refuses to compose one, rather than emitting a Node-shaped
+    // command an interceptor would never start from.
+    const unsupported = createManagedDeliveryFacade({
+      repoDir,
+      policyBinding: disposablePolicyBinding(),
+      installation: { installationPath, receiptDir },
+      hostVersion: HOST_VERSION,
+      exec: recordingExecPort(),
+      hookRuntime: { execPath: "/usr/local/bin/bun", versions: { node: "22.6.0", bun: "1.1.30" }, acceptsFlag: () => true },
+    });
+    sequence += 1;
+    const contract = { ...DISPOSABLE_CONTRACT, contractId: `contract-cc-${sequence}` };
+    const presented = await unsupported.presentContract({ contract, expiry: EXPIRY });
+    must(presented, "presentContract");
+    const confirmed = await unsupported.confirmContract({ intakeId: presented.intakeId, echo: operatorEcho(presented.channelPath) });
+    must(confirmed, "confirmContract");
+    const worktree = path.join(scratch, `wt-${sequence}`);
+    git(repoDir, "worktree", "add", "--quiet", "-b", `cc-${sequence}`, worktree, "main");
+    const refused = await unsupported.bindWorkspace({
+      deliveryId: confirmed.deliveryId,
+      worktreeDir: worktree,
+      hostTaskId: `host-${sequence}`,
+      observedAt: NOW,
+      attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
+    });
+    expect(refused.ok, JSON.stringify(refused)).toBe(false);
+    if (refused.ok) return;
+    expect(refused.blockers.map((blocker) => blocker.code)).toEqual(["hook_runtime_unsupported"]);
+    expect(refused.blockers[0]?.summary).toContain("bun");
   });
 
   it("gives the in-session layer no way to apply, expand, or replace its own grant", async () => {

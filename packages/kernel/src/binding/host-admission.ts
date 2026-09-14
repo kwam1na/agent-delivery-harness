@@ -322,12 +322,21 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * inside it, so the deny side matches case-insensitively while the allow
  * side (writable paths) stays byte-exact — asymmetric, in the closed
  * direction.
+ *
+ * Unicode normalization is folded for the same reason and only here. HFS+
+ * stores a decomposed form and APFS preserves whatever it is given, so one
+ * file has two spellings whose bytes differ — `"caf\u00e9"` and `"cafe\u0301"` are
+ * not equal, lowercased or not — and a protected path with a non-ASCII
+ * component named in the other form would pass this check and be opened by
+ * the OS anyway. The fold is COMPARISON-ONLY: nothing stored, recorded, or
+ * digested is normalized, because a digest over a normalized path would no
+ * longer match the bytes on disk. ASCII has a single normalization form, so
+ * every existing protected set compares exactly as before.
  */
+const folded = (value: string): string => value.normalize("NFC").toLowerCase();
+
 export const underAnyFolded = (p: string, prefixes: readonly string[]): boolean =>
-  underAny(
-    p.toLowerCase(),
-    prefixes.map((prefix) => prefix.toLowerCase()),
-  );
+  underAny(folded(p), prefixes.map(folded));
 
 /**
  * The interceptor decision for one tool invocation: re-evaluates admission

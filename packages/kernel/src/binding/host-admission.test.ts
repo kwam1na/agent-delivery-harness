@@ -119,6 +119,51 @@ describe("evaluateToolInvocation path scoping", () => {
     if (!caseWritable.allowed) expect(caseWritable.denials[0]?.code).toBe("write_outside_grant");
   });
 
+  it("enforces a protected path declared in one Unicode normalization form against a write naming the other", () => {
+    // HFS+ stores a decomposed form and APFS preserves whatever it is given,
+    // so one file has two spellings whose BYTES differ. Case folding does not
+    // merge them: "caf\u00e9" !== "cafe\u0301" even lowercased. The protected path
+    // here sits INSIDE the writable root, which is what makes the miss a
+    // permit rather than a different refusal: the other spelling passes the
+    // protected check, lands inside `src`, and is ALLOWED — while the OS
+    // opens the very file the policy set out to protect.
+    const composed = "src/caf\u00e9-secrets";
+    const decomposed = "src/cafe\u0301-secrets";
+    expect(composed).not.toBe(decomposed);
+    expect(composed.toLowerCase()).not.toBe(decomposed.toLowerCase());
+
+    for (const [declared, written] of [
+      [composed, `${decomposed}/key.pem`],
+      [decomposed, `${composed}/key.pem`],
+    ] as const) {
+      const scopedGrant = { ...grant, protectedPaths: [declared] };
+      const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };
+      const decision = evaluateToolInvocation(expectation, scopedGrant, scoped, {
+        capability: "fs.write",
+        writes: [written],
+      });
+      expect(decision.allowed, `${JSON.stringify(declared)} vs ${JSON.stringify(written)}`).toBe(false);
+      if (!decision.allowed) {
+        expect(decision.denials[0]?.code).toBe("protected_path");
+        // Comparison-only: the refusal quotes the path AS WRITTEN. Nothing
+        // downstream of this check sees a normalized spelling, so no stored,
+        // recorded, or digested path changes representation.
+        expect(decision.denials[0]?.message).toContain(written);
+      }
+    }
+
+    // The deny side did not widen into a match-everything: a sibling inside
+    // the same writable root, protected under neither spelling, is allowed.
+    const scopedGrant = { ...grant, protectedPaths: [composed] };
+    const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };
+    expect(
+      evaluateToolInvocation(expectation, scopedGrant, scoped, {
+        capability: "fs.write",
+        writes: ["src/cafe\u0301-elsewhere/x.ts"],
+      }).allowed,
+    ).toBe(true);
+  });
+
   it("one bad path denies the whole invocation", () => {
     const decision = decide(["src/ok.ts", ".git/config"]);
     expect(decision.allowed).toBe(false);

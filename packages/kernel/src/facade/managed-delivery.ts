@@ -62,6 +62,7 @@ import {
 } from "../checkpoint/retention.ts";
 import { digestCanonical, sha256Hex } from "../digest.ts";
 import { createArtifactsPort } from "../artifacts.ts";
+import { liveHookRuntimeProbes, resolveHookRuntimeArgs, type HookRuntimeProbes } from "./hook-runtime.ts";
 import { runAdmission } from "../admission.ts";
 import {
   buildDeliveryRecord,
@@ -249,10 +250,12 @@ const OWNER_FILE = 0o600;
  * The flag is why the package's engines floor is 22.6 and not 22: earlier
  * 22.x rejects it outright, and the interceptor would then never start — an
  * empty stdout and an exit code the host does not read as blocking, which is
- * a deny-until-attested boundary failing OPEN.
+ * a deny-until-attested boundary failing OPEN. Which flags this runtime
+ * actually accepts, and whether it is Node at all, are PROBED rather than
+ * assumed — see `hook-runtime.ts` — and a runtime that cannot be observed to
+ * support them is refused rather than handed a command it will reject.
  */
 const GENERATION_HOOK_ENTRY = "harness/packages/kernel/src/host/hook-main.ts";
-const HOOK_RUNTIME_ARGS: readonly string[] = Object.freeze(["--experimental-strip-types"]);
 
 /**
  * The staged hook entry, resolved to the spelling the entry will recognize as
@@ -301,6 +304,12 @@ export interface CreateFacadeInput {
    * Claude Code binding, which is what every existing caller gets, unchanged.
    */
   readonly hostBinding?: ManagedHostBinding;
+  /**
+   * Observations of the runtime that will carry the emitted hook command.
+   * Injectable so an unsupported runtime is testable without one; the live
+   * default observes the real process.
+   */
+  readonly hookRuntime?: HookRuntimeProbes;
 }
 
 /**
@@ -2819,6 +2828,20 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // left for this branch is a race after that verification, and nothing
       // falsifies it; it keeps the resolution total, and it is recorded as
       // unexercised in qualifications/product-qualification.json.
+      // What the emitted command may assume about this runtime is PROBED, not
+      // baked in: a runtime that rejects the type-stripping flag, or that is
+      // not Node at all, would be handed a Node-shaped command it cannot run,
+      // and an interceptor that never starts is a deny-until-attested
+      // boundary failing OPEN. Refusing here is the closed direction.
+      const hookRuntime = resolveHookRuntimeArgs(input.hookRuntime ?? liveHookRuntimeProbes());
+      if (!hookRuntime.ok) {
+        return refuse(
+          "hook_runtime_unsupported",
+          `The running executable cannot run the emitted hook command: ${hookRuntime.reason}.`,
+          "Run the delivery on a Node runtime that accepts the type-stripping flag; the activation preflight declares the floor.",
+        );
+      }
+
       const hookEntry = await resolveStagedHookEntry(path.join(guarded.generationRoot, ...GENERATION_HOOK_ENTRY.split("/")));
       if (hookEntry === undefined) {
         return refuse(
@@ -2831,7 +2854,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const composed = await hostBinding.composeSession({
         bindingDir,
         statePath,
-        hookCommand: [process.execPath, ...HOOK_RUNTIME_ARGS, hookEntry],
+        hookCommand: [process.execPath, ...hookRuntime.args, hookEntry],
         // The session's own identity, baked into its hook command: a later
         // invocation overwrites the shared binding state, and this is how a
         // superseded-but-still-running session recognizes that it has been.
