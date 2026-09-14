@@ -382,6 +382,36 @@ describe("run-event payload grammar types and examples", () => {
   });
 
   /**
+   * `cost` and `preparation` are the only described values whose constraint is
+   * written where they are described rather than produced by a check factory,
+   * so nothing else pins their words. Each is held to its own text, and each
+   * arm's text is held beside the value that discriminates that arm: an arm
+   * label swapped onto the other arm fails here, and so does a member or arm
+   * constraint that stops saying what the caller needs to tell the arms apart.
+   */
+  it("labels each hand-written variant table and both of its arms", () => {
+    for (const [kind, name, constraint, arms] of [
+      ["run.ended", "cost", "a cost: an unreported coverage, or a measured unit and total", [
+        ["coverage", "unreported", "coverage \"unreported\": the host metered nothing, so no total is written"],
+        ["unit", "subagent-tokens", "a measured cost, whose coverage is complete or partial when stated"],
+      ]],
+      ["command.completed", "preparation", "a preparation observation; reason's vocabulary follows checks", [
+        ["checks", "executed", "checks \"executed\": the configured checks ran"],
+        ["checks", "reused", "checks \"reused\": a validation-equivalent receipt was reused"],
+      ]],
+    ] as const) {
+      const described = member(kind, name)();
+      expect(described.constraint, `${kind}.${name} constraint`).toBe(constraint);
+      expect(described.variants?.length, `${kind}.${name} arms`).toBe(2);
+      for (const [index, [discriminator, value, armConstraint]] of arms.entries()) {
+        const variant = described.variants![index]!;
+        expect(variant.constraint, `${kind}.${name} arm ${index} constraint`).toBe(armConstraint);
+        expect((variant.example as Record<string, unknown>)[discriminator], `${kind}.${name} arm ${index} discriminator`).toBe(value);
+      }
+    }
+  });
+
+  /**
    * A closed nested table publishes `a <member> object`, so each is pinned to
    * the member it actually describes rather than to its length: a constraint
    * that stops naming its own table stops matching here.
