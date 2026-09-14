@@ -44,7 +44,7 @@ import {
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
-import { oneLine, resolveRunJournalRow, runJournalRows } from "../run-surface.ts";
+import { RUN_JOURNAL_ADMISSION_ROW, oneLine, resolveRunJournalRow, runJournalRows } from "../run-surface.ts";
 
 const USAGE = "Usage: delivery-harness verify [--require-run-journal] [--mandated-lens <id>]...";
 
@@ -98,11 +98,61 @@ function parseArgs(args: readonly string[]): ArgParse {
 function runJournalBlocker(row: RunJournalRow) {
   const missing = row.missing.length === 0 ? "(none)" : row.missing.join(", ");
   const violations = row.violations === undefined || row.violations.length === 0 ? "(none)" : row.violations.join(", ");
+  // The same per-violation reasons the row prints. A refusal that named only
+  // the identifiers would make the operator run the command again with the
+  // flag dropped just to read why.
+  //
+  // EVERYTHING THE REMEDIATION NAMES COMES FIRST, BECAUSE A DETAIL IS CUT FROM
+  // THE END. A blocker's detail reaches a terminal through `renderBlockers`,
+  // which bounds it at 600 characters, so a journal with several warnings
+  // pushes whatever is last off the end. Two things must never be the
+  // casualty: the line saying none of this blocks admission, because a
+  // truncated list of violated constraints with no such line reads as a
+  // verdict; and the `missing:` list, because the remediation tells the
+  // operator to emit the run events this delivery did not journal and that
+  // list is the only place this refusal says which ones. So the identifiers,
+  // the missing list and the admission sentence all precede the per-warning
+  // reasons, which are the right thing to lose to the cap — the row on stdout,
+  // which is written line by line and is not bounded this way, always carries
+  // all of them. Inside a warning's own segment the `(a consequence of …)`
+  // clause goes before the reason for the same arithmetic: the reason is the
+  // long part, so a clause written after it is the first thing the cap
+  // destroys. With the clause after the reason it vanished from the
+  // reproduction shape once the run id reached 36 characters, and `runId` is
+  // accepted up to 128; with it before, it survives at every run id length
+  // through 128, as do the missing list and the admission sentence. Two
+  // warnings that restate one fact, printed as peers with nothing saying so,
+  // are the exact misreading this row exists to prevent.
+  //
+  // Do not read the 120 as making the whole detail fit. It never does on a
+  // journal with more than one warning: the reproduction's two render 733
+  // characters at this bound (753 at 130, 813 at 160, and 1045 at 400 and at
+  // every larger bound — the longer of its two reasons is 315 characters, so
+  // nothing above that is binding) against a 600-character cut, and the later
+  // warnings' reasons are lost at every one of them — that is what the
+  // unbounded stdout row is for.
+  //
+  // What 120 buys is narrower than it looks, and the narrowness is the point,
+  // because two earlier rounds of this delivery each shipped a confident and
+  // wrong statement about this budget. Measured on the reproduction's two
+  // warnings at the run id this store actually mints (`run-` + 16 hex = 20
+  // characters), the second warning's identifier begins inside the cut — as
+  // `round-not-bou…`, 13 of its 25 characters — and at 121 and above it does
+  // not. That is the whole of it. The margin is one character: at a 21-
+  // character run id, which `isLegalRunId` admits up to 128, it is already
+  // gone, and a journal carrying a third warning loses the later segments
+  // whatever the bound is. What a larger bound costs is a later warning's own
+  // SEGMENT, never its name: the `violations:` list and any `(a consequence
+  // of …)` clause naming it are ahead of the cut and survive regardless.
+  const why = (row.explanations ?? []).map(
+    (explanation) =>
+      `; ${oneLine(explanation.violation, 64)}${explanation.consequenceOf === undefined ? "" : ` (a consequence of ${oneLine(explanation.consequenceOf, 64)})`}: ${oneLine(explanation.because, 120)}`,
+  ).join("");
   return commandBlocker({
     code: "run_journal_incomplete",
     sourceId: "delivery-harness.cli.verify",
     summary: "The run journal for this candidate is not complete, and --require-run-journal was given.",
-    details: `status ${row.status}${row.runId === undefined ? "" : ` (run ${oneLine(row.runId, 128)})`}; missing: ${missing}; violations: ${violations}`,
+    details: `status ${row.status}${row.runId === undefined ? "" : ` (run ${oneLine(row.runId, 128)})`}; violations: ${violations}; missing: ${missing}; ${RUN_JOURNAL_ADMISSION_ROW}${why}`,
     remediations: [
       {
         id: "emit-the-missing-run-events",

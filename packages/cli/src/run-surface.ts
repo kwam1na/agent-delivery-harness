@@ -49,6 +49,7 @@ import {
   createRunStore,
   sha256Hex,
   evaluateRunJournal,
+  explainRunJournal,
   gitNamespaceClearedEnvironment,
   neutralizeForDisplay,
   resolveRunStoreLocation,
@@ -56,6 +57,7 @@ import {
   type Blocker,
   type RunEventInput,
   type RunEventKind,
+  type RunJournalRoundBinding,
   type RunJournalRow,
   type RunStore,
 } from "@agent-delivery-harness/kernel";
@@ -266,6 +268,8 @@ export async function resolveRunJournalRow(input: {
   const read = await resolved.surface.store.read(match.runId);
   if (!read.ok) return ABSENT;
   const evaluation = evaluateRunJournal(read.events, input.treeSha, input.mandatedLensIds, acceptedTrees.slice(1));
+  // The same arguments, so the explanations describe exactly these violations.
+  const diagnostics = explainRunJournal(read.events, input.treeSha, input.mandatedLensIds, acceptedTrees.slice(1));
   const alsoMatching = [...new Set(matches.flatMap((entry) => entry === undefined ? [] : [entry.runId, ...entry.alsoMatching]))]
     .filter((runId) => runId !== match.runId);
   return {
@@ -273,11 +277,40 @@ export async function resolveRunJournalRow(input: {
     ...(alsoMatching.length === 0 ? {} : { alsoMatching }),
     status: evaluation.status,
     missing: evaluation.missing,
-    ...(evaluation.violations.length === 0 ? {} : { violations: evaluation.violations }),
+    ...(evaluation.violations.length === 0 ? {} : { violations: evaluation.violations, explanations: diagnostics.explanations }),
     ...(acceptedTrees.length === 1 ? {} : { recordTreeSha: input.treeSha, reviewedCandidateTreeShas: acceptedTrees.slice(1) }),
+    ...(diagnostics.roundBinding === undefined ? {} : { roundBinding: diagnostics.roundBinding }),
     attestation: "self",
   };
 }
+
+/**
+ * What the round binding means to someone deciding whether to act on the row.
+ *
+ * The `reviewed-tree` sentence is the one this ticket's readout exists for: it
+ * names WHERE the acceptance came from — the record's own verified evidence —
+ * and says in the same breath that the two trees differ, because the row prints
+ * both and an operator who reads "accepted" as "equal" would then wonder why.
+ */
+const ROUND_BINDING_ROWS: Readonly<Record<RunJournalRoundBinding, string>> = {
+  "record-tree": "the governing closed round binds the record's own candidate tree",
+  "reviewed-tree":
+    "the governing closed round binds a reviewed candidate above, accepted from this record's verified review-neutral projection; the two trees differ and neither is claimed to equal the other",
+  unbound: "no closed round binds the record's candidate tree or any reviewed candidate it accepts",
+};
+
+/**
+ * The one true sentence about authority, printed wherever a violation is.
+ *
+ * An operator reading a list of violated constraints under a line that says
+ * `verified` is being asked a question the row cannot answer by itself: does
+ * this stop anything? It does not. The journal is appended to by anything the
+ * owner can execute, so no admission, gate, or record decision reads it — and
+ * the only thing that can be blocked by it is this command, behind the local
+ * opt-in the operator typed themselves.
+ */
+export const RUN_JOURNAL_ADMISSION_ROW =
+  "none of the above blocks admission: the record's own evidence decides that, and no gate, admission, or record decision reads a journal. Only --require-run-journal blocks, and only this verify invocation.";
 
 /**
  * The row, rendered for a terminal. Every store-derived string goes through
@@ -295,9 +328,19 @@ export function runJournalRows(row: RunJournalRow): readonly string[] {
     rows.push(`    record candidate: ${oneLine(row.recordTreeSha, 64)}`);
     rows.push(`    reviewed candidate: ${row.reviewedCandidateTreeShas.map((tree) => oneLine(tree, 64)).join(", ")} (verified review-neutral projection)`);
   }
+  if (row.roundBinding !== undefined) rows.push(`    round binding: ${ROUND_BINDING_ROWS[row.roundBinding]}`);
   rows.push(`    missing: ${row.missing.length === 0 ? "(none)" : row.missing.map((entry) => oneLine(entry, 64)).join(", ")}`);
   if (row.violations !== undefined && row.violations.length > 0) {
     rows.push(`    violations: ${row.violations.map((entry) => oneLine(entry, 64)).join(", ")}`);
+    // One indented line per violation, in the order they were raised, each
+    // saying why it exists and — where it is only another warning restated —
+    // which warning that is. Product-authored text, bounded like every other
+    // store-derived row for the same reason.
+    for (const explanation of row.explanations ?? []) {
+      const consequence = explanation.consequenceOf === undefined ? "" : `; a consequence of ${oneLine(explanation.consequenceOf, 64)}, not a separate mistake`;
+      rows.push(`      ${oneLine(explanation.violation, 64)}: ${oneLine(explanation.because, 400)}${consequence}`);
+    }
+    rows.push(`    admission: ${RUN_JOURNAL_ADMISSION_ROW}`);
   }
   return rows;
 }

@@ -584,6 +584,12 @@ describe("verify's run-journal completeness row", () => {
     // The label that separates this caller from the viewer's: `verify` judged
     // the round constraints against THIS record's candidate.
     expect(row).toContain("bound to the record");
+    // And the binding is named on the healthy row too, not only where a
+    // projection widened it: an operator who sees the reviewed-tree sentence
+    // elsewhere can tell the two apart because both are always printed.
+    expect(row).toContain("round binding: the governing closed round binds the record's own candidate tree");
+    // Nothing was violated, so no reason and no admission sentence appear.
+    expect(row).not.toContain("admission:");
 
     // The opt-in agrees with the row it reads.
     const required = await harness.cli(["verify", "--require-run-journal"]);
@@ -650,6 +656,15 @@ describe("verify's run-journal completeness row", () => {
     expect(row).toContain("verified review-neutral projection");
     expect(row).not.toContain("gate-before-closed-round");
     expect(row).not.toContain("round-not-bound-to-record");
+    // The acceptance is displayed with where it came from — this record's own
+    // verified evidence — and with the explicit statement that the two trees
+    // differ, so the row is never read as a claim that they are the same tree.
+    expect(row).toContain("round binding: the governing closed round binds a reviewed candidate above");
+    expect(row).toContain("accepted from this record's verified review-neutral projection");
+    expect(row).toContain("the two trees differ and neither is claimed to equal the other");
+    // Nothing was violated, so the row carries no admission disclaimer to read
+    // past; the statement appears exactly where a warning does.
+    expect(row).not.toContain("admission: none of the above");
 
     if (!withProjection) return;
     const recordDir = path.join(harness.dir, "telemetry/delivery-runs");
@@ -759,9 +774,85 @@ describe("verify's run-journal completeness row", () => {
     expect(row).toContain("incomplete");
     expect(row).toContain("round-not-bound-to-record");
 
+    // The three questions a bare identifier leaves open, answered on the row
+    // itself: which trees a round could have bound, why the gate warning is
+    // beside it, and whether any of it stops this candidate being admitted.
+    expect(row).toContain("round binding: no closed round binds the record's candidate tree or any reviewed candidate it accepts");
+    expect(row).toContain("round-not-bound-to-record: the governing round closed at seq");
+    expect(row).toContain("admission: none of the above blocks admission");
+    expect(row).toContain("Only --require-run-journal blocks, and only this verify invocation.");
+
     const required = await harness.cli(["verify", "--require-run-journal"]);
     expect(required.code).toBe(EXIT_POLICY);
     expect(required.err).toContain("round-not-bound-to-record");
+    // The refusal carries the same reason, so nobody has to re-run the command
+    // with the flag dropped just to read why it refused.
+    expect(required.err).toContain("round-not-bound-to-record: the governing round closed at seq");
+    expect(required.err).toContain("none of the above blocks admission");
+  });
+
+  /**
+   * The shape this ticket was filed from: a round closed against an earlier
+   * tree, and a gate reported after it. Two warnings appear, and they are one
+   * fact — the gate warning exists only because no round this record accepts
+   * closed at all. A row that listed them as peers would send an operator
+   * looking for a mis-ordered gate that never happened.
+   */
+  it("names the gate warning as a consequence of the unaccepted round, not a second defect", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    await deliverRecord(harness);
+    await commitRecord(harness.dir);
+    const runId = await startRun(harness);
+    await emitAll(harness, [
+      ...prerequisites(),
+      roundOpened(OTHER_TREE_SHA),
+      roundClosed(OTHER_TREE_SHA),
+      ["gate.reported", { command: "npm run check", outcome: "pass", durationMs: 5 }],
+      ["pr.opened", { url: "https://example.invalid/pr/1", candidateTreeSha: harness.treeSha }],
+      ended(),
+    ]);
+
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    const row = rowOf(verified.out);
+    expect(row).toContain("round-not-bound-to-record");
+    expect(row).toContain("gate-reported-before-closed-round: the governing gate.reported at seq");
+    expect(row).toContain("a consequence of round-not-bound-to-record, not a separate mistake");
+    // The gate itself is not accused of preceding anything: there is no closed
+    // round this record accepts for it to have preceded.
+    expect(row).not.toContain("precedes the governing closed round");
+    expect(row).toContain("admission: none of the above blocks admission");
+
+    const required = await harness.cli(["verify", "--require-run-journal"]);
+    expect(required.code).toBe(EXIT_POLICY);
+    // The clause naming the other warning as this one's cause is ADJACENT to
+    // the identifier, ahead of the reason. The reason is the part the refusal's
+    // per-warning bound truncates, so a clause written after it is the first
+    // thing the 600-character cap destroys — and two warnings printed as peers
+    // with nothing saying one restates the other are the misreading this row
+    // exists to prevent.
+    expect(required.err).toContain("gate-reported-before-closed-round (a consequence of round-not-bound-to-record): the governing gate.reported at seq");
+    expect(required.err).toContain("none of the above blocks admission");
+    // Three sightings of the second warning: the violations list, the clause
+    // naming it as the first warning's cause, and the start of its own
+    // segment. The third is what the per-warning reason bound of 120 buys over
+    // the stdout row's 400 - a larger bound spends the last of the
+    // 600-character budget on the first warning's reason, and this warning
+    // keeps only its `violations:` entry and the consequence clause without
+    // ever beginning a segment of its own.
+    //
+    // This holds at the run id the store mints (`run-` + 16 hex = 20
+    // characters) and has no margin above it: one more character ahead of the
+    // explanations - a longer run id, another `missing:` entry, a third
+    // warning - takes the third sighting away. So read a red here as
+    // "something grew ahead of the explanations", not as "the bound
+    // regressed", and check which before changing the bound.
+    expect(runId).toHaveLength(20);
+    expect(required.err.split("round-not-bou").length - 1).toBeGreaterThanOrEqual(3);
+    // The remediation says to emit the run events this delivery did not
+    // journal; this list is the only place the refusal names them, so it has
+    // to survive the 600-character cap on a detail with two warnings in it.
+    expect(required.err).toContain("missing: command.completed:gate");
   });
 
   it("resolves two journals binding the record's tree to one run, naming the other in alsoMatching", { timeout: 120000 }, async () => {

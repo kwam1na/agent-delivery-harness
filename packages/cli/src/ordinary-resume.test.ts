@@ -30,7 +30,7 @@ function contextsSaved(events: readonly RunEvent[]) {
     } }));
 }
 
-async function fixture(options: { readonly version?: "1" | "2" } = {}) {
+async function fixture(options: { readonly version?: "1" | "2"; readonly freshness?: "live" } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "ordinary-resume-")); dirs.push(dir);
   const git = async (...args: string[]) => (await exec("git", args, { cwd: dir })).stdout.trim();
   await git("init", "-q"); await git("config", "user.name", "Test"); await git("config", "user.email", "test@example.invalid");
@@ -39,7 +39,21 @@ async function fixture(options: { readonly version?: "1" | "2" } = {}) {
   await writeFile(path.join(dir, "harness.config.ts"), "export default {};\n");
   await writeFile(path.join(dir, "source.ts"), "export const value = 1;\n");
   await git("add", "."); await git("-c", "commit.gpgsign=false", "commit", "-qm", "initial"); await git("branch", "origin/main");
-  let config = defineHarnessConfig({ ...adopterConfig, preparationCommands: [], preparationWiringPaths: ["harness.config.ts"] });
+  const ordinary = defineHarnessConfig({ ...adopterConfig, preparationCommands: [], preparationWiringPaths: ["harness.config.ts"] });
+  /**
+   * The same obligations re-declared at `live` freshness, and declared that way
+   * from the start. Re-declaring them later would move the policy digest, and
+   * the resume refusal under test would then be staleness rather than the
+   * freshness posture the row is about.
+   */
+  let config = options.freshness !== "live" ? ordinary : defineHarnessConfig({
+    ...ordinary,
+    obligations: ordinary.obligations.map(obligation => ({
+      ...obligation,
+      freshness: "live" as const,
+      allowedResolutionKinds: ["satisfied_live_fact" as const, "waived" as const, "not_applicable" as const],
+    })),
+  });
   const output: string[] = [], errors: string[] = [];
   const runtime: CliRuntime = { cwd: dir, env: {}, stdinIsTTY: false, stdoutIsTTY: false,
     stdout: text => output.push(text), stderr: text => errors.push(text),
@@ -57,7 +71,9 @@ async function fixture(options: { readonly version?: "1" | "2" } = {}) {
     if (!read.ok) throw new Error(`journal unreadable: ${JSON.stringify(read.rejections)}`);
     return read.events;
   };
-  return { dir, git, run, output, errors, journal, changePolicy: () => { config = defineHarnessConfig({ ...config, activationThreshold: 200 }); } };
+  return { dir, git, run, output, errors, journal,
+    changePolicy: () => { config = defineHarnessConfig({ ...config, activationThreshold: 200 }); },
+  };
 }
 
 describe("ordinary save and resume", () => {
@@ -118,6 +134,53 @@ describe("ordinary save and resume", () => {
     expect(await f.run("resume")).toBe(0);
     expect(f.output.join("\n")).toContain('"automaticReplay":false');
   });
+  /**
+   * WHY A READ-ONLY RESUME REPORTS `live_provider_missing`, characterized.
+   *
+   * `resume` re-runs the ordinary sensors with no prompt, no live-result
+   * injection, and no provider invocation — that is what makes it read-only.
+   * An obligation whose freshness is `live` is satisfied only by a result
+   * observed during THIS invocation, and `resume` observes none, so the gate
+   * it reconstructs necessarily finds none. The code therefore describes
+   * resume's own posture, not a defect in the delivery's evidence, and the two
+   * halves of this row are the same candidate, the same saved context and the
+   * same activation under the two freshness declarations: `exact_candidate`
+   * asks what the store holds and names the evidence gap, `live` asks what this
+   * invocation observed and names the provider it did not call.
+   *
+   * Characterized rather than changed. Making `resume` reach for a provider
+   * would make a read-only command perform work, and making it treat a missing
+   * live result as satisfied would turn an observation into an authorization.
+   * Both are refused; this row is the explanation instead.
+   */
+  it.each([
+    { freshness: undefined, expected: "review_evidence_missing", refuted: "live_provider_missing" },
+    { freshness: "live" as const, expected: "live_provider_missing", refuted: "review_evidence_missing" },
+  ])("names $expected on a read-only resume under $freshness freshness", async ({ freshness, expected, refuted }) => {
+    const f = await fixture(freshness === undefined ? {} : { freshness });
+    // A committed change, so the relevant-change obligation actually activates:
+    // an unactivated obligation asks for neither stored nor live evidence, and
+    // the two declarations would be indistinguishable.
+    await writeFile(path.join(f.dir, "source.ts"), "export const value = 2;\n");
+    await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "work");
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "validation" })), f.errors.join("\n")).toBe(0);
+
+    expect(await f.run("resume")).toBe(1);
+    expect(f.errors.join("\n")).toContain(expected);
+    expect(f.errors.join("\n")).not.toContain(refuted);
+    // Whichever code it is, it is a reconstructed gate finding and not resume's
+    // own staleness refusal: nothing about the candidate, the saved context,
+    // the policy digest's inputs or the release moved between save and resume.
+    expect(f.errors.join("\n")).not.toContain("resume_context_stale");
+    // And resume says so in its own terms: it observed, it did not admit.
+    expect(f.output.join("\n")).toContain('"observationOnly":true');
+    expect(f.output.join("\n")).toContain('"reuseAllowed":false');
+    // Drives the CLI end to end over a real git fixture four times, each one
+    // spawning git repeatedly; the shared default is spent long before the
+    // first assertion is reached.
+  }, 120000);
+
   it("blocks missing context and a corrupted saved journal", async () => {
     const f = await fixture(); expect(await f.run("resume")).toBe(1);
     expect(f.errors.join("\n")).toContain("resume_context_missing");

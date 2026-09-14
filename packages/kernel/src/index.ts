@@ -837,12 +837,17 @@ export {
 } from "./checkpoint/run-event.ts";
 export {
   RUN_JOURNAL_REQUIRED_ENTRIES,
+  RUN_JOURNAL_ROUND_BINDINGS,
   RUN_JOURNAL_STATUSES,
   RUN_JOURNAL_VIOLATIONS,
   evaluateRunJournal,
+  explainRunJournal,
   runJournalCarries,
+  type RunJournalDiagnostics,
   type RunJournalEvaluation,
+  type RunJournalExplanation,
   type RunJournalRequiredEntry,
+  type RunJournalRoundBinding,
   type RunJournalRow,
   type RunJournalStatus,
   type RunJournalViolation,

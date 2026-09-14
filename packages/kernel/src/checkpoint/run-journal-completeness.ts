@@ -20,6 +20,25 @@
  * `gate.reported` is evaluated only when every anchor it names is present.
  * When one is absent the constraint is skipped and the absent anchor is
  * reported MISSING — an unfinished run is incomplete, not ill-ordered.
+ *
+ * EVERY VIOLATION EXPLAINS ITSELF. `explainRunJournal` answers, for each
+ * violation this evaluator raised, the two questions a reader of a bare
+ * identifier cannot answer: why it was raised, and whether it bears on the
+ * current admission decision. The second answer is the constant `false`,
+ * because nothing authoritative reads a journal — see the file header — and
+ * the type says so rather than leaving a reader to infer it from prose. The
+ * first is composed only from this file's own identifiers and the journal's
+ * integer `seq` positions, NEVER from journal free text: a row anyone who can
+ * execute here may append to is printed under a line an operator reads as a
+ * verdict, so no attacker-chosen string may reach it.
+ *
+ * ONE ROOT CAUSE IS NOT TWO DEFECTS. `gate-before-closed-round` and
+ * `gate-reported-before-closed-round` are each raised from two structurally
+ * different conditions — a genuinely mis-ordered gate, and a governing round
+ * bound to a candidate this record does not accept. In the second case the
+ * explanation names `round-not-bound-to-record` as the warning it is a
+ * consequence of, so an operator reading three rows does not go looking for
+ * three separate mistakes.
  */
 
 import type { RunEvent, RunEventKind } from "./run-event.ts";
@@ -118,6 +137,54 @@ export interface RunJournalEvaluation {
 }
 
 /**
+ * How the governing closed round's candidate reached the record this row was
+ * resolved for. Only a caller that supplied a record tree sha has one.
+ *
+ * `reviewed-tree` is the case this whole vocabulary exists for: the round was
+ * closed against an EARLIER raw tree, and the record's own verified
+ * review-neutral projection is what accepted it. Saying so is not a claim that
+ * the two trees are equal — they are not, and the row prints both.
+ */
+export const RUN_JOURNAL_ROUND_BINDINGS = Object.freeze(["record-tree", "reviewed-tree", "unbound"] as const);
+
+export type RunJournalRoundBinding = (typeof RUN_JOURNAL_ROUND_BINDINGS)[number];
+
+/**
+ * One violation, with the two things its identifier alone does not say.
+ *
+ * `because` is composed in this file from this file's own identifiers and the
+ * journal's integer `seq` positions only; no journal-supplied string reaches
+ * it. `blocksAdmission` is the literal `false` rather than a boolean, because
+ * there is no journal and no violation for which it could be anything else:
+ * no gate, admission, or record decision reads this evaluator's output, and a
+ * field that could be `true` would invite a caller to look for the case where
+ * it is.
+ */
+export interface RunJournalExplanation {
+  readonly violation: RunJournalViolation;
+  readonly because: string;
+  readonly blocksAdmission: false;
+  /**
+   * The violation this one merely restates, where it has one. Set only where
+   * the SAME journal fact raised both, so an operator reading two rows looks
+   * for one mistake rather than two.
+   */
+  readonly consequenceOf?: RunJournalViolation;
+}
+
+/**
+ * The explanatory companion to {@link RunJournalEvaluation}, returned
+ * separately so the evaluation's own shape — which several callers compare by
+ * exact equality — stays as it was.
+ */
+export interface RunJournalDiagnostics {
+  /** One entry per violation the same inputs raise, in the same order. */
+  readonly explanations: readonly RunJournalExplanation[];
+  /** Absent unless a record tree sha bound the evaluation. */
+  readonly roundBinding?: RunJournalRoundBinding;
+}
+
+/**
  * One journal's completeness as a REPORTED ROW, rather than as the evaluator's
  * own return: the shape a reader — today only `verify` — attaches to something
  * it prints or returns.
@@ -144,6 +211,10 @@ export interface RunJournalRow {
   readonly recordTreeSha?: string;
   /** Raw trees the verified record says were actually reviewed. */
   readonly reviewedCandidateTreeShas?: readonly string[];
+  /** One per violation above, in the same order; absent when there are none. */
+  readonly explanations?: readonly RunJournalExplanation[];
+  /** How the governing round's candidate reached this record. */
+  readonly roundBinding?: RunJournalRoundBinding;
   readonly attestation: "self";
 }
 
@@ -286,9 +357,59 @@ export function evaluateRunJournal(
   mandatedLensIds?: readonly string[],
   reviewedTreeShas: readonly string[] = [],
 ): RunJournalEvaluation {
+  const { status, missing, violations, boundToRecord } = analyze(events, treeSha, mandatedLensIds, reviewedTreeShas);
+  return { status, missing, violations, boundToRecord };
+}
+
+/**
+ * The same journal, read for WHY rather than for WHETHER.
+ *
+ * Takes the same arguments as {@link evaluateRunJournal} and shares its single
+ * implementation, so the explanations cannot drift from the violations they
+ * explain: an entry exists here exactly when the identifier appears there, in
+ * that order. Call it with the arguments the evaluation was taken with — a
+ * readout that evaluates unbound to a record explains unbound too.
+ */
+export function explainRunJournal(
+  events: readonly RunEvent[],
+  treeSha?: string,
+  mandatedLensIds?: readonly string[],
+  reviewedTreeShas: readonly string[] = [],
+): RunJournalDiagnostics {
+  const { explanations, roundBinding } = analyze(events, treeSha, mandatedLensIds, reviewedTreeShas);
+  return { explanations, ...(roundBinding === undefined ? {} : { roundBinding }) };
+}
+
+/**
+ * The `seq` the store assigned, which is what `runs show` prints beside each
+ * entry, so an explanation naming one can be looked up directly. It is a
+ * validated positive integer in the event grammar — the only journal-derived
+ * value an explanation may carry, and the reason explanations cannot smuggle
+ * attacker-chosen text into a readout.
+ */
+const seqOf = (event: RunEvent): number => event.seq;
+
+/** The one pass both public readers above project out of. */
+function analyze(
+  events: readonly RunEvent[],
+  treeSha: string | undefined,
+  mandatedLensIds: readonly string[] | undefined,
+  reviewedTreeShas: readonly string[],
+): RunJournalEvaluation & RunJournalDiagnostics {
   const missing: RunJournalRequiredEntry[] = [];
   const violations: RunJournalViolation[] = [];
+  const explanations: RunJournalExplanation[] = [];
   const boundToRecord = treeSha !== undefined;
+  /**
+   * The one place a violation is recorded, so no arm can raise an identifier
+   * without also saying why. `because` is this file's own prose; the only
+   * journal-derived values it may interpolate are integer `seq` positions and
+   * counts.
+   */
+  const raise = (violation: RunJournalViolation, because: string, consequenceOf?: RunJournalViolation): void => {
+    violations.push(violation);
+    explanations.push({ violation, because, blocksAdmission: false, ...(consequenceOf === undefined ? {} : { consequenceOf }) });
+  };
 
   const runStarted = first(indexBy(events, "run.started"));
   // This is a linked attempt on an existing PR, not a claim that a prior gate
@@ -339,9 +460,29 @@ export function evaluateRunJournal(
     if (!runJournalCarries(events, entry)) missing.push(entry);
   }
 
+  /**
+   * WHY THE GOVERNING ROUND WAS OR WAS NOT ACCEPTED, said once.
+   *
+   * Three of the eleven constraints turn on the same fact, and stating it in
+   * one place is what lets the three explanations agree. `unbound` covers both
+   * shapes an operator has to tell apart: no governing paired round at all,
+   * and a governing round closed against a candidate this record does not
+   * accept.
+   */
+  const roundBinding: RunJournalRoundBinding | undefined = treeSha === undefined ? undefined
+    : requiredRound === undefined ? "unbound"
+    : String(payloadOf(requiredRound.closed)["candidateTreeSha"]) === treeSha ? "record-tree" : "reviewed-tree";
+  /** The tree-binding refusal, phrased once for every constraint that inherits it. */
+  const unacceptedRound = currentRound === undefined
+    ? "the journal carries no round whose latest opening is closed by its own latest close, so no closed round governs"
+    : `the governing round closed at seq ${seqOf(currentRound.closed)} binds a candidate tree that is not the record's and is not among the ${reviewedTreeShas.length} the record's verified review-neutral projection accepts`;
+
   // ── Ordering constraints ─────────────────────────────────────────────────
   if (runStarted !== undefined && (runStarted.at !== 0 || indexBy(events, "run.started").length > 1)) {
-    violations.push(VIOLATION.runStartedNotFirst);
+    raise(
+      VIOLATION.runStartedNotFirst,
+      `run.started is at journal position ${runStarted.at + 1} of ${events.length} and the journal carries ${indexBy(events, "run.started").length} of them; a whole run starts exactly once, at the first entry`,
+    );
   }
 
   // THE FIRST OF EACH PREREQUISITE KIND, NOT EVERY ENTRY OF IT. `ticketRead`,
@@ -355,32 +496,82 @@ export function evaluateRunJournal(
   // hand before review opened, which the first of each kind establishes.
   const firstRound = first(roundsOpened);
   if (firstRound !== undefined) {
-    const late = [ticketRead, postureDeclared, lensSelected].some((entry) => entry !== undefined && entry.at > firstRound.at);
-    if (late) violations.push(VIOLATION.prerequisitesAfterFirstRound);
+    const prerequisites = [
+      { name: REQUIRED.ticketRead, entry: ticketRead },
+      { name: REQUIRED.postureDeclared, entry: postureDeclared },
+      { name: REQUIRED.lensSelected, entry: lensSelected },
+    ];
+    const late = prerequisites.flatMap((item) => item.entry !== undefined && item.entry.at > firstRound.at ? [{ name: item.name, entry: item.entry }] : []);
+    if (late.length > 0) {
+      raise(
+        VIOLATION.prerequisitesAfterFirstRound,
+        `${late.map((item) => `${item.name} (seq ${seqOf(item.entry.event)})`).join(" and ")} ${late.length === 1 ? "was" : "were"} recorded after the first review.round.opened at seq ${seqOf(firstRound.event)}; this is the order the executor journaled its own prerequisites in, and it is retained as history rather than corrected`,
+      );
+    }
   }
 
-  if (inverted) violations.push(VIOLATION.roundClosedBeforeOpened);
+  if (inverted) {
+    raise(
+      VIOLATION.roundClosedBeforeOpened,
+      "at least one round key carries its review.round.closed ahead of its review.round.opened, so that round cannot be read as a review that ran",
+    );
+  }
 
   if (gateCompletion !== undefined) {
     const closedFirst = requiredRound !== undefined && requiredRound.closedAt < gateCompletion.at;
-    if (!closedFirst) violations.push(VIOLATION.gateBeforeClosedRound);
-    if (recordCompletion !== undefined && recordCompletion.at < gateCompletion.at) violations.push(VIOLATION.recordBeforeGate);
+    if (!closedFirst) {
+      raise(
+        VIOLATION.gateBeforeClosedRound,
+        requiredRound === undefined
+          ? `the governing gate completion at seq ${seqOf(gateCompletion.event)} has no closed round this row accepts: ${unacceptedRound}`
+          : `the governing gate completion at seq ${seqOf(gateCompletion.event)} precedes the governing closed round at seq ${seqOf(requiredRound.closed)}, so that gate did not stand on a completed review`,
+        // Two rows, one fact: only the tree-binding arm inherits, and only
+        // where a record supplied the trees that could have accepted the round.
+        requiredRound === undefined && treeSha !== undefined ? VIOLATION.roundNotBoundToRecord : undefined,
+      );
+    }
+    if (recordCompletion !== undefined && recordCompletion.at < gateCompletion.at) {
+      raise(
+        VIOLATION.recordBeforeGate,
+        `the governing record completion at seq ${seqOf(recordCompletion.event)} precedes the governing gate completion at seq ${seqOf(gateCompletion.event)}, so the record was written before the gate it reports`,
+      );
+    }
   }
 
   if (!linkedRetry && openingGateCompletion !== undefined && prOpened !== undefined && prOpened.at < openingGateCompletion.at) {
-    violations.push(VIOLATION.prBeforeGate);
+    raise(
+      VIOLATION.prBeforeGate,
+      `pr.opened at seq ${seqOf(prOpened.event)} precedes the opening gate completion at seq ${seqOf(openingGateCompletion.event)}, so the delivery proposed a change before it had gated at all`,
+    );
   }
 
-  if (runEnded !== undefined && runEnded.at !== events.length - 1) violations.push(VIOLATION.runEndedNotLast);
+  if (runEnded !== undefined && runEnded.at !== events.length - 1) {
+    const after = events.length - runEnded.at - 1;
+    raise(
+      VIOLATION.runEndedNotLast,
+      `run.ended is at journal position ${runEnded.at + 1} of ${events.length}, with ${after} later ${after === 1 ? "entry" : "entries"}; run.ended is terminal`,
+    );
+  }
 
   // `gate.reported` is ordered only where it stands in for the gate
   // completion: in a journal that has any CLI completion it carries no
   // ordering constraint and the CLI completion's constraints govern.
   if (executorOnly && gateReported !== undefined) {
     const closedFirst = requiredRound !== undefined && requiredRound.closedAt < gateReported.at;
-    if (!closedFirst) violations.push(VIOLATION.gateReportedBeforeClosedRound);
+    if (!closedFirst) {
+      raise(
+        VIOLATION.gateReportedBeforeClosedRound,
+        requiredRound === undefined
+          ? `the governing gate.reported at seq ${seqOf(gateReported.event)} has no closed round this row accepts: ${unacceptedRound}`
+          : `the governing gate.reported at seq ${seqOf(gateReported.event)} precedes the governing closed round at seq ${seqOf(requiredRound.closed)}, so that reported gate did not stand on a completed review`,
+        requiredRound === undefined && treeSha !== undefined ? VIOLATION.roundNotBoundToRecord : undefined,
+      );
+    }
     if (!linkedRetry && openingGateReported !== undefined && prOpened !== undefined && prOpened.at < openingGateReported.at) {
-      violations.push(VIOLATION.prBeforeGateReported);
+      raise(
+        VIOLATION.prBeforeGateReported,
+        `pr.opened at seq ${seqOf(prOpened.event)} precedes the opening gate.reported at seq ${seqOf(openingGateReported.event)}, so the delivery proposed a change before it had reported a gate at all`,
+      );
     }
   }
 
@@ -391,10 +582,22 @@ export function evaluateRunJournal(
     const agreed =
       mandatedLensIds === undefined ||
       (ids !== undefined && [...ids].map(String).sort().join(" ") === [...mandatedLensIds].sort().join(" "));
-    if (!wellFormed || !agreed) violations.push(VIOLATION.mandatedPairMismatch);
+    if (!wellFormed || !agreed) {
+      raise(
+        VIOLATION.mandatedPairMismatch,
+        !wellFormed
+          ? `lens.selected at seq ${seqOf(lensSelected.event)} does not declare a mandated pair of exactly two non-empty ids`
+          : `lens.selected at seq ${seqOf(lensSelected.event)} declares a mandated set differing from the ${mandatedLensIds?.length ?? 0} id(s) the caller supplied with --mandated-lens`,
+      );
+    }
   }
 
-  if (treeSha !== undefined && requiredRound === undefined) violations.push(VIOLATION.roundNotBoundToRecord);
+  if (treeSha !== undefined && requiredRound === undefined) {
+    raise(
+      VIOLATION.roundNotBoundToRecord,
+      `${unacceptedRound}; the record's own candidate tree and the ${reviewedTreeShas.length} reviewed tree(s) its verified review-neutral projection accepts are the only candidates a round may bind here`,
+    );
+  }
 
   // ── Status ───────────────────────────────────────────────────────────────
   //
@@ -413,5 +616,5 @@ export function evaluateRunJournal(
   const status: RunJournalStatus =
     violations.length > 0 || outstanding.size > 0 ? "incomplete" : executorOnly ? "complete-executor-only" : "complete";
 
-  return { status, missing, violations, boundToRecord };
+  return { status, missing, violations, boundToRecord, explanations, ...(roundBinding === undefined ? {} : { roundBinding }) };
 }
