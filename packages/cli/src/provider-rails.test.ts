@@ -392,6 +392,7 @@ describe("provider invocation lifecycle", () => {
     // explicit and generous rather than tuned, because nothing about its value
     // is asserted: the row asserts what the expiry DID.
     const session = await openReadyProviderProcess({ script, marker, cwd: dir });
+    const started = Date.now();
     const result = await invokeProviderRail(
       { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
       {
@@ -402,6 +403,20 @@ describe("provider invocation lifecycle", () => {
     );
     expect(result).toMatchObject({ kind: "blocked", status: "indeterminate" });
     expect(await readFile(marker, "utf8")).toContain("cancel");
+    // THAT THIS EXPIRY IS THE CALLER'S DEADLINE, for the same reason and on the
+    // same terms as the stalled-negotiation row above: a rail that stopped
+    // reading `deadlineMs` from the caller — a lifecycle timer clamped to a
+    // floor, or a multiple of the configured value — still expires eventually
+    // and still records the cancel, so every assertion above survives it.
+    //
+    // This row catches strictly more than the stalled-negotiation row can,
+    // because its bound is ten times larger. Three times 5 000 ms leaves
+    // ten seconds of slack over the ~5.1 s this window actually costs — the
+    // child is already up before the clock starts, so only the negotiation
+    // round trip and the rail's own expiry are inside it — while still
+    // refusing a timer multiplied by four, which at a 500 ms bound would need
+    // a ceiling back down at the tuned figure this delivery removed.
+    expect(Date.now() - started).toBeLessThan(3 * WARM_EXPIRY_DEADLINE_MS);
     await rm(dir, { recursive: true, force: true });
   }, PROCESS_ROW_TIMEOUT_MS);
 
