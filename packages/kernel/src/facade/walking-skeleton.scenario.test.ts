@@ -68,6 +68,20 @@ const FIXTURES = path.join(REPO_ROOT, "qualifications", "fixtures");
 const instantAfter = (instant: string, seconds: number): string =>
   `${new Date(Date.parse(instant) + seconds * 1000).toISOString().slice(0, 19)}Z`;
 
+/**
+ * The lifetime the second bind below DECLARES for its own fence.
+ *
+ * ABOVE the default rather than below it, deliberately. The declaration is
+ * written into the invocation spine and governs the whole fence, so a value
+ * shorter than the default expires this delivery's binding partway through the
+ * remaining checkpoints and the scenario stops testing what it is here to test.
+ * A longer one separates the two readings just as sharply — at
+ * `DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1` a facade that honours the
+ * declaration still says `active` while one that discarded it says `unknown` —
+ * and leaves every later step running against a live fence.
+ */
+const DECLARED_LIFETIME_SECONDS = DEFAULT_OBSERVATION_LIFETIME_SECONDS * 2;
+
 const NOW = "2026-08-30T12:00:00Z";
 const LATER = "2026-08-30T12:00:30Z";
 const EXPIRY = "2026-08-31T12:00:00Z";
@@ -340,11 +354,49 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-2",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      // This bind DECLARES its own lifetime rather than taking the default.
+      // That declaration is what a repository with a heavier single operation
+      // than the measured one uses, and it is the only thing distinguishing
+      // `bindWorkspace` honouring its argument from `bindWorkspace` discarding
+      // it: with the argument dropped, every row that reads the default still
+      // passes. Deliberately far below the default so the two are separable.
+      observationLifetimeSeconds: DECLARED_LIFETIME_SECONDS,
       providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
     });
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
     if (!rebound.ok) return;
     expect(rebound.fence).toBe(2); // monotonic supersession
+
+    // ── The declared lifetime, through the real facade ──
+    // The instant that separates the two facades: one second past the DEFAULT,
+    // which a `bindWorkspace` that discarded the caller's declaration would
+    // already call `unknown`, and which one that honours it still calls
+    // `active`. Without this read the whole `?? DEFAULT` expression can be
+    // replaced by the bare default with every other row still green.
+    expect(DECLARED_LIFETIME_SECONDS).toBeGreaterThan(DEFAULT_OBSERVATION_LIFETIME_SECONDS);
+    const pastDefaultLifetime = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(LATER, DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1),
+    });
+    expect(pastDefaultLifetime.ok, JSON.stringify(pastDefaultLifetime)).toBe(true);
+    if (!pastDefaultLifetime.ok) return;
+    expect(pastDefaultLifetime.status.hostActivity).toBe("active");
+    // And the declaration is a lifetime rather than a disabling: this fence
+    // still ages, at its own boundary.
+    const atDeclaredBoundary = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(LATER, DECLARED_LIFETIME_SECONDS),
+    });
+    expect(atDeclaredBoundary.ok, JSON.stringify(atDeclaredBoundary)).toBe(true);
+    if (!atDeclaredBoundary.ok) return;
+    expect(atDeclaredBoundary.status.hostActivity).toBe("active");
+    const pastDeclaredLifetime = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(LATER, DECLARED_LIFETIME_SECONDS + 1),
+    });
+    expect(pastDeclaredLifetime.ok, JSON.stringify(pastDeclaredLifetime)).toBe(true);
+    if (!pastDeclaredLifetime.ok) return;
+    expect(pastDeclaredLifetime.status.hostActivity).toBe("unknown");
 
     // NO replay of accepted work: the plan checkpoint stands, and the next
     // checkpoint is implementation — not a second plan.

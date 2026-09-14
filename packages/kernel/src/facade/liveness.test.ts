@@ -18,6 +18,7 @@
  *   `ages a vanished host to unknown once the heartbeat outlives the lifetime`,
  *   because nothing else in the rule turns a stale heartbeat into `unknown`.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_OBSERVATION_LIFETIME_SECONDS, gradeHostActivity, type HostActivity } from "./liveness.ts";
 import { MEASURED_HEAVIEST_INVOCATION_SECONDS, OBSERVED_HEAVIEST_VALIDATION_SECONDS } from "./liveness.fixture.ts";
@@ -46,10 +47,39 @@ describe("the measured observation lifetime", () => {
     // described. The larger figure is what the default is derived from, because
     // a lifetime clearing the upper bound clears everything inside it — and it
     // is the measured floor that establishes the bound is not idle.
-    expect(MEASURED_HEAVIEST_INVOCATION_SECONDS).toBeGreaterThan(0);
+    // ANCHORED TO LITERALS, NOT TO EACH OTHER. Written only in terms of the
+    // symbols under test, every row below translates under a mutation of them:
+    // move the fixture to 1000 and the constant to 2000 together and an
+    // ordering assertion still passes, while the shipped lifetime has become
+    // 1.16x the observed ceiling instead of the doubling the derivation
+    // mandates. So the two recorded observations are pinned to the figures
+    // actually taken, and the constant is pinned to the derivation applied to
+    // them rather than to a bound it happens to clear.
+    expect(MEASURED_HEAVIEST_INVOCATION_SECONDS).toBe(807);
+    expect(OBSERVED_HEAVIEST_VALIDATION_SECONDS).toBe(1731);
     expect(OBSERVED_HEAVIEST_VALIDATION_SECONDS).toBeGreaterThan(MEASURED_HEAVIEST_INVOCATION_SECONDS);
     expect(DEFAULT_OBSERVATION_LIFETIME_SECONDS).not.toBe(900);
-    expect(DEFAULT_OBSERVATION_LIFETIME_SECONDS).toBeGreaterThanOrEqual(2 * OBSERVED_HEAVIEST_VALIDATION_SECONDS);
+    // The derivation itself, as an equality: the smallest whole hour at or
+    // above twice the observed ceiling. This is the one row that fails both
+    // when the constant is lowered below the doubling and when it is raised
+    // past the rounding — 36000 is as wrong as 2000.
+    expect(DEFAULT_OBSERVATION_LIFETIME_SECONDS).toBe(
+      Math.ceil((2 * OBSERVED_HEAVIEST_VALIDATION_SECONDS) / 3600) * 3600,
+    );
+  });
+
+  it("keeps the recorded derivation in the guide identical to the shipped figures", () => {
+    // The module says the constant "moves only with" the derivation recorded in
+    // `docs/managed-delivery.md`, and nothing enforced that: the guide's
+    // `**3600s**` could be edited to `**900s**` with the whole suite green, or
+    // the constant moved with the guide left stating the replaced number. The
+    // guide is prose, so this reads its bytes for the three figures the
+    // derivation is written from — the one place product and guide can drift.
+    const guide = readFileSync(new URL("../../../../docs/managed-delivery.md", import.meta.url), "utf8");
+    expect(guide).toContain(`**${MEASURED_HEAVIEST_INVOCATION_SECONDS}s**`);
+    expect(guide).toContain(`**${OBSERVED_HEAVIEST_VALIDATION_SECONDS}s**`);
+    expect(guide).toContain(`**${DEFAULT_OBSERVATION_LIFETIME_SECONDS}s**`);
+    expect(guide).toContain(`2 x ${OBSERVED_HEAVIEST_VALIDATION_SECONDS}s = ${2 * OBSERVED_HEAVIEST_VALIDATION_SECONDS}s`);
   });
 
   it("holds active across the heaviest observed validation invocation", () => {
@@ -108,12 +138,31 @@ describe("the graded host-liveness rule", () => {
     expect(grade({ observationLifetimeSeconds: 100_000, observedAt: after(99_999) })).toBe("active");
   });
 
-  it("never ages active into anything but unknown", () => {
-    // Timeout never proves termination. Every expiry above and below reaches
-    // exactly one grade, and it is not `paused` and not a terminal claim.
-    const expired = grade({ observedAt: after(DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1) });
-    expect(expired).toBe("unknown");
-    expect(expired).not.toBe("paused");
+  it("ages exactly one term, and ages it only into unknown", () => {
+    // Timeout never proves termination, and the vocabulary is closed, so the
+    // claim is about the WHOLE term list rather than about one case: past the
+    // lifetime, `active` becomes `unknown` and every other term is returned
+    // unchanged. Written as the closed set rather than as a single sample,
+    // because a row asserting only that an expired `active` is not `paused`
+    // proves nothing its neighbour does not — it never fails alone.
+    const terms: readonly HostActivity[] = ["active", "paused", "unknown", "cancellation_pending"];
+    const expired = after(DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1);
+    for (const term of terms) {
+      expect(
+        grade({ lastObservedActivity: { activity: term, fence: FENCE }, observedAt: expired }),
+        `expired ${term}`,
+      ).toBe(term === "active" ? "unknown" : term);
+    }
+    // The list itself is closed: a term added to `HostActivity` without a
+    // decision about aging fails to compile here rather than silently
+    // inheriting the `active` branch.
+    const exhaustive: Record<HostActivity, true> = {
+      active: true,
+      paused: true,
+      unknown: true,
+      cancellation_pending: true,
+    };
+    expect(Object.keys(exhaustive).sort()).toEqual([...terms].sort());
   });
 
   it("reports unknown when the journal names no activity for this fence", () => {
