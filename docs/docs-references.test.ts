@@ -636,8 +636,14 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
    * Every term this page uses for an operator step-in. The page uses both
    * `intervention` and `step-in` for the same thing, so a scan keyed on the
    * first cannot see a claim written with the second.
+   *
+   * The trailing `\w*` is load-bearing rather than lazy. Inline code is
+   * unwrapped before this runs, so an identifier reaches the scan as a word:
+   * `interventions?\b` cannot match inside `interventionCounts`, and a claim
+   * written as "the gate compares `interventionCounts` against the baseline's"
+   * escaped the pin entirely until the boundary was opened.
    */
-  const STEP_IN = /\b(interventions?|step-ins?|operator (actions?|involvement|input)|hand-offs?|manual input)\b/i;
+  const STEP_IN = /\b(intervention\w*|step-?in\w*|operator (actions?|involvement|input)|hand-offs?|manual input)\b/i;
 
   /**
    * This page's clauses that have an operator step-in as their subject.
