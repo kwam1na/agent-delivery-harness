@@ -420,17 +420,25 @@ describe("verifying what the host reported it applied", () => {
     if (!swapped.verified) {
       expect(swapped.mismatches.map((mismatch) => mismatch.code)).toContain("writable_roots_mismatch");
     }
-    // A SEPARATOR THAT CANNOT OCCUR IN A PATH. Joined on a space, the sets
-    // ["/a b", "/c"] and ["/a", "/b c"] canonicalize to the same string and
-    // have the same length, so a host reporting different roots — any path
-    // with a space in it, which on macOS includes ordinary home directories —
-    // would compare equal and the gate would pass.
-    expect(
-      verifyAppliedCodexThreadConfiguration(composed, { ...faithful, writableRoots: ["/a b", "/c"] }).verified,
-    ).toBe(false);
-    expect(
-      verifyAppliedCodexThreadConfiguration(composed, { ...faithful, writableRoots: ["/a", "/b c"] }).verified,
-    ).toBe(false);
+    // A SEPARATOR THAT CANNOT OCCUR IN A PATH. The collision only exists
+    // BETWEEN the two sets being compared, so it has to be planted on BOTH
+    // sides: expecting ["/a /b", "/c"] while the host reports ["/a", "/b /c"]
+    // is the same cardinality and the same space-join, and differs only under
+    // a separator no path can contain. Comparing a made-up applied set against
+    // the real composed one proves nothing here — those differ under every
+    // separator, and on cardinality first.
+    const collidingExpected = {
+      ...composed,
+      profile: { ...composed.profile, denyReadRoots: ["/a /b", "/c"] },
+    };
+    const collided = verifyAppliedCodexThreadConfiguration(collidingExpected, {
+      ...faithful,
+      deniedReadRoots: ["/a", "/b /c"],
+    });
+    expect(collided.verified).toBe(false);
+    if (!collided.verified) {
+      expect(collided.mismatches.map((mismatch) => mismatch.code)).toContain("deny_read_roots_mismatch");
+    }
     // ORDER IS NOT A DIVERGENCE. A host that applies the same roots in another
     // order applied the same configuration, and failing it here would teach a
     // later delivery to sort the host's answer into agreement.

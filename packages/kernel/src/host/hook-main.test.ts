@@ -125,6 +125,13 @@ describe("the Codex subcommand of this same entry", () => {
       expect(document.hookSpecificOutput.permissionDecision).toBe("deny");
       expect(document.hookSpecificOutput.permissionDecisionReason.length).toBeGreaterThan(0);
 
+      // A DENIAL IS NOT ACTIVITY. The observation is written only for an
+      // invocation that was allowed; a branch that wrote it unconditionally
+      // would keep a workspace whose every tool call is being refused reading
+      // `active` forever, and the ageing to `unknown` that hands the operator
+      // the takeover would never fire.
+      expect(existsSync(observationOf(dir))).toBe(false);
+
       // An in-grant write renders NOTHING — the host's own "no opinion".
       mkdirSync(path.join(dir, "src"), { recursive: true });
       const allowed = runEntry(
@@ -152,6 +159,24 @@ describe("the Codex subcommand of this same entry", () => {
       );
       expect(expired.status, expired.stderr).toBe(0);
       expect(JSON.parse(expired.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+
+      // THE SUPERSEDED-SESSION LOCK, THROUGH THE PROCESS. The fence is an
+      // ARGUMENT baked into the composed hook command, not a field of the
+      // state file. A branch that read the state's own fence instead would
+      // agree with itself forever, and a session the facade had already
+      // superseded would keep its write path for as long as it could read its
+      // own state. (`writeState` rewrites the same path, so the unexpired
+      // state has to be restored after the expiry case above clobbered it.)
+      const currentPath = writeState(dir, "2099-01-01T00:00:00Z");
+      const superseded = runEntry(
+        ["codex-pre-tool-use", currentPath, String(SESSION_FENCE + 1)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, "src", "a.ts") } }),
+      );
+      expect(superseded.status, superseded.stderr).toBe(0);
+      expect(JSON.parse(superseded.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(JSON.parse(superseded.stdout).hookSpecificOutput.permissionDecisionReason).toContain(
+        "superseded_session",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

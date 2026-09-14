@@ -825,10 +825,23 @@ describe("the thin one-handoff walking skeleton", () => {
     // calling `composeClaudeCodeSession` directly — or that read the seam's
     // result and then recomposed — would satisfy all of them, and the second
     // host would be unreachable in the only place a host is admitted.
+    // All THREE members are recorded, not just the one that is marked. A stub
+    // that delegates a member verbatim is transparent on it: the facade could
+    // go on calling the Claude definition directly at that site and nothing
+    // here would notice. That is exactly the shape this case exists to refuse,
+    // and the digest and the grading key are the two sites where reaching the
+    // wrong binding is silent — a mismatched recheck digest voids an admitted
+    // session, and a mis-keyed grade reads a second host's teardown off the
+    // first host's row.
     const calls: { readonly fence: number; readonly workspaceRoot: string; readonly grant: HostSessionGrant }[] = [];
+    const digestCalls: string[] = [];
+    let hostIdReads = 0;
     const MARKER = "--composed-through-the-seam";
     const recording: ManagedHostBinding = {
-      hostId: claudeCodeBinding.hostId,
+      get hostId() {
+        hostIdReads += 1;
+        return claudeCodeBinding.hostId;
+      },
       async composeSession(composeInput) {
         calls.push({
           fence: composeInput.fence,
@@ -841,8 +854,10 @@ describe("the thin one-handoff walking skeleton", () => {
         // caller read THIS binding's answer.
         return { ...composed, hostAdmissionArguments: [...composed.hostAdmissionArguments, MARKER] };
       },
-      recomputeDiscoveryConfigurationDigest: (digestInput) =>
-        claudeCodeBinding.recomputeDiscoveryConfigurationDigest(digestInput),
+      recomputeDiscoveryConfigurationDigest: (digestInput) => {
+        digestCalls.push(digestInput.admissionConfigurationPath);
+        return claudeCodeBinding.recomputeDiscoveryConfigurationDigest(digestInput);
+      },
       admissionConfigurationPath: (bindingDir, fence) => claudeCodeBinding.admissionConfigurationPath(bindingDir, fence),
     };
 
@@ -891,6 +906,37 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(bound.settingsPath).toBe(
       recording.admissionConfigurationPath(path.dirname(bound.statePath), bound.fence),
     );
+
+    // THE RECHECK GOES THROUGH THIS BINDING TOO. The discovery-configuration
+    // digest is recomputed on every status recheck against the value the
+    // admission recorded; a facade that recomputed it with the Claude
+    // definition while a second host had written the file would report a
+    // mismatch on every recheck and void a correctly admitted session.
+    const planned = await seamFacade.submitStageResult({
+      deliveryId: confirmed.deliveryId,
+      stageId: "plan",
+      resultBytes: typedStageResultBytes({
+        stageId: "plan",
+        deliveryId: confirmed.deliveryId,
+        outputKind: "bounded-plan",
+        candidate: treeOf(worktreeE),
+      }),
+      fence: bound.fence,
+    });
+    expect(planned.ok, JSON.stringify(planned)).toBe(true);
+    expect(digestCalls).toContain(bound.settingsPath);
+
+    // AND THE GRADING KEY. Descendant teardown is graded per host; a facade
+    // still holding `"claude-code"` would grade a Codex session's teardown off
+    // the Claude row of the capability record and hand back a resume
+    // eligibility nothing observed.
+    const readsBefore = hostIdReads;
+    const provenance = await seamFacade.recordTerminationProvenance({
+      deliveryId: confirmed.deliveryId,
+      fence: bound.fence,
+    });
+    expect(provenance.ok, JSON.stringify(provenance)).toBe(true);
+    expect(hostIdReads).toBeGreaterThan(readsBefore);
   });
 });
 

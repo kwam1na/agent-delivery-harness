@@ -464,9 +464,10 @@ async function main(argv: readonly string[]): Promise<number> {
     // state file as the Claude branch: the admission decision is shared, the
     // allowed-invocation observation is written the same way, and only the
     // host-specific surface refusal and the rendered decision document
-    // differ. Without this branch `codexHookTurn` is reachable from
-    // no process, and the "second half" the binding's own comments call
-    // required would never run.
+    // differ. Without this branch the Codex decision is reachable from no
+    // process at all — the composed hook command would name a subcommand this
+    // binary rejects with a usage error — and the "second half" the binding's
+    // own comments call required would never run.
     let raw = "";
     try {
       raw = readFileSync(0, "utf8");

@@ -43,7 +43,8 @@ const escapeForRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\
  * case off would then leave the criterion reading `held` with a sensor that no
  * longer runs, which is exactly the failure this file's header names.
  */
-const SILENCED = /\b(?:it|test|describe|suite)\.(?:only|skip|todo|fails|skipIf|concurrent\.skip)\s*\(/;
+const SILENCED =
+  /\b(?:it|test|describe|suite)(?:\.(?:concurrent|sequential|each|for|extend))*\.(?:only|skip|todo|fails|skipIf|runIf)(?:\.(?:each|for))?\s*\(/;
 
 /**
  * Nothing in a cited evidence file may be switched off or made exclusive.
@@ -167,6 +168,46 @@ describe("the Codex app-server integration record", () => {
     const ordering = record.attestationOrdering;
     expect(existsSync(path.join(REPO_ROOT, ordering.sensor))).toBe(true);
     expectLiveCase(path.join(REPO_ROOT, ordering.sensor), ordering.caseName);
+  });
+
+  it("recognises every way a cited case stops running, and leaves ordinary declarations alone", () => {
+    // The rule above is an ABSENCE assertion over evidence files that are all
+    // clean today, so every one of those assertions passes for free and a
+    // weakening of this pattern — to one that matches nothing at all, or to
+    // one that misses a spelling — leaves the whole sensor green while every
+    // citation goes unchecked. That has already happened twice to this rule.
+    // Both directions are pinned: the spellings it must catch, and the
+    // ordinary declarations it must not, because a rule that refuses every
+    // evidence file says nothing about any of them either.
+    for (const silenced of [
+      `describe.skip("x", () => {});`,
+      `it.only("x", () => {});`,
+      `test.todo("x");`,
+      `it.fails("x", () => {});`,
+      `describe.skipIf(cond)("x", () => {});`,
+      `it.runIf(false)("x", () => {});`,
+      `suite.only("x", () => {});`,
+      // The table forms: `it.each` and `describe.each` are ordinary, and
+      // `it.each` alone appears over a hundred times in this tree, but the
+      // same table reads as silenced on either side of `each`.
+      `it.skip.each([1])("x", () => {});`,
+      `it.only.each([1])("x", () => {});`,
+      `describe.skip.each([1])("x", () => {});`,
+      `it.concurrent.only("x", () => {});`,
+      `it.concurrent.skip("x", () => {});`,
+    ]) {
+      expect(SILENCED.test(silenced), silenced).toBe(true);
+    }
+    for (const live of [
+      `it("x", () => {});`,
+      `describe("only the brave", () => {});`,
+      `it.each([1, 2])("x %i", () => {});`,
+      `describe.each(rows)("x", () => {});`,
+      `it.concurrent("x", () => {});`,
+      `expect(thing.skip).toBe(1);`,
+    ]) {
+      expect(SILENCED.test(live), live).toBe(false);
+    }
   });
 
   it("carries a non-empty claim in every field that states one", () => {
