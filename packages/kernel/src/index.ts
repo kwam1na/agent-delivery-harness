@@ -985,6 +985,18 @@ export {
   type ResolvedPersonaSource,
   compiledAdopterPolicyBindingDigest,
 } from "./facade/managed-delivery.ts";
+// The graded host-liveness rule and the measured observation lifetime it ages
+// against. Exported because every reader of liveness — the per-delivery status
+// model and the installation-scoped listing alike — must derive the same grade.
+export {
+  DEFAULT_OBSERVATION_LIFETIME_SECONDS,
+  gradeHostActivity,
+  resolveObservationLifetimeSeconds,
+  type GradeHostActivityInput,
+  type HostActivity,
+  type HostObservationStamp,
+  type ObservedActivityEntry,
+} from "./facade/liveness.ts";
 export {
   evaluateMigrationConsumption,
   type MigrationConsumptionContext,

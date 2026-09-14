@@ -44,6 +44,8 @@ import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
 import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
+import { DEFAULT_OBSERVATION_LIFETIME_SECONDS } from "./liveness.ts";
+import { OBSERVED_HEAVIEST_VALIDATION_SECONDS } from "./liveness.fixture.ts";
 import {
   DISPOSABLE_CONTRACT,
   GREET_RIGHT,
@@ -61,6 +63,35 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..", "..");
 const FIXTURES = path.join(REPO_ROOT, "qualifications", "fixtures");
+
+/** An instant `seconds` after `instant`, in the spine's fixed-width UTC shape. */
+const instantAfter = (instant: string, seconds: number): string =>
+  `${new Date(Date.parse(instant) + seconds * 1000).toISOString().slice(0, 19)}Z`;
+
+/**
+ * The lifetime the second bind below DECLARES for its own fence.
+ *
+ * ABOVE the default rather than below it, deliberately. The declaration is
+ * written into the invocation spine and governs the whole fence, so a value
+ * shorter than the default expires this delivery's binding partway through the
+ * remaining checkpoints and the scenario stops testing what it is here to test.
+ * A longer one separates the two readings just as sharply — at
+ * `DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1` a facade that honours the
+ * declaration still says `active` while one that discarded it says `unknown` —
+ * and leaves every later step running against a live fence.
+ */
+const DECLARED_LIFETIME_SECONDS = DEFAULT_OBSERVATION_LIFETIME_SECONDS * 2;
+
+/**
+ * The lifetime the TERMINAL rebind declares: below the default, deliberately.
+ *
+ * The pair matters more than either value. A resolution that floors the
+ * declaration at the default is invisible to every upward declaration, so
+ * `DECLARED_LIFETIME_SECONDS` above cannot see it; this one can, and it is
+ * safe to declare here because the fence it opens is the last one and nothing
+ * after it reads a liveness grade.
+ */
+const SHORT_DECLARED_LIFETIME_SECONDS = 30;
 
 const NOW = "2026-08-30T12:00:00Z";
 const LATER = "2026-08-30T12:00:30Z";
@@ -255,6 +286,31 @@ describe("the thin one-handoff walking skeleton", () => {
     // ── Plan checkpoint ──
     const statusPlanning = await facade.status({ deliveryId, observedAt: LATER });
     expect(statusPlanning.ok && statusPlanning.status.delivery.state === "planning" && statusPlanning.status.hostActivity === "active").toBe(true);
+
+    // ── The heaviest recorded single tool invocation, through the real facade ──
+    // The binding stamps its heartbeat BEFORE the tool runs, so a delivery that
+    // starts that invocation emits nothing for its whole duration. Read at its
+    // last second, against the workspace this bind actually wrote, the status
+    // model must still say `active` — the composed fixture cannot show this,
+    // because the value under test is the lifetime `bindWorkspace` wrote.
+    const duringLongCall = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(NOW, OBSERVED_HEAVIEST_VALIDATION_SECONDS),
+    });
+    expect(duringLongCall.ok, JSON.stringify(duringLongCall)).toBe(true);
+    if (!duringLongCall.ok) return;
+    expect(duringLongCall.status.hostActivity).toBe("active");
+    // And the other direction, which a raised lifetime must not buy off: a host
+    // that has genuinely gone away still ages to `unknown` rather than staying
+    // `active` forever. Same delivery, same heartbeat, one second past the
+    // default lifetime.
+    const vanished = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(NOW, DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1),
+    });
+    expect(vanished.ok, JSON.stringify(vanished)).toBe(true);
+    if (!vanished.ok) return;
+    expect(vanished.status.hostActivity).toBe("unknown");
     const planned = await facade.submitStageResult({
       deliveryId,
       stageId: "plan",
@@ -309,11 +365,68 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-2",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      // This bind DECLARES its own lifetime rather than taking the default.
+      // That declaration is what a repository with a heavier single operation
+      // than the measured one uses, and it is the only thing distinguishing
+      // `bindWorkspace` honouring its argument from `bindWorkspace` discarding
+      // it: with the argument dropped, every row that reads the default still
+      // passes. Deliberately ABOVE the default so the two are separable while
+      // the fence stays live for every later checkpoint — see the block comment
+      // on `DECLARED_LIFETIME_SECONDS`. The other direction, below the default,
+      // is pinned twice: on the resolution rule itself in `liveness.test.ts`,
+      // and through `bindWorkspace` at the TERMINAL rebind below, whose fence
+      // nothing afterwards grades (`SHORT_DECLARED_LIFETIME_SECONDS`). That
+      // second one is the only thing in either suite that catches a resolution
+      // which floors the declaration at the default, so it is not redundant
+      // with this one.
+      observationLifetimeSeconds: DECLARED_LIFETIME_SECONDS,
       providerReviewBindingCapability: fixtureProviderBindingCapability(deliveryId),
     });
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
     if (!rebound.ok) return;
     expect(rebound.fence).toBe(2); // monotonic supersession
+
+    // The declaration is PERSISTED, unaltered. Read as an equality on the
+    // workspace record rather than inferred from a grade: a grade only ever
+    // reports one of four words, so a resolution that altered the number on
+    // the way in — clamping it, rounding it, substituting the default — could
+    // still produce `active` at every instant the rows below read at. This is
+    // the assertion that says which NUMBER the fence runs under.
+    const reboundWorkspace = JSON.parse(
+      readFileSync(path.join(await facade.namespaceDir(), "deliveries", deliveryId, "workspace.json"), "utf8"),
+    ) as { readonly observationLifetimeSeconds: number };
+    expect(reboundWorkspace.observationLifetimeSeconds).toBe(DECLARED_LIFETIME_SECONDS);
+
+    // ── The declared lifetime, through the real facade ──
+    // The instant that separates the two facades: one second past the DEFAULT,
+    // which a `bindWorkspace` that discarded the caller's declaration would
+    // already call `unknown`, and which one that honours it still calls
+    // `active`. Without this read the whole `?? DEFAULT` expression can be
+    // replaced by the bare default with every other row still green.
+    expect(DECLARED_LIFETIME_SECONDS).toBeGreaterThan(DEFAULT_OBSERVATION_LIFETIME_SECONDS);
+    const pastDefaultLifetime = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(LATER, DEFAULT_OBSERVATION_LIFETIME_SECONDS + 1),
+    });
+    expect(pastDefaultLifetime.ok, JSON.stringify(pastDefaultLifetime)).toBe(true);
+    if (!pastDefaultLifetime.ok) return;
+    expect(pastDefaultLifetime.status.hostActivity).toBe("active");
+    // And the declaration is a lifetime rather than a disabling: this fence
+    // still ages, at its own boundary.
+    const atDeclaredBoundary = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(LATER, DECLARED_LIFETIME_SECONDS),
+    });
+    expect(atDeclaredBoundary.ok, JSON.stringify(atDeclaredBoundary)).toBe(true);
+    if (!atDeclaredBoundary.ok) return;
+    expect(atDeclaredBoundary.status.hostActivity).toBe("active");
+    const pastDeclaredLifetime = await facade.status({
+      deliveryId,
+      observedAt: instantAfter(LATER, DECLARED_LIFETIME_SECONDS + 1),
+    });
+    expect(pastDeclaredLifetime.ok, JSON.stringify(pastDeclaredLifetime)).toBe(true);
+    if (!pastDeclaredLifetime.ok) return;
+    expect(pastDeclaredLifetime.status.hostActivity).toBe("unknown");
 
     // NO replay of accepted work: the plan checkpoint stands, and the next
     // checkpoint is implementation — not a second plan.
@@ -654,9 +767,28 @@ describe("the thin one-handoff walking skeleton", () => {
       hostTaskId: "host-task-4",
       observedAt: LATER,
       attestationExpiry: EXPIRY,
+      // BELOW the default, which is the direction the earlier rebind cannot
+      // take: there the declaration governs the rest of the scenario and a
+      // short one expires the binding mid-run. Here it governs a fence nothing
+      // after this point grades — the bind and the status below both read at
+      // `LATER`, age zero, and every later assertion reads journal-reduced
+      // state rather than a liveness grade. So this is the one place the
+      // facade can be asked for a shorter lifetime, and it is the only thing
+      // that fails when the resolution FLOORS the declaration at the default:
+      // an upward declaration survives a clamp unchanged, so every other row
+      // here stays green under one.
+      observationLifetimeSeconds: SHORT_DECLARED_LIFETIME_SECONDS,
       providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
     });
     expect(rebound.ok, JSON.stringify(rebound)).toBe(true);
+    expect(SHORT_DECLARED_LIFETIME_SECONDS).toBeLessThan(DEFAULT_OBSERVATION_LIFETIME_SECONDS);
+    const shortWorkspace = JSON.parse(
+      readFileSync(
+        path.join(await facade.namespaceDir(), "deliveries", confirmed.deliveryId, "workspace.json"),
+        "utf8",
+      ),
+    ) as { readonly observationLifetimeSeconds: number };
+    expect(shortWorkspace.observationLifetimeSeconds).toBe(SHORT_DECLARED_LIFETIME_SECONDS);
     const resumedStatus = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
     expect(resumedStatus.ok, JSON.stringify(resumedStatus)).toBe(true);
     if (!resumedStatus.ok) return;

@@ -173,6 +173,134 @@ state that never changes the delivery state.
 the transition check returns false for every edge into it. Host activity is
 observed, not obeyed.
 
+## Host liveness, and the measured observation lifetime
+
+Host activity is graded by one rule —
+[`gradeHostActivity`](../packages/kernel/src/facade/liveness.ts) — and every
+reader of liveness calls it, so no two surfaces can disagree about whether one
+delivery is alive.
+
+The grades are not interchangeable. `paused` is a **trusted clean end**: the
+session-end hook appended it to the journal, so the host said it was leaving.
+`unknown` is a **disappearance**: either no lifecycle event stands for the
+current fence, or the freshness heartbeat has aged past the workspace's declared
+lifetime. A timeout never proves termination, so aging turns `active` into
+`unknown` and never into `paused` or a terminal state.
+
+### Why the lifetime is a measurement
+
+The binding rewrites `binding/observation.json` on every **allowed PreToolUse
+invocation** ([`packages/kernel/src/host/hook-main.ts`](../packages/kernel/src/host/hook-main.ts)),
+stamped **before** the tool runs. Two consequences follow, and the second is
+the one that sets the number:
+
+- The heartbeat's density is exactly the host's tool-call rate. It is not a
+  timer and there is no poller; the freshness is a side effect of the host
+  working.
+- A single long tool call emits nothing for its whole duration. The gap **is**
+  the call, so no extra emission the binding could make — a PostToolUse stamp
+  included — lands inside it.
+
+The `activity.observed` journal entry is a different signal, and it is not a
+heartbeat either. Three emitters append it, none of them periodic:
+`bindWorkspace` writes `active` once, when the fence opens
+(`managed-delivery.ts:2910`); cancellation writes `cancellation_pending`
+(`managed-delivery.ts:4893`); and session end writes `paused`, from
+`sessionEnded` and from `recordTerminationProvenance`
+(`managed-delivery.ts:4531`, `:4567`, reached from the SessionEnd hook in
+`host/hook-main.ts`). The `active` marker from the first of those is precisely
+what the aging rule reads as the fence's claim, so a fence with no
+`activity.observed` naming it grades `unknown` however fresh the heartbeat file
+underneath happens to be.
+
+So the lifetime has to exceed the longest single tool invocation a delivery
+actually performs, and that is a measurement rather than a preference.
+
+### The measurement
+
+Measured on this machine, as one invocation, on its own — the shape a delivery
+would run it in as a single Bash call:
+
+| Invocation | Result | Wall time |
+|---|---|---|
+| `bun run --filter '@athena/webapp' test:coverage` | exit 0 | **807s** |
+| `bun run --filter '@athena/storefront-webapp' test:coverage` | exit 1 — the checkout could not resolve its coverage toolchain | not established |
+
+Taken on 2026-09-13 on the delivering machine, with sibling deliveries running
+their own suites concurrently, so 807s is if anything generous rather than
+optimistic. The cutover target's composite `bun run test:coverage` is the
+webapp leg plus the storefront leg plus a scripts leg and a summary, so the
+single call a delivery would actually make is **strictly longer than 807s**;
+what was measured here is a floor on it, not the call itself.
+
+The enclosing gate check — "Athena and Storefront Webapp Validation" — was
+observed at **1731s**, 1697s and 1493s across three consecutive merged pull
+requests. Those jobs include checkout, install and two builds around the suite,
+so they bound the single call from **above** without establishing it. Between
+them the two figures bracket the real cost: a measured floor of 807s and an
+observed ceiling of 1731s, both of which the replaced 900s default sits inside
+or below.
+
+The harness's own gate is an order of magnitude cheaper — its CI jobs run
+89-107s — and was never at risk. This surfaces only at the cutover target,
+which is precisely where an operator who did not build the thing would meet it
+first.
+
+### The derivation
+
+The default is derived from the **upper** figure, doubled and rounded up to the
+hour:
+
+> `DEFAULT_OBSERVATION_LIFETIME_SECONDS` = the smallest round value at or above
+> twice the heaviest recorded single invocation. 2 x 1731s = 3462s, so
+> **3600s**.
+
+Two reasons for taking the ceiling rather than the floor. A lifetime that
+clears the bound clears everything inside it, including the composite call
+whose exact cost this machine could not establish; and the doubling absorbs the
+load a busy machine adds to any of these figures — the 807s above was itself
+taken under concurrent load.
+
+The direction of the error matters too. Too short misreports a healthy delivery
+as `unknown`, which an operator sees constantly and learns to ignore. Too long
+has a real cost, and it is worth naming rather than waving away: three readers
+branch on `active` before any provenance is consulted. `status()` short-circuits
+resume to `none` while the host reads `active`
+(`managed-delivery.ts:3015`); `deriveMutationVerification` returns
+`not-applicable`, which carries `deriveRetrySafety` to `safe` (`status.ts:180`);
+and the takeover-first suppression of fence-carrying next actions is off
+(`status.ts:231`). So for a host that dies silently at the start of its fence,
+the window in which the surface still says `active`, `resume: none`,
+`retrySafety: safe` grows with this change from 900s to 3600s — fifteen minutes
+to an hour.
+
+The trade is still taken, because the alternative is worse in a way that is not
+recoverable by looking harder. A 900s lifetime ages out a *living* host in the
+middle of a single legitimate tool call — the 1731s validation above would trip
+it twice over — and an operator who is shown `unknown` for healthy deliveries
+every day stops reading the field at all, which costs the signal everywhere
+rather than in one hour-long window. The stale-`active` window is also bounded,
+visible, and closed the moment any termination provenance or `paused` marker
+lands; the desensitized operator is not.
+
+Both figures live in
+[`packages/kernel/src/facade/liveness.fixture.ts`](../packages/kernel/src/facade/liveness.fixture.ts)
+so the two suites that read them read the same numbers, and
+[`liveness.test.ts`](../packages/kernel/src/facade/liveness.test.ts) asserts the
+derivation rather than describing it: the default clears the observed ceiling
+with at least a doubling of headroom, a delivery running either recorded
+invocation holds `active` at every point inside it, and a host that has
+genuinely gone away still reaches `unknown`. That last assertion is why the
+first is worth anything — a lifetime raised high enough to keep everything
+`active` forever satisfies the long-operation direction on its own. The
+walking-skeleton scenario pins both directions again through the real facade,
+against the lifetime `bindWorkspace` actually wrote.
+
+A repository whose heaviest single operation is heavier than the recorded ones
+does not re-derive this default: `bindWorkspace` takes a per-fence
+`observationLifetimeSeconds`, and declaring it is a declaration, not machinery.
+No visibility surface, no polling, no daemon.
+
 ## The policy compiler
 
 `compileRepositoryPolicy`
