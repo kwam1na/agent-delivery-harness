@@ -348,9 +348,11 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * the same shape. `U+017F` (LATIN SMALL LETTER LONG S) is already lowercase and
  * has no canonical decomposition, so it survives both the normalization and the
  * lowercasing untouched — while a case-insensitive APFS or HFS+ volume folds it
- * to `"s"` and opens the file the policy meant to protect. 101 code points sit
- * in that class (`"\u03c2"`/`"\u03c3"`, `"\u00b5"`/`"\u03bc"`, the Greek symbol
- * variants). Routing through `toUpperCase` first collapses every one of them:
+ * to `"s"` and opens the file the policy meant to protect. A hundred-odd code
+ * points sit in that class (`"\u03c2"`/`"\u03c3"`, `"\u00b5"`/`"\u03bc"`, the
+ * Greek symbol variants); the exact size is an ICU property that moves with
+ * the runtime, so the test ENUMERATES the class rather than pinning a count.
+ * Routing through `toUpperCase` first collapses every one of them:
  * the fold becomes idempotent and leaves ASCII byte-identical. The test
  * enumerates that class rather than sampling it, so a fold that special-cased
  * the members a comment happens to name gets a red row.
@@ -371,6 +373,15 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * every cased code point below `U+30000` against every single-code-point
  * combining mark, the fold merges no fewer pairs than `toLowerCase` does, so
  * no existing denial is weakened.
+ *
+ * ONE STEP OF THE CHAIN IS REDUNDANT, AND SAYING SO IS CHEAPER THAN LEAVING
+ * THE NEXT READER TO WONDER. The `toLowerCase` that follows the inner
+ * normalize can never fire: `toLowerCase` is idempotent and NFC composition
+ * preserves the case of the starter, so the value is already lowercase by the
+ * time it runs — no input differs across it, over any single code point or
+ * over the base-times-mark corpus. It is kept for symmetry with the
+ * round-trip it precedes, and it is the one step of this expression that no
+ * mutation can turn a row red on, because deleting it changes nothing.
  *
  * The boundary this holds to, stated rather than implied: the fold is a
  * comparison that ERRS TOWARD DENYING. Case-mapping through upper and back

@@ -257,6 +257,60 @@ describe("decideHookInvocation", () => {
     expect(decision.allowed).toBe(false);
   });
 
+  it("denies a write that passes through a protected path spelled in the OTHER normalization form", () => {
+    // THE SECOND CALLER OF THE FOLD, and the only place its wiring is
+    // observable. The endpoint of a write is judged by the same
+    // `evaluateToolInvocation` the binding uses, so an endpoint row proves
+    // nothing about THIS module: it stays green with the fold removed from
+    // here. A position the walk PASSES THROUGH is judged here and nowhere
+    // else — so the write below resolves somewhere genuinely writable, and
+    // only the folded protected match on the mid-walk position can deny it.
+    //
+    // The protected path is declared composed and the link is spelled
+    // decomposed: two spellings of one directory, which is exactly what
+    // V26-1501 widened this comparison to see. Every other fixture in this
+    // file declares and writes its protected paths in ASCII, so a byte-exact
+    // match here passes all of them.
+    const aliasGrant = { ...grant, protectedPaths: [".git", ".managed-projection/caf\u00e9"] };
+    const aliasState: HookBindingState = {
+      ...state,
+      grant: aliasGrant,
+      attestation: { ...attestation, grantDigest: digestCanonical(aliasGrant) },
+    };
+    const real = mkdtempSync(path.join(realpathSync(tmpdir()), "write-canon-nfc-"));
+    try {
+      mkdirSync(path.join(real, "src", "projdir"), { recursive: true });
+      mkdirSync(path.join(real, ".managed-projection"), { recursive: true });
+      // The protected directory is itself a link OUT to a writable one, so
+      // the write below lands in `src/projdir` and the endpoint check has no
+      // objection to it. Only the position the walk passed is protected.
+      symlinkSync(path.join(real, "src", "projdir"), path.join(real, ".managed-projection", "cafe\u0301"));
+      const decision = decideHookInvocation(
+        { ...aliasState, workspaceRoot: real },
+        { tool_name: "Write", tool_input: { file_path: ".managed-projection/cafe\u0301/x.md" } },
+        "2026-08-30T12:01:00Z",
+        SESSION_FENCE,
+      );
+      expect(decision.allowed).toBe(false);
+      expect(decision.allowed ? "" : decision.reason).toContain("protected_path");
+
+      // The deny side did not widen into a match-everything: the same shape
+      // of link, at a position under no protected prefix in either spelling,
+      // is ALLOWED.
+      symlinkSync(path.join(real, "src", "projdir"), path.join(real, "src", "cafe\u0301-elsewhere"));
+      expect(
+        decideHookInvocation(
+          { ...aliasState, workspaceRoot: real },
+          { tool_name: "Write", tool_input: { file_path: "src/cafe\u0301-elsewhere/x.md" } },
+          "2026-08-30T12:01:00Z",
+          SESSION_FENCE,
+        ).allowed,
+      ).toBe(true);
+    } finally {
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
   it("denies a write outside the workspace entirely", () => {
     const decision = decideHookInvocation(state, {
       tool_name: "Write",
