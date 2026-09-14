@@ -156,6 +156,14 @@ describe("evaluateToolInvocation path scoping", () => {
       [upperDecomposed, `${lowerPrecomposed}/key.pem`],
       [longS, `${plainS}/key.pem`],
       [plainS, `${longS}/key.pem`],
+      // The fold routes through toUpperCase and BACK, and these two rows are
+      // what keeps the round-trip from being silently shortened: an
+      // uppercase-only fold passes every row above while splitting
+      // "\u00df" from "\u1e9e", re-opening the same permit one letter over.
+      ["src/\u00df-secrets", "src/\u1e9e-secrets/key.pem"],
+      // ...and the false DENY the round-trip buys, which the comment claims
+      // and nothing pinned: "\u00df" and "ss" compare as one path.
+      ["src/\u00df-secrets", "src/ss-secrets/key.pem"],
     ] as const) {
       const scopedGrant = { ...grant, protectedPaths: [declared] };
       const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };

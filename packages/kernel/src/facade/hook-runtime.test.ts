@@ -96,6 +96,11 @@ describe("liveHookRuntimeProbes", () => {
     const probes = liveHookRuntimeProbes();
     expect(probes.execPath).toBe(process.execPath);
     expect(probes.versions["node"]).toBe(process.versions.node);
+    // The WHOLE version report is carried through, not a rebuilt `{ node }`
+    // subset: the impostor rule reads members this row does not name, and a
+    // default that reconstructs only `node` silently disables it — on Bun,
+    // which is the runtime the ticket names.
+    expect(probes.versions).toBe(process.versions);
     // Both directions against the real binary: the flag this repository's
     // runtime floor is built around is accepted, and an invented flag is not —
     // so the probe reports what the executable lists rather than a constant.
@@ -139,6 +144,33 @@ describe("liveHookRuntimeProbes", () => {
     }
     // ...and the restore really restored: the next reader sees the runtime.
     expect(liveHookRuntimeProbes().acceptsFlag(STRIP_TYPES_FLAG)).toBe(true);
+  });
+
+  it("carries the runtime's own identity into the impostor rule, not just its Node version", () => {
+    // The second of the two assumptions V26-1510 names is that `execPath` is
+    // Node at all, and the only thing that decides it is `versions`. Rebuild
+    // that report as `{ node }` — the natural "cleanup" of the cast — and this
+    // process passes for Node under any compatibility banner. Driven by
+    // shadowing `process.versions` so the LIVE probe, not a constructed one,
+    // is what answers.
+    const original = Object.getOwnPropertyDescriptor(process, "versions");
+    expect(original).toBeDefined();
+    Object.defineProperty(process, "versions", {
+      configurable: true,
+      get() {
+        return { ...(original!.value as NodeJS.ProcessVersions), bun: "1.1.30" };
+      },
+    });
+    try {
+      const resolution = resolveHookRuntimeArgs(liveHookRuntimeProbes());
+      expect(resolution.ok, JSON.stringify(resolution)).toBe(false);
+      if (resolution.ok) return;
+      expect(resolution.reason).toContain("bun");
+    } finally {
+      Object.defineProperty(process, "versions", original!);
+    }
+    // ...and the restore took: the real process is Node again.
+    expect(resolveHookRuntimeArgs(liveHookRuntimeProbes()).ok).toBe(true);
   });
 
   it("resolves the running runtime, which is the one the emitted command would name", () => {
