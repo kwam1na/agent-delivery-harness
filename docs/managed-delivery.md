@@ -139,10 +139,11 @@ documentation.** `docs/docs-references.test.ts` recomputes the gating criterion
 and the baseline figures above from those two artifacts and fails on
 disagreement, and it holds the exact set of clauses this page states about an
 operator step-in, so a new claim about one reaches this page only by being
-re-stamped there, whatever words it chooses. Prose elsewhere under
-`docs/` carries no such pin unless a sensor names it; the historical narration
-under `docs/solutions/` is deliberately unpinned and unmaintained, for the
-reason [its index](solutions/README.md) states.
+re-stamped there, in whatever verb or form it chooses among the terms this
+page uses for one. Prose elsewhere under `docs/` carries no such pin unless a
+sensor names it; the historical narration under `docs/solutions/` is
+deliberately unpinned and unmaintained, for the reason
+[its index](solutions/README.md) states.
 
 ## The facade's operation contract
 

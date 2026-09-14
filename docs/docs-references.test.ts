@@ -633,9 +633,13 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
   const GUIDE = "docs/managed-delivery.md";
 
   /**
-   * Every term this page uses for an operator step-in. The page uses both
-   * `intervention` and `step-in` for the same thing, so a scan keyed on the
-   * first cannot see a claim written with the second.
+   * Every term this page uses for an operator step-in. The page uses
+   * `intervention`, `step-in`, "steps in" and `interruption` for the operator
+   * touching the run, so a scan keyed on any one of them cannot see a claim
+   * written with another. `interruption` matters most: the page makes the
+   * interruption/intervention distinction load-bearing and warns against
+   * relabelling across it, so a gating claim written with the page's own word
+   * for the operator pressing a key has to be inspected, not skipped.
    *
    * The trailing `\w*` is load-bearing rather than lazy. Inline code is
    * unwrapped before this runs, so an identifier reaches the scan as a word:
@@ -643,24 +647,30 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
    * written as "the gate compares `interventionCounts` against the baseline's"
    * escaped the pin entirely until the boundary was opened.
    */
-  const STEP_IN = /\b(intervention\w*|step-?in\w*|operator (actions?|involvement|input)|hand-offs?|manual input)\b/i;
+  const STEP_IN =
+    /\b(intervention\w*|interruption\w*|step-?in\w*|steps? in|operator (actions?|involvement|input|effort)|human (involvement|input)|manual (input|steps?|effort)|press(es|ed|ing)? a key|hand-offs?)\b/i;
 
   /**
    * This page's clauses that have an operator step-in as their subject.
    *
-   * Three normalizations, each closing a way a claim walked out of the first
+   * Four normalizations, each closing a way a claim walked out of an earlier
    * version of this scan:
    *   - inline code is UNWRAPPED rather than deleted, so a claim written as
    *     `interventionCounts` still carries the word it is about;
    *   - soft line wraps are joined, because this page is hard-wrapped at ~78
    *     columns and splitting on every newline cut most sentences in half,
    *     leaving the subject in one fragment and the verb in the next;
+   *   - intra-word emphasis is stripped, because `inter*vention*s` reaches a
+   *     word-boundary scan as three tokens and none of them is the subject,
+   *     while boundary-adjacent `**intervention**` is left alone so the
+   *     pinned strings below still read as the page writes them;
    *   - only real clause punctuation and paragraph breaks split.
    */
   const stepInClauses = (): readonly string[] =>
     textOf(GUIDE)
       .replace(/`([^`]*)`/g, " $1 ")
       .replace(/([^\n])\n(?!\n)/g, "$1 ")
+      .replace(/(\w)[*_]{1,2}(\w)/g, "$1$2")
       .split(/[.;:,]|\n\n+|—/)
       .map((clause) => clause.replace(/\s+/g, " ").trim())
       .filter((clause) => clause !== "" && STEP_IN.test(clause));
@@ -689,13 +699,18 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
    * over-trust it: a gating claim that names an operator step-in with a term
    * outside `STEP_IN` above is not in the set and so does not have to be
    * pinned. That residue is one closed list of nouns, not an open list of
-   * verbs and negations.
+   * verbs and negations, and the page states the bound rather than claiming
+   * closure it does not have: it says a claim reaches it only by re-stamping
+   * here "in whatever verb or form it chooses among the terms this page uses
+   * for one", which is exactly `STEP_IN`.
    */
   const PINNED_STEP_IN_CLAUSES: readonly string[] = [
+    "That single authorization is counted as a policy-required **interruption**",
     "and never as an operator **intervention**",
     "but not because interventions decide anything",
     "a design that requires an operator to press a key must not be able to flatter its own reported figures by calling that key an intervention",
     "Operator interventions are reported in full and gate nothing",
+    "Policy-required interruptions are recorded and reported alongside them",
     "and are never counted as interventions",
     "Interventions no longer gate because the criterion never had headroom",
     "The baseline's own intervention counts are **2**",
@@ -754,7 +769,13 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
     // Presence pins, because these two are rules rather than values. Both were
     // stated only in the record before this delivery; the guide is where an
     // operator meets them.
-    documentStates(GUIDE, "Operator interventions are reported in full and\ngate nothing.");
+    // Compared with whitespace collapsed. Pinning the page's hard wrap into
+    // the phrase made a meaning-preserving re-flow of the paragraph fail here
+    // with "no longer states", which is a false report of a real edit.
+    expect(
+      textOf(GUIDE).replace(/\s+/g, " "),
+      `${GUIDE} no longer states that operator interventions are reported in full and gate nothing`,
+    ).toContain("Operator interventions are reported in full and gate nothing.");
     documentStates(GUIDE, "are never counted as interventions");
   });
 
