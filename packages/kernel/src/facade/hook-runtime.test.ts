@@ -192,6 +192,16 @@ describe("liveHookRuntimeProbes", () => {
     // becomes a fail-closed refusal caused by machine contention, which is why
     // the probe reads the in-process enumeration instead); as EVIDENCE it only
     // costs a process.
+    //
+    // THE NEGATION IN FRONT IS WHAT MAKES THE ROW ASK ANYTHING. Node enabled
+    // type stripping UNFLAGGED in 22.18 and 23.6, and the CI matrix runs 22
+    // and 24 — so a bare spawn runs the `.ts` entry whatever flag it is
+    // handed, and the row would be green for every constant on every runtime
+    // the project gates on, while still refusing on the 22.6-22.17 band
+    // `engines` admits. Later flags win, so starting the child with stripping
+    // explicitly OFF forces `resolution.args` to be the switch that turns it
+    // back ON. If a future runtime were to drop the negation the spawn exits
+    // nonzero and this row goes red — loudly, not silently green.
     const resolution = resolveHookRuntimeArgs(liveHookRuntimeProbes());
     expect(resolution.ok, JSON.stringify(resolution)).toBe(true);
     if (!resolution.ok) return;
@@ -200,7 +210,7 @@ describe("liveHookRuntimeProbes", () => {
       const entry = path.join(dir, "probe.ts");
       writeFileSync(entry, 'const ran: string = "ran";\nprocess.stdout.write(ran);\n');
       expect(
-        execFileSync(resolution.execPath, [...resolution.args, entry], {
+        execFileSync(resolution.execPath, ["--no-experimental-strip-types", ...resolution.args, entry], {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
         }),

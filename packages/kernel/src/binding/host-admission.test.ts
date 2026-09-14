@@ -204,6 +204,12 @@ describe("evaluateToolInvocation path scoping", () => {
       // The trailing normalize, both directions.
       [composedTonos, `${decomposedTonos}/key.pem`],
       [decomposedTonos, `${composedTonos}/key.pem`],
+      // ...and the rest of the class the fold's header names: `toLowerCase`
+      // alone leaves these apart too, and only the round-trip merges them, so
+      // a fold that special-cased the two members pinned above would pass
+      // every row while re-opening the permit for 26 more pairs.
+      ["src/\u00b5-secrets", "src/\u03bc-secrets/key.pem"],
+      ["src/\u03c2-secrets", "src/\u03c3-secrets/key.pem"],
       // The leading normalize, both directions.
       [reordered, `${canonical}/key.pem`],
       [canonical, `${reordered}/key.pem`],
