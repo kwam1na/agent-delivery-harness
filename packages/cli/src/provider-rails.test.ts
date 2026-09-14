@@ -284,6 +284,9 @@ describe("provider invocation lifecycle", () => {
     `;
     const session = await openReadyProviderProcess({ script, marker, cwd: dir });
     const stalled = await providerPid(marker);
+    // The child is already booted and ready, so nothing but the rail's own two
+    // bounds is inside the window measured below.
+    const started = Date.now();
     const result = await invokeProviderRail(
       { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
       {
@@ -296,10 +299,30 @@ describe("provider invocation lifecycle", () => {
     expect(await readFile(marker, "utf8")).toContain("term");
     // The escalation itself, observed rather than timed. This provider ignores
     // SIGTERM and is kept alive by its own interval, so the only thing that can
-    // have ended it is the SIGKILL the grace expiry escalates to — and it is
-    // already reaped by the time the attempt returns, which is the same claim
-    // the former `Date.now() - started < 2_000` was standing in for.
+    // have ended it is the SIGKILL the grace expiry escalates to, and it is
+    // already reaped by the time the attempt returns.
     expect(isAlive(stalled)).toBe(false);
+    // THAT THE TWO BOUNDS BIND AT ALL.
+    //
+    // `deadlineMs` and `terminationGraceMs` are declared in no other test file
+    // in this repository, so if this row asserts only the outcome and the
+    // signals, a rail that ignored both — a clamped lifecycle timer, a grace
+    // read from a constant instead of the caller — still passes everything
+    // above. The elapsed window is the only thing that refuses that.
+    //
+    // The ceiling is deliberately not tuned to 500 + 100: it is sixteen times
+    // the two bounds together, so it survives a runner hosting several suites
+    // at once. What it therefore does not catch is a small inflation of either
+    // bound; what it does catch is a bound that has stopped being read from the
+    // caller at all, which is how they actually break — a lifecycle timer
+    // clamped to a floor, or a grace taken from the module default instead of
+    // `terminationGraceMs`, puts this row in the tens of seconds.
+    //
+    // It is a wall-clock assertion that is no longer a wall-clock race: what
+    // used to make this window unpredictable, a cold `node` boot inside the
+    // deadline, is awaited above, before the clock starts. Only the rail's own
+    // two bounds are measured here.
+    expect(Date.now() - started).toBeLessThan(10_000);
     await rm(dir, { recursive: true, force: true });
   }, PROCESS_ROW_TIMEOUT_MS);
 
