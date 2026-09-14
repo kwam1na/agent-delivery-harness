@@ -1020,7 +1020,15 @@ export function classifyActionOutcome(input: ClassifyActionInput): ActionClassif
 
   return {
     state: "blocked",
-    replayProhibited: false,
+    // The action did not happen, and it is still not taken again under this
+    // intent. The frozen reducer admits a second `action.intent.recorded` only
+    // while `acting` and only once every prior intent is succeeded/passed, and
+    // this classification has just put the delivery in `blocked` — so a `false`
+    // here would tell a host a second attempt is available that the product
+    // refuses, which is exactly the shape of promise this unit removed from
+    // reconciliation. Every branch prohibits the replay; the delivery leaves
+    // through the containment the policy selected.
+    replayProhibited: true,
     permittedMoves: [...input.containmentMoves],
     refusals: [
       refusal("action_failed", "/outcome", "the action did not happen; the delivery is blocked rather than acting"),

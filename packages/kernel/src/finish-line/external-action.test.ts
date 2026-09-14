@@ -22,6 +22,7 @@ import { digestCanonical } from "../digest.ts";
 import { checkActionAuthorization } from "../policy/authority.ts";
 import type { AcceptedContract } from "../spine/contract.ts";
 import { ABSENT_BY_STATE } from "../spine/grammar.ts";
+import { validateSensitiveApprovalAssertion } from "../spine/assertion.ts";
 import type { PolicySnapshot } from "../spine/policy.ts";
 import type { ExternalActionPort } from "./merge-ready.ts";
 import { UNBOUND_EXTERNAL_ACTION_PORT } from "./merge-ready.ts";
@@ -132,7 +133,7 @@ const planOf = (over: Partial<PlanExternalActionInput> = {}): PlanExternalAction
     evidence: { externalVerification: "passed", completedObligations: ["review-green"] },
     chain: [],
     consumedNonces: new Set<string>(),
-    currentProfile: "linear",
+    currentProfile: "production",
     now: NOW,
     ...over,
   };
@@ -289,6 +290,13 @@ describe("the external-operation authority matrix", () => {
   it("refuses when the hosted check or the local obligations no longer stand", () => {
     expect(
       codesOf(planExternalAction(planOf({ evidence: { externalVerification: "failed", completedObligations: ["review-green"] } }))),
+    ).toContain("external_verification_missing");
+    // `unavailable` is the third member of the union and refuses the same way:
+    // a hosted check that never resolved is not a hosted check that passed.
+    expect(
+      codesOf(
+        planExternalAction(planOf({ evidence: { externalVerification: "unavailable", completedObligations: ["review-green"] } })),
+      ),
     ).toContain("external_verification_missing");
     expect(
       codesOf(planExternalAction(planOf({ evidence: { externalVerification: "passed", completedObligations: [] } }))),
@@ -569,6 +577,7 @@ describe("approval binding", () => {
     expect(codesOf(withApproval({ candidateTreeSha: "9".repeat(40) }))).toContain("approval_mismatch");
     expect(codesOf(withApproval({ policyDigest: "a".repeat(64) }))).toContain("approval_mismatch");
     expect(codesOf(withApproval({ invocationFence: 8 }))).toContain("approval_mismatch");
+    expect(codesOf(withApproval({ invocationFence: 10 }))).toContain("approval_mismatch");
     expect(codesOf(withApproval({ deliveryId: "delivery-2" }))).toContain("approval_mismatch");
     expect(codesOf(withApproval({ productTrustRevocationEpoch: 3 }))).toContain("approval_stale");
     expect(codesOf(withApproval({ repositoryAuthorityRevocationEpoch: 6 }))).toContain("approval_stale");
@@ -605,6 +614,13 @@ describe("approval binding", () => {
   });
 
   it("refuses a fixture-sourced approval on a production profile", () => {
+    // `currentProfile` is the active COMPOSITION profile, whose frozen
+    // vocabulary is exactly ["production", "confirmation-fixture"]. Pinning
+    // this against any other string would leave the product's only production
+    // profile unproven, which is the installation the rule exists for.
+    expect(
+      codesOf(withApproval({ assertionSource: "qualification-fixture" }, { currentProfile: "production" })),
+    ).toContain("approval_source_mismatch");
     expect(codesOf(withApproval({ assertionSource: "qualification-fixture" }))).toContain("approval_source_mismatch");
     const policy = policyOf();
     expect(
@@ -618,6 +634,56 @@ describe("approval binding", () => {
         }),
       ).ok,
     ).toBe(true);
+  });
+
+  it("refuses an approval the spine's own validator rejects, and one that is merely the wrong class", () => {
+    const policy = policyOf();
+    const plan = (approval: Record<string, unknown>) =>
+      planExternalAction(
+        planOf({
+          policy,
+          approvalRequiredActions: ["merge"],
+          approval,
+          approvedChainDigest: actionChainDigest([], "merge"),
+        }),
+      );
+    // Well-formed delivery-bound assertion, so the class guard passes: only
+    // `validateSensitiveApprovalAssertion` can refuse this, and it must — an
+    // assertion carrying a member the closed spine grammar does not admit is
+    // not the spine's non-model-mintable assertion at all. Without that call
+    // the nonce need not even be a string, and a non-string nonce can never
+    // match the consumed-nonce ledger: one approval, unbounded merges.
+    expect(codesOf(plan(approvalOf(policy, { smuggled: "anything at all" })))).toContain("approval_malformed");
+    expect(codesOf(plan(approvalOf(policy, { nonce: { forged: true } })))).toContain("approval_malformed");
+    const { expiry: _dropped, ...missingExpiry } = approvalOf(policy);
+    expect(codesOf(plan(missingExpiry))).toContain("approval_malformed");
+    // And an assertion the spine's validator ACCEPTS whose only fault is its
+    // class. This is a real maintenance-lane approval — every member that arm
+    // requires is real and every member it forbids is "absent-by-state" — so
+    // the shape guard has nothing to say about it and only the class
+    // comparison can refuse it. An installer's approval to roll a generation
+    // back is not an approval to merge a delivery.
+    const maintenanceLane: Record<string, unknown> = {
+      spec: "sensitive-approval-assertion/1",
+      assertionClass: "maintenance-lane",
+      origin: `${ACTION_APPROVAL_ORIGIN_PREFIX}release-manager`,
+      action: "rollback",
+      expiry: LATER,
+      nonce: "nonce-2",
+      assertionSource: "host-native",
+      productTrustRevocationEpoch: policy.productTrustRevocationEpoch,
+      repositoryAuthorityRevocationEpoch: ABSENT_BY_STATE,
+      deliveryId: ABSENT_BY_STATE,
+      candidateTreeSha: ABSENT_BY_STATE,
+      policyDigest: ABSENT_BY_STATE,
+      invocationFence: ABSENT_BY_STATE,
+      targetInstallationId: "install-abc",
+      targetGenerationDigest: "b".repeat(64),
+      targetHighWaterMark: ABSENT_BY_STATE,
+      expectedJournalRevision: ABSENT_BY_STATE,
+    };
+    expect(validateSensitiveApprovalAssertion(maintenanceLane).ok).toBe(true);
+    expect(codesOf(plan(maintenanceLane))).toEqual(["approval_malformed"]);
   });
 
   it("refuses a malformed approval without reading any further binding off it", () => {
@@ -635,7 +701,7 @@ describe("approval binding", () => {
         approvedChainDigest: actionChainDigest([], "merge"),
         actingActorId: "agent-task-1",
         consumedNonces: new Set<string>(),
-        currentProfile: "linear",
+        currentProfile: "production",
         now: NOW,
       },
     );
@@ -650,6 +716,14 @@ describe("the recheck immediately before the call", () => {
     expect(codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { invocationFence: 10 })))).toContain(
       "fence_superseded",
     );
+    // Both directions: a store rolled BACKWARD restores nothing, so a fence or
+    // an epoch below the one the intent bound is as disqualifying as one above.
+    expect(codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { invocationFence: 8 })))).toContain(
+      "fence_superseded",
+    );
+    expect(
+      codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { productTrustRevocationEpoch: 3 }))),
+    ).toContain("product_trust_stale");
     expect(codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { candidateTreeSha: "9".repeat(40) })))).toContain(
       "candidate_moved",
     );
@@ -902,6 +976,17 @@ describe("the single invocation, against a fake adapter at every boundary", () =
     // it is journaled as one — unlike a call this unit refused to make.
     expect(observedResult(result)).toMatchObject({ outcome: "failed", verification: "not-attempted" });
     expect(codesOf(observedResult(result))).toContain("adapter_refused");
+    // The journal payload is the five frozen members and NOTHING else — this
+    // is the one result that carries a sixth (`refusals`), and the frozen
+    // `action.result.recorded` grammar is closed, so a payload that spread the
+    // whole result would make the record of a failed action unwritable.
+    expect(journalResultPayload(observedResult(result))).toEqual({
+      intentId: "intent-1",
+      action: "merge",
+      outcome: "failed",
+      verification: "not-attempted",
+      externalReference: ABSENT_BY_STATE,
+    });
   });
 
   it("records a failed verification over a succeeded action, and a throwing verifier as failed rather than absent", async () => {
@@ -1171,7 +1256,10 @@ describe("the post-action classification", () => {
     expect(unresolved.replayProhibited).toBe(true);
     const failed = classify(resultOf("failed", "not-attempted"), ["escalate"]);
     expect(failed.state).toBe("blocked");
-    expect(failed.replayProhibited).toBe(false);
+    // Every branch prohibits the replay. `blocked` is not `acting`, and the
+    // frozen reducer admits no second intent from there either, so telling a
+    // host otherwise would promise an attempt the product refuses.
+    expect(failed.replayProhibited).toBe(true);
     // An action that did not happen still leaves through the containment the
     // policy selected, not through nothing at all.
     expect(failed.permittedMoves).toEqual(["escalate"]);
