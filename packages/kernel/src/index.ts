@@ -1067,6 +1067,7 @@ export {
   type ActionEvidence,
   type BoundActionIntent,
   type DeployPreconditionInput,
+  type InvocationOutcome,
   type ObservedActionResult,
   type PlanExternalActionInput,
   type PlanExternalActionVerdict,

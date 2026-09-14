@@ -658,20 +658,28 @@ export interface InvokeExternalActionInput {
 }
 
 /**
+ * What one attempted invocation produced. A REFUSAL IS NOT AN OBSERVATION: a
+ * call this unit declined to make produces no result to journal or classify,
+ * because a fabricated `failed`/`not-attempted` is byte-identical — in every
+ * member the frozen result payload keeps — to a genuine statement that the
+ * action did not happen. That matters most for the replay refusal, where the
+ * action DID happen: classifying such a result would report `blocked` with
+ * `action_failed` and `replayProhibited: false` about an action that succeeded.
+ */
+export type InvocationOutcome =
+  | { readonly kind: "observed"; readonly result: ObservedActionResult }
+  | { readonly kind: "refused"; readonly refusals: readonly FinishLineRefusal[] };
+
+/**
  * Invokes the action exactly once. There is no retry here and no loop: a
  * thrown adapter, a rejected promise, or a port that resolves without a
  * reference all record `indeterminate`, which is the honest statement that the
- * action MAY have happened and must be reconciled rather than repeated.
+ * action MAY have happened and must be reconciled rather than repeated. A call
+ * this unit refuses to make returns `refused` and no result at all.
  */
-export async function invokeExternalActionOnce(input: InvokeExternalActionInput): Promise<ObservedActionResult> {
-  const notPerformed = (refusals: readonly FinishLineRefusal[]): ObservedActionResult => ({
-    intentId: input.intent.intentId,
-    action: input.intent.action,
-    outcome: "failed",
-    verification: "not-attempted",
-    externalReference: ABSENT_BY_STATE,
-    refusals,
-  });
+export async function invokeExternalActionOnce(input: InvokeExternalActionInput): Promise<InvocationOutcome> {
+  const observed = (result: ObservedActionResult): InvocationOutcome => ({ kind: "observed", result });
+  const notPerformed = (refusals: readonly FinishLineRefusal[]): InvocationOutcome => ({ kind: "refused", refusals });
 
   if (!input.intentJournaled) {
     return notPerformed([
@@ -701,47 +709,50 @@ export async function invokeExternalActionOnce(input: InvokeExternalActionInput)
     invocation = await input.port.invoke(journalIntentPayload(input.intent));
   } catch {
     // The call left; whether it arrived is unknown. This is the whole reason
-    // `indeterminate` exists, and the reason nothing here tries again.
-    return {
+    // `indeterminate` exists, and the reason nothing here tries again. It IS
+    // an observation: the action may have happened.
+    return observed({
       intentId: input.intent.intentId,
       action: input.intent.action,
       outcome: "indeterminate",
       verification: "not-attempted",
       externalReference: ABSENT_BY_STATE,
-    };
+    });
   }
 
   if (!invocation.ok) {
-    return {
+    // The adapter itself reported that it did not act. That is an observation
+    // rather than a refusal by this unit, and it is journaled as one.
+    return observed({
       intentId: input.intent.intentId,
       action: input.intent.action,
       outcome: "failed",
       verification: "not-attempted",
       externalReference: ABSENT_BY_STATE,
       refusals: invocation.refusals,
-    };
+    });
   }
 
   if (invocation.externalReference.length === 0) {
     // A success without a reference cannot be verified or reconciled against
     // anything, so it is not recorded as a success.
-    return {
+    return observed({
       intentId: input.intent.intentId,
       action: input.intent.action,
       outcome: "indeterminate",
       verification: "not-attempted",
       externalReference: ABSENT_BY_STATE,
-    };
+    });
   }
 
   if (input.verify === undefined) {
-    return {
+    return observed({
       intentId: input.intent.intentId,
       action: input.intent.action,
       outcome: "succeeded",
       verification: "not-attempted",
       externalReference: invocation.externalReference,
-    };
+    });
   }
 
   let verified: boolean;
@@ -750,13 +761,13 @@ export async function invokeExternalActionOnce(input: InvokeExternalActionInput)
   } catch {
     verified = false;
   }
-  return {
+  return observed({
     intentId: input.intent.intentId,
     action: input.intent.action,
     outcome: "succeeded",
     verification: verified ? "passed" : "failed",
     externalReference: invocation.externalReference,
-  };
+  });
 }
 
 /** Exactly the frozen `action.result.recorded` payload, and nothing else. */
@@ -784,7 +795,6 @@ export type ReconciliationFinding = (typeof RECONCILIATION_FINDINGS)[number];
 
 export type ReconciliationDisposition =
   | { readonly kind: "already-performed"; readonly result: ObservedActionResult }
-  | { readonly kind: "retry-authorized"; readonly nextIntentId: string }
   | { readonly kind: "blocked"; readonly refusals: readonly FinishLineRefusal[] };
 
 export interface ReconcileInput {
@@ -797,10 +807,27 @@ export interface ReconcileInput {
 }
 
 /**
- * Decides what may follow an indeterminate action. Two of the three findings
- * forbid a second call, and the third authorizes a NEW intent rather than a
- * replay of the old one — an intentId reused after an indeterminate outcome is
- * exactly the replay this rule exists to prevent.
+ * Decides what may follow an indeterminate action. ALL THREE FINDINGS FORBID A
+ * SECOND CALL, and the third — the action positively did not happen — forbids
+ * it for a reason worth stating at length, because the obvious reading is that
+ * a retry should be authorized there.
+ *
+ * The frozen delivery reducer admits `action.intent.recorded` only once EVERY
+ * prior intent is reconciled, and reconciled means succeeded with a PASSING
+ * verification (`spine/reducer.ts`). An indeterminate action never becomes
+ * that: its result is written exactly once, so it cannot be re-observed, and
+ * nothing in the product records a reconciliation as a result. A second intent
+ * is therefore inadmissible whatever this function says, and a disposition
+ * that authorized one would hand the caller an authorization the product
+ * refuses — the delivery would sit in `acting` holding it, and the only
+ * refusal anyone would see would name the first intent's observation rather
+ * than the rule that actually forbids the step.
+ *
+ * So the honest answer is: an indeterminate action ends the delivery through
+ * containment, and this function says so rather than promising a retry. The id
+ * a caller offers is still checked, because reusing the indeterminate intent's
+ * own id is a sharper error than proposing a new one and deserves its own
+ * refusal.
  */
 export function reconcileBeforeRetry(input: ReconcileInput): ReconciliationDisposition {
   if (input.indeterminate.outcome !== "indeterminate") {
@@ -842,20 +869,29 @@ export function reconcileBeforeRetry(input: ReconcileInput): ReconciliationDispo
     };
   }
 
-  if (input.nextIntentId === undefined || input.nextIntentId === input.indeterminate.intentId) {
+  if (input.nextIntentId !== undefined && input.nextIntentId === input.indeterminate.intentId) {
     return {
       kind: "blocked",
       refusals: [
         refusal(
           "action_replay_prohibited",
           "/nextIntentId",
-          "a retry runs under a new intent; reusing the indeterminate intent's id is the replay this path forbids",
+          "the indeterminate intent's own id is offered for the retry; that is the replay this path exists to forbid",
         ),
       ],
     };
   }
 
-  return { kind: "retry-authorized", nextIntentId: input.nextIntentId };
+  return {
+    kind: "blocked",
+    refusals: [
+      refusal(
+        "retry_not_admissible",
+        "/finding",
+        "reconciliation established the action did not happen, and a second intent is admitted only once every prior action is reconciled — which an indeterminate action never becomes, because its result is written exactly once. The delivery leaves through policy-selected containment rather than through a retry",
+      ),
+    ],
+  };
 }
 
 // ── The post-action classification ─────────────────────────────────────────
@@ -896,9 +932,28 @@ export function classifyActionOutcome(input: ClassifyActionInput): ActionClassif
     // An earlier action in the chain — the merge a deploy contract deploys —
     // leaves the delivery acting, with the next step named rather than
     // invented, and never terminates it as though the finish line were reached.
-    const remaining = (FINISH_LINE_REACHED_ACTIONS[input.requestedFinishLine] ?? []).slice(
-      (FINISH_LINE_REACHED_ACTIONS[input.requestedFinishLine] ?? []).indexOf(input.result.action) + 1,
-    );
+    const reached = FINISH_LINE_REACHED_ACTIONS[input.requestedFinishLine];
+    const position = reached === undefined ? -1 : reached.indexOf(input.result.action);
+    if (position < 0) {
+      // A finish line that does not reach the action that was taken cannot be
+      // the finish line this result completes. Nothing upstream can produce
+      // one — `finishLineReaches` refuses the plan — so this is the direction
+      // the branch fails in when something upstream stops holding, and it is
+      // never `completed`.
+      return {
+        state: "blocked",
+        replayProhibited: true,
+        permittedMoves: [...input.containmentMoves],
+        refusals: [
+          refusal(
+            "finish_line_not_reached",
+            "/requestedFinishLine",
+            `the ${input.requestedFinishLine} finish line does not reach the ${input.result.action} that was taken; a result cannot complete a finish line it never served`,
+          ),
+        ],
+      };
+    }
+    const remaining = (reached ?? []).slice(position + 1);
     if (remaining.length === 0) {
       return { state: "completed", replayProhibited: true, permittedMoves: [], refusals: [] };
     }
