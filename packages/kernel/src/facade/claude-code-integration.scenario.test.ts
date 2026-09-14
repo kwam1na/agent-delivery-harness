@@ -154,8 +154,14 @@ const restoreWritable = (dir: string): void => {
  * machine was loaded. Nothing else about these rows changes — none waits on a
  * duration, none asserts an elapsed time, and each still reaches its subject by
  * awaiting the facade's own completions. `beforeAll` keeps its own budget below.
+ *
+ * `hookTimeout` is declared alongside it because `vi.setConfig` sets only the
+ * row budget. This file's `afterAll` walks a packed and installed composition
+ * tree back to writable and then removes it; left on vitest's 10 000 ms hook
+ * default it can end the file red in teardown with every row green — the same
+ * signature, one declaration further down.
  */
-vi.setConfig({ testTimeout: 300_000 });
+vi.setConfig({ testTimeout: 300_000, hookTimeout: 300_000 });
 
 beforeAll(async () => {
   scratch = await mkdtemp(path.join(tmpdir(), "claude-code-integration-"));

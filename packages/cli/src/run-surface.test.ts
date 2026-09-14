@@ -53,8 +53,14 @@ import { RUN_STORE_OVERRIDE, buildRunEvent, resolveRunSurface, resolveWorktreeRo
  * exit and reading the store back off disk. The three rows that declared
  * `}, 30_000` are folded into this one declaration, so the file's heaviest rows
  * are no longer the ones with the tightest ceiling.
+ *
+ * `hookTimeout` is declared alongside it because `vi.setConfig` sets only the
+ * row budget. This file's `afterAll` removes up to seventy-six temporary git
+ * repositories; left on vitest's 10 000 ms hook default it can end the file red
+ * in teardown with every row green — the same signature, one declaration
+ * further down.
  */
-vi.setConfig({ testTimeout: 120_000 });
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 const exec = promisify(execFile);
 const cleanups: string[] = [];

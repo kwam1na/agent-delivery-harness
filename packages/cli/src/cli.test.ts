@@ -79,8 +79,14 @@ import { runAction } from "../../action/src/main.ts";
  * bounds the test rather than the subject. The three rows that declared their
  * own budgets are folded into this one declaration, so the file's heaviest rows
  * are no longer the ones carrying the tightest ceiling.
+ *
+ * `hookTimeout` is declared alongside it because `vi.setConfig` sets only the
+ * row budget, and this file's `afterAll` removes every temporary repository the
+ * run created; left on vitest's 10 000 ms hook default it can end the file red
+ * in teardown with every row green — the same signature, one declaration
+ * further down.
  */
-vi.setConfig({ testTimeout: 120_000 });
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 const run = promisify(execFile);
 const cleanups: string[] = [];
