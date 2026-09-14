@@ -26,6 +26,7 @@ import type { CommandContext, CommandResult } from "../boundary.ts";
 const DIGEST = "a".repeat(64);
 const DIGEST2 = "c".repeat(64);
 const OID = "b".repeat(40);
+const BINDING_DIGEST = compiledAdopterPolicyBindingDigest(disposablePolicyBinding());
 
 let repoDir: string;
 
@@ -67,7 +68,15 @@ const opening = (deliveryId: string) => [
     activeCompositionProfile: "core",
     registeringInstallationId: "install-1",
   }),
-  entry(deliveryId, 1, "policy.snapshot.bound", { policyDigest: DIGEST, repositoryAuthorityEpoch: 4 }),
+  entry(deliveryId, 1, "policy.snapshot.bound", {
+    policyDigest: DIGEST,
+    repositoryAuthorityEpoch: 4,
+    // The digest BOTH durable records must carry: the listing reports no state
+    // for a delivery whose binding records disagree, exactly as `status`
+    // refuses one, so a fixture with any other digest would be a delivery
+    // neither mode will answer for.
+    policyBindingDigest: BINDING_DIGEST,
+  }),
   entry(deliveryId, 2, "generation.pinned", { generationDigest: DIGEST2, releaseId: "core-v1", profile: "core" }),
   entry(deliveryId, 3, "transition.committed", { from: "accepted", to: "preparing" }),
 ];
@@ -133,7 +142,10 @@ beforeAll(async () => {
   for (const deliveryId of ["delivery-one", "delivery-two"]) {
     const dir = path.join(namespace, "deliveries", deliveryId);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, "delivery.json"), `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: DIGEST })}\n`);
+    writeFileSync(
+      path.join(dir, "delivery.json"),
+      `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: BINDING_DIGEST })}\n`,
+    );
     const store = createJournalStore(path.join(dir, "journal.jsonl"));
     for (const candidate of opening(deliveryId)) {
       const appended = await store.append(candidate);
@@ -215,6 +227,18 @@ describe("managed deliveries", () => {
     const { result } = await run(["deliveries"], bareInstallation("d".repeat(64)));
     expect(result.kind, JSON.stringify(result)).toBe("blocked");
     expect(result.kind === "blocked" ? result.blockers.map((blocker) => blocker.code) : []).toContain("policy_binding_mismatch");
+  });
+
+  it("judges the installation before the delivery, for the operations that were already here", async () => {
+    // The split hoisted the policy-binding load and the digest comparison above
+    // delivery selection, so a repository with drift and no resolvable delivery
+    // now reports the drift rather than `delivery_unresolved`. That is the more
+    // fundamental refusal arriving first — an untrustworthy installation is not
+    // a delivery-resolution problem — and this row is what makes the order a
+    // decision rather than an accident of where the code was moved.
+    const { result } = await run(["status"], bareInstallation("d".repeat(64)));
+    expect(result.kind, JSON.stringify(result)).toBe("blocked");
+    expect(result.kind === "blocked" ? result.blockers.map((blocker) => blocker.code) : []).toEqual(["policy_binding_mismatch"]);
   });
 
   it("names no delivery and binds no fence: it is refused outside a repository, like every read here", async () => {

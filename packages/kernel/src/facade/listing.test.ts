@@ -25,11 +25,20 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createJournalStore } from "../checkpoint/journal-store.ts";
 import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";
-import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
+import { compiledAdopterPolicyBindingDigest, createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
 import { disposablePolicyBinding } from "./disposable-repository.fixture.ts";
 import { DEFAULT_OBSERVATION_LIFETIME_SECONDS } from "./liveness.ts";
 
 const DIGEST = "a".repeat(64);
+/**
+ * The binding digest every installation here is built from. The fixtures write
+ * it into BOTH durable records — the registration marker and the journal —
+ * because that is the precondition `status` enforces before it will report on a
+ * delivery at all: a fixture carrying any other digest is a delivery the
+ * product refuses, and a suite built on those would pin the listing against
+ * deliveries no operator can ever ask `status` about.
+ */
+const BINDING_DIGEST = compiledAdopterPolicyBindingDigest(disposablePolicyBinding());
 const DIGEST2 = "c".repeat(64);
 const OID = "b".repeat(40);
 
@@ -72,7 +81,11 @@ const opening = (deliveryId: string, lifetimeSeconds: number) => [
     activeCompositionProfile: "core",
     registeringInstallationId: "install-1",
   }),
-  entry(deliveryId, 1, "policy.snapshot.bound", { policyDigest: DIGEST, repositoryAuthorityEpoch: 4 }),
+  entry(deliveryId, 1, "policy.snapshot.bound", {
+    policyDigest: DIGEST,
+    repositoryAuthorityEpoch: 4,
+    policyBindingDigest: BINDING_DIGEST,
+  }),
   entry(deliveryId, 2, "generation.pinned", { generationDigest: DIGEST2, releaseId: "core-v1", profile: "core" }),
   entry(deliveryId, 3, "transition.committed", { from: "accepted", to: "preparing" }),
   entry(deliveryId, 4, "workspace.bound", {
@@ -104,6 +117,8 @@ interface RegisterInput {
   readonly workspace?: { readonly observationLifetimeSeconds: number };
   /** The binding's freshness heartbeat, written only when given. */
   readonly observation?: { readonly fence: number; readonly observedAt: string };
+  /** Overrides the registration marker's binding digest, to build drift. */
+  readonly markerBindingDigest?: string;
 }
 
 /**
@@ -118,7 +133,10 @@ interface RegisterInput {
 async function register(namespace: string, input: RegisterInput): Promise<void> {
   const dir = path.join(namespace, "deliveries", input.deliveryId);
   mkdirSync(path.join(dir, "binding"), { recursive: true });
-  writeFileSync(path.join(dir, "delivery.json"), `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: DIGEST })}\n`);
+  writeFileSync(
+    path.join(dir, "delivery.json"),
+    `${JSON.stringify({ intakeId: "intake-1", policyBindingDigest: input.markerBindingDigest ?? BINDING_DIGEST })}\n`,
+  );
   const store = createJournalStore(path.join(dir, "journal.jsonl"));
   for (const candidate of input.entries) {
     const appended = await store.append(candidate);
@@ -209,6 +227,16 @@ describe("the installation-scoped listing", () => {
     // listing starts growing, one plausible member at a time, into a second
     // status model that can disagree with the first.
     expect(Object.keys(live as object).sort()).toEqual(["deliveryId", "lastActivity", "pendingDecision", "state"]);
+
+    // THE OTHER MODE OF THE SAME SURFACE, on the same delivery, in the same
+    // test: the listing is only "a mode of status" if the two agree. This is
+    // also what makes the fixtures honest — a delivery `status` refuses is one
+    // this row could not make this assertion about at all.
+    const perDelivery = await facade.status({ deliveryId: "delivery-live", observedAt: "2026-09-14T12:00:00Z" });
+    expect(perDelivery.ok, JSON.stringify(perDelivery)).toBe(true);
+    if (!perDelivery.ok) return;
+    expect(perDelivery.status.delivery.state).toBe(live?.state);
+    expect(perDelivery.status.hostActivity).toBe(live?.lastActivity.activity);
 
     const gone = listing.deliveries.find((listed) => listed.deliveryId === "delivery-gone");
     expect(gone?.state).toBe("cancelled");
@@ -422,6 +450,33 @@ describe("the installation-scoped listing", () => {
     expect(other.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-elsewhere"]);
   });
 
+  it("names a delivery whose durable binding records disagree, rather than reporting a state `status` refuses to report", async () => {
+    const { namespace, facade } = installation();
+    await register(namespace, {
+      deliveryId: "delivery-bound",
+      entries: opening("delivery-bound", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+    });
+    // Registered under a binding this facade is not holding. `status` refuses
+    // this delivery outright; the listing must not answer for it either.
+    await register(namespace, {
+      deliveryId: "delivery-drifted",
+      entries: opening("delivery-drifted", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
+      markerBindingDigest: "d".repeat(64),
+    });
+
+    const drifted = await facade.status({ deliveryId: "delivery-drifted", observedAt: "2026-09-14T12:00:00Z" });
+    expect(drifted.ok).toBe(false);
+    if (!drifted.ok) expect(drifted.blockers.map((blocker) => blocker.code)).toEqual(["policy_binding_mismatch"]);
+
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(true);
+    if (!listing.ok) return;
+    // Beside one that DOES bind, from the same call: the separation is the
+    // binding comparison, not an empty listing.
+    expect(listing.deliveries.map((listed) => listed.deliveryId)).toEqual(["delivery-bound"]);
+    expect(listing.unreadable).toEqual(["delivery-drifted"]);
+  });
+
   it("refuses when the deliveries directory exists and cannot be read, rather than reporting quiet", async () => {
     const { namespace, facade } = installation();
     await register(namespace, {
@@ -443,6 +498,20 @@ describe("the installation-scoped listing", () => {
     }
   });
 
+  it("refuses when the deliveries path is not a directory at all", async () => {
+    const { namespace, facade } = installation();
+    mkdirSync(namespace, { recursive: true });
+    // `ENOTDIR`, not `ENOENT`: the path EXISTS and cannot be enumerated. An
+    // installation that has registered nothing is the absent case and the only
+    // one an empty listing may answer for.
+    writeFileSync(path.join(namespace, "deliveries"), "not a directory\n");
+
+    const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
+    expect(listing.ok, JSON.stringify(listing)).toBe(false);
+    if (listing.ok) return;
+    expect(listing.blockers.map((blocker) => blocker.code)).toEqual(["delivery_namespace_unreadable"]);
+  });
+
   it("names a directory it cannot read rather than listing it with an invented state or dropping it silently", async () => {
     const { namespace, facade } = installation();
     await register(namespace, {
@@ -458,6 +527,10 @@ describe("the installation-scoped listing", () => {
       entries: opening("delivery-stray", DEFAULT_OBSERVATION_LIFETIME_SECONDS),
     });
     rmSync(path.join(namespace, "deliveries", "delivery-stray", "delivery.json"));
+    // A stray FILE is not a delivery whose state could not be read — it is not
+    // a delivery id, and naming it would send an operator to ask `status`
+    // about a name no delivery ever had.
+    writeFileSync(path.join(namespace, "deliveries", ".DS_Store"), "");
     // Registered, but its journal does not reduce. This is the branch that is
     // otherwise unreachable from any fixture, and the one whose silent drop
     // would contradict the CLI's own count of registered deliveries.

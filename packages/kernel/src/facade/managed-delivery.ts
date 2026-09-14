@@ -743,8 +743,9 @@ export interface ManagedDeliveryFacade {
    * has no path into this result.
    *
    * `unreadable` NAMES WHAT IT COULD NOT LIST, rather than dropping it. A
-   * directory with no registration record, or one whose journal does not
-   * reduce, has no state to report — but this is the only installation-wide
+   * directory with no registration record, one whose journal does not reduce,
+   * or one whose durable binding records disagree with this facade's — the
+   * precondition `status` refuses on — has no state this surface may report — but this is the only installation-wide
    * surface an operator has, and a delivery that silently vanishes from it is
    * worse than one reported as unreadable: the CLI's own delivery resolution
    * counts that same directory as in flight, so a silent omission leaves two
@@ -3218,7 +3219,14 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const root = path.join(await namespaceDir(), "deliveries");
       let ids: string[];
       try {
-        ids = (await readdir(root)).sort();
+        // Directories only. A stray FILE in the namespace is not a delivery
+        // whose state could not be read — it is not a delivery id at all, and
+        // reporting it as unreadable would send an operator to ask `status`
+        // about a name no delivery ever had.
+        ids = (await readdir(root, { withFileTypes: true }))
+          .filter((candidate) => candidate.isDirectory())
+          .map((candidate) => candidate.name)
+          .sort();
       } catch (error) {
         // ABSENCE ONLY. An installation that has registered nothing has no
         // directory at all, and that is an EMPTY listing rather than a
@@ -3229,8 +3237,12 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         // exists and cannot be read — and answering it with the same empty
         // listing would report a positive claim of quiet built out of an
         // unreadable namespace, with not even an id left to reconcile by.
+        // ENOENT ALONE. A path component that exists as a non-directory
+        // raises `ENOTDIR`, and that is a corrupt namespace rather than an
+        // installation that has registered nothing — swallowing it would
+        // rebuild the very defect this discrimination exists to close.
         const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT" && code !== "ENOTDIR") {
+        if (code !== "ENOENT") {
           return refuse(
             "delivery_namespace_unreadable",
             "The installation's deliveries directory exists but cannot be read.",
@@ -3260,6 +3272,23 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         // this id refuses and says why; the listing names the id so an
         // operator can ask.
         if (!reduced.ok || !read.ok) {
+          unreadable.push(deliveryId);
+          continue;
+        }
+        // THE SAME PRECONDITION `status` ENFORCES, with the same three-way
+        // comparison. A delivery whose two durable binding records do not both
+        // agree with this facade's binding is one `status` refuses outright, so
+        // listing its state would put the two modes of one surface in
+        // contradiction by id: the listing would report `reviewing` for a
+        // delivery the per-delivery mode will not report on at all. The id goes
+        // to `unreadable` instead, which is exactly what that member is for —
+        // `status` with it then gives the `policy_binding_mismatch` refusal and
+        // says why.
+        if (
+          meta.policyBindingDigest !== policyBindingDigest ||
+          reduced.state.policyBindingDigest !== policyBindingDigest ||
+          meta.policyBindingDigest !== reduced.state.policyBindingDigest
+        ) {
           unreadable.push(deliveryId);
           continue;
         }

@@ -375,8 +375,10 @@ itself accepted: a heartbeat written under a fence that has since been
 superseded is not evidence of anything, so it is withheld rather than paired
 with an `unknown` to make a dead host look barely-missed.
 
-**What it cannot read, it names.** A directory with no registration record, or
-one whose journal does not reduce, has no state and so is not a listing entry —
+**What it cannot read, it names.** A directory with no registration record, one
+whose journal does not reduce, or one whose two durable binding records do not
+both agree with the facade's binding — the precondition `status` itself refuses
+on — has no state this surface may report, and so is not a listing entry —
 but its id is returned in `unreadable`, and `managed deliveries` says how many
 and which. Dropping it silently would leave the CLI counting it as registered
 while the only surface that hands out ids denied it existed; naming it lets an

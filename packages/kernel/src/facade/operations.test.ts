@@ -20,6 +20,21 @@ describe("the facade operation inventory", () => {
     }
   });
 
+  it("declares the installation-scoped listing as a read that binds nothing and moves nothing", () => {
+    // The inventory is the SOLE declaration site for these four, and the
+    // product's behaviour is pinned elsewhere: the listing's suite asserts the
+    // read leaves the delivery directory byte-identical (journalRevision
+    // `none`, fence `absent-by-state`), and the CLI and MCP contract rows reach
+    // it from `surfaces`. This row is what makes the declaration drift from
+    // that behaviour a failure rather than a silent disagreement.
+    expect(facadeOperation("listDeliveries")).toMatchObject({
+      capability: "read",
+      fence: "absent-by-state",
+      journalRevision: "none",
+      surfaces: ["cli", "mcp"],
+    });
+  });
+
   it("names every operation exactly once", () => {
     const names = FACADE_OPERATIONS.map((entry) => entry.operation);
     expect(new Set(names).size).toBe(names.length);
