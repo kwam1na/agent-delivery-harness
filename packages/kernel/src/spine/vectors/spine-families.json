@@ -943,7 +943,7 @@
               "run": "journal-entry/1",
               "workflowResult": "stage-result-ref/1",
               "event": "journal-entry/1",
-              "controlPlane": "reserved/0"
+              "controlPlane": "control-plane-coordination/1"
             },
             "productTrustLabel": "local-digest / operator-pinned"
           }
@@ -976,7 +976,7 @@
               "run": "journal-entry/1",
               "workflowResult": "stage-result-ref/1",
               "event": "journal-entry/1",
-              "controlPlane": "reserved/0"
+              "controlPlane": "control-plane-coordination/1"
             },
             "productTrustLabel": "local-digest / operator-pinned",
             "floatingBranch": "main"

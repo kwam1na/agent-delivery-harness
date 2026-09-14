@@ -89,6 +89,46 @@ describe("the promoted mirror pair", () => {
     }
   });
 
+  it("pins the VALUE rule of every member — this is the only durable payload whose content comes from outside", () => {
+    // Round 2 found that only two of this table's seven members had a reject
+    // vector, so five of them could be weakened to `text` or to a bare number
+    // with every suite green. Presence rows (`missing_member` for each member)
+    // and closure rows (`unknown_member` for a stranger) both pass against a
+    // table whose rules accept anything, which is precisely the shape a
+    // remote-authored payload must not have.
+    const vectors: readonly (readonly [string, unknown])[] = [
+      ["messageId", "message 42"],
+      ["messageId", "id/with/slashes"],
+      ["channelKeyId", "connector key 1"],
+      ["remoteSequence", -1],
+      ["remoteSequence", 2.5],
+      // The member `conflictBlockerEpochOf` reads the coalescing window back
+      // off. `-1` is that reader's "no blocker was ever recorded" sentinel, so
+      // a negative value here is a value that means something else entirely.
+      ["localFactEpoch", -1],
+      ["localFactEpoch", 1.5],
+      // The bound on how much remote-authored free text one claim can push
+      // into the durable journal. "Minimally redacted" is the ticket's word.
+      ["summary", "s".repeat(2001)],
+    ];
+    for (const [name, value] of vectors) {
+      const label = `${name}=${JSON.stringify(value)}`;
+      expect(codesOf(entry({ payload: payload({ [name]: value }) })), label).toEqual(["malformed_member"]);
+    }
+
+    // The presence half: the boundary value on the accepting side of each
+    // rule, so none of the rejections above is passing against a table that
+    // refuses everything.
+    for (const accepted of [
+      { remoteSequence: 0 },
+      { localFactEpoch: 0 },
+      { summary: "s".repeat(2000) },
+      { messageId: "message-42.v1_b" },
+    ]) {
+      expect(validateJournalEntry(entry({ payload: payload(accepted) })), JSON.stringify(accepted)).toEqual({ ok: true });
+    }
+  });
+
   it("offers no member through which a remote claim could become a local fact", () => {
     // Each of these is a member some OTHER active payload carries. None of
     // them exists here, and the closed table is what makes that mechanical.

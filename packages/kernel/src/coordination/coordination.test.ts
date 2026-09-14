@@ -34,6 +34,9 @@ import {
 import { COORDINATION_PORT_UNBOUND_CODE, UNBOUND_COORDINATION_PORT } from "./port.ts";
 import { createCoordinationSimulator } from "./simulator.ts";
 import { OBSERVATION_ONLY_KINDS } from "../spine/vocabulary.ts";
+import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";
+import { reduceDeliveryJournal } from "../spine/reducer.ts";
+import { evaluateCanonicalRecheck } from "../checkpoint/recheck.ts";
 
 const CHANNEL = "d".repeat(64);
 const OTHER_CHANNEL = "e".repeat(64);
@@ -178,6 +181,67 @@ describe("the coordination message grammar", () => {
       expect(verdict.ok, name).toBe(false);
       if (verdict.ok) continue;
       expect(verdict.rejections.map((rejection) => rejection.code), name).toEqual(["missing_member"]);
+    }
+  });
+
+  it("pins the VALUE rule of every member, not just its presence — a weakened rule is a widened wire", () => {
+    // Round 2 found that this family's closed member vocabularies and value
+    // shapes were pinned by nothing: `claim` could be weakened from
+    // `oneOf(CONTROL_PLANE_CLAIMS)` to `text` — admitting a claim spelled
+    // "cancel", which slips past `AUTHORITY_BEARING_CLAIMS` entirely — and
+    // every suite stayed green. Presence-and-closure rows read like
+    // enforcement and pin neither the vocabulary nor the shape, so this is the
+    // reject half of the table, one vector per member with a rule.
+    //
+    // `protocolVersion` is deliberately absent: its rule IS `text`, because it
+    // is the peer's claim about itself and must be able to hold a version this
+    // product does not implement. Refusing it by name is `protocol_unsupported`
+    // in admission, which has its own row.
+    const vectors: readonly (readonly [string, unknown, string, string])[] = [
+      // A message of another contract family must not be admitted as this one.
+      // `specLiteral` has its own code, which is the point of using it here.
+      ["spec", "coordination-message/2", "/spec", "unsupported_spec"],
+      ["messageId", "not a spine id", "/messageId", "malformed_member"],
+      ["nonce", "not a spine id", "/nonce", "malformed_member"],
+      ["sequence", -1, "/sequence", "malformed_member"],
+      ["sequence", 1.5, "/sequence", "malformed_member"],
+      ["repositoryId", "repo/with/slashes", "/repositoryId", "malformed_member"],
+      ["deliveryId", "delivery id", "/deliveryId", "malformed_member"],
+      // Not in COORDINATION_MESSAGE_KINDS — near-misses, which is how a
+      // widened rule actually gets exercised in the wild.
+      ["kind", "cancel", "/kind", "malformed_member"],
+      ["kind", "Mirror", "/kind", "malformed_member"],
+      // Not in CONTROL_PLANE_CLAIMS. "cancel" is the one that matters: the
+      // local-authority gate is keyed on the exact string "cancelled".
+      ["claim", "cancel", "/claim", "malformed_member"],
+      ["claim", "succeeded", "/claim", "malformed_member"],
+      ["claim", "Cancelled", "/claim", "malformed_member"],
+      ["summary", "s".repeat(2001), "/summary", "malformed_member"],
+      ["authentication", { keyId: "key with spaces", channelDigest: CHANNEL }, "/authentication/keyId", "malformed_member"],
+      // The member that binds a message to the channel it arrived on: a
+      // replay onto another channel must not verify, which needs a digest.
+      ["authentication", { keyId: KEY, channelDigest: "not-a-digest" }, "/authentication/channelDigest", "malformed_member"],
+      ["authentication", { keyId: KEY, channelDigest: CHANNEL.toUpperCase() }, "/authentication/channelDigest", "malformed_member"],
+    ];
+    for (const [name, value, pointer, code] of vectors) {
+      const verdict = validateCoordinationMessage({ ...message(), [name]: value });
+      const label = `${name}=${JSON.stringify(value)}`;
+      expect(verdict.ok, label).toBe(false);
+      if (verdict.ok) continue;
+      expect(verdict.rejections.map((rejection) => rejection.pointer), label).toEqual([pointer]);
+      expect(verdict.rejections.map((rejection) => rejection.code), label).toEqual([code]);
+    }
+
+    // The presence half. Every member above is asserted to REJECT a bad value,
+    // and an assertion like that passes for free against a grammar that
+    // rejects everything — so the boundary value on each side is accepted.
+    expect(validateCoordinationMessage({ ...message(), sequence: 0 }).ok).toBe(true);
+    expect(validateCoordinationMessage({ ...message(), summary: "s".repeat(2000) }).ok).toBe(true);
+    for (const kind of COORDINATION_MESSAGE_KINDS) {
+      expect(validateCoordinationMessage({ ...message(), kind }).ok, kind).toBe(true);
+    }
+    for (const claim of CONTROL_PLANE_CLAIMS) {
+      expect(validateCoordinationMessage({ ...message(), claim }).ok, claim).toBe(true);
     }
   });
 
@@ -469,6 +533,138 @@ describe("reconciliation", () => {
 });
 
 // ── The port and the no-control-plane path ────────────────────────────────
+
+// ── AC1's second clause, end to end ───────────────────────────────────────
+
+describe("a reconnect flush against a pending takeover confirmation", () => {
+  // Round 2 found that AC1's second clause — mirror appends "void no pending
+  // confirmation or assertion" — was argued rather than evidenced: the flush
+  // rows walk a `localFactEpochOf` count and the reducer row appends two
+  // mirrors, and the step to "no confirmation voided" was left to the reader.
+  // This row closes it with the product's own two mechanisms: the real reducer
+  // produces the observed revision, and the real `evaluateCanonicalRecheck`
+  // takeover consumption is what a pending takeover authorization is actually
+  // rechecked by.
+  const DIGEST = "a".repeat(64);
+  const DIGEST2 = "c".repeat(64);
+  const OID = "b".repeat(40);
+
+  const deliveryEntry = (revision: number, kind: string, payload: Record<string, unknown>, key = `key-${revision}-${kind}`) => ({
+    spec: JOURNAL_ENTRY_SPEC,
+    journal: "delivery",
+    subjectId: "delivery-1",
+    expectedRevision: revision,
+    idempotencyKey: key,
+    kind,
+    payload,
+  });
+
+  const openingEntries = () => [
+    deliveryEntry(0, "delivery.registered", {
+      contractDigest: DIGEST,
+      intakeId: "intake-1",
+      confirmationNonce: "nonce-1",
+      activeCompositionProfile: "core",
+      registeringInstallationId: "install-1",
+    }),
+    deliveryEntry(1, "policy.snapshot.bound", { policyDigest: DIGEST, repositoryAuthorityEpoch: 4 }),
+    deliveryEntry(2, "generation.pinned", { generationDigest: DIGEST2, releaseId: "core-v1", profile: "core" }),
+    deliveryEntry(3, "transition.committed", { from: "accepted", to: "preparing" }),
+    deliveryEntry(4, "workspace.bound", {
+      workspaceId: "workspace-1",
+      repositoryId: "repo-1",
+      baseRef: "refs/heads/main",
+      baseTipSha: OID,
+      branchRef: "refs/heads/delivery-1",
+      branchRefValue: OID,
+      worktreeId: "worktree-1",
+      baselineClassification: "clean",
+    }),
+    deliveryEntry(5, "invocation.fenced", {
+      fence: 1,
+      hostTaskId: "task-1",
+      worktreeId: "worktree-1",
+      candidateTreeSha: OID,
+      candidateBranchRefValue: OID,
+      policyDigest: DIGEST,
+      authorityEpoch: 4,
+      observationLifetimeSeconds: 900,
+    }),
+  ];
+
+  const mirrorEntry = (revision: number, index: number) =>
+    deliveryEntry(
+      revision,
+      "control.plane.mirror.recorded",
+      {
+        messageId: `message-${index}`,
+        channelKeyId: "connector-key-1",
+        claim: "completed",
+        remoteSequence: index,
+        localFactEpoch: revision,
+        disposition: index === 0 ? "blocker" : "coalesced",
+        summary: `the control plane claims completion, flush entry ${index}`,
+      },
+      `mirror-${index}`,
+    );
+
+  const takeoverRecheck = (boundRevision: number, observedRevision: number) =>
+    evaluateCanonicalRecheck({
+      consumption: {
+        kind: "takeover",
+        supersededFence: { kind: "compare", expected: 1, observed: 1 },
+        expectedJournalRevision: { kind: "compare", expected: boundRevision, observed: observedRevision },
+        targetBaseCommit: { kind: "compare", expected: OID, observed: OID },
+      },
+      values: {
+        "product-trust": { kind: "eligible", ok: true },
+        "repository-authority-epoch": { kind: "compare", expected: 4, observed: 4 },
+        "invocation-fence": "absent-by-state",
+        "registering-installation-id": { kind: "compare", expected: "install-1", observed: "install-1" },
+        "active-profile": { kind: "compare", expected: "core", observed: "core" },
+        "projection-digest": "absent-by-state",
+        "discovery-configuration-digest": "absent-by-state",
+      },
+    });
+
+  it("leaves the pending confirmation consumable — 1000 mirror records move the bound revision not at all", () => {
+    const opening = openingEntries();
+    const bound = reduceDeliveryJournal(opening);
+    expect(bound.ok).toBe(true);
+    if (!bound.ok) return;
+    // The operator's takeover authorization is minted here, binding whatever
+    // revision the journal carried at that moment.
+    const boundRevision = bound.state.expectedRevision;
+
+    const flushed = reduceDeliveryJournal([
+      ...opening,
+      ...Array.from({ length: 1000 }, (_unused, index) => mirrorEntry(boundRevision, index)),
+    ]);
+    expect(flushed.ok).toBe(true);
+    if (!flushed.ok) return;
+    expect(flushed.state.expectedRevision).toBe(boundRevision);
+
+    // The product's own recheck, not a restatement of it: the consumption that
+    // a pending takeover authorization goes through still passes.
+    expect(takeoverRecheck(boundRevision, flushed.state.expectedRevision)).toEqual({ ok: true });
+
+    // The presence half, and the reason this row is not vacuous: the SAME
+    // recheck fails the moment the observed revision really does move, so it
+    // is genuinely observing the number the flush left alone.
+    const advanced = reduceDeliveryJournal([
+      ...opening,
+      ...Array.from({ length: 1000 }, (_unused, index) => mirrorEntry(boundRevision, index)),
+      deliveryEntry(boundRevision, "transition.committed", { from: "preparing", to: "planning" }),
+    ]);
+    expect(advanced.ok).toBe(true);
+    if (!advanced.ok) return;
+    expect(advanced.state.expectedRevision).toBe(boundRevision + 1);
+    const voided = takeoverRecheck(boundRevision, advanced.state.expectedRevision);
+    expect(voided.ok).toBe(false);
+    if (voided.ok) return;
+    expect(voided.failures.map((failure) => failure.value)).toContain("expected-journal-revision");
+  });
+});
 
 describe("the unbound port — core delivery depends on no connector", () => {
   it("refuses every send and every host-start request, and yields nothing", async () => {
