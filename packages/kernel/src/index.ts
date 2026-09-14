@@ -730,8 +730,10 @@ export {
   PORTABLE_PRIVILEGED_CREDENTIALS,
   PORTABLE_INTAKE_GRANT,
   PORTABLE_STAGE_GRANT,
+  TRACKER_POSTURES,
   checkBoundPolicy,
   compileRepositoryPolicy,
+  trackerPostureOf,
   verifyCompiledPolicy,
   effectiveHostedChecksPolicy,
   type CompiledCheckpointGrant,
@@ -739,6 +741,7 @@ export {
   type CompileRepositoryPolicyInput,
   type AvailablePersona,
   type CompileRepositoryPolicyResult,
+  type TrackerPosture,
 } from "./policy/compile.ts";
 export {
   ARCHIVE_RELEASE_MANIFEST_ENTRY,

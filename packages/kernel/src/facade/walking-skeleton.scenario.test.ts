@@ -210,6 +210,16 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(beforeBinding.status.nextCheckpoint.kind).toBe("bind-workspace");
     expect(beforeBinding.status.authorizedNextActions).toContain("bindWorkspace");
     expect(beforeBinding.status.authorizedNextActions).not.toContain("presentTakeover");
+    // The tracker posture reaches the operator only through this facade, and
+    // only this row reads it off a real facade rather than off a composed
+    // status fixture. It is compared against the BOUND policy's own value, so
+    // a facade that substituted any constant — "available" for a repository
+    // that has no tracker is the failure that matters — fails here. The
+    // disposable policy binds no tracker capability, so the bound value is
+    // `absent`, and the status is complete without one: this row is also the
+    // scenario's evidence that a trackerless repository stays whole.
+    expect(beforeBinding.status.trackerPosture).toBe(disposablePolicyBinding().compiledPolicy.tracker);
+    expect(beforeBinding.status.trackerPosture).toBe("absent");
 
     // ── The HOST creates the isolated worktree; the facade only binds it ──
     worktreeA = path.join(scratch, "worktree-a");
