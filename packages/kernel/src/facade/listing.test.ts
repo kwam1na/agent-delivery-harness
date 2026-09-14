@@ -201,7 +201,13 @@ describe("the installation-scoped listing", () => {
     // The inventory declares this operation `read`, `absent-by-state`, `none`.
     // A mutation that changes a RETURNED value is caught by every other row
     // here; a write that changes nothing returned is caught only by this one.
-    const liveDir = path.join(namespace, "deliveries", "delivery-live");
+    // THE WHOLE NAMESPACE, not one delivery. `delivery-live` is the only
+    // fixture that takes every happy branch of the loop, so a write that fires
+    // on a branch it does not take — a "self-healing" heartbeat stamped for a
+    // delivery that has none, say — would be invisible to a row that watched
+    // only that directory. This root holds `delivery-gone` too (no workspace,
+    // a stale stamp on disk) and the root itself.
+    const deliveriesRoot = path.join(namespace, "deliveries");
     // CONTENTS, not names. A file list catches a file the read invents, but
     // the write that would actually matter is an OVERWRITE of a file already
     // there — `binding/observation.json` above all, the heartbeat this read
@@ -216,7 +222,7 @@ describe("the installation-scoped listing", () => {
           const full = path.join(dir, relative);
           return `${relative}:${statSync(full).isDirectory() ? "" : readFileSync(full, "utf8")}`;
         });
-    const before = snapshot(liveDir);
+    const before = snapshot(deliveriesRoot);
 
     const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
     expect(listing.ok, JSON.stringify(listing)).toBe(true);
@@ -225,7 +231,7 @@ describe("the installation-scoped listing", () => {
 
     // Not one byte, and not one file: no journal revision, no fabricated
     // heartbeat, nothing stamped on the way past.
-    expect(snapshot(liveDir)).toEqual(before);
+    expect(snapshot(deliveriesRoot)).toEqual(before);
 
     const live = listing.deliveries.find((listed) => listed.deliveryId === "delivery-live");
     expect(live?.state).toBe("planning");

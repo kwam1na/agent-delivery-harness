@@ -10,7 +10,7 @@
  * refuses, and asserts the listing names both anyway.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -261,6 +261,28 @@ describe("managed deliveries", () => {
     expect(result.kind, JSON.stringify(result)).toBe("ok");
     expect((JSON.parse(written) as { deliveryId: string }[]).map((candidate) => candidate.deliveryId)).toEqual(["delivery-only"]);
     expect((result as { kind: "ok"; summary: string }).summary).toBe("1 delivery(ies) registered for this installation");
+  });
+
+  it("relays the facade's own refusal instead of rendering quiet it cannot vouch for", async () => {
+    // The kernel refuses an unreadable namespace rather than answering `[]`.
+    // This row pins that the REFUSAL survives to the terminal: rendering it as
+    // `ok` with an empty array would rebuild, one layer up, the positive claim
+    // of quiet the kernel refuses to make — and it is the terminal an operator
+    // actually reads.
+    const root = bareInstallation();
+    const deliveries = path.join(root, ".git", "managed-delivery", "deliveries");
+    await registerDelivery(path.join(root, ".git", "managed-delivery"), "delivery-only");
+    chmodSync(deliveries, 0o000);
+    try {
+      const { result, written } = await run(["deliveries"], root);
+      expect(result.kind, JSON.stringify(result)).toBe("blocked");
+      expect(result.kind === "blocked" ? result.blockers.map((blocker) => blocker.code) : []).toContain(
+        "delivery_namespace_unreadable",
+      );
+      expect(written).toBe("");
+    } finally {
+      chmodSync(deliveries, 0o700);
+    }
   });
 
   it("judges the installation before the delivery, for the operations that were already here", async () => {
