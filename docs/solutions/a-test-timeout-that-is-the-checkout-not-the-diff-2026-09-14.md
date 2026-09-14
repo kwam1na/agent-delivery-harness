@@ -76,10 +76,12 @@ wave ran, so they were reverted to base rather than shipped with a ceiling
 nothing had established. The delivery went back to exactly the three files its
 ticket names.
 
-**Keep the load term outside the window you assert.** The three rows this
-delivery does keep open their provider subprocess *before* starting the clock
-(`await openReadyProviderProcess(...)`, then `const started = Date.now()`), so
-the spawn that load inflates is not inside the measured window at all. Their
+**Keep the load term outside the window you assert.** Four rows in the file
+this delivery does keep open a provider subprocess, and the two of them that
+assert an elapsed bound open it *before* starting the clock
+(`await openReadyProviderProcess(...)` at lines 285 and 394, then
+`const started = Date.now()` at 289 and 395), so the spawn that load inflates
+is not inside the measured window at all. Their
 residual overhead above the product's own timers measured 10–528 ms across
 every run in three review rounds, on a machine where spawning took tens of
 seconds. That is what makes an elapsed-time assertion survivable here at all,
