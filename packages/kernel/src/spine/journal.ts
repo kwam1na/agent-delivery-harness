@@ -340,6 +340,14 @@ const terminationProvenancePayload: PayloadCheck = (payload, at, collector) => {
     [
       { name: "fence", check: positiveInt },
       { name: "hostVersion", check: text },
+      // WHICH HOST, not merely which version. The facade reaches its host
+      // through an injected binding now, and a provenance record that names a
+      // version but not the host is ambiguous the moment a second host exists:
+      // the teardown grade below is looked up per host id, so a reader cannot
+      // tell which row this verdict came from. OPTIONAL, because journals
+      // written before the seam existed carry no host id and must stay
+      // readable; every entry this facade writes carries it.
+      { name: "hostId", check: text, required: false },
       { name: "provenance", check: oneOf(TERMINATION_PROVENANCE_KINDS) },
       { name: "descendantTeardown", check: oneOf(DESCENDANT_TEARDOWN_STATUSES) },
       { name: "resumeEligibility", check: oneOf(RESUME_ELIGIBILITIES) },

@@ -180,6 +180,44 @@ describe("the host's own tool vocabulary", () => {
     expect(allowed.allowed, JSON.stringify(allowed)).toBe(true);
   });
 
+  it("adjudicates the path it READ, not an unreadable `file_path` member sitting beside it", () => {
+    // THE SAME OPERAND MUST BE AUTHORITATIVE ON BOTH BRANCHES. `apply_patch`
+    // names its writes in `fileChanges`; a `file_path` member may also be
+    // present and be something this hook cannot read. Adjudicating that member
+    // instead of the path actually resolved refused an in-grant one-file patch
+    // with a reason that was FALSE about it — "write path `..`" naming a path
+    // the invocation never mentioned — while the identical patch naming two
+    // files was allowed, because the multi-path branch spells the injection
+    // the other way round. The branch taken is a path count; it decides
+    // nothing about the question.
+    for (const alias of [[], "", 42, null]) {
+      const decision = decideCodexHookInvocation(
+        state,
+        {
+          tool_name: "apply_patch",
+          tool_input: { fileChanges: { "/work/tree/src/a.ts": {} }, file_path: alias },
+        },
+        OBSERVED_AT,
+        SESSION_FENCE,
+      );
+      expect(decision.allowed, `${JSON.stringify(alias)}: ${JSON.stringify(decision)}`).toBe(true);
+    }
+    // And the boundary still holds on that same shape: the READ path is what
+    // containment is applied to, so a protected one is refused even when an
+    // unreadable alias rides along.
+    const denied = decideCodexHookInvocation(
+      state,
+      {
+        tool_name: "apply_patch",
+        tool_input: { fileChanges: { "/work/tree/.git/config": {} }, file_path: [] },
+      },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(denied.allowed).toBe(false);
+    if (!denied.allowed) expect(denied.reason).not.toContain("unreadable_write_operands");
+  });
+
   it("denies a write whose operands it cannot read, and a tool it has never heard of", () => {
     const unreadable = decideCodexHookInvocation(
       state,

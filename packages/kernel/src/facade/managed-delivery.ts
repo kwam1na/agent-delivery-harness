@@ -4596,6 +4596,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const appended = await appendEntry(guarded.store, deliveryId, "termination.provenance.recorded", {
         fence: guarded.lastFence,
         hostVersion: input.hostVersion,
+        // The host this delivery was actually bound to, read from the same
+        // binding the grade above was looked up under, so the record says
+        // whose teardown this verdict is about.
+        hostId: hostBinding.hostId,
         provenance: "graceful",
         descendantTeardown,
         resumeEligibility,

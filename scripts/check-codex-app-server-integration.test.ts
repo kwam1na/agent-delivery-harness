@@ -12,6 +12,7 @@
  * themselves.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ import {
   CODEX_PINNED_HOST_VERSION,
   SPINE_INSTANT,
   codexSubagentPosture,
+  composeCodexAppServerThread,
 } from "@agent-delivery-harness/kernel";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -73,6 +75,38 @@ function expectLiveCase(absolute: string, caseName: string): void {
   expect(declared.test(source), `${absolute}: no live case declares ${JSON.stringify(caseName)}`).toBe(true);
   expect(disabled.test(source), `${absolute}: ${JSON.stringify(caseName)} is declared but disabled`).toBe(false);
   expectNothingSilenced(absolute, source, JSON.stringify(caseName));
+}
+
+/**
+ * Certifies a criterion list's citations. Named and exported to the suite
+ * rather than inlined in the loop because an inline loop over citations that
+ * are all clean today is ITSELF an absence assertion: deleting the two calls
+ * left the sensor green with every citation certified by a rule that ran
+ * nowhere — the same shape, one level up, that this rule has already been
+ * caught in twice.
+ */
+function certifyCitations(
+  criteria: readonly { readonly evidence: string }[],
+  resolve: (file: string) => string,
+): number {
+  const evidenceOf = (text: string): { readonly file: string; readonly caseName?: string } => {
+    const [file = "", caseName] = text.split(" — ");
+    return { file: file.trim(), caseName: caseName?.trim().replace(/^'|'$/g, "") };
+  };
+  let certified = 0;
+  for (const criterion of criteria) {
+    const { file, caseName } = evidenceOf(criterion.evidence);
+    const absolute = resolve(file);
+    expect(existsSync(absolute), file).toBe(true);
+    if (caseName === undefined) expectLiveFile(absolute);
+    else expectLiveCase(absolute, caseName);
+    certified += 1;
+  }
+  // The COUNT is returned so a caller can assert the certification actually
+  // ran over its own citations. Without it, deleting the call from the
+  // criteria case leaves this sensor green — the rule is pinned, the helpers
+  // are pinned, and nothing says the record's citations ever met either.
+  return certified;
 }
 
 /** The same rule for a criterion that cites a whole file rather than a case. */
@@ -155,17 +189,11 @@ describe("the Codex app-server integration record", () => {
     for (const sensor of record.modelFreeLane.sensors as string[]) {
       expect(existsSync(path.join(REPO_ROOT, sensor)), sensor).toBe(true);
     }
-    const evidenceOf = (text: string): { readonly file: string; readonly caseName?: string } => {
-      const [file = "", caseName] = text.split(" — ");
-      return { file: file.trim(), caseName: caseName?.trim().replace(/^'|'$/g, "") };
-    };
-    for (const criterion of record.acceptanceCriteria as any[]) {
-      const { file, caseName } = evidenceOf(criterion.evidence);
-      const absolute = path.join(REPO_ROOT, file);
-      expect(existsSync(absolute), file).toBe(true);
-      if (caseName === undefined) expectLiveFile(absolute);
-      else expectLiveCase(absolute, caseName);
-    }
+    const criteria = record.acceptanceCriteria as { readonly evidence: string }[];
+    expect(criteria.length).toBeGreaterThan(0);
+    // EVERY criterion, counted. A call whose result nothing reads can be
+    // deleted with this case green.
+    expect(certifyCitations(criteria, (file) => path.join(REPO_ROOT, file))).toBe(criteria.length);
     const ordering = record.attestationOrdering;
     expect(existsSync(path.join(REPO_ROOT, ordering.sensor))).toBe(true);
     expectLiveCase(path.join(REPO_ROOT, ordering.sensor), ordering.caseName);
@@ -235,6 +263,17 @@ describe("the Codex app-server integration record", () => {
       // And the name check itself still bites: a file that declares no such
       // case fails even though nothing in it is silenced.
       expect(() => expectLiveCase(clean, "a case nobody declares")).toThrow();
+
+      // AND THE CALLER. The helpers being right is not the criteria loop
+      // CALLING them: deleting both calls left this sensor green while every
+      // citation in the record went unchecked.
+      const resolve = (file: string): string => path.join(dir, file);
+      expect(certifyCitations([{ evidence: `clean.test.ts — 'cited case'` }], resolve)).toBe(1);
+      expect(() =>
+        certifyCitations([{ evidence: `silenced.test.ts — 'cited case'` }], resolve),
+      ).toThrow();
+      expect(() => certifyCitations([{ evidence: "silenced.test.ts" }], resolve)).toThrow();
+      expect(() => certifyCitations([{ evidence: "nothing-here.test.ts" }], resolve)).toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -264,6 +303,40 @@ describe("the Codex app-server integration record", () => {
     // that drifts away from what the binding composes fails here.
     expect(record.host.admissionSurface).toContain(CODEX_HOOK_EVENT);
     expect(record.host.gradeSource).toContain("qualifications/host-admission-capabilities.json");
+  });
+
+  it("keeps its hook-coverage disclosure true of what the binding actually composes", async () => {
+    // A LIMITATION DISCLOSED IN PROSE IS DEFENDED BY PROSE. Every other field
+    // here is checked against something outside the record; the limitations
+    // list was checked only for being non-empty, so the one entry that
+    // discharges a review finding — the `pre_tool_use`-only asymmetry, and
+    // with it the absence of any Codex counterpart to the Claude binding's
+    // projection-consumption evidence — could be deleted with this sensor
+    // green. Both directions are tied to the tree: the disclosure must name
+    // the event and the operation it has consequences for, and the composition
+    // must actually wire that one event and no other.
+    const base = await mkdtemp(path.join(tmpdir(), "codex-record-hooks-"));
+    try {
+      const composed = await composeCodexAppServerThread({
+        bindingDir: path.join(base, "binding"),
+        statePath: path.join(base, "binding", "state-1.json"),
+        hookCommand: ["node", "--import", "tsx", path.join(base, "codex-hook-main.ts")],
+        fence: 1,
+        workspaceRoot: path.join(base, "worktree"),
+        commonGitDir: path.join(base, "repo", ".git"),
+        authorityDir: path.join(base, "authority"),
+        grant: { allowedCapabilities: ["Read", "Write"], writablePaths: ["src"], protectedPaths: [".git"] },
+      });
+      const hooks = (composed.request.params.config as Record<string, unknown>)["hooks"] as Record<string, unknown>;
+      expect(Object.keys(hooks)).toEqual([CODEX_HOOK_EVENT]);
+
+      const disclosed = (record.knownLimitations as string[]).filter(
+        (entry) => entry.includes(CODEX_HOOK_EVENT) && entry.includes("recordProjectionConsumption"),
+      );
+      expect(disclosed.length, "a known limitation names the one composed hook event and what it costs").toBe(1);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
   it("states what was NOT exercised, and what it still does not know", () => {

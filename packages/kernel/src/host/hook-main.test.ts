@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { digestCanonical } from "../digest.ts";
+import { SPINE_INSTANT } from "../spine/grammar.ts";
 import {
   decideHookInvocation,
   exactWorkflowSourceRead,
@@ -147,8 +148,14 @@ describe("the Codex subcommand of this same entry", () => {
       // observation lifetime. A Codex branch that rendered its decision and
       // wrote nothing would tell the operator to abandon a live workspace.
       expect(existsSync(observationOf(dir))).toBe(true);
-      expect(JSON.parse(readFileSync(observationOf(dir), "utf8"))).toMatchObject({
+      // THE INSTANT IS THE FIELD THE AGEING RULE READS. A `toMatchObject` on
+      // the fence alone is satisfied by an observation whose `observedAt` is
+      // unparseable — the file exists, the fence is right, and the facade's
+      // `instantSeconds` reads NaN, which is precisely the "abandon a live
+      // workspace" outcome this write exists to prevent. Pin the whole object.
+      expect(JSON.parse(readFileSync(observationOf(dir), "utf8"))).toEqual({
         fence: expectation.invocationFence,
+        observedAt: expect.stringMatching(SPINE_INSTANT),
       });
 
       // An expired attestation denies again, through the same entry.

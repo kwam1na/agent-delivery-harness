@@ -143,7 +143,16 @@ export function decideCodexHookInvocation(
     // spelled in, and the write paths under the member name the shared
     // decision's own table reads for that capability.
     tool_name: host.capability,
-    tool_input: host.writes === "paths" ? { file_path: writes[0], ...(toolInput ?? {}) } : toolInput,
+    // THE PATH THIS HOOK READ WINS, exactly as it does on the multi-path branch
+    // below. Spelling the injection first and spreading the host's document
+    // over it let a `file_path` member the hook could not read — `[]`, `""`, a
+    // number — override the path `codexWrittenPaths` actually resolved out of
+    // `fileChanges`, so the same invocation was adjudicated on an unrelated
+    // operand and refused with a reason that was false about it
+    // (`unnormalized_path: write path ".."`), while the identical invocation
+    // naming two written paths was allowed. Which branch ran was decided by a
+    // path count that has no bearing on the question.
+    tool_input: host.writes === "paths" ? { ...(toolInput ?? {}), file_path: writes[0] } : toolInput,
     tool_use_id: typeof input.tool_use_id === "string" ? input.tool_use_id : undefined,
   };
   if (host.writes === "paths" && writes.length > 1) {

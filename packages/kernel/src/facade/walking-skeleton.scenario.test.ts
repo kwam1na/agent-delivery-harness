@@ -836,11 +836,20 @@ describe("the thin one-handoff walking skeleton", () => {
     const calls: { readonly fence: number; readonly workspaceRoot: string; readonly grant: HostSessionGrant }[] = [];
     const digestCalls: string[] = [];
     let hostIdReads = 0;
+    let digestAnswer: string | undefined;
     const MARKER = "--composed-through-the-seam";
+    // Marker VALUES, not merely recorded calls. A stub that delegates a member
+    // verbatim is transparent on it twice over: the facade could call the
+    // Claude definition at that site (caught by the recorders below), or it
+    // could call this binding and then use a value computed some other way —
+    // which no recorder can see, because the two answers are identical. Both
+    // members therefore answer something only THIS binding can produce.
+    const MARKER_HOST_ID = "marker-host-only-this-binding-answers";
+    const MARKER_DIGEST = "d".repeat(64);
     const recording: ManagedHostBinding = {
       get hostId() {
         hostIdReads += 1;
-        return claudeCodeBinding.hostId;
+        return MARKER_HOST_ID;
       },
       async composeSession(composeInput) {
         calls.push({
@@ -854,9 +863,9 @@ describe("the thin one-handoff walking skeleton", () => {
         // caller read THIS binding's answer.
         return { ...composed, hostAdmissionArguments: [...composed.hostAdmissionArguments, MARKER] };
       },
-      recomputeDiscoveryConfigurationDigest: (digestInput) => {
+      recomputeDiscoveryConfigurationDigest: async (digestInput) => {
         digestCalls.push(digestInput.admissionConfigurationPath);
-        return claudeCodeBinding.recomputeDiscoveryConfigurationDigest(digestInput);
+        return digestAnswer ?? (await claudeCodeBinding.recomputeDiscoveryConfigurationDigest(digestInput));
       },
       admissionConfigurationPath: (bindingDir, fence) => claudeCodeBinding.admissionConfigurationPath(bindingDir, fence),
     };
@@ -944,6 +953,36 @@ describe("the thin one-handoff walking skeleton", () => {
     });
     expect(provenance.ok, JSON.stringify(provenance)).toBe(true);
     expect(hostIdReads).toBeGreaterThan(readsBefore);
+    // The VALUE, not the read. Every graded host in this tree sits at Tier 0,
+    // so the teardown verdict is `unverified` for any host id and a wrong one
+    // has no other consequence — which is exactly why the provenance record
+    // names the host it graded. A facade holding a constant, or a near-miss
+    // spelling, is visible here and nowhere else.
+    const seamStore = createJournalStore(
+      path.join(await seamFacade.namespaceDir(), "deliveries", confirmed.deliveryId, "journal.jsonl"),
+    );
+    const seamEntries = await seamStore.read();
+    expect(seamEntries.ok).toBe(true);
+    if (!seamEntries.ok) return;
+    const recorded = (seamEntries.entries as readonly { kind: string; payload: Record<string, unknown> }[]).filter(
+      (entry) => entry.kind === "termination.provenance.recorded",
+    );
+    expect(recorded.length).toBe(1);
+    expect(recorded[0]!.payload["hostId"]).toBe(MARKER_HOST_ID);
+
+    // AND THE DIGEST'S ANSWER, not merely the call. From here the seam
+    // answers a digest only it can produce; the recheck compares that answer
+    // against the one admission bound, so the delivery must refuse as tampered.
+    // A facade that called this member for its side effect and then computed
+    // the observed digest itself would sail through.
+    digestAnswer = MARKER_DIGEST;
+    const tampered = await seamFacade.recordProjectionConsumption({
+      deliveryId: confirmed.deliveryId,
+      category: "workflow-source",
+    });
+    expect(tampered.ok, JSON.stringify(tampered)).toBe(false);
+    if (tampered.ok) return;
+    expect(tampered.blockers.map((blocker) => blocker.code)).toEqual(["discovery_configuration_tampered"]);
   });
 });
 
