@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { composeManagedStatus, type ManagedStatusInput } from "./status.ts";
-import { TRACKER_POSTURES } from "../policy/compile.ts";
+import { TRACKER_POSTURES, compileRepositoryPolicy, type TrackerPosture } from "../policy/compile.ts";
+import {
+  compositionPersonaSetFixture,
+  degradedTrackerAdapterFixture,
+  policyDocumentFixture,
+  sensorAdapterFixture,
+  trackerAdapterFixture,
+} from "../policy/fixtures.ts";
 
 const baseInput = (overrides: Partial<ManagedStatusInput> = {}): ManagedStatusInput => ({
   deliveryId: "delivery-1",
@@ -331,6 +338,37 @@ describe("the tracker posture the status model reports", () => {
     const absent = composeManagedStatus(baseInput({ trackerPosture: "absent" })).trackerPosture;
     const available = composeManagedStatus(baseInput({ trackerPosture: "available" })).trackerPosture;
     expect(new Set([degraded, absent, available]).size).toBe(3);
+  });
+
+  /**
+   * The rows above hand the projection a posture this file wrote down, so they
+   * prove carriage and nothing about where the value comes from. This one
+   * takes the posture out of a REAL compilation of a real adapter set, so the
+   * compiler and the projection have to agree about the same three values
+   * rather than about a literal this suite chose. A posture renamed on one
+   * side of that seam and not the other fails here.
+   */
+  it("agrees with the compiler about the value of every posture, not with a literal in this file", () => {
+    const compiledFor = (adapters: readonly Record<string, unknown>[]): TrackerPosture => {
+      const result = compileRepositoryPolicy({
+        document: policyDocumentFixture(),
+        adapters,
+        personas: compositionPersonaSetFixture(),
+        productTrustRevocationEpoch: 0,
+        repositoryAuthorityRevocationEpoch: 0,
+      });
+      if (!result.ok) throw new Error(`the fixture policy no longer compiles: ${JSON.stringify(result.rejections)}`);
+      return result.compiled.tracker;
+    };
+    const observed = {
+      absent: compiledFor([sensorAdapterFixture()]),
+      available: compiledFor([sensorAdapterFixture(), trackerAdapterFixture()]),
+      degraded: compiledFor([sensorAdapterFixture(), degradedTrackerAdapterFixture()]),
+    };
+    for (const [expected, posture] of Object.entries(observed)) {
+      expect(composeManagedStatus(baseInput({ trackerPosture: posture })).trackerPosture, expected).toBe(expected);
+    }
+    expect(new Set(Object.values(observed)).size).toBe(TRACKER_POSTURES.length);
   });
 
   it("does not let the tracker posture move any other derived value", () => {

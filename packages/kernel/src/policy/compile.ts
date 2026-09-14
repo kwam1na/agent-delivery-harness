@@ -113,11 +113,22 @@ export type TrackerPosture = (typeof TRACKER_POSTURES)[number];
  * The posture of one adapter set. Reads exactly the `tracker` kind: a bound
  * `merge` or `approval-request` capability without a credential says nothing
  * about the tracker.
+ *
+ * EVERY tracker descriptor is read, not the first one declared. The adapter
+ * grammar rejects a duplicate `capabilityId` but not a duplicate KIND
+ * (`validateAdapterSet` in `./capabilities.ts`), so a valid set may bind two
+ * tracker capabilities — say a credentialed one beside a declared-but-
+ * unconfigured one. Reading only the first would make the compiled posture,
+ * and therefore whether a `block` document compiles at all, depend on the
+ * order the owner happened to list them in. The set is `available` when ANY
+ * bound tracker can operate: the repository has a tracker it can reach, which
+ * is exactly what the posture is asked to say. It is `degraded` only when a
+ * tracker is bound and none of them binds a credential.
  */
 export function trackerPostureOf(adapters: readonly AdapterCapability[]): TrackerPosture {
-  const tracker = adapters.find((adapter) => adapter.kind === "tracker");
-  if (tracker === undefined) return "absent";
-  return tracker.credentialId === undefined ? "degraded" : "available";
+  const trackers = adapters.filter((adapter) => adapter.kind === "tracker");
+  if (trackers.length === 0) return "absent";
+  return trackers.some((tracker) => tracker.credentialId !== undefined) ? "available" : "degraded";
 }
 
 /**

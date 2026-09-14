@@ -480,8 +480,12 @@ describe("tracker absence with a declared fallback", () => {
  * repository that looks fully tracked and cannot file anything.
  */
 describe("the compiled tracker posture", () => {
-  it("names exactly three postures", () => {
+  it("names exactly three postures, in a list nothing downstream can extend", () => {
     expect([...TRACKER_POSTURES]).toEqual(["available", "degraded", "absent"]);
+    // The freeze is half the closed-list claim: without it a consumer can push
+    // a fourth member onto the shared array and every "for (const posture of
+    // TRACKER_POSTURES)" loop in this suite silently grows a case nobody wrote.
+    expect(Object.isFrozen(TRACKER_POSTURES)).toBe(true);
   });
 
   it("reports absent when no tracker capability is bound at all", () => {
@@ -512,6 +516,29 @@ describe("the compiled tracker posture", () => {
       } as unknown as AdapterCapability;
       expect(trackerPostureOf([adapter]), kind).toBe("absent");
     }
+  });
+
+  /**
+   * The grammar admits two tracker descriptors — `validateAdapterSet` rejects
+   * a duplicate `capabilityId`, not a duplicate kind — so the posture of a
+   * two-tracker set is a real question and its answer must not depend on the
+   * order the owner declared them in. A `find`-based derivation answers
+   * `degraded` for one order and `available` for the other, and a document
+   * declaring `block` then compiles or refuses on declaration order alone.
+   */
+  it("reads every bound tracker, so the posture does not turn on declaration order", () => {
+    const credentialled = trackerAdapterFixture() as unknown as AdapterCapability;
+    const credentialless = {
+      ...(degradedTrackerAdapterFixture() as unknown as AdapterCapability),
+      capabilityId: "tracker.other",
+    } as AdapterCapability;
+    expect(trackerPostureOf([credentialless, credentialled])).toBe("available");
+    expect(trackerPostureOf([credentialled, credentialless])).toBe("available");
+    // Two bound trackers, neither able to operate, is still degraded in both
+    // orders — the rule is "any can operate", not "the first one can".
+    const secondCredentialless = { ...credentialless, capabilityId: "tracker.third" } as AdapterCapability;
+    expect(trackerPostureOf([credentialless, secondCredentialless])).toBe("degraded");
+    expect(trackerPostureOf([secondCredentialless, credentialless])).toBe("degraded");
   });
 
   it("carries each posture through a real compilation, not only through the helper", () => {
