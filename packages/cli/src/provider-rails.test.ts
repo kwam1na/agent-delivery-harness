@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -92,6 +93,79 @@ describe("delivery-provider rails conformance", () => {
     }
   });
 });
+
+/**
+ * Budget for a row that drives a real provider subprocess.
+ *
+ * These rows used to inherit vitest's 5000 ms default, which had to cover a
+ * node boot, the product's own lifecycle deadline, a termination grace and a
+ * SIGKILL escalation on a runner shared with every other test file. Nothing in
+ * these rows is timed BY the test — the deadline under test is the product's,
+ * passed in its own option — so the row's budget is explicit and generous and
+ * carries no assertion of its own.
+ */
+const PROCESS_ROW_TIMEOUT_MS = 60_000;
+
+/**
+ * A deadline set so far past the row's own budget that it can never be what
+ * ends the attempt, for the row whose subject is the abort rather than the
+ * expiry.
+ */
+const UNREACHED_DEADLINE_MS = 10 * 60_000;
+
+/**
+ * The one deadline here that has to beat a provider that does answer: it spans
+ * a negotiation round trip on an already-live child. Generous rather than
+ * tuned, because the row asserts what the expiry did and never how long it took.
+ */
+const WARM_EXPIRY_DEADLINE_MS = 5_000;
+
+/**
+ * The line a fixture provider appends once its handlers and its stdin reader
+ * are installed. Waiting on it is what keeps a cold node boot out of the
+ * lifecycle deadline the row is actually about.
+ */
+const READY = 'fs.appendFileSync(marker, "ready " + process.pid + "\\n")';
+
+/** Waits on the provider's own record rather than on a duration. */
+async function waitForMarker(file: string, token: string): Promise<string> {
+  for (;;) {
+    const recorded = await readFile(file, "utf8").catch(() => "");
+    if (recorded.includes(token)) return recorded;
+    await sleep(10);
+  }
+}
+
+/** Opens a real provider subprocess and returns only once it is up. */
+async function openReadyProviderProcess(options: {
+  readonly script: string;
+  readonly marker: string;
+  readonly cwd: string;
+}): Promise<ProviderRailSession> {
+  const session = await openProviderRailProcess({
+    command: [process.execPath, "-e", options.script, options.marker],
+    cwd: options.cwd,
+    env: process.env,
+  });
+  await waitForMarker(options.marker, "ready");
+  return session;
+}
+
+/** The provider's own pid, as it reported it on the readiness line. */
+async function providerPid(marker: string): Promise<number> {
+  const reported = /ready (\d+)/u.exec(await waitForMarker(marker, "ready"));
+  if (reported === null) throw new Error(`No provider pid was recorded in ${marker}.`);
+  return Number(reported[1]);
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe("provider invocation lifecycle", () => {
   const negotiation = {
@@ -206,21 +280,51 @@ describe("provider invocation lifecycle", () => {
       const marker = process.argv[1];
       process.on("SIGTERM", () => fs.appendFileSync(marker, "term\\n"));
       setInterval(() => {}, 1000);
+      ${READY};
     `;
+    const session = await openReadyProviderProcess({ script, marker, cwd: dir });
+    const stalled = await providerPid(marker);
+    // The child is already booted and ready, so nothing but the rail's own two
+    // bounds is inside the window measured below.
     const started = Date.now();
     const result = await invokeProviderRail(
       { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
       {
-        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script, marker], cwd: dir, env: process.env }),
+        open: async () => session,
         deadlineMs: 500,
         terminationGraceMs: 100,
       },
     );
     expect(result).toMatchObject({ kind: "blocked", status: "indeterminate" });
-    expect(Date.now() - started).toBeLessThan(2_000);
     expect(await readFile(marker, "utf8")).toContain("term");
+    // The escalation itself, observed rather than timed. This provider ignores
+    // SIGTERM and is kept alive by its own interval, so the only thing that can
+    // have ended it is the SIGKILL the grace expiry escalates to, and it is
+    // already reaped by the time the attempt returns.
+    expect(isAlive(stalled)).toBe(false);
+    // THAT THE TWO BOUNDS BIND AT ALL.
+    //
+    // `deadlineMs` and `terminationGraceMs` are declared in no other test file
+    // in this repository, so if this row asserts only the outcome and the
+    // signals, a rail that ignored both — a clamped lifecycle timer, a grace
+    // read from a constant instead of the caller — still passes everything
+    // above. The elapsed window is the only thing that refuses that.
+    //
+    // The ceiling is deliberately not tuned to 500 + 100: it is sixteen times
+    // the two bounds together, so it survives a runner hosting several suites
+    // at once. What it therefore does not catch is a small inflation of either
+    // bound; what it does catch is a bound that has stopped being read from the
+    // caller at all, which is how they actually break — a lifecycle timer
+    // clamped to a floor, or a grace taken from the module default instead of
+    // `terminationGraceMs`, puts this row in the tens of seconds.
+    //
+    // It is a wall-clock assertion that is no longer a wall-clock race: what
+    // used to make this window unpredictable, a cold `node` boot inside the
+    // deadline, is awaited above, before the clock starts. Only the rail's own
+    // two bounds are measured here.
+    expect(Date.now() - started).toBeLessThan(10_000);
     await rm(dir, { recursive: true, force: true });
-  }, 5_000);
+  }, PROCESS_ROW_TIMEOUT_MS);
 
   it.skipIf(process.platform === "win32")("cancels an aborted real process stalled before terminal and awaits its closure", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "provider-rail-abort-"));
@@ -234,25 +338,34 @@ describe("provider invocation lifecycle", () => {
       lines.on("line", (line) => {
         const message = JSON.parse(line);
         if (message.kind === "negotiate") process.stdout.write(JSON.stringify({ kind: "negotiation", outcome: "supported", selectedVersion: "delivery-provider-rails/1", supportedVersions: ["delivery-provider-rails/1"] }) + "\\n");
+        if (message.kind === "request") fs.appendFileSync(marker, "request\\n");
         if (message.kind === "cancel") fs.appendFileSync(marker, "cancel\\n");
       });
+      ${READY};
       setInterval(() => {}, 1000);
     `;
+    const session = await openReadyProviderProcess({ script, marker, cwd: dir });
+    // The abort fires on the condition the row is about — the provider having
+    // actually received the request it will never answer — instead of on a
+    // fixed delay that a loaded runner can reorder against the request write.
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 500);
+    const aborting = waitForMarker(marker, "request").then(() => {
+      controller.abort();
+    });
     const result = await invokeProviderRail(
       { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
       {
-        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script, marker], cwd: dir, env: process.env }),
+        open: async () => session,
         signal: controller.signal,
-        deadlineMs: 2_000,
+        deadlineMs: UNREACHED_DEADLINE_MS,
         terminationGraceMs: 100,
       },
     );
+    await aborting;
     expect(result).toMatchObject({ kind: "interrupted", status: "indeterminate" });
     expect(await readFile(marker, "utf8")).toContain("cancel");
     await rm(dir, { recursive: true, force: true });
-  }, 5_000);
+  }, PROCESS_ROW_TIMEOUT_MS);
 
   it.skipIf(process.platform === "win32")("expires a negotiated real process that never emits a terminal", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "provider-rail-no-terminal-"));
@@ -268,27 +381,63 @@ describe("provider invocation lifecycle", () => {
         if (message.kind === "negotiate") process.stdout.write(JSON.stringify({ kind: "negotiation", outcome: "supported", selectedVersion: "delivery-provider-rails/1", supportedVersions: ["delivery-provider-rails/1"] }) + "\\n");
         if (message.kind === "cancel") fs.appendFileSync(marker, "cancel\\n");
       });
+      ${READY};
       setInterval(() => {}, 1000);
     `;
+    // The only row here whose deadline has to beat a provider that does answer.
+    // Opening OUTSIDE the attempt is what makes that survivable: `invokeProviderRail`
+    // runs `open` inside the very deadline being measured, so a session opened
+    // there would spend the budget on a cold node boot before the negotiation
+    // round trip it is supposed to bound had even started. The deadline is also
+    // explicit and generous rather than tuned, because nothing about its value
+    // is asserted: the row asserts what the expiry DID.
+    const session = await openReadyProviderProcess({ script, marker, cwd: dir });
+    const started = Date.now();
     const result = await invokeProviderRail(
       { providerId: "review.provider", requestId: "request-one", idempotencyKey: "attempt-one", payload: {}, requiresEvidence: false },
       {
-        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script, marker], cwd: dir, env: process.env }),
-        deadlineMs: 750,
+        open: async () => session,
+        deadlineMs: WARM_EXPIRY_DEADLINE_MS,
         terminationGraceMs: 100,
       },
     );
     expect(result).toMatchObject({ kind: "blocked", status: "indeterminate" });
     expect(await readFile(marker, "utf8")).toContain("cancel");
+    // THAT THIS EXPIRY IS THE CALLER'S DEADLINE, for the same reason and on the
+    // same terms as the stalled-negotiation row above: a rail that stopped
+    // reading `deadlineMs` from the caller — a lifecycle timer clamped to a
+    // floor, or a multiple of the configured value — still expires eventually
+    // and still records the cancel, so every assertion above survives it.
+    //
+    // The two rows catch different halves of that, and neither catch-set
+    // contains the other. This row's bound is ten times larger, so three times
+    // it still refuses a timer multiplied by four — which at a 500 ms bound
+    // would need a ceiling back down at the tuned figure this delivery removed,
+    // so the row above admits it. The row above in exchange carries the larger
+    // proportional slack, sixteen times its bound against three times this one,
+    // so it refuses a timer clamped to a floor between ten and fifteen seconds
+    // that this row admits. Read them as a pair.
+    //
+    // Three times 5 000 ms leaves ten seconds of slack over the ~5.1 s this
+    // window actually costs. The child is already up before the clock starts,
+    // so only the negotiation round trip and the rail's own expiry are inside
+    // it, and what load inflates — spawning the child — is outside it.
+    expect(Date.now() - started).toBeLessThan(3 * WARM_EXPIRY_DEADLINE_MS);
     await rm(dir, { recursive: true, force: true });
-  }, 5_000);
+  }, PROCESS_ROW_TIMEOUT_MS);
 
   it.skipIf(process.platform === "win32")("bounds a real provider that never reads a request write", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "provider-rail-blocked-write-"));
+    const marker = path.join(dir, "events.txt");
     const script = `
+      const fs = require("node:fs");
+      const marker = process.argv[1];
       process.on("SIGTERM", () => {});
       process.stdout.write(JSON.stringify({ kind: "negotiation", outcome: "supported", selectedVersion: "delivery-provider-rails/1", supportedVersions: ["delivery-provider-rails/1"] }) + "\\n");
       setInterval(() => {}, 1000);
+      ${READY};
     `;
+    const session = await openReadyProviderProcess({ script, marker, cwd: dir });
     const result = await invokeProviderRail(
       {
         providerId: "review.provider",
@@ -298,13 +447,14 @@ describe("provider invocation lifecycle", () => {
         requiresEvidence: false,
       },
       {
-        open: () => openProviderRailProcess({ command: [process.execPath, "-e", script], cwd: process.cwd(), env: process.env }),
+        open: async () => session,
         deadlineMs: 500,
         terminationGraceMs: 100,
       },
     );
     expect(result).toMatchObject({ kind: "blocked", status: "indeterminate" });
-  }, 5_000);
+    await rm(dir, { recursive: true, force: true });
+  }, PROCESS_ROW_TIMEOUT_MS);
 });
 
 describe("green-claim publication", () => {
