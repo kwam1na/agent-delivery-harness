@@ -83,6 +83,20 @@ export const trackerAdapterFixture = (): Record<string, unknown> => ({
   credentialId: "credential.tracker",
 });
 
+/**
+ * The same tracker capability with no credential binding: bound, selected, and
+ * unable to reach the tracker. `credentialId` is an OPTIONAL member of the
+ * adapter grammar, so this descriptor is valid — which is exactly why the
+ * compiled posture has to be able to say so.
+ */
+export const degradedTrackerAdapterFixture = (): Record<string, unknown> => ({
+  spec: "adapter-capability/1",
+  capabilityId: "tracker.linear",
+  kind: "tracker",
+  version: "1",
+  resultSpec: "operation-result/1",
+});
+
 export const repositoryAdapterSetFixture = (): readonly Record<string, unknown>[] => [sensorAdapterFixture()];
 
 /** A repo-shaped admission gate, shared by the characterization and projection suites. */

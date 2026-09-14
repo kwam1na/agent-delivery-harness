@@ -22,6 +22,7 @@
  */
 import type { LaneAvailability } from "../binding/host-admission.ts";
 import type { WaiverProposal } from "../evidence/waiver.ts";
+import type { TrackerPosture } from "../policy/compile.ts";
 import type { DeliveryState, HostActivityState, IntakeState } from "../spine/vocabulary.ts";
 import { FACADE_OPERATIONS, type FacadeOperation } from "./operations.ts";
 
@@ -84,6 +85,14 @@ export interface ManagedStatusInput {
   readonly completedObligations: readonly string[];
   readonly productTrust: ProductTrustView;
   readonly assertionSource: AssertionSourceView;
+  /**
+   * The bound compiled policy's tracker posture, read verbatim. The optional
+   * tracker capability is the one bound integration whose unavailability
+   * changes what an operator should expect of the delivery's tracked record
+   * without changing the delivery's own state, so status reports it rather
+   * than leaving `absent` and `degraded` indistinguishable from `available`.
+   */
+  readonly trackerPosture: TrackerPosture;
   readonly quarantinedWorkspaces: readonly string[];
   readonly candidate: { readonly treeSha: string; readonly branchRefValue: string } | undefined;
   readonly pendingDecision: WaiverProposal | undefined;
@@ -120,6 +129,8 @@ export interface ManagedDeliveryStatus {
   readonly completedObligations: readonly string[];
   readonly productTrust: ProductTrustView;
   readonly assertionSource: AssertionSourceView;
+  /** The bound compiled policy's tracker posture, carried verbatim. */
+  readonly trackerPosture: TrackerPosture;
   readonly quarantinedWorkspaces: readonly string[];
   readonly candidate: { readonly treeSha: string; readonly branchRefValue: string } | undefined;
   readonly pendingDecision: WaiverProposal | undefined;
@@ -309,6 +320,7 @@ export function composeManagedStatus(input: ManagedStatusInput): ManagedDelivery
     completedObligations: input.completedObligations,
     productTrust: input.productTrust,
     assertionSource: input.assertionSource,
+    trackerPosture: input.trackerPosture,
     quarantinedWorkspaces: input.quarantinedWorkspaces,
     candidate: input.candidate,
     pendingDecision: input.pendingDecision,

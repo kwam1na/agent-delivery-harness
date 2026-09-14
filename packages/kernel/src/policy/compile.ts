@@ -76,6 +76,51 @@ export const PORTABLE_PRIVILEGED_CREDENTIALS = Object.freeze([
 export const MANDATORY_LENS_CATEGORIES = Object.freeze(["outcome-correctness", "testing-policy"] as const);
 
 /**
+ * The three tracker postures a compiled policy can report.
+ *
+ * `available` is a bound tracker capability that the host has something to
+ * reach the tracker THROUGH — the descriptor names a credential binding.
+ * `absent` is no tracker capability at all. `degraded` is the middle case the
+ * two-valued union could not say: a tracker capability IS bound, so the
+ * repository is not trackerless and its adapter is selected, but the
+ * descriptor binds no credential, so every operation through it will report
+ * an actionable unavailability rather than a mutation.
+ *
+ * WHY THIS IS A COMPILE-TIME FACT AND NOT A PROBE. The compiler is pure over
+ * ports and consults no clock and no network; a live credential health check
+ * belongs to the adapter at call time. What is decidable here is whether the
+ * bound capability set can reach a tracker at all, and that is exactly the
+ * distinction a surface needs to tell "this repository has no tracker" from
+ * "this repository has one it cannot use". A posture is never an authority:
+ * `available` grants nothing that `degraded` denies.
+ *
+ * THIS LIST IS NOT THE INSTALLED WORKFLOW'S CAPABILITY-STATE LIST, and the two
+ * spellings of `available` are deliberately not the same claim. The released
+ * neutral capability contract
+ * (`.agent-skills/current/skills/deliver-work/references/capability-contract.md`)
+ * declares `absent`/`available`/`configured`/`blocked`, where ITS `available`
+ * means "the capability exists but is not configured for use" — the polarity
+ * opposite of this one, whose `available` means the compiled policy binds a
+ * tracker capability that can operate. These postures are the COMPILER's, over
+ * the bound adapter set; that vocabulary is the WORKFLOW's, over a capability
+ * at call time. Neither is derived from the other and neither is renamed to
+ * match: the release is digest-pinned and installed, not edited from here.
+ */
+export const TRACKER_POSTURES = Object.freeze(["available", "degraded", "absent"] as const);
+export type TrackerPosture = (typeof TRACKER_POSTURES)[number];
+
+/**
+ * The posture of one adapter set. Reads exactly the `tracker` kind: a bound
+ * `merge` or `approval-request` capability without a credential says nothing
+ * about the tracker.
+ */
+export function trackerPostureOf(adapters: readonly AdapterCapability[]): TrackerPosture {
+  const tracker = adapters.find((adapter) => adapter.kind === "tracker");
+  if (tracker === undefined) return "absent";
+  return tracker.credentialId === undefined ? "degraded" : "available";
+}
+
+/**
  * The portable per-stage envelope. A checkpoint override REPLACES the tool
  * and writable-path lists — those are the owner-approved document's to shape
  * — while protections and forbidden operations are union-only (`additional*`
@@ -135,7 +180,7 @@ export interface CompiledPolicy {
   readonly capabilities: readonly AdapterCapability[];
   readonly checkpointGrants: readonly CompiledCheckpointGrant[];
   readonly approvals: readonly { readonly action: string; readonly approval: string }[];
-  readonly tracker: "available" | "absent";
+  readonly tracker: TrackerPosture;
   readonly trackerAbsenceFallback: string;
   readonly hostedChecks?: HostedChecksPolicy;
   readonly admission?: HarnessConfig;
@@ -313,12 +358,18 @@ export function compileRepositoryPolicy(input: CompileRepositoryPolicyInput): Co
   });
 
   // ── Tracker posture ──────────────────────────────────────────────────────
-  const trackerBound = adapters.some((adapter) => adapter.kind === "tracker");
-  if (!trackerBound && document.trackerAbsenceFallback === "block") {
+  // A document that blocks on tracker absence is not satisfied by a tracker it
+  // cannot operate: the rule is "the posture is not `available`", not "no
+  // tracker is bound". A degraded tracker passing this rule would be the exact
+  // silent hole the typed posture exists to close.
+  const trackerPosture = trackerPostureOf(adapters);
+  if (trackerPosture !== "available" && document.trackerAbsenceFallback === "block") {
     collector.emit(
       "tracker_unavailable",
       "/document/trackerAbsenceFallback",
-      "the document blocks on tracker absence and no tracker capability is bound",
+      trackerPosture === "absent"
+        ? "the document blocks on tracker absence and no tracker capability is bound"
+        : "the document blocks on tracker absence and the bound tracker capability binds no credential, so it cannot operate",
     );
   }
 
@@ -443,7 +494,7 @@ export function compileRepositoryPolicy(input: CompileRepositoryPolicyInput): Co
     capabilities: adapters.map((adapter) => ({ ...adapter })),
     checkpointGrants,
     approvals: document.approvals.map((approval) => ({ ...approval })),
-    tracker: trackerBound ? ("available" as const) : ("absent" as const),
+    tracker: trackerPosture,
     trackerAbsenceFallback: document.trackerAbsenceFallback,
     ...(document.hostedChecks === undefined ? {} : {
       hostedChecks: {

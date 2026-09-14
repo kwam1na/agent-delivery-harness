@@ -3116,6 +3116,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           generation,
         },
         assertionSource: assertionView,
+        // Verbatim from the policy this facade is bound to — status reports the
+        // posture, it does not re-derive it.
+        trackerPosture: compiledPolicy.tracker,
         quarantinedWorkspaces,
         candidate: currentCandidateOf(views),
         pendingDecision: waiverLedgerOf(views).pending[0],

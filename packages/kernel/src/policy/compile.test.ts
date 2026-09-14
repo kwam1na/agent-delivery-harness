@@ -22,13 +22,18 @@ import {
   POLICY_COMPILE_CODES,
   PORTABLE_MODEL_DRIVEN_STAGES,
   PORTABLE_PRIVILEGED_CREDENTIALS,
+  TRACKER_POSTURES,
   checkBoundPolicy,
   compileRepositoryPolicy,
+  trackerPostureOf,
   verifyCompiledPolicy,
   type AvailablePersona,
 } from "./compile.ts";
+import { CAPABILITY_RESULT_SPECS, POLICY_CAPABILITY_KINDS, type AdapterCapability } from "./capabilities.ts";
+import { TRACKER_ABSENCE_FALLBACKS } from "./document.ts";
 import {
   compositionPersonaSetFixture,
+  degradedTrackerAdapterFixture,
   deployAdapterFixture,
   mergeAdapterFixture,
   mergeAuthorityDocumentFixture,
@@ -465,6 +470,103 @@ describe("tracker absence with a declared fallback", () => {
     const result = compile(policyDocumentFixture(), [sensorAdapterFixture(), trackerAdapterFixture()]);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.compiled.tracker).toBe("available");
+  });
+});
+
+/**
+ * The three-valued posture. Each member gets its own entry condition and its
+ * own falsifying row, because the whole point of the third member is that the
+ * two-valued union reported a credential-less tracker as `available` — a
+ * repository that looks fully tracked and cannot file anything.
+ */
+describe("the compiled tracker posture", () => {
+  it("names exactly three postures", () => {
+    expect([...TRACKER_POSTURES]).toEqual(["available", "degraded", "absent"]);
+  });
+
+  it("reports absent when no tracker capability is bound at all", () => {
+    expect(trackerPostureOf([])).toBe("absent");
+    expect(trackerPostureOf([sensorAdapterFixture() as unknown as AdapterCapability])).toBe("absent");
+  });
+
+  it("reports available when the bound tracker binds a credential", () => {
+    expect(trackerPostureOf([trackerAdapterFixture() as unknown as AdapterCapability])).toBe("available");
+  });
+
+  it("reports degraded when the bound tracker binds no credential", () => {
+    expect(trackerPostureOf([degradedTrackerAdapterFixture() as unknown as AdapterCapability])).toBe("degraded");
+  });
+
+  it("reads the tracker kind only — a credential-less privileged adapter is not a degraded tracker", () => {
+    // Every non-tracker kind, credential-less, must still leave the posture
+    // `absent`: the rule keys on the kind, not on "some adapter lacks a
+    // credential". Deleting the kind predicate turns each of these degraded.
+    for (const kind of POLICY_CAPABILITY_KINDS) {
+      if (kind === "tracker") continue;
+      const adapter = {
+        spec: "adapter-capability/1",
+        capabilityId: `capability.${kind}`,
+        kind,
+        version: "1",
+        resultSpec: CAPABILITY_RESULT_SPECS[kind],
+      } as unknown as AdapterCapability;
+      expect(trackerPostureOf([adapter]), kind).toBe("absent");
+    }
+  });
+
+  it("carries each posture through a real compilation, not only through the helper", () => {
+    const absent = compile(policyDocumentFixture(), [sensorAdapterFixture()]);
+    const available = compile(policyDocumentFixture(), [sensorAdapterFixture(), trackerAdapterFixture()]);
+    const degraded = compile(policyDocumentFixture(), [sensorAdapterFixture(), degradedTrackerAdapterFixture()]);
+    expect([absent.ok, available.ok, degraded.ok]).toEqual([true, true, true]);
+    if (absent.ok) expect(absent.compiled.tracker).toBe("absent");
+    if (available.ok) expect(available.compiled.tracker).toBe("available");
+    if (degraded.ok) expect(degraded.compiled.tracker).toBe("degraded");
+  });
+
+  /**
+   * The whole 3 x 2 grid of posture against declared fallback, every cell
+   * decided. A rule that blocked only on `absent` passes five of these six and
+   * fails exactly the degraded/block cell — which is the cell that matters.
+   */
+  it("blocks on every posture that is not available, and only when the document says block", () => {
+    const adaptersFor: Record<string, readonly Record<string, unknown>[]> = {
+      available: [sensorAdapterFixture(), trackerAdapterFixture()],
+      degraded: [sensorAdapterFixture(), degradedTrackerAdapterFixture()],
+      absent: [sensorAdapterFixture()],
+    };
+    const observed: string[] = [];
+    for (const posture of TRACKER_POSTURES) {
+      for (const fallback of TRACKER_ABSENCE_FALLBACKS) {
+        const result = compile(policyDocumentFixture({ trackerAbsenceFallback: fallback }), adaptersFor[posture]!);
+        const blocked = !result.ok && codesOf(result).includes("tracker_unavailable");
+        observed.push(`${posture}/${fallback}=${blocked ? "blocked" : "compiled"}`);
+      }
+    }
+    expect(observed).toEqual([
+      "available/proceed-without-tracker=compiled",
+      "available/block=compiled",
+      "degraded/proceed-without-tracker=compiled",
+      "degraded/block=blocked",
+      "absent/proceed-without-tracker=compiled",
+      "absent/block=blocked",
+    ]);
+  });
+
+  it("says which of the two unavailable postures it refused, rather than one message for both", () => {
+    const degraded = compile(policyDocumentFixture({ trackerAbsenceFallback: "block" }), [
+      sensorAdapterFixture(),
+      degradedTrackerAdapterFixture(),
+    ]);
+    const absent = compile(policyDocumentFixture({ trackerAbsenceFallback: "block" }), [sensorAdapterFixture()]);
+    expect(degraded.ok).toBe(false);
+    expect(absent.ok).toBe(false);
+    if (degraded.ok || absent.ok) return;
+    const messageOf = (result: typeof degraded): string =>
+      result.rejections.find((rejection) => rejection.code === "tracker_unavailable")!.message;
+    expect(messageOf(degraded)).toContain("binds no credential");
+    expect(messageOf(absent)).toContain("no tracker capability is bound");
+    expect(messageOf(degraded)).not.toBe(messageOf(absent));
   });
 });
 

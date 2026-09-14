@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { composeManagedStatus, type ManagedStatusInput } from "./status.ts";
+import { TRACKER_POSTURES } from "../policy/compile.ts";
 
 const baseInput = (overrides: Partial<ManagedStatusInput> = {}): ManagedStatusInput => ({
   deliveryId: "delivery-1",
@@ -18,6 +19,7 @@ const baseInput = (overrides: Partial<ManagedStatusInput> = {}): ManagedStatusIn
     detail: "os-native",
     lanes: { sensitiveApprovals: "available", operatorConfirmations: "fail_closed_no_qualified_producer", mergeReadyLane: "available" },
   },
+  trackerPosture: "absent",
   quarantinedWorkspaces: [],
   candidate: { treeSha: "b".repeat(40), branchRefValue: "refs/heads/delivery" },
   pendingDecision: undefined,
@@ -49,6 +51,7 @@ describe("the typed status model", () => {
     expect(status.candidate?.treeSha).toBe("b".repeat(40));
     expect(status.productTrust.label).toBe("local-digest / operator-pinned");
     expect(status.assertionSource.availability).toBe("available");
+    expect(status.trackerPosture).toBe("absent");
     expect(status.quarantinedWorkspaces).toEqual([]);
     expect(status.completedObligations).toEqual([]);
     expect(status.nextCheckpoint.kind).toBe("workflow-stage");
@@ -302,5 +305,46 @@ describe("pending decisions and interruption", () => {
       }),
     );
     expect(status.authorizedNextActions).toContain("finalizeCancellation");
+  });
+});
+
+/**
+ * The tracker posture the compiled policy decided, carried to the operator
+ * unchanged. The projection re-derives nothing here on purpose: a second
+ * opinion about whether the tracker works is a second authority, and the
+ * compiled policy is the one that binds. What is asserted is therefore
+ * carriage — every posture arrives, and none is collapsed into another.
+ */
+describe("the tracker posture the status model reports", () => {
+  it("carries every posture through to the projection, unchanged", () => {
+    for (const posture of TRACKER_POSTURES) {
+      expect(composeManagedStatus(baseInput({ trackerPosture: posture })).trackerPosture, posture).toBe(posture);
+    }
+  });
+
+  it("distinguishes a tracker that cannot operate from one that is not there", () => {
+    // The whole reason the third posture exists: before it, both of these
+    // repositories reported the same thing, and only one of them would file
+    // anything. A projection that returned a constant, or that mapped
+    // `degraded` onto either neighbour, fails here.
+    const degraded = composeManagedStatus(baseInput({ trackerPosture: "degraded" })).trackerPosture;
+    const absent = composeManagedStatus(baseInput({ trackerPosture: "absent" })).trackerPosture;
+    const available = composeManagedStatus(baseInput({ trackerPosture: "available" })).trackerPosture;
+    expect(new Set([degraded, absent, available]).size).toBe(3);
+  });
+
+  it("does not let the tracker posture move any other derived value", () => {
+    // The posture is an observation, not an authority. A delivery whose
+    // tracker is degraded is still admissible, still has the same next
+    // actions, and still has the same retry safety.
+    const base = composeManagedStatus(baseInput({ trackerPosture: "available" }));
+    for (const posture of TRACKER_POSTURES) {
+      const other = composeManagedStatus(baseInput({ trackerPosture: posture }));
+      expect(other.authorizedNextActions, posture).toEqual(base.authorizedNextActions);
+      expect(other.retrySafety, posture).toBe(base.retrySafety);
+      expect(other.mutationVerification, posture).toBe(base.mutationVerification);
+      expect(other.migrationPath, posture).toBe(base.migrationPath);
+      expect(other.blockers, posture).toEqual(base.blockers);
+    }
   });
 });
