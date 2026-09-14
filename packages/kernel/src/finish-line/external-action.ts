@@ -903,7 +903,17 @@ export function reconcileBeforeRetry(input: ReconcileInput): ReconciliationDispo
 export interface ActionClassification {
   readonly state: DeliveryState;
   readonly replayProhibited: boolean;
-  /** The moves policy itself selected; empty when the action simply completed. */
+  /**
+   * What the delivery may do next, and it is NOT one thing. Three branches fill
+   * this differently: `[]` when the action completed and the requested finish
+   * line is reached; the remaining authorized actions when it is not (for the
+   * deploy contract, `["deploy"]` after a verified merge — the next irreversible
+   * action, the opposite of a containment move); `["reconcile"]` for an
+   * indeterminate outcome; and the containment the policy itself selected for
+   * every blocked branch, which is the set AC3 is about. A host that reads this
+   * member as always being policy-selected containment would offer an operator
+   * a deployment as though policy had named it a way out.
+   */
   readonly permittedMoves: readonly string[];
   readonly refusals: readonly FinishLineRefusal[];
 }

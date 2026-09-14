@@ -30,6 +30,7 @@ import { UNBOUND_EXTERNAL_ACTION_PORT } from "./merge-ready.ts";
 import {
   ACTION_APPROVAL_ORIGIN_PREFIX,
   EXTERNAL_ACTION_RESULT_SPEC,
+  RECONCILIATION_FINDINGS,
   actionChainDigest,
   checkDeployPreconditions,
   classifyActionOutcome,
@@ -177,8 +178,29 @@ const recheckWith = (intent: BoundActionIntent, revocation: Record<string, unkno
   });
 
 /** The deploy fixture: a deploy contract, a deploy grant, a deploy adapter. */
+// Every member below carries a SECOND value, distinct from the merge
+// fixture's. Without that, every plan in this suite that successfully binds an
+// intent binds the same delivery id, actor, candidate, base, record, fence and
+// pair of epochs — so each of those members could be replaced in the product by
+// the literal the fixture happens to use and the whole suite would stay green.
+// The sharpest is the candidate: it is one of the five members
+// `journalIntentPayload` keeps, so it is simultaneously the object handed to the
+// privileged adapter and the `action.intent.recorded` entry, and a constant
+// there would name a tree the delivery never bound while the payload rows and
+// the adapter-argument row all still passed.
+const DEPLOY_TREE = "2".repeat(40);
+const DEPLOY_BASE = "4".repeat(40);
+const DEPLOY_DELIVERABLE = "d".repeat(64);
+const DEPLOY_RECORD_DIGEST = "c".repeat(64);
+
 const deployPolicy = (over: Partial<PolicySnapshot> = {}): PolicySnapshot =>
-  policyOf({ grantedFinishLines: ["merge-ready", "merge", "deploy"], grantedAuthority: ["merge", "deploy"], ...over });
+  policyOf({
+    grantedFinishLines: ["merge-ready", "merge", "deploy"],
+    grantedAuthority: ["merge", "deploy"],
+    productTrustRevocationEpoch: 5,
+    repositoryAuthorityRevocationEpoch: 11,
+    ...over,
+  });
 
 const deployChain = [
   { intentId: "intent-1", action: "merge" as const, outcome: "succeeded" as const, verification: "passed" as const },
@@ -187,9 +209,15 @@ const deployChain = [
 const deployPlanOf = (over: Partial<PlanExternalActionInput> = {}): PlanExternalActionInput =>
   planOf({
     intentId: "intent-2",
+    deliveryId: "delivery-2",
     action: "deploy",
+    actingActorId: "agent-task-2",
     contract: contractOf({ requestedFinishLine: "deploy", requestedAuthority: ["merge", "deploy"] }),
     policy: deployPolicy(),
+    invocationFence: 12,
+    candidate: { treeSha: DEPLOY_TREE, deliverableDigest: DEPLOY_DELIVERABLE },
+    baseTipSha: DEPLOY_BASE,
+    record: { treeSha: DEPLOY_TREE, baseTipSha: DEPLOY_BASE, digest: DEPLOY_RECORD_DIGEST },
     adapter: { capabilityId: "deploy.fly", kind: "deploy", hasCredential: true },
     chain: deployChain,
     ...over,
@@ -338,23 +366,23 @@ describe("the external-operation authority matrix", () => {
     // and everything derived from it could be replaced by the literal "merge"
     // throughout the unit and stay green — the irreversible call and the
     // record that it was about to happen would both name the wrong action.
-    expect(deployIntent()).toEqual({
+    expect(deployIntent()).toStrictEqual({
       intentId: "intent-2",
-      deliveryId: "delivery-1",
+      deliveryId: "delivery-2",
       action: "deploy",
-      actingActorId: "agent-task-1",
+      actingActorId: "agent-task-2",
       approval: "not-required",
-      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
-      baseTipSha: BASE,
+      candidate: { treeSha: DEPLOY_TREE, deliverableDigest: DEPLOY_DELIVERABLE },
+      baseTipSha: DEPLOY_BASE,
       policyDigest: deployPolicy().policyDigest,
-      invocationFence: 9,
-      productTrustRevocationEpoch: 4,
-      repositoryAuthorityRevocationEpoch: 7,
+      invocationFence: 12,
+      productTrustRevocationEpoch: 5,
+      repositoryAuthorityRevocationEpoch: 11,
       requestedFinishLine: "deploy",
       adapterCapabilityId: "deploy.fly",
       actionChainDigest: actionChainDigest(deployChain, "deploy"),
       evidence: { externalVerification: "passed", completedObligations: ["review-green"] },
-      trackedRecordDigest: RECORD_DIGEST,
+      trackedRecordDigest: DEPLOY_RECORD_DIGEST,
     });
     // The chain digest is the deploy's, not the merge's over the same history.
     expect(deployIntent().actionChainDigest).not.toBe(actionChainDigest(deployChain, "merge"));
@@ -371,10 +399,10 @@ describe("the external-operation authority matrix", () => {
       intentAlreadyObserved: false,
       verify: async () => true,
     });
-    expect(port.invoke.mock.calls[0]?.[0]).toEqual({
+    expect(port.invoke.mock.calls[0]?.[0]).toStrictEqual({
       intentId: "intent-2",
       action: "deploy",
-      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
+      candidate: { treeSha: DEPLOY_TREE, deliverableDigest: DEPLOY_DELIVERABLE },
       policyDigest: deployPolicy().policyDigest,
       approval: "not-required",
     });
@@ -406,7 +434,12 @@ describe("the external-operation authority matrix", () => {
       deployPlanOf({
         policy,
         approvalRequiredActions: ["deploy"],
-        approval: approvalOf(policy, { action: "deploy", candidateTreeSha: TREE }),
+        approval: approvalOf(policy, {
+          action: "deploy",
+          deliveryId: "delivery-2",
+          candidateTreeSha: DEPLOY_TREE,
+          invocationFence: 12,
+        }),
         approvedChainDigest: actionChainDigest(deployChain, "deploy"),
       }),
     );
@@ -424,7 +457,7 @@ describe("the external-operation authority matrix", () => {
     expect(approved.ok === true && journalIntentPayload(approved.intent)).toStrictEqual({
       intentId: "intent-2",
       action: "deploy",
-      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
+      candidate: { treeSha: DEPLOY_TREE, deliverableDigest: DEPLOY_DELIVERABLE },
       policyDigest: policy.policyDigest,
       approval: "required",
     });
@@ -1177,6 +1210,17 @@ describe("reconcile before retry", () => {
     // says so by state rather than by inventing one.
     const unreferenced = reconcileBeforeRetry({ indeterminate, finding: "performed" });
     expect(unreferenced.kind === "already-performed" && unreferenced.result.externalReference).toBe(ABSENT_BY_STATE);
+  });
+
+  it("pins the reconciliation finding vocabulary as a closed, frozen list", () => {
+    // `RECONCILIATION_FINDINGS` is exported from the kernel's public surface and
+    // read by nothing in the product, so member REMOVAL is caught only
+    // indirectly — the rows below pass all three literals, so typecheck fails —
+    // while member ADDITION and the loss of the freeze are caught by nothing.
+    // A fourth finding is a fourth way an indeterminate action can be disposed
+    // of, and this unit's whole argument is that there are exactly three.
+    expect([...RECONCILIATION_FINDINGS]).toStrictEqual(["performed", "not-performed", "unknown"]);
+    expect(Object.isFrozen(RECONCILIATION_FINDINGS)).toBe(true);
   });
 
   it("carries the reconciled action through, rather than the one the fixture happens to use", () => {
