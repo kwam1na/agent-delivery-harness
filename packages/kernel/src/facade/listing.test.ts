@@ -19,7 +19,7 @@
  * delivery reading `active` from the same call.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -202,10 +202,21 @@ describe("the installation-scoped listing", () => {
     // A mutation that changes a RETURNED value is caught by every other row
     // here; a write that changes nothing returned is caught only by this one.
     const liveDir = path.join(namespace, "deliveries", "delivery-live");
-    const before = {
-      files: readdirSync(liveDir, { recursive: true }).map(String).sort(),
-      journal: readFileSync(path.join(liveDir, "journal.jsonl"), "utf8"),
-    };
+    // CONTENTS, not names. A file list catches a file the read invents, but
+    // the write that would actually matter is an OVERWRITE of a file already
+    // there — `binding/observation.json` above all, the heartbeat this read
+    // grades from and the one `status` grades from too. A listing that stamped
+    // it would fabricate liveness for every delivery on every read, and a
+    // name-only comparison would not notice.
+    const snapshot = (dir: string): string[] =>
+      readdirSync(dir, { recursive: true })
+        .map(String)
+        .sort()
+        .map((relative) => {
+          const full = path.join(dir, relative);
+          return `${relative}:${statSync(full).isDirectory() ? "" : readFileSync(full, "utf8")}`;
+        });
+    const before = snapshot(liveDir);
 
     const listing = await facade.listDeliveries({ observedAt: "2026-09-14T12:00:00Z" });
     expect(listing.ok, JSON.stringify(listing)).toBe(true);
@@ -214,8 +225,7 @@ describe("the installation-scoped listing", () => {
 
     // Not one byte, and not one file: no journal revision, no fabricated
     // heartbeat, nothing stamped on the way past.
-    expect(readdirSync(liveDir, { recursive: true }).map(String).sort()).toEqual(before.files);
-    expect(readFileSync(path.join(liveDir, "journal.jsonl"), "utf8")).toBe(before.journal);
+    expect(snapshot(liveDir)).toEqual(before);
 
     const live = listing.deliveries.find((listed) => listed.deliveryId === "delivery-live");
     expect(live?.state).toBe("planning");
