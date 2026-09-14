@@ -31,6 +31,8 @@ import {
   describeRunEventPayload,
   evaluateRunJournal,
   type RunEventPayloadGrammar,
+  type RunEventPayloadMemberGrammar,
+  type RunEventValueGrammar,
   type RunEventVersion,
 } from "@agent-delivery-harness/kernel";
 import {
@@ -195,11 +197,31 @@ function parseGrammarArgs(args: readonly string[]): GrammarParse {
   return { ok: true, args: { kind, version, json } };
 }
 
+/**
+ * One described value, and everything beneath it. Types, nested tables, array
+ * items and variants are printed rather than summarised: the whole point of
+ * this view is that a caller never has to open the validator to find out what
+ * a member holds.
+ */
+function renderValue(value: RunEventValueGrammar, indent: string, lead: string, context: ConfigFreeCommandContext): void {
+  context.write(`${indent}${lead}${value.type}  ${value.constraint}${value.values === undefined ? "" : `  values: ${value.values.join(", ")}`}`);
+  context.write(`${indent}  example: ${JSON.stringify(value.example)}`);
+  for (const member of value.members ?? []) renderMember(member, `${indent}  `, context);
+  if (value.items !== undefined) renderValue(value.items, `${indent}  `, "items  ", context);
+  for (const [index, variant] of (value.variants ?? []).entries()) {
+    renderValue(variant, `${indent}  `, `variant ${index + 1}  `, context);
+  }
+}
+
+function renderMember(member: RunEventPayloadMemberGrammar, indent: string, context: ConfigFreeCommandContext): void {
+  renderValue(member, indent, `${member.name}  ${member.required ? "required" : "optional"}  `, context);
+}
+
 function renderGrammar(grammar: RunEventPayloadGrammar, context: ConfigFreeCommandContext): void {
   context.write(`${grammar.kind} (${grammar.version})`);
-  for (const member of grammar.members) {
-    context.write(`  ${member.name}  ${member.required ? "required" : "optional"}${member.values === undefined ? "" : `  values: ${member.values.join(", ")}`}`);
-  }
+  for (const member of grammar.members) renderMember(member, "  ", context);
+  context.write("  example:");
+  context.write(JSON.stringify(grammar.example, null, 2));
 }
 
 function showGrammar(context: ConfigFreeCommandContext, args: readonly string[]): CommandResult {

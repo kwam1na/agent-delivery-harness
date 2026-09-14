@@ -7,6 +7,7 @@ import {
   describeRunEventPayload,
   validateRunEvent,
   type RunEventKind,
+  type RunEventValueGrammar,
   type RunEventVersion,
   type SpineRejection,
 } from "../index.ts";
@@ -140,5 +141,124 @@ describe("run-event payload grammar discovery", () => {
     } finally {
       values[0] = original;
     }
+  });
+});
+
+/**
+ * V26-2058 / V26-2039. Member names and requiredness alone left a caller
+ * guessing at value types, nested shapes and vocabularies, so every payload
+ * below is constructed from what `runs grammar` publishes and nothing else.
+ * The examples are validator-checked rather than hand-maintained prose: a
+ * described example that stops being emittable fails here.
+ */
+describe("run-event payload grammar types and examples", () => {
+  const VALUE_TYPES = ["string", "number", "boolean", "array", "object"];
+
+  function walk(value: RunEventValueGrammar, visit: (value: RunEventValueGrammar) => void): void {
+    visit(value);
+    for (const member of value.members ?? []) walk(member, visit);
+    if (value.items !== undefined) walk(value.items, visit);
+    for (const variant of value.variants ?? []) walk(variant, visit);
+  }
+
+  for (const [version, kinds] of [
+    [RUN_EVENT_SPEC, RUN_EVENT_KINDS_V1],
+    [RUN_EVENT_SPEC_V2, RUN_EVENT_KINDS],
+  ] as const) {
+    it(`types every ${version} member and publishes an emittable minimal example`, () => {
+      for (const kind of kinds) {
+        const grammar = describeRunEventPayload(kind, version)!;
+        expect(grammar.spec, `${version} ${kind} spec`).toBe("run-event-payload-grammar/2");
+        for (const member of grammar.members) {
+          walk(member, described => {
+            expect(VALUE_TYPES, `${version} ${kind}.${member.name} type`).toContain(described.type);
+            expect(described.constraint.length, `${version} ${kind}.${member.name} constraint`).toBeGreaterThan(0);
+          });
+        }
+        // The published minimal example carries every required member, nothing
+        // the table does not define, and — for the one kind whose combination
+        // rule demands it — the optional member that makes it emittable. It is
+        // accepted by the same validator that refuses everything else.
+        const published = Object.keys(grammar.example);
+        const required = grammar.members.filter(member => member.required).map(member => member.name);
+        expect(required.filter(name => !published.includes(name)), `${version} ${kind} minimal example omits a required member`).toEqual([]);
+        expect(published.filter(name => !grammar.members.some(member => member.name === name)), `${version} ${kind} minimal example invents a member`).toEqual([]);
+        expect(published.filter(name => !required.includes(name)), `${version} ${kind} minimal example beyond its required members`)
+          .toEqual(kind === "report.referenced" ? ["artifactId"] : []);
+        expect(validateRunEvent(event(kind, version, grammar.example)), `${version} ${kind} minimal example`).toEqual({ ok: true });
+
+        // Every optional member's own example is emittable beside the rest, so
+        // a caller reading one member's example is never reading a value the
+        // validator would refuse.
+        const complete = Object.fromEntries(grammar.members.map(member => [member.name, member.example]));
+        expect(validateRunEvent(event(kind, version, complete)), `${version} ${kind} complete example`).toEqual({ ok: true });
+      }
+    });
+
+    it(`describes run.started's workflow object and its required members under ${version}`, () => {
+      const workflow = describeRunEventPayload("run.started", version)!.members.find(member => member.name === "workflow")!;
+      expect(workflow.type).toBe("object");
+      expect(workflow.members?.map(member => [member.name, member.required, member.type])).toEqual([
+        ["releaseId", true, "string"],
+        ["profile", true, "string"],
+      ]);
+      expect(Object.keys(workflow.example as Record<string, unknown>).sort()).toEqual(["profile", "releaseId"]);
+    });
+
+    it(`names run.started's workflow members when a non-object is supplied under ${version}`, () => {
+      const refused = rejections(event("run.started", version, { host: "claude-code", workflow: "linear" }))
+        .find(rejection => rejection.pointer === "/payload/workflow");
+      expect(refused?.code).toBe("not_an_object");
+      expect(refused?.message).toContain("accepted members: releaseId, profile");
+    });
+
+    it(`types decision.recorded's cited as an optional string under ${version}`, () => {
+      const cited = describeRunEventPayload("decision.recorded", version)!.members.find(member => member.name === "cited")!;
+      expect(cited).toMatchObject({ required: false, type: "string" });
+      expect(cited.values).toBeUndefined();
+      expect(typeof cited.example).toBe("string");
+
+      const refused = rejections(event("decision.recorded", version, { fork: "f", choice: "c", cited: ["V26-2058"] }))
+        .find(rejection => rejection.pointer === "/payload/cited");
+      expect(refused?.code).toBe("malformed_member");
+      expect(refused?.message).toContain("expected bounded free text");
+    });
+
+    it(`types lens.selected's id arrays and their items under ${version}`, () => {
+      const grammar = describeRunEventPayload("lens.selected", version)!;
+      for (const name of ["mandated", "selected"]) {
+        const member = grammar.members.find(item => item.name === name)!;
+        expect(member.type, name).toBe("array");
+        expect(member.items?.type, name).toBe("string");
+        expect(Array.isArray(member.example), name).toBe(true);
+        expect((member.example as readonly unknown[]).length, name).toBeGreaterThan(0);
+      }
+      expect(grammar.members.find(item => item.name === "rationale")).toMatchObject({ type: "string", required: true });
+    });
+  }
+
+  it("describes activity.observed's nested round binding and its cost variants", () => {
+    const grammar = describeRunEventPayload("activity.observed", RUN_EVENT_SPEC_V2)!;
+    expect(grammar.members.find(member => member.name === "round")).toMatchObject({ type: "number", required: false });
+    expect(grammar.members.find(member => member.name === "state")).toMatchObject({ type: "string", required: true });
+    const cost = grammar.members.find(member => member.name === "cost")!;
+    expect(cost.type).toBe("object");
+    expect(cost.variants?.map(variant => variant.members?.map(member => member.name))).toEqual([
+      ["coverage", "reportedBy"],
+      ["unit", "total", "reportedBy", "coverage"],
+    ]);
+    for (const variant of cost.variants!) {
+      expect(validateRunEvent(event("run.ended", RUN_EVENT_SPEC_V2, { result: "complete", cost: variant.example }))).toEqual({ ok: true });
+    }
+  });
+
+  it("keeps the described shapes out of reach of consumer mutation", () => {
+    const first = describeRunEventPayload("run.started", RUN_EVENT_SPEC_V2)!;
+    const workflow = first.members.find(member => member.name === "workflow")!;
+    (workflow.example as Record<string, unknown>)["releaseId"] = "consumer-mutated";
+    (workflow.members as unknown as { name: string }[])[0]!.name = "consumer-mutated";
+    const second = describeRunEventPayload("run.started", RUN_EVENT_SPEC_V2)!.members.find(member => member.name === "workflow")!;
+    expect(second.members?.map(member => member.name)).toEqual(["releaseId", "profile"]);
+    expect((second.example as Record<string, unknown>)["releaseId"]).not.toBe("consumer-mutated");
   });
 });

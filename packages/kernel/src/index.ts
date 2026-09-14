@@ -829,6 +829,8 @@ export {
   type RunEventPayloadGrammar,
   type RunEventPayloadMemberGrammar,
   type RunEventRepo,
+  type RunEventValueGrammar,
+  type RunEventValueType,
 } from "./checkpoint/run-event.ts";
 export {
   RUN_JOURNAL_REQUIRED_ENTRIES,
