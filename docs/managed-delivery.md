@@ -138,12 +138,14 @@ to read them out of.
 documentation.** `docs/docs-references.test.ts` recomputes the gating criterion
 and the baseline figures above from those two artifacts and fails on
 disagreement, and it holds the exact set of clauses this page states about an
-operator step-in, so a new claim about one reaches this page only by being
-re-stamped there, in whatever verb or form it chooses among the terms this
-page uses for one. Prose elsewhere under `docs/` carries no such pin unless a
-sensor names it; the historical narration under `docs/solutions/` is
-deliberately unpinned and unmaintained, for the reason
-[its index](solutions/README.md) states.
+operator step-in, so a claim that calls one an intervention, an interruption or
+a step-in reaches this page only by being re-stamped there, in whatever verb or
+form it chooses. The pin is bounded by those words: a claim that calls the same
+thing an authorization or a takeover is outside it, which is the price of
+pinning a closed set rather than scanning open prose for a verb. Prose
+elsewhere under `docs/` carries no such pin unless a sensor names it; the
+historical narration under `docs/solutions/` is deliberately unpinned and
+unmaintained, for the reason [its index](solutions/README.md) states.
 
 ## The facade's operation contract
 

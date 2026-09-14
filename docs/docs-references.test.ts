@@ -653,27 +653,39 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
   /**
    * This page's clauses that have an operator step-in as their subject.
    *
-   * Four normalizations, each closing a way a claim walked out of an earlier
-   * version of this scan:
+   * Three normalizations, each closing a way a claim walked out of an earlier
+   * version of this scan. Emphasis is deliberately not one of them: stripping
+   * it here fused words and cost the scan a boundary it needed, so it is read
+   * around in `namesAStepIn` below instead of rewritten away.
    *   - inline code is UNWRAPPED rather than deleted, so a claim written as
    *     `interventionCounts` still carries the word it is about;
    *   - soft line wraps are joined, because this page is hard-wrapped at ~78
    *     columns and splitting on every newline cut most sentences in half,
    *     leaving the subject in one fragment and the verb in the next;
-   *   - intra-word emphasis is stripped, because `inter*vention*s` reaches a
-   *     word-boundary scan as three tokens and none of them is the subject,
-   *     while boundary-adjacent `**intervention**` is left alone so the
-   *     pinned strings below still read as the page writes them;
    *   - only real clause punctuation and paragraph breaks split.
    */
+  const namesAStepIn = (clause: string): boolean =>
+    // Three readings of one clause, because a markdown emphasis marker is a
+    // word boundary in one direction and a word joiner in the other.
+    //   - as written, `operator*interventions*` already reads as its
+    //     subject, because `*` is a boundary; an earlier fix stripped the
+    //     marker in place, which fused the two words and lost that boundary;
+    //   - with the markers removed, `inter*vention*s` reads as its subject,
+    //     which a word-boundary scan cannot see while it is split in three;
+    //   - with the markers turned into a space, `operator_interventions`
+    //     reads as its subject, which no boundary ever separated, because an
+    //     underscore is a word character.
+    STEP_IN.test(clause) ||
+    STEP_IN.test(clause.replace(/[*_]/g, "")) ||
+    STEP_IN.test(clause.replace(/[*_]+/g, " "));
+
   const stepInClauses = (): readonly string[] =>
     textOf(GUIDE)
       .replace(/`([^`]*)`/g, " $1 ")
       .replace(/([^\n])\n(?!\n)/g, "$1 ")
-      .replace(/(\w)[*_]{1,2}(\w)/g, "$1$2")
       .split(/[.;:,]|\n\n+|—/)
       .map((clause) => clause.replace(/\s+/g, " ").trim())
-      .filter((clause) => clause !== "" && STEP_IN.test(clause));
+      .filter((clause) => clause !== "" && namesAStepIn(clause));
 
   /**
    * Those clauses, pinned verbatim.
@@ -699,10 +711,15 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
    * over-trust it: a gating claim that names an operator step-in with a term
    * outside `STEP_IN` above is not in the set and so does not have to be
    * pinned. That residue is one closed list of nouns, not an open list of
-   * verbs and negations, and the page states the bound rather than claiming
-   * closure it does not have: it says a claim reaches it only by re-stamping
-   * here "in whatever verb or form it chooses among the terms this page uses
-   * for one", which is exactly `STEP_IN`.
+   * verbs and negations, and the page states that bound rather than claiming
+   * closure it does not have: it says the pin holds a claim that calls a
+   * step-in "an intervention, an interruption or a step-in", and says in the
+   * same breath that a claim calling the same thing an authorization or a
+   * takeover is outside it. Those are the page's own words for its
+   * authorization model, not for a counted step-in, and pulling them into
+   * `STEP_IN` was measured: it grows this set from 13 rows to 31, binding
+   * the page's authorization sections to a pin about its gate metric. The
+   * sentence is the cheaper honesty.
    */
   const PINNED_STEP_IN_CLAUSES: readonly string[] = [
     "That single authorization is counted as a policy-required **interruption**",
@@ -716,6 +733,8 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
     "The baseline's own intervention counts are **2**",
     "every step-in the baseline's rubric counts is still counted and still reported",
     "and it holds the exact set of clauses this page states about an operator step-in",
+    "so a claim that calls one an intervention",
+    "an interruption or a step-in reaches this page only by being re-stamped there",
   ];
 
   const gateRecord = (): { gateMetrics: { gatingCriterion: string } } =>
@@ -776,7 +795,10 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
       textOf(GUIDE).replace(/\s+/g, " "),
       `${GUIDE} no longer states that operator interventions are reported in full and gate nothing`,
     ).toContain("Operator interventions are reported in full and gate nothing.");
-    documentStates(GUIDE, "are never counted as interventions");
+    expect(
+      textOf(GUIDE).replace(/\s+/g, " "),
+      `${GUIDE} no longer states that interruptions are never counted as interventions`,
+    ).toContain("are never counted as interventions");
   });
 
   it("says nothing about an operator step-in beyond the clauses pinned here", () => {
