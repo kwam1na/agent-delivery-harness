@@ -784,7 +784,7 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
     everyStatementAgrees("the baseline's median intervention count", /a median of\n?\*\*(\d+)\*\*/g, String(baseline.medianOperatorInterventions));
   });
 
-  it("says interventions are reported and gate nothing, and that interruptions are never counted as interventions", () => {
+  it("says interventions are reported and gate nothing, that interruptions are never counted as interventions, and where this pin stops", () => {
     // Presence pins, because these two are rules rather than values. Both were
     // stated only in the record before this delivery; the guide is where an
     // operator meets them.
@@ -799,6 +799,17 @@ describe("the milestone gate claims docs/managed-delivery.md makes", () => {
       textOf(GUIDE).replace(/\s+/g, " "),
       `${GUIDE} no longer states that interruptions are never counted as interventions`,
     ).toContain("are never counted as interventions");
+    // The bound, pinned as a rule too. The sentence below it is the page's
+    // only statement of where the closed set stops, and it carries no
+    // `STEP_IN` term, so the set cannot hold it: the page could be edited to
+    // claim the pin covers an authorization or a takeover — which it measurably
+    // does not — with every other row on this page still green. That is the
+    // over-trust this block exists to prevent, arriving through the one
+    // sentence written to prevent it.
+    expect(
+      textOf(GUIDE).replace(/\s+/g, " "),
+      `${GUIDE} no longer states the bound of the clause pin it describes`,
+    ).toContain("an authorization or a takeover is outside it");
   });
 
   it("says nothing about an operator step-in beyond the clauses pinned here", () => {
