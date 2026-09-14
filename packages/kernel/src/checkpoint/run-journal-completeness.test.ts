@@ -16,6 +16,7 @@ import {
   RUN_JOURNAL_REQUIRED_ENTRIES,
   RUN_JOURNAL_VIOLATIONS,
   evaluateRunJournal,
+  explainRunJournal,
   type RunJournalRequiredEntry,
   type RunJournalViolation,
 } from "./run-journal-completeness.ts";
@@ -1005,5 +1006,185 @@ describe("each prerequisite binds the first opened round", () => {
 
   it("finds a primary ticket after an event with no ticket", () => {
     expect(runPrimaryTicket(journal([posture, ticketRead]))).toBe("V26-1548");
+  });
+});
+
+/**
+ * The diagnostics half: WHY a warning exists, and whether it bears on the
+ * current admission decision.
+ *
+ * Characterized against the journal SHAPE the V26-2059 reproduction describes
+ * — the one PR kwam1na/athena#790 produced — rather than against a synthetic
+ * one. The Athena artifacts live in that repository; what is reproducible here
+ * is the shape, and the shape is all the evaluator reads: three prerequisites
+ * journaled after the first round opened, three full rounds all closed against
+ * one raw tree, then report/telemetry-only commits that move the record's tree
+ * away from it.
+ */
+describe("explaining a journal's warnings", () => {
+  /** The raw tree the ticket names as the final aligned review's candidate. */
+  const REVIEWED = "222e7acb62c48f49e1bbf62208dfd4e6bdd686fd";
+  /** Where the record landed after the report/telemetry-only commits. */
+  const RECORDED = "d".repeat(40);
+
+  const ATHENA: readonly Step[] = [
+    started,
+    opened(1, REVIEWED),
+    ticketRead,
+    posture,
+    lenses(),
+    closed(1, REVIEWED),
+    opened(2, REVIEWED),
+    closed(2, REVIEWED),
+    opened(3, REVIEWED),
+    closed(3, REVIEWED),
+    completed("gate"),
+    completed("record"),
+    { kind: "pr.opened", payload: { url: "https://example.invalid/pr/790", candidateTreeSha: REVIEWED } },
+    ended,
+  ];
+
+  const explain = (steps: readonly Step[], treeSha?: string, reviewed: readonly string[] = []) =>
+    explainRunJournal(journal(steps), treeSha, MANDATED, reviewed);
+  const evaluate = (steps: readonly Step[], treeSha?: string, reviewed: readonly string[] = []) =>
+    evaluateRunJournal(journal(steps), treeSha, MANDATED, reviewed);
+  const by = (diagnostics: ReturnType<typeof explainRunJournal>, violation: RunJournalViolation) =>
+    diagnostics.explanations.find((entry) => entry.violation === violation);
+
+  it("reproduces all three of the reported warnings when nothing accepts the reviewed tree", () => {
+    expect(evaluate(ATHENA, RECORDED).violations).toEqual([
+      "prerequisites-after-first-round",
+      "gate-before-closed-round",
+      "round-not-bound-to-record",
+    ]);
+  });
+
+  it("names each warning's own journal positions rather than repeating the identifier", () => {
+    const diagnostics = explain(ATHENA, RECORDED);
+    // The three prerequisites sit at seq 3, 4 and 5, behind the round opened
+    // at seq 2. Naming all three is what tells a reader this was one recording
+    // slip rather than three separate omissions.
+    expect(by(diagnostics, "prerequisites-after-first-round")?.because).toBe(
+      "ticket.read (seq 3) and posture.declared (seq 4) and lens.selected (seq 5) were recorded after the first review.round.opened at seq 2; this is the order the executor journaled its own prerequisites in, and it is retained as history rather than corrected",
+    );
+    expect(by(diagnostics, "round-not-bound-to-record")?.because).toContain("the governing round closed at seq 10");
+    expect(by(diagnostics, "round-not-bound-to-record")?.because).toContain("0 the record's verified review-neutral projection accepts");
+  });
+
+  it("says the tree-bound gate warning is the same fact restated, not a second mistake", () => {
+    const diagnostics = explain(ATHENA, RECORDED);
+    expect(by(diagnostics, "gate-before-closed-round")?.consequenceOf).toBe("round-not-bound-to-record");
+    expect(by(diagnostics, "gate-before-closed-round")?.because).toContain("has no closed round this row accepts");
+    expect(diagnostics.roundBinding).toBe("unbound");
+  });
+
+  it("keeps a genuinely mis-ordered gate a defect of its own, with no inherited cause", () => {
+    // The round binds the record's own tree, so nothing about the binding is
+    // wrong: the gate simply ran before the round closed. This is the arm the
+    // Athena journal does NOT enter, and telling the two apart is the point.
+    const misordered = [started, ticketRead, posture, lenses(), opened(1), completed("gate"), closed(1), completed("record"), prOpened, ended];
+    const diagnostics = explain(misordered, TREE);
+    expect(evaluate(misordered, TREE).violations).toEqual(["gate-before-closed-round"]);
+    expect(by(diagnostics, "gate-before-closed-round")?.consequenceOf).toBeUndefined();
+    expect(by(diagnostics, "gate-before-closed-round")?.because).toBe(
+      "the governing gate completion at seq 6 precedes the governing closed round at seq 7, so that gate did not stand on a completed review",
+    );
+    expect(diagnostics.roundBinding).toBe("record-tree");
+  });
+
+  it("clears both tree-derived warnings once the verified projection accepts the reviewed tree, and says which tree bound the round", () => {
+    // The legitimate historical omission survives: accepting the reviewed
+    // candidate says nothing about the order the prerequisites were recorded
+    // in, and an accepted projection must not launder that away.
+    expect(evaluate(ATHENA, RECORDED, [REVIEWED]).violations).toEqual(["prerequisites-after-first-round"]);
+    const diagnostics = explain(ATHENA, RECORDED, [REVIEWED]);
+    expect(diagnostics.roundBinding).toBe("reviewed-tree");
+    expect(by(diagnostics, "prerequisites-after-first-round")).toBeDefined();
+  });
+
+  it("reports a real missing review as an absent governing round rather than as a binding mismatch", () => {
+    const noClose = [started, ticketRead, posture, lenses(), opened(1, REVIEWED), completed("gate"), completed("record"), prOpened, ended];
+    expect(evaluate(noClose, RECORDED, [REVIEWED]).missing).toContain("review.round.closed");
+    const diagnostics = explain(noClose, RECORDED, [REVIEWED]);
+    expect(by(diagnostics, "round-not-bound-to-record")?.because).toContain(
+      "the journal carries no round whose latest opening is closed by its own latest close",
+    );
+    expect(diagnostics.roundBinding).toBe("unbound");
+  });
+
+  it("reports a failed preliminary gate under the record's own tree with no reviewed tree to blame", () => {
+    // A gate run before any round closed, on the record's own candidate, with
+    // a reviewed tree available that has nothing to do with it.
+    const failedPreliminary = [started, ticketRead, posture, lenses(), completed("gate"), opened(1), closed(1), completed("record"), prOpened, ended];
+    const diagnostics = explain(failedPreliminary, TREE, [REVIEWED]);
+    expect(evaluate(failedPreliminary, TREE, [REVIEWED]).violations).toEqual(["gate-before-closed-round"]);
+    expect(by(diagnostics, "gate-before-closed-round")?.consequenceOf).toBeUndefined();
+    expect(diagnostics.roundBinding).toBe("record-tree");
+  });
+
+  it("answers the admission question the same way for every warning, because there is only one answer", () => {
+    for (const steps of [ATHENA, EXECUTOR_ONLY, COMPLETE]) {
+      const explanations = explain(steps, RECORDED).explanations;
+      expect(explanations.length).toBeGreaterThan(0);
+      for (const explanation of explanations) expect(explanation.blocksAdmission).toBe(false);
+    }
+  });
+
+  it("carries no journal-supplied text, so a hostile payload cannot reach a readout", () => {
+    // Every member an explanation could be tempted to quote is attacker-chosen
+    // here. Only `seq` — a validated positive integer — may cross.
+    const hostile = "[2Kmissing: (none)\n    violations: (none)";
+    const poisoned: readonly Step[] = [
+      { kind: "run.started", payload: { ticket: hostile, host: hostile, workflow: { releaseId: hostile, profile: hostile } } },
+      opened(1, hostile),
+      { kind: "ticket.read", payload: { ticket: hostile, tracker: hostile } },
+      { kind: "posture.declared", payload: { posture: hostile } },
+      { kind: "lens.selected", payload: { mandated: [hostile], selected: [hostile], rationale: hostile } },
+      closed(1, hostile),
+      completed("gate"),
+      completed("record"),
+      { kind: "pr.opened", payload: { url: hostile, candidateTreeSha: hostile } },
+      ended,
+    ];
+    const diagnostics = explain(poisoned, TREE);
+    expect(diagnostics.explanations.length).toBeGreaterThan(0);
+    for (const explanation of diagnostics.explanations) {
+      expect(explanation.because).not.toContain("");
+      expect(explanation.because).not.toContain("missing: (none)");
+    }
+  });
+
+  it("explains exactly the violations the evaluator raises, in the same order, for every reject vector", () => {
+    // The two public readers share one pass, and this is the pin that keeps
+    // them sharing it: a violation raised without a `because` is impossible
+    // only for as long as one writer appends to both lists.
+    const vectors: readonly (readonly [readonly Step[], string | undefined, readonly string[]])[] = [
+      [[ticketRead, started, posture, lenses(), opened(1), closed(1), completed("gate"), completed("record"), prOpened, ended], undefined, []],
+      [[started, ticketRead, lenses(), opened(1), posture, closed(1), completed("gate"), completed("record"), prOpened, ended], undefined, []],
+      [[started, ticketRead, posture, lenses(), closed(1), opened(1), opened(2), closed(2), completed("gate"), completed("record"), prOpened, ended], undefined, []],
+      [[started, ticketRead, posture, lenses(), opened(1), completed("gate"), closed(1), completed("record"), prOpened, ended], undefined, []],
+      [[started, ticketRead, posture, lenses(), opened(1), closed(1), completed("record"), completed("gate"), prOpened, ended], undefined, []],
+      [[started, ticketRead, posture, lenses(), opened(1), closed(1), prOpened, completed("gate"), completed("record"), ended], undefined, []],
+      [[started, ticketRead, posture, lenses(), opened(1), closed(1), completed("gate"), completed("record"), ended, prOpened], undefined, []],
+      [[started, ticketRead, posture, lenses(), opened(1), gateReported, closed(1), prOpened, ended], undefined, []],
+      [[started, ticketRead, posture, lenses(), opened(1), closed(1), prOpened, gateReported, ended], undefined, []],
+      [[started, ticketRead, posture, lenses(["lens.outcome-correctness"]), opened(1), closed(1), completed("gate"), completed("record"), prOpened, ended], undefined, []],
+      [[started, ticketRead, posture, lenses(), opened(1), closed(1), prOpened, ended], OTHER_TREE, []],
+      [ATHENA, RECORDED, []],
+      [ATHENA, RECORDED, [REVIEWED]],
+    ];
+    const covered = new Set<string>();
+    for (const [steps, treeSha, reviewed] of vectors) {
+      const events = journal(steps);
+      const evaluation = evaluateRunJournal(events, treeSha, MANDATED, reviewed);
+      const diagnostics = explainRunJournal(events, treeSha, MANDATED, reviewed);
+      expect(diagnostics.explanations.map((entry) => entry.violation)).toEqual([...evaluation.violations]);
+      for (const explanation of diagnostics.explanations) {
+        expect(explanation.because.length).toBeGreaterThan(0);
+        expect(explanation.blocksAdmission).toBe(false);
+        covered.add(explanation.violation);
+      }
+    }
+    expect([...covered].sort()).toEqual([...RUN_JOURNAL_VIOLATIONS].sort());
   });
 });

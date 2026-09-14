@@ -44,7 +44,7 @@ import {
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
-import { oneLine, resolveRunJournalRow, runJournalRows } from "../run-surface.ts";
+import { RUN_JOURNAL_ADMISSION_ROW, oneLine, resolveRunJournalRow, runJournalRows } from "../run-surface.ts";
 
 const USAGE = "Usage: delivery-harness verify [--require-run-journal] [--mandated-lens <id>]...";
 
@@ -98,11 +98,18 @@ function parseArgs(args: readonly string[]): ArgParse {
 function runJournalBlocker(row: RunJournalRow) {
   const missing = row.missing.length === 0 ? "(none)" : row.missing.join(", ");
   const violations = row.violations === undefined || row.violations.length === 0 ? "(none)" : row.violations.join(", ");
+  // The same per-violation reasons the row prints. A refusal that named only
+  // the identifiers would make the operator run the command again with the
+  // flag dropped just to read why.
+  const why = (row.explanations ?? []).map(
+    (explanation) =>
+      `; ${oneLine(explanation.violation, 64)}: ${oneLine(explanation.because, 400)}${explanation.consequenceOf === undefined ? "" : ` (a consequence of ${oneLine(explanation.consequenceOf, 64)})`}`,
+  ).join("");
   return commandBlocker({
     code: "run_journal_incomplete",
     sourceId: "delivery-harness.cli.verify",
     summary: "The run journal for this candidate is not complete, and --require-run-journal was given.",
-    details: `status ${row.status}${row.runId === undefined ? "" : ` (run ${oneLine(row.runId, 128)})`}; missing: ${missing}; violations: ${violations}`,
+    details: `status ${row.status}${row.runId === undefined ? "" : ` (run ${oneLine(row.runId, 128)})`}; missing: ${missing}; violations: ${violations}${why}; ${RUN_JOURNAL_ADMISSION_ROW}`,
     remediations: [
       {
         id: "emit-the-missing-run-events",

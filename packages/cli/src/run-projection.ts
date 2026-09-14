@@ -20,11 +20,13 @@
  */
 import {
   RUN_JOURNAL_REQUIRED_ENTRIES,
+  explainRunJournal,
   runJournalCarries,
   runPrimaryTicket,
   projectRunActivities,
   type RunEvent,
   type RunJournalEvaluation,
+  type RunJournalExplanation,
   type RunJournalRequiredEntry,
 } from "@agent-delivery-harness/kernel";
 import { harnessConfigPresentAt, oneLine, oneLineOf } from "./run-surface.ts";
@@ -232,6 +234,12 @@ export interface Readout {
   readonly present: readonly RunJournalRequiredEntry[];
   readonly missing: readonly RunJournalRequiredEntry[];
   readonly violations: readonly string[];
+  /**
+   * One per violation above, in the same order. The readout evaluates unbound
+   * to any record, so these explain the journal's own ordering only; the
+   * record-bound explanations are `verify`'s.
+   */
+  readonly explanations?: readonly RunJournalExplanation[];
   /** The config-presence note, present on exactly the status that it explains. */
   readonly note?: string;
 }
@@ -255,11 +263,16 @@ export function readoutOf(events: readonly RunEvent[], evaluation: RunJournalEva
     evaluation.status === "complete-executor-only" && rootDir !== undefined && harnessConfigPresentAt(rootDir)
       ? `no CLI gate completion in this journal; harness.config.ts present at ${oneLine(rootDir, 400)}`
       : undefined;
+  // Explained with the arguments this readout is taken with — none — so the
+  // sentences describe exactly the violations printed beside them. `verify`
+  // supplies a record and gets the record-bound explanations instead.
+  const explanations = evaluation.violations.length === 0 ? undefined : explainRunJournal(events).explanations;
   return {
     status: evaluation.status,
     present,
     missing: evaluation.missing,
     violations: evaluation.violations,
+    ...(explanations === undefined ? {} : { explanations }),
     ...(note === undefined ? {} : { note }),
   };
 }
@@ -276,7 +289,13 @@ export function readoutRows(events: readonly RunEvent[], evaluation: RunJournalE
     `    present: ${readout.present.length === 0 ? "(none)" : readout.present.join(", ")}`,
     `    missing: ${readout.missing.length === 0 ? "(none)" : [...readout.missing].join(", ")}`,
   ];
-  if (readout.violations.length > 0) rows.push(`    violations: ${[...readout.violations].join(", ")}`);
+  if (readout.violations.length > 0) {
+    rows.push(`    violations: ${[...readout.violations].join(", ")}`);
+    for (const explanation of readout.explanations ?? []) {
+      rows.push(`      ${explanation.violation}: ${oneLine(explanation.because, 400)}`);
+    }
+    rows.push("    admission: none of the above blocks admission; no gate, admission, or record decision reads a journal.");
+  }
   if (readout.note !== undefined) rows.push(`    note: ${readout.note}`);
   return rows;
 }

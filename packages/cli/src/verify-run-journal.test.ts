@@ -650,6 +650,15 @@ describe("verify's run-journal completeness row", () => {
     expect(row).toContain("verified review-neutral projection");
     expect(row).not.toContain("gate-before-closed-round");
     expect(row).not.toContain("round-not-bound-to-record");
+    // The acceptance is displayed with where it came from — this record's own
+    // verified evidence — and with the explicit statement that the two trees
+    // differ, so the row is never read as a claim that they are the same tree.
+    expect(row).toContain("round binding: the governing closed round binds a reviewed candidate above");
+    expect(row).toContain("accepted from this record's verified review-neutral projection");
+    expect(row).toContain("the two trees differ and neither is claimed to equal the other");
+    // Nothing was violated, so the row carries no admission disclaimer to read
+    // past; the statement appears exactly where a warning does.
+    expect(row).not.toContain("admission: none of the above");
 
     if (!withProjection) return;
     const recordDir = path.join(harness.dir, "telemetry/delivery-runs");
@@ -759,9 +768,23 @@ describe("verify's run-journal completeness row", () => {
     expect(row).toContain("incomplete");
     expect(row).toContain("round-not-bound-to-record");
 
+    // The three questions a bare identifier leaves open, answered on the row
+    // itself: which trees a round could have bound, why the gate warning is
+    // beside it, and whether any of it stops this candidate being admitted.
+    expect(row).toContain("round binding: no closed round binds the record's candidate tree or any reviewed candidate it accepts");
+    expect(row).toContain("round-not-bound-to-record: the governing round closed at seq");
+    expect(row).toContain("a consequence of round-not-bound-to-record, not a separate mistake");
+    expect(row).toContain("admission: none of the above blocks admission");
+    expect(row).toContain("Only --require-run-journal blocks, and only this verify invocation.");
+
     const required = await harness.cli(["verify", "--require-run-journal"]);
     expect(required.code).toBe(EXIT_POLICY);
     expect(required.err).toContain("round-not-bound-to-record");
+    // The refusal carries the same reasons, so nobody has to re-run the
+    // command with the flag dropped just to read why it refused.
+    expect(required.err).toContain("gate-before-closed-round: the governing gate completion at seq");
+    expect(required.err).toContain("(a consequence of round-not-bound-to-record)");
+    expect(required.err).toContain("none of the above blocks admission");
   });
 
   it("resolves two journals binding the record's tree to one run, naming the other in alsoMatching", { timeout: 120000 }, async () => {
