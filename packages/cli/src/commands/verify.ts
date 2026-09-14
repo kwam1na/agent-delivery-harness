@@ -101,15 +101,25 @@ function runJournalBlocker(row: RunJournalRow) {
   // The same per-violation reasons the row prints. A refusal that named only
   // the identifiers would make the operator run the command again with the
   // flag dropped just to read why.
+  //
+  // THE QUALIFYING SENTENCE COMES FIRST, BECAUSE A DETAIL IS CUT FROM THE END.
+  // A blocker's detail reaches a terminal through `renderBlockers`, which
+  // bounds it at 600 characters, so a journal with several warnings pushes
+  // whatever is last off the end. What must never be the casualty is the line
+  // saying none of this blocks admission: a truncated list of violated
+  // constraints with no such line reads as a verdict. So the identifiers and
+  // that sentence are placed ahead of the per-warning reasons, which are the
+  // right thing to lose to the cap — the row on stdout, which is written line
+  // by line and is not bounded this way, always carries all of them.
   const why = (row.explanations ?? []).map(
     (explanation) =>
-      `; ${oneLine(explanation.violation, 64)}: ${oneLine(explanation.because, 400)}${explanation.consequenceOf === undefined ? "" : ` (a consequence of ${oneLine(explanation.consequenceOf, 64)})`}`,
+      `; ${oneLine(explanation.violation, 64)}: ${oneLine(explanation.because, 160)}${explanation.consequenceOf === undefined ? "" : ` (a consequence of ${oneLine(explanation.consequenceOf, 64)})`}`,
   ).join("");
   return commandBlocker({
     code: "run_journal_incomplete",
     sourceId: "delivery-harness.cli.verify",
     summary: "The run journal for this candidate is not complete, and --require-run-journal was given.",
-    details: `status ${row.status}${row.runId === undefined ? "" : ` (run ${oneLine(row.runId, 128)})`}; missing: ${missing}; violations: ${violations}${why}; ${RUN_JOURNAL_ADMISSION_ROW}`,
+    details: `status ${row.status}${row.runId === undefined ? "" : ` (run ${oneLine(row.runId, 128)})`}; violations: ${violations}; ${RUN_JOURNAL_ADMISSION_ROW}${why}; missing: ${missing}`,
     remediations: [
       {
         id: "emit-the-missing-run-events",

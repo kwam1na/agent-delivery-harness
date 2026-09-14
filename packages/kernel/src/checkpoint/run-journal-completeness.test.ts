@@ -1094,7 +1094,11 @@ describe("explaining a journal's warnings", () => {
   it("says the tree-bound gate warning is the same fact restated, not a second mistake", () => {
     const diagnostics = explain(ATHENA, RECORDED);
     expect(by(diagnostics, "gate-before-closed-round")?.consequenceOf).toBe("round-not-bound-to-record");
-    expect(by(diagnostics, "gate-before-closed-round")?.because).toContain("has no closed round this row accepts");
+    // The completion's own position and the round's, both named exactly, for
+    // the same reason the bound arm names its two below.
+    expect(by(diagnostics, "gate-before-closed-round")?.because).toBe(
+      "the governing gate completion at seq 11 has no closed round this row accepts: the governing round closed at seq 10 binds a candidate tree that is not the record's and is not among the 0 the record's verified review-neutral projection accepts",
+    );
     expect(diagnostics.roundBinding).toBe("unbound");
   });
 
@@ -1178,9 +1182,20 @@ describe("explaining a journal's warnings", () => {
       // The adopter shape, where gate.reported carries the ordering instead.
       [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), closedH(1), prOpenedH, gateReportedH, endedH], undefined],
       [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), gateReportedH, closedH(1), prOpenedH, endedH], undefined],
+      // The two arms a set over IDENTIFIERS would leave unexercised, reached
+      // deliberately: the reported gate's unbound arm under a record that
+      // accepts nothing the rounds bound, and the branch that speaks when no
+      // paired round exists at all. Both are arms `verify` renders in
+      // production, and each interpolates a different journal position.
+      [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), closedH(1), gateReportedH, prOpenedH, endedH], TREE],
+      [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), gateReportedH, prOpenedH, endedH], TREE],
+      // The same two branches for the COMPLETED gate, whose sentence is the
+      // one the reproduction's own row carries.
+      [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), completedH("gate"), completedH("record"), prOpenedH, endedH], TREE],
     ];
 
     const covered = new Set<string>();
+    const arms = new Set<string>();
     for (const [steps, treeSha] of poisoned) {
       const diagnostics = explain(steps, treeSha);
       expect(diagnostics.explanations.length).toBeGreaterThan(0);
@@ -1189,11 +1204,29 @@ describe("explaining a journal's warnings", () => {
         expect(explanation.because).not.toContain("missing: (none)");
         expect(explanation.because).not.toContain("\n");
         covered.add(explanation.violation);
+        // Which BRANCH of the two-armed explanations this vector entered, so
+        // the closing assertion is about arms rather than identifiers.
+        if (explanation.violation === "gate-before-closed-round" || explanation.violation === "gate-reported-before-closed-round") {
+          arms.add(`${explanation.violation}|${
+            !explanation.because.includes("has no closed round this row accepts") ? "ordered"
+              : explanation.because.includes("carries no round whose latest opening") ? "no round"
+              : "other tree"
+          }`);
+        }
       }
     }
     // Every builder ran against attacker-chosen payloads, not only the four a
-    // single shape happens to provoke.
+    // single shape happens to provoke — and ARMS, not merely identifiers: an
+    // explanation that reaches a reader by one branch of a conditional is not
+    // protected by a hostile vector that only ever takes the other.
     expect([...covered].sort()).toEqual([...RUN_JOURNAL_VIOLATIONS].sort());
+    expect([...arms].sort()).toEqual([
+      "gate-before-closed-round|no round",
+      "gate-before-closed-round|other tree",
+      "gate-reported-before-closed-round|no round",
+      "gate-reported-before-closed-round|ordered",
+      "gate-reported-before-closed-round|other tree",
+    ]);
   });
 
   it("says nothing about a round binding when no record bound the reading", () => {
@@ -1211,13 +1244,18 @@ describe("explaining a journal's warnings", () => {
     const diagnostics = explain(EXECUTOR_ONLY, RECORDED);
     expect(evaluate(EXECUTOR_ONLY, RECORDED).violations).toContain("gate-reported-before-closed-round");
     expect(by(diagnostics, "gate-reported-before-closed-round")?.consequenceOf).toBe("round-not-bound-to-record");
-    expect(by(diagnostics, "gate-reported-before-closed-round")?.because).toContain("has no closed round this row accepts");
+    // Both positions named, exactly: the sentence's whole value is that its
+    // numbers are lookup keys into `runs show`, so a swapped pair would be
+    // worse than no numbers at all.
+    expect(by(diagnostics, "gate-reported-before-closed-round")?.because).toBe(
+      "the governing gate.reported at seq 7 has no closed round this row accepts: the governing round closed at seq 6 binds a candidate tree that is not the record's and is not among the 0 the record's verified review-neutral projection accepts",
+    );
     // And where the round IS accepted, the same identifier means the ordering
     // defect it names, with no cause inherited from a binding that is fine.
     const misreported = [started, ticketRead, posture, lenses(), opened(1), gateReported, closed(1), prOpened, ended];
     expect(by(explain(misreported, TREE), "gate-reported-before-closed-round")?.consequenceOf).toBeUndefined();
-    expect(by(explain(misreported, TREE), "gate-reported-before-closed-round")?.because).toContain(
-      "precedes the governing closed round at seq",
+    expect(by(explain(misreported, TREE), "gate-reported-before-closed-round")?.because).toBe(
+      "the governing gate.reported at seq 6 precedes the governing closed round at seq 7, so that reported gate did not stand on a completed review",
     );
   });
 

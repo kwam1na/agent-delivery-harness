@@ -400,6 +400,20 @@ it("parses an export whose stored readout predates per-violation explanations", 
   expect(parsedOlder.ok).toBe(true);
   if (parsedOlder.ok) expect(parsedOlder.value.readout.explanations).toEqual(built.readout.explanations);
 
+  // The loosening reaches exactly one key. Everything else in the readout is
+  // still checked against the recomputation, so a stored export that claims a
+  // clean journal over events that say otherwise is still refused.
+  for (const tamper of [
+    (value: { readout: Record<string, unknown> }) => { value.readout["violations"] = []; },
+    (value: { readout: Record<string, unknown> }) => { value.readout["status"] = "complete"; },
+    (value: { readout: Record<string, unknown> }) => { value.readout["present"] = []; },
+    (value: { readout: Record<string, unknown> }) => { value.readout["missing"] = []; },
+  ]) {
+    const tampered = JSON.parse(JSON.stringify(built));
+    tamper(tampered);
+    expect(parseRunExport(JSON.stringify(tampered)).ok).toBe(false);
+  }
+
   // And a supplied sentence is not what the reader gets back.
   const forged = JSON.parse(JSON.stringify(built));
   forged.readout.explanations = [{ violation: "run-started-not-first", because: "nothing is wrong", blocksAdmission: true }];
