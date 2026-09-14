@@ -559,6 +559,14 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
     { name: "channelKeyId", check: spineId },
     { name: "claim", check: oneOf(CONTROL_PLANE_CLAIM_KINDS) },
     { name: "remoteSequence", check: nonNegativeInt },
+    // The local fact epoch this record was APPENDED at — not the one the claim
+    // was judged against, when those differ. They differ for exactly one
+    // disposition: a `blocker` record follows the advancing `blocker.recorded`
+    // append that it reports, so it carries one more. Written that way on
+    // purpose: the coordination unit reads the coalescing window straight back
+    // off these records (`conflictBlockerEpochOf`) rather than recomputing it,
+    // and a reader that had to add one somewhere would be a second definition
+    // of the window.
     { name: "localFactEpoch", check: nonNegativeInt },
     { name: "disposition", check: oneOf(CONTROL_PLANE_DISPOSITIONS) },
     { name: "summary", check: boundedText },

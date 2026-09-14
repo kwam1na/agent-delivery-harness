@@ -23,10 +23,13 @@ import {
 } from "./message.ts";
 import {
   claimContradictsLocalHistory,
+  conflictBlockerEpochOf,
   CONTROL_PLANE_CONFLICT_BLOCKER_CODE,
   localFactEpochOf,
   reconcileRemoteClaim,
+  type ClaimReconciliation,
   type LocalHistoryView,
+  type MirrorRecordView,
 } from "./reconcile.ts";
 import { COORDINATION_PORT_UNBOUND_CODE, UNBOUND_COORDINATION_PORT } from "./port.ts";
 import { createCoordinationSimulator } from "./simulator.ts";
@@ -72,6 +75,48 @@ const local = (overrides: Partial<LocalHistoryView> = {}): LocalHistoryView => (
   ...overrides,
 });
 
+const isObservationOnly = (kind: string): boolean => (OBSERVATION_ONLY_KINDS as readonly string[]).includes(kind);
+
+/**
+ * A delivery journal the reconciliation rows actually append to.
+ *
+ * It exists because the two numbers reconciliation turns on — the local fact
+ * epoch and the coalescing window — are only correct in RELATION to each other,
+ * and a fixture that sets both by hand can state a relation the running system
+ * never produces. So this composes them the way the unit's header says the
+ * caller must: derive the epoch with the unit's own `localFactEpochOf` over the
+ * real observation-only partition, append `blocker.recorded` BEFORE the mirror
+ * record when the reconciliation advances, stamp the mirror record with
+ * `mirroredAtEpoch`, and read the window back with `conflictBlockerEpochOf`.
+ * Nothing here is hand-written except the local facts a local delivery would
+ * have recorded anyway.
+ */
+const localJournal = (history: { locallyTerminal: boolean; localEvidenceContradictsCompletion: boolean }) => {
+  const entryKinds: string[] = ["delivery.registered", "policy.snapshot.bound", "transition.committed"];
+  const mirrors: MirrorRecordView[] = [];
+  const epoch = (): number => localFactEpochOf(entryKinds, isObservationOnly);
+  return {
+    epoch,
+    window: (): number => conflictBlockerEpochOf(mirrors),
+    view: (): LocalHistoryView => ({
+      localFactEpoch: epoch(),
+      locallyTerminal: history.locallyTerminal,
+      localEvidenceContradictsCompletion: history.localEvidenceContradictsCompletion,
+      conflictBlockerAtEpoch: conflictBlockerEpochOf(mirrors),
+    }),
+    apply: (outcome: ClaimReconciliation): void => {
+      if (outcome.advancesJournalRevision) entryKinds.push("blocker.recorded");
+      entryKinds.push("control.plane.mirror.recorded");
+      mirrors.push({ disposition: outcome.disposition, localFactEpoch: outcome.mirroredAtEpoch });
+    },
+    recordLocalFact: (kind: string): void => {
+      entryKinds.push(kind);
+    },
+    blockerAppends: (): number => entryKinds.filter((kind) => kind === "blocker.recorded").length,
+    mirrorAppends: (): number => entryKinds.filter((kind) => kind === "control.plane.mirror.recorded").length,
+  };
+};
+
 const codesOf = (result: ReturnType<typeof admitCoordinationMessage>): string[] =>
   result.ok ? [] : result.refusals.map((refusal) => refusal.code);
 
@@ -108,12 +153,16 @@ describe("the coordination message grammar", () => {
     ]);
   });
 
-  it("has no message kind that could complete an obligation or move a state", () => {
-    // The vocabulary is the enforcement: a kind that does not exist cannot be
-    // sent. This row fails the moment someone adds one that could.
-    for (const kind of COORDINATION_MESSAGE_KINDS) {
-      expect(kind).not.toMatch(/complete|satisf|advance|grant|admit|approve$/);
-    }
+  it("has no cancel kind — local cancellation authority is never carried on the wire", () => {
+    // Round 1 retired this row's first half, a regex over kind NAMES claiming
+    // to fail "the moment someone adds one that could" complete an obligation.
+    // A kind named `execution.occurred` passes that regex, so it pinned a
+    // spelling convention and not the property. The property is pinned by the
+    // verbatim enumeration above, which catches any added kind whatever it is
+    // called, and by the rows below showing that a claim is admitted, mirrored,
+    // and applied to nothing. What remains here is the one specific absence
+    // this unit chose deliberately and a reader would otherwise assume was an
+    // oversight.
     expect(COORDINATION_MESSAGE_KINDS).not.toContain("cancel");
   });
 
@@ -168,6 +217,18 @@ describe("admission", () => {
     // refused even though the key id is in the trusted set, which is the only
     // way "distinct from the release-signing trust root" is enforceable here.
     expect(codesOf(refused)).toEqual(["trust_root_confusion"]);
+
+    // And the no-short-circuit rule holds at the one place round 1 found it
+    // being described rather than enforced: a key that is the release-signing
+    // root AND absent from the trusted connector set earned two refusals, and
+    // the corpus reports both. The row above is the ONLY vector in which the
+    // overlapped key is also trusted, which is exactly why the suppression
+    // hid there.
+    const bothEarned = admitCoordinationMessage(
+      message({ authentication: { keyId: RELEASE_KEY, channelDigest: CHANNEL } }),
+      view({ trustedKeyIds: [KEY] }),
+    );
+    expect(codesOf(bothEarned)).toEqual(["trust_root_confusion", "channel_unrecognized"]);
   });
 
   it("refuses an unknown key id, and refuses a valid key on an unestablished channel", () => {
@@ -297,25 +358,100 @@ describe("reconciliation", () => {
     expect(first.mirrored).toBe(true);
   });
 
-  it("coalesces every later contradiction in the same epoch — a reconnect flush costs one blocker, not a thousand", () => {
-    const history = local({ locallyTerminal: true, localEvidenceContradictsCompletion: true, conflictBlockerAtEpoch: 6 });
-    const flush = Array.from({ length: 1000 }, (_unused, index) =>
-      reconcileRemoteClaim(message({ claim: "completed", messageId: `m-${index}`, sequence: index }), history),
-    );
-    expect(flush.every((outcome) => outcome.disposition === "coalesced")).toBe(true);
-    expect(flush.filter((outcome) => outcome.advancesJournalRevision).length).toBe(0);
-    // Presence half: every one of them is still mirrored, so the detail
-    // survives in the audit rather than being dropped on the floor.
+  // Both rows below used to hand-write `localFactEpoch: 6` alongside
+  // `conflictBlockerAtEpoch: 6` — a pairing composed to make coalescing true
+  // and then asserted to be true. Round 1 found the defect that hid behind
+  // exactly that: `blocker.recorded` is an ADVANCING kind, so the one permitted
+  // blocker increments the epoch its own window is keyed on, and a flush cost
+  // one advancing blocker per claim. Nothing short of deriving both numbers
+  // from one journal can see it, so these rows walk one.
+
+  it("costs exactly one advancing blocker for a 1000-claim reconnect flush against one unchanged local history", () => {
+    const journal = localJournal({ locallyTerminal: true, localEvidenceContradictsCompletion: true });
+    const before = journal.epoch();
+
+    const flush = Array.from({ length: 1000 }, (_unused, index) => {
+      const outcome = reconcileRemoteClaim(
+        message({ claim: "completed", messageId: `m-${index}`, sequence: index }),
+        journal.view(),
+      );
+      journal.apply(outcome);
+      return outcome;
+    });
+
+    // The absence half, computed rather than assumed: the journal itself holds
+    // one blocker, and the epoch moved by exactly that one.
+    expect(journal.blockerAppends()).toBe(1);
+    expect(journal.epoch()).toBe(before + 1);
+    expect(flush.filter((outcome) => outcome.advancesJournalRevision).length).toBe(1);
+    expect(flush[0]?.disposition).toBe("blocker");
+    expect(flush.slice(1).every((outcome) => outcome.disposition === "coalesced")).toBe(true);
+    // The presence half: every one of them is still mirrored, so the detail
+    // survives in the audit rather than being dropped on the floor — and the
+    // thousand mirror records did not themselves move the epoch.
     expect(flush.every((outcome) => outcome.mirrored)).toBe(true);
+    expect(journal.mirrorAppends()).toBe(1000);
   });
 
-  it("reopens the window only when a local fact supersedes — never when the control plane asks", () => {
-    const blocked = local({ locallyTerminal: true, localEvidenceContradictsCompletion: true, conflictBlockerAtEpoch: 6 });
-    expect(reconcileRemoteClaim(message({ claim: "completed" }), blocked).disposition).toBe("coalesced");
+  it("reopens the window only when a local fact supersedes — never when the control plane keeps talking", () => {
+    const journal = localJournal({ locallyTerminal: true, localEvidenceContradictsCompletion: true });
+    journal.apply(reconcileRemoteClaim(message({ claim: "completed" }), journal.view()));
+    expect(journal.blockerAppends()).toBe(1);
+
+    // The control plane asking again, however it varies the claim, buys nothing.
+    for (const claim of ["completed", "advanced", "cancelled", "completed"] as const) {
+      const outcome = reconcileRemoteClaim(message({ claim }), journal.view());
+      expect(outcome.disposition, claim).toBe("coalesced");
+      journal.apply(outcome);
+    }
+    expect(journal.blockerAppends()).toBe(1);
+
     // A superseding LOCAL fact moves the epoch, and the next contradiction
-    // costs its one blocker again.
-    const superseded = { ...blocked, localFactEpoch: 7 };
-    expect(reconcileRemoteClaim(message({ claim: "completed" }), superseded).disposition).toBe("blocker");
+    // costs its one blocker again — and only one.
+    journal.recordLocalFact("stage.result.recorded");
+    const reopened = reconcileRemoteClaim(message({ claim: "completed" }), journal.view());
+    expect(reopened.disposition).toBe("blocker");
+    journal.apply(reopened);
+    expect(journal.blockerAppends()).toBe(2);
+    expect(reconcileRemoteClaim(message({ claim: "completed" }), journal.view()).disposition).toBe("coalesced");
+  });
+
+  it("stamps every mirror record with the epoch the journal carried when it was appended", () => {
+    // This is what makes the window a READ rather than a computation: the
+    // blocker's own mirror record carries the post-append epoch, so
+    // `conflictBlockerEpochOf` needs no arithmetic and cannot drift from the
+    // one place that decided the value.
+    const journal = localJournal({ locallyTerminal: true, localEvidenceContradictsCompletion: true });
+    const judged = journal.view().localFactEpoch;
+
+    const blocker = reconcileRemoteClaim(message({ claim: "completed" }), journal.view());
+    expect(blocker.mirroredAtEpoch).toBe(judged + 1);
+    journal.apply(blocker);
+    expect(journal.window()).toBe(journal.epoch());
+
+    const coalesced = reconcileRemoteClaim(message({ claim: "completed" }), journal.view());
+    expect(coalesced.mirroredAtEpoch).toBe(journal.epoch());
+    journal.apply(coalesced);
+    expect(journal.window()).toBe(judged + 1);
+
+    // And a consistent claim, which advances nothing, is stamped at the epoch
+    // it was judged against and leaves the window alone.
+    const consistent = reconcileRemoteClaim(message({ claim: "enqueued" }), journal.view());
+    expect(consistent.disposition).toBe("mirror-only");
+    expect(consistent.mirroredAtEpoch).toBe(journal.epoch());
+    journal.apply(consistent);
+    expect(journal.window()).toBe(judged + 1);
+  });
+
+  it("never records a blocker before one is earned — an empty journal has no window", () => {
+    // The anti-vacuity half of the reader: -1 is an epoch no journal reaches,
+    // so a fresh delivery cannot accidentally compare equal and coalesce the
+    // first genuine contradiction into a blocker that was never recorded.
+    const journal = localJournal({ locallyTerminal: true, localEvidenceContradictsCompletion: true });
+    expect(journal.window()).toBe(-1);
+    expect(journal.epoch()).toBeGreaterThanOrEqual(0);
+    expect(conflictBlockerEpochOf([])).toBe(-1);
+    expect(conflictBlockerEpochOf([{ disposition: "mirror-only", localFactEpoch: 0 }])).toBe(-1);
   });
 
   it("computes the local fact epoch from local advancing entries only — mirrors cannot open their own window", () => {
@@ -420,8 +556,11 @@ describe("the deterministic simulator", () => {
     expect(exchange.reconciliation?.mirrored).toBe(true);
     // The presence half of "never applied": the outcome names no state, no
     // obligation and no transition, and offers the caller nothing to apply.
+    // `mirroredAtEpoch` is a COUNT of local facts, not one of them — it tells
+    // the caller what to stamp the observation with and nothing about what to
+    // do — so the closed shape still carries no applicable member.
     expect(Object.keys(exchange.reconciliation ?? {}).sort()).toEqual(
-      ["advancesJournalRevision", "blockerCode", "disposition", "mirrored", "reason"].sort(),
+      ["advancesJournalRevision", "blockerCode", "disposition", "mirrored", "mirroredAtEpoch", "reason"].sort(),
     );
   });
 

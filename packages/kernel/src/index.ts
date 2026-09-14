@@ -1103,11 +1103,13 @@ export {
 export {
   CONTROL_PLANE_CONFLICT_BLOCKER_CODE,
   claimContradictsLocalHistory,
+  conflictBlockerEpochOf,
   localFactEpochOf,
   reconcileRemoteClaim,
   type LocalHistoryView,
   type ClaimDisposition,
   type ClaimReconciliation,
+  type MirrorRecordView,
 } from "./coordination/reconcile.ts";
 export {
   COORDINATION_PORT_UNBOUND_CODE,

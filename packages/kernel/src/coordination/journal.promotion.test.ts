@@ -8,6 +8,7 @@
  * land here rather than disappearing.
  */
 import { describe, expect, it } from "vitest";
+import { applySecretDiscipline } from "../checkpoint/redaction.ts";
 import { CONTROL_PLANE_CLAIM_KINDS, CONTROL_PLANE_DISPOSITIONS, JOURNAL_ENTRY_SPEC, validateJournalEntry } from "../spine/journal.ts";
 import { classifyEventKind, EVENT_VOCABULARY, OBSERVATION_ONLY_KINDS } from "../spine/vocabulary.ts";
 import { SUPPORTED_CONTRACT_VERSIONS } from "../substrate/manifest.ts";
@@ -104,11 +105,35 @@ describe("the promoted mirror pair", () => {
     }
   });
 
-  it("binds the summary member by name to the durable path's redaction rule", () => {
-    // Not a restatement of the redaction test: this is the row that fails if
-    // someone renames the member to something the free-text set does not
-    // contain, which would silently turn redaction into rejection.
-    expect(Object.keys(payload())).toContain("summary");
+  it("binds the summary member by name to the durable path's redaction rule — a secret there is redacted, the same secret elsewhere is refused", () => {
+    // Round 1 found the earlier version of this row asserting its own fixture
+    // (`Object.keys(payload())` contains "summary"), which tests the test. The
+    // member name is load-bearing because `FREE_TEXT_MEMBERS` is keyed on it,
+    // so the row that means anything runs the durable path's actual discipline
+    // over a mirror entry — the only durable payload whose content originates
+    // OUTSIDE this installation, which is why the distinction matters here.
+    const token = "ghp_0123456789abcdefghijklmnopqrstuvwxyz12";
+
+    const inSummary = applySecretDiscipline(entry({ payload: payload({ summary: `the peer said ${token}` }) }));
+    expect(inSummary.ok).toBe(true);
+    if (inSummary.ok) {
+      expect(inSummary.redactions).toContain("github-token");
+      expect(JSON.stringify(inSummary.entry)).not.toContain(token);
+    }
+
+    // The presence half, and the reason the member name cannot be changed
+    // casually: the identical secret in any other member is REFUSED, not
+    // redacted. Rename `summary` and this entry stops being redactable and
+    // starts being rejected.
+    const elsewhere = applySecretDiscipline(entry({ payload: payload({ channelKeyId: token }) }));
+    expect(elsewhere.ok).toBe(false);
+    if (!elsewhere.ok) {
+      expect(elsewhere.matches.map((match) => match.pointer)).toContain("/payload/channelKeyId");
+    }
+
+    // And redaction is not acceptance: the redacted entry still has to satisfy
+    // the frozen payload table.
+    if (inSummary.ok) expect(codesOf(inSummary.entry)).toEqual([]);
   });
 
   it("names the implemented wire contract in the composition pin", () => {

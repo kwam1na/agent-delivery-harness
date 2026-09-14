@@ -23,6 +23,25 @@
  *    delivery's own advancing facts — and only a new local fact opens a new
  *    one. The reset is journal-decidable: given the journal, any reader
  *    computes the same epoch, and no message is an input to it.
+ *
+ * **The blocker counts itself, and that is the subtle part.** `blocker.recorded`
+ * is an advancing kind, so the one permitted blocker append increments the very
+ * epoch the window is keyed on. If the window were recorded at the epoch the
+ * claim was JUDGED against, the blocker would move the journal out from under
+ * its own window and the next stale claim in an unchanged local history would
+ * block again — one advancing blocker per claim, which is the storm, reached by
+ * the back door. So the window is recorded at the epoch the journal carries
+ * once the blocker has landed, and the rule that keeps the two definitions from
+ * drifting is an ORDERING one, stated here because it is the caller's to honour:
+ *
+ *   1. append `blocker.recorded` (advancing), then
+ *   2. append the claim's `control.plane.mirror.recorded` (observation-only),
+ *      stamped with `mirroredAtEpoch`.
+ *
+ * Every mirror record then carries the same thing — the local fact epoch at the
+ * moment it was appended — and `conflictBlockerEpochOf` reads the window back
+ * off the journal with no arithmetic at all. A reader that had to add one
+ * somewhere would be a second definition, and second definitions drift.
  */
 
 import type { CoordinationMessage } from "./message.ts";
@@ -60,9 +79,11 @@ export interface LocalHistoryView {
    */
   readonly localEvidenceContradictsCompletion: boolean;
   /**
-   * The local fact epoch at which a coordination conflict blocker was last
-   * recorded, or -1 when none has been. Read off the delivery journal, so two
-   * readers of the same journal always agree.
+   * The coalescing window: the local fact epoch the journal carried once the
+   * last coordination conflict blocker had landed, or -1 when none has. It is
+   * read straight off the journal by `conflictBlockerEpochOf` — never computed
+   * from the judged epoch by adding one — so two readers of the same journal
+   * always agree.
    */
   readonly conflictBlockerAtEpoch: number;
 }
@@ -85,6 +106,15 @@ export interface ClaimReconciliation {
   /** Always true: every admitted claim is mirrored, contradicted or not. */
   readonly mirrored: boolean;
   readonly blockerCode?: typeof CONTROL_PLANE_CONFLICT_BLOCKER_CODE;
+  /**
+   * The local fact epoch this claim's mirror record must carry — the epoch the
+   * journal holds at the moment that record is appended. For `mirror-only` and
+   * `coalesced` that is the epoch the claim was judged against, because nothing
+   * advanced. For `blocker` it is one higher, because the blocker append that
+   * precedes the mirror record advanced the journal. Stamping this value is
+   * what lets the next claim's window be read back rather than recomputed.
+   */
+  readonly mirroredAtEpoch: number;
   /** Why, in one bounded sentence, for the operator reading the audit. */
   readonly reason: string;
 }
@@ -113,6 +143,7 @@ export function reconcileRemoteClaim(message: CoordinationMessage, local: LocalH
       disposition: "mirror-only",
       advancesJournalRevision: false,
       mirrored: true,
+      mirroredAtEpoch: local.localFactEpoch,
       reason: "the claim is consistent with local history, or asserts nothing about local progress; it is recorded as an observation and applied to nothing",
     };
   }
@@ -121,6 +152,7 @@ export function reconcileRemoteClaim(message: CoordinationMessage, local: LocalH
       disposition: "coalesced",
       advancesJournalRevision: false,
       mirrored: true,
+      mirroredAtEpoch: local.localFactEpoch,
       reason: `a coordination conflict is already blocking at local fact epoch ${local.localFactEpoch}; this claim's detail is kept in its mirror record and costs no second advancing append`,
     };
   }
@@ -129,7 +161,11 @@ export function reconcileRemoteClaim(message: CoordinationMessage, local: LocalH
     advancesJournalRevision: true,
     mirrored: true,
     blockerCode: CONTROL_PLANE_CONFLICT_BLOCKER_CODE,
-    reason: `the control plane claims ${message.claim} against a local history that contradicts it; recorded once for local fact epoch ${local.localFactEpoch}`,
+    // One higher than the judged epoch: the blocker append lands first and is
+    // advancing, so this is what the journal carries when the mirror record
+    // that pins the window is written. See the ordering contract in the header.
+    mirroredAtEpoch: local.localFactEpoch + 1,
+    reason: `the control plane claims ${message.claim} against a local history that contradicts it; recorded once for local fact epoch ${local.localFactEpoch}, which closes the coalescing window at epoch ${local.localFactEpoch + 1}`,
   };
 }
 
@@ -151,4 +187,29 @@ export function localFactEpochOf(
   isObservationOnly: (kind: string) => boolean,
 ): number {
   return entryKinds.reduce((epoch, kind) => (isObservationOnly(kind) ? epoch : epoch + 1), 0);
+}
+
+/**
+ * A mirror record as far as this unit needs to read one back: the disposition
+ * it was written with and the local fact epoch it was stamped at. Structural on
+ * purpose — the durable payload carries both members, and this unit neither
+ * imports the journal store nor re-states its grammar.
+ */
+export interface MirrorRecordView {
+  readonly disposition: ClaimDisposition;
+  readonly localFactEpoch: number;
+}
+
+/**
+ * The coalescing window, read off the journal's own mirror records.
+ *
+ * This is the ONLY way `LocalHistoryView.conflictBlockerAtEpoch` should be
+ * obtained. It is the last epoch at which a blocker was recorded, and it is a
+ * read rather than a computation: the arithmetic lives at the single point in
+ * `reconcileRemoteClaim` that decided the value, so no caller can get it
+ * subtly different. `-1` when no conflict blocker has ever been recorded, which
+ * is an epoch no journal can reach and therefore never accidentally equal.
+ */
+export function conflictBlockerEpochOf(records: readonly MirrorRecordView[]): number {
+  return records.reduce((epoch, record) => (record.disposition === "blocker" ? record.localFactEpoch : epoch), -1);
 }

@@ -130,7 +130,13 @@ export function admitCoordinationMessage(value: unknown, view: CoordinationAdmis
         "a coordination key must be distinct from the release-signing trust root; a key serving both roles would let the control plane speak with release authority",
       ),
     );
-  } else if (!view.trustedKeyIds.includes(keyId)) {
+  }
+  // Not `else if`: a key that is BOTH the release-signing root and absent from
+  // the trusted connector set earned two distinct refusals, and the header's
+  // no-short-circuit rule is a rule, not a description. Suppressing the second
+  // here would produce exactly the corpus that rule exists to prevent — one
+  // that cannot tell a reader whether the trusted-key check ran at all.
+  if (!view.trustedKeyIds.includes(keyId)) {
     refusals.push(
       refusal("channel_unrecognized", "/authentication/keyId", "no connector-provisioned key with this id is trusted by this installation"),
     );
