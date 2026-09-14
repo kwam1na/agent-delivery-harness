@@ -134,9 +134,12 @@ describe("evaluateToolInvocation path scoping", () => {
 
     // One step past that pair, where case and normalization differ TOGETHER.
     // `U+01F0` has no precomposed uppercase form, so the uppercase spelling of
-    // this one file is necessarily decomposed, and a fold that normalizes only
-    // before lowercasing lets the two spellings diverge again — the same
-    // permit, one case-mapping away.
+    // this one file is necessarily decomposed, and a fold that lowercases
+    // without normalizing FIRST lets the two spellings diverge again — the
+    // same permit, one case-mapping away. This pair pins the LEADING
+    // normalize only: both of its spellings denormalize identically under the
+    // rest of the fold, so deleting the trailing normalize leaves it green.
+    // The `U+0390` pair below is what pins the trailing one.
     const lowerPrecomposed = "src/\u01f0-secrets";
     const upperDecomposed = "src/J\u030c-secrets";
     expect(lowerPrecomposed.normalize("NFC").toLowerCase()).not.toBe(upperDecomposed.normalize("NFC").toLowerCase());
@@ -148,6 +151,23 @@ describe("evaluateToolInvocation path scoping", () => {
     const longS = "src/\u017fecrets";
     const plainS = "src/secrets";
     expect(longS.normalize("NFC").toLowerCase()).not.toBe(plainS.normalize("NFC").toLowerCase());
+
+    // And one step past the LEADING normalize: case mapping denormalizes its
+    // own input, so the fold normalizes a second time at the END. Lowercasing
+    // `U+03AA` (capital iota with dialytika) and recomposing yields the
+    // precomposed `U+0390`, while lowercasing `U+0390` itself leaves a
+    // DECOMPOSED sequence behind — so without that trailing normalize the two
+    // spellings of one file fold apart and the permit re-opens. 8 code points
+    // behave this way (`U+0390`, `U+03B0`, and six of the Greek
+    // `U+1FD2`-`U+1FE7` block); `U+0390` stands for all of them here.
+    const composedTonos = "src/\u0390-secrets";
+    const decomposedTonos = "src/\u03aa\u0301-secrets";
+    expect(composedTonos.normalize("NFC").toLowerCase()).not.toBe(decomposedTonos.normalize("NFC").toLowerCase());
+    // ...and the pin itself: everything the fold does EXCEPT the trailing
+    // normalize still leaves these two apart.
+    expect(composedTonos.normalize("NFC").toLowerCase().toUpperCase().toLowerCase()).not.toBe(
+      decomposedTonos.normalize("NFC").toLowerCase().toUpperCase().toLowerCase(),
+    );
 
     for (const [declared, written] of [
       [composed, `${decomposed}/key.pem`],
@@ -164,6 +184,9 @@ describe("evaluateToolInvocation path scoping", () => {
       // ...and the false DENY the round-trip buys, which the comment claims
       // and nothing pinned: "\u00df" and "ss" compare as one path.
       ["src/\u00df-secrets", "src/ss-secrets/key.pem"],
+      // The trailing normalize, both directions.
+      [composedTonos, `${decomposedTonos}/key.pem`],
+      [decomposedTonos, `${composedTonos}/key.pem`],
     ] as const) {
       const scopedGrant = { ...grant, protectedPaths: [declared] };
       const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };

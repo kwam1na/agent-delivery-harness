@@ -453,6 +453,65 @@ describe("the pre-admission binding layer", () => {
     expect(again.ok, JSON.stringify(again)).toBe(true);
   }, 120_000);
 
+  it("refuses BEFORE the predecessor's binding state is voided, which no refusal can unwind", async () => {
+    // The probe is a pure observation of this process, so WHERE it sits in
+    // `bindWorkspace` is load-bearing and invisible to a refusal assertion.
+    // The first irreversible thing the method does is void every superseded
+    // invocation's state — it rewrites the predecessor's fence-scoped file to
+    // a null attestation, which is the frozen deny-until-attested case. A
+    // probe block moved past that point still refuses, still appends no
+    // `workspace.bound`, and has already killed a session that is still
+    // running. The refusal path never puts the attestation back.
+    const session = await openSession();
+    const staleStatePath = await bindingStatePath(session.deliveryId);
+    const attestationAt = (): unknown =>
+      (JSON.parse(readFileSync(staleStatePath, "utf8")) as HookBindingState).attestation;
+    expect(attestationAt()).not.toBeNull();
+
+    // A takeover is what makes a second bind reach the void at all.
+    must(await facade.sessionEnded({ deliveryId: session.deliveryId, fence: session.fence }), "sessionEnded");
+    const presented = await facade.presentTakeover({ deliveryId: session.deliveryId, expiry: EXPIRY });
+    must(presented, "presentTakeover");
+    const authorized = await facade.confirmTakeover({
+      deliveryId: session.deliveryId,
+      echo: operatorEcho(presented.channelPath),
+    });
+    must(authorized, "confirmTakeover");
+    sequence += 1;
+    const fresh = path.join(scratch, `wt-${sequence}-runtime-takeover`);
+    git(repoDir, "worktree", "add", "--quiet", "-b", authorized.takeoverBranchRef, fresh, authorized.targetBaseCommit);
+    const rebind = {
+      deliveryId: session.deliveryId,
+      worktreeDir: fresh,
+      hostTaskId: `host-${sequence}-rebind`,
+      observedAt: LATER,
+      attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(session.deliveryId),
+    };
+
+    const impostorFacade = createManagedDeliveryFacade({
+      repoDir,
+      policyBinding: disposablePolicyBinding(),
+      installation: { installationPath, receiptDir },
+      hostVersion: HOST_VERSION,
+      exec: recordingExecPort(),
+      hookRuntime: { execPath: "/usr/local/bin/bun", versions: { node: "22.6.0", bun: "1.1.30" }, acceptsFlag: () => true },
+    });
+    const refused = await impostorFacade.bindWorkspace(rebind);
+    expect(refused.ok, JSON.stringify(refused)).toBe(false);
+    if (refused.ok) return;
+    expect(refused.blockers.map((blocker) => blocker.code)).toEqual(["hook_runtime_unsupported"]);
+    // The still-running predecessor was NOT collateral of a refusal it has
+    // nothing to do with: its own fence-scoped state still attests.
+    expect(attestationAt(), "the refusal voided the predecessor's attestation").not.toBeNull();
+
+    // ...and the void is genuinely downstream and reachable, so the assertion
+    // above is about ORDER rather than about a void that never happens: the
+    // same rebind on a supported runtime does void it.
+    must(await facade.bindWorkspace(rebind), "rebind");
+    expect(attestationAt()).toBeNull();
+  }, 120_000);
+
   it("gives the in-session layer no way to apply, expand, or replace its own grant", async () => {
     const session = await openSession();
     const state = await bindingState(session.deliveryId);
