@@ -1,0 +1,349 @@
+/**
+ * Holds the Codex app-server integration record honest against the tree.
+ *
+ * The failure this guards against is not a wrong fact, it is a record that
+ * quietly outgrows its evidence: a "live" claim with no live lane, a tier that
+ * does not follow from the grading it cites, a version claim about a host
+ * nobody ran, an acceptance criterion whose sensor does not exist or does not
+ * contain the case it names.
+ *
+ * So every claim below is checked against something outside the record: the
+ * graded capability record, the binding's own constants, and the sensor files
+ * themselves.
+ */
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import {
+  CODEX_APP_SERVER_HOST_ID,
+  CODEX_CHARACTERIZED_HOST_VERSION,
+  CODEX_HOOK_EVENT,
+  CODEX_HOOK_EXECUTION_MODE,
+  CODEX_PINNED_HOST_VERSION,
+  SPINE_INSTANT,
+  codexSubagentPosture,
+  composeCodexAppServerThread,
+} from "@agent-delivery-harness/kernel";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, "..");
+
+const readJson = (relative: string): any => JSON.parse(readFileSync(path.join(REPO_ROOT, relative), "utf8"));
+
+const record = readJson("qualifications/codex-app-server-integration.json");
+const admissionRecord = readJson("qualifications/host-admission-capabilities.json");
+
+const escapeForRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A named case must be a LIVE declaration, not merely a string present in the
+ * file. A substring test is satisfied by a header comment, a commented-out
+ * block, an `it.todo`, or — the case that actually matters — a `describe.skip`
+ * around the very case the record cites as its evidence. Switching a named
+ * case off would then leave the criterion reading `held` with a sensor that no
+ * longer runs, which is exactly the failure this file's header names.
+ */
+const SILENCED =
+  /\b(?:it|test|describe|suite)(?:\.(?:concurrent|sequential|each|for|extend))*\.(?:only|skip|todo|fails|skipIf|runIf)(?:\.(?:each|for))?\s*\(/;
+
+/**
+ * Nothing in a cited evidence file may be switched off or made exclusive.
+ *
+ * Matching the cited NAME is not enough, because the two ways a cited case
+ * actually stops running never mention it: a `describe.skip` whose own name
+ * differs silences every `it` inside it, and a single `it.only` anywhere in
+ * the file silences every case that is not it. Either leaves the criterion
+ * reading `held` with a citation this sensor certified as live.
+ *
+ * This is deliberately a FILE-level rule rather than a scope-aware one: a
+ * cited file is evidence, and evidence that carries a disabled or exclusive
+ * declaration anywhere is evidence whose coverage nobody can read off the
+ * citation.
+ */
+function expectNothingSilenced(absolute: string, source: string, what: string): void {
+  expect(SILENCED.test(source), `${absolute}: a disabled or exclusive declaration can silence ${what}`).toBe(false);
+}
+
+function expectLiveCase(absolute: string, caseName: string): void {
+  const source = readFileSync(absolute, "utf8");
+  const name = escapeForRegExp(caseName);
+  const declared = new RegExp(String.raw`\b(?:it|test|describe)\(\s*["'\`]${name}`);
+  const disabled = new RegExp(String.raw`\b(?:it|test|describe)\.(?:skip|todo|fails|skipIf)\(\s*["'\`]${name}`);
+  expect(declared.test(source), `${absolute}: no live case declares ${JSON.stringify(caseName)}`).toBe(true);
+  expect(disabled.test(source), `${absolute}: ${JSON.stringify(caseName)} is declared but disabled`).toBe(false);
+  expectNothingSilenced(absolute, source, JSON.stringify(caseName));
+}
+
+/**
+ * Certifies a criterion list's citations. Named and exported to the suite
+ * rather than inlined in the loop because an inline loop over citations that
+ * are all clean today is ITSELF an absence assertion: deleting the two calls
+ * left the sensor green with every citation certified by a rule that ran
+ * nowhere — the same shape, one level up, that this rule has already been
+ * caught in twice.
+ */
+function certifyCitations(
+  criteria: readonly { readonly evidence: string }[],
+  resolve: (file: string) => string,
+): number {
+  const evidenceOf = (text: string): { readonly file: string; readonly caseName?: string } => {
+    const [file = "", caseName] = text.split(" — ");
+    return { file: file.trim(), caseName: caseName?.trim().replace(/^'|'$/g, "") };
+  };
+  let certified = 0;
+  for (const criterion of criteria) {
+    const { file, caseName } = evidenceOf(criterion.evidence);
+    const absolute = resolve(file);
+    expect(existsSync(absolute), file).toBe(true);
+    if (caseName === undefined) expectLiveFile(absolute);
+    else expectLiveCase(absolute, caseName);
+    certified += 1;
+  }
+  // The COUNT is returned so a caller can assert the certification actually
+  // ran over its own citations. Without it, deleting the call from the
+  // criteria case leaves this sensor green — the rule is pinned, the helpers
+  // are pinned, and nothing says the record's citations ever met either.
+  return certified;
+}
+
+/** The same rule for a criterion that cites a whole file rather than a case. */
+function expectLiveFile(absolute: string): void {
+  expectNothingSilenced(absolute, readFileSync(absolute, "utf8"), `the cited file`);
+}
+
+describe("the Codex app-server integration record", () => {
+  it("keys the host exactly as the graded capability record does, at the version actually characterized", () => {
+    expect(record.schemaVersion).toBe("codex-app-server-integration/1");
+    expect(record.recordedAt).toMatch(SPINE_INSTANT);
+    expect(record.host.hostId).toBe(CODEX_APP_SERVER_HOST_ID);
+    const graded = (admissionRecord.hosts as any[]).find(
+      (host) => host.hostId === record.host.hostId && host.hostVersion === record.host.hostVersionCharacterized,
+    );
+    expect(graded, "the admission record grades this exact host and version").toBeDefined();
+    expect(record.host.tier).toBe(graded.grade.tier);
+    expect(record.host.hostVersionCharacterized).toBe(CODEX_CHARACTERIZED_HOST_VERSION);
+  });
+
+  it("separates the version characterized from the version pinned, and claims nothing about the latter", () => {
+    expect(record.host.hostVersionPinnedByTheTrackedItem).toBe(CODEX_PINNED_HOST_VERSION);
+    expect(record.host.hostVersionPinnedByTheTrackedItem).not.toBe(record.host.hostVersionCharacterized);
+    expect(record.host.versionClaim.length).toBeGreaterThan(0);
+    // The pinned version may be NAMED, but no acceptance criterion, finding, or
+    // limitation may rest on it.
+    const load = JSON.stringify([record.acceptanceCriteria, record.characterization.findings]);
+    expect(load.includes(CODEX_PINNED_HOST_VERSION)).toBe(false);
+    expect(record.notExercisedLive.some((entry: string) => entry.includes(CODEX_PINNED_HOST_VERSION))).toBe(true);
+  });
+
+  it("carries no live lane, and says so rather than leaving it implied", () => {
+    expect(record.liveLane.status).toBe("absent");
+    expect(record.liveLane.reason.length).toBeGreaterThan(0);
+    expect(record.modelFreeLane.status).toBe("present");
+    expect(record.deliveryLaneBinding.status).toBe("composed-only");
+    // A record with no live lane may not claim a live probe.
+    expect(record.liveProbes).toBeUndefined();
+    for (const criterion of record.acceptanceCriteria as any[]) {
+      expect(criterion.leg, criterion.statement).toBe("model-free");
+      // The OUTCOME vocabulary is open in both directions on purpose. Pinning
+      // it to "held" makes an honest `not-held` fail this sensor, which leaves
+      // a later delivery two ways to go green — falsify the outcome, or delete
+      // the criterion — and both are the "record that quietly outgrows its
+      // evidence" this file exists to prevent.
+      expect(["held", "not-held"], criterion.statement).toContain(criterion.outcome);
+    }
+  });
+
+  it("derives its resume position from the graded teardown rather than declaring one", () => {
+    expect(record.terminationProvenance.descendantTeardown).toBe("unverified");
+    expect(record.terminationProvenance.resumeEligibility).toBe("fresh-worktree-only");
+    expect(record.terminationProvenance.sameWorkspaceResume).toBe("closed");
+    // Tier 0 and an unverified teardown are the same evidence seen twice; a
+    // record that separated them would be claiming something.
+    expect(record.host.tier).toBe(0);
+  });
+
+  it("removes the subagent capability with the binding's own reason, not a softer one", () => {
+    expect(record.subagents.capability).toBe(codexSubagentPosture().capability);
+    expect(record.subagents.capability).toBe("removed");
+    // The BINDING'S OWN reason, verbatim — not merely a non-empty string. A
+    // test that promises "not a softer one" in its name and checks only that a
+    // string exists reads as covered while covering nothing: a later edit
+    // softening this to a compensation claim would keep it green.
+    expect(record.subagents.reason).toContain(codexSubagentPosture().reason);
+  });
+
+  it("names the host primitives by the spellings the binding actually composes", () => {
+    const findings = JSON.stringify(record.characterization.findings);
+    expect(findings).toContain(CODEX_HOOK_EVENT);
+    expect(findings).toContain(CODEX_HOOK_EXECUTION_MODE);
+    expect(record.characterization.observedAt).toMatch(SPINE_INSTANT);
+    expect(record.characterization.observedAt <= record.recordedAt).toBe(true);
+    expect(record.characterization.limits.length).toBeGreaterThan(0);
+  });
+
+  it("names sensors that exist and actually contain the cases they claim", () => {
+    expect(record.modelFreeLane.sensors.length).toBeGreaterThan(0);
+    for (const sensor of record.modelFreeLane.sensors as string[]) {
+      expect(existsSync(path.join(REPO_ROOT, sensor)), sensor).toBe(true);
+    }
+    const criteria = record.acceptanceCriteria as { readonly evidence: string }[];
+    expect(criteria.length).toBeGreaterThan(0);
+    // EVERY criterion, counted. A call whose result nothing reads can be
+    // deleted with this case green.
+    expect(certifyCitations(criteria, (file) => path.join(REPO_ROOT, file))).toBe(criteria.length);
+    const ordering = record.attestationOrdering;
+    expect(existsSync(path.join(REPO_ROOT, ordering.sensor))).toBe(true);
+    expectLiveCase(path.join(REPO_ROOT, ordering.sensor), ordering.caseName);
+  });
+
+  it("recognises every way a cited case stops running, and leaves ordinary declarations alone", () => {
+    // The rule above is an ABSENCE assertion over evidence files that are all
+    // clean today, so every one of those assertions passes for free and a
+    // weakening of this pattern — to one that matches nothing at all, or to
+    // one that misses a spelling — leaves the whole sensor green while every
+    // citation goes unchecked. That has already happened twice to this rule.
+    // Both directions are pinned: the spellings it must catch, and the
+    // ordinary declarations it must not, because a rule that refuses every
+    // evidence file says nothing about any of them either.
+    for (const silenced of [
+      `describe.skip("x", () => {});`,
+      `it.only("x", () => {});`,
+      `test.todo("x");`,
+      `it.fails("x", () => {});`,
+      `describe.skipIf(cond)("x", () => {});`,
+      `it.runIf(false)("x", () => {});`,
+      `suite.only("x", () => {});`,
+      // The table forms: `it.each` and `describe.each` are ordinary, and
+      // `it.each` alone appears over a hundred times in this tree, but the
+      // same table reads as silenced on either side of `each`.
+      `it.skip.each([1])("x", () => {});`,
+      `it.only.each([1])("x", () => {});`,
+      `describe.skip.each([1])("x", () => {});`,
+      `it.concurrent.only("x", () => {});`,
+      `it.concurrent.skip("x", () => {});`,
+    ]) {
+      expect(SILENCED.test(silenced), silenced).toBe(true);
+    }
+    for (const live of [
+      `it("x", () => {});`,
+      `describe("only the brave", () => {});`,
+      `it.each([1, 2])("x %i", () => {});`,
+      `describe.each(rows)("x", () => {});`,
+      `it.concurrent("x", () => {});`,
+      `expect(thing.skip).toBe(1);`,
+    ]) {
+      expect(SILENCED.test(live), live).toBe(false);
+    }
+  });
+
+  it("actually applies that rule to the files it certifies, in both directions", () => {
+    // Pinning the PATTERN is not pinning its APPLICATION. `SILENCED` is read
+    // only by `expectNothingSilenced`, which is called only from the two
+    // helpers below, and every one of those calls is an absence assertion over
+    // evidence files that are clean today — so deleting both calls changed no
+    // observable outcome and left this sensor green with every citation
+    // certified by a rule that ran nowhere. These rows drive the helpers
+    // themselves, over files written for the purpose.
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-record-citation-"));
+    try {
+      const clean = path.join(dir, "clean.test.ts");
+      const silenced = path.join(dir, "silenced.test.ts");
+      writeFileSync(clean, `it("cited case", () => {});\n`);
+      // The cited case itself is live here; what silences it is the exclusive
+      // declaration beside it, which never mentions its name.
+      writeFileSync(silenced, `it("cited case", () => {});\nit.only("other", () => {});\n`);
+
+      expect(() => expectLiveCase(clean, "cited case")).not.toThrow();
+      expect(() => expectLiveFile(clean)).not.toThrow();
+      expect(() => expectLiveCase(silenced, "cited case")).toThrow();
+      expect(() => expectLiveFile(silenced)).toThrow();
+      // And the name check itself still bites: a file that declares no such
+      // case fails even though nothing in it is silenced.
+      expect(() => expectLiveCase(clean, "a case nobody declares")).toThrow();
+
+      // AND THE CALLER. The helpers being right is not the criteria loop
+      // CALLING them: deleting both calls left this sensor green while every
+      // citation in the record went unchecked.
+      const resolve = (file: string): string => path.join(dir, file);
+      expect(certifyCitations([{ evidence: `clean.test.ts — 'cited case'` }], resolve)).toBe(1);
+      expect(() =>
+        certifyCitations([{ evidence: `silenced.test.ts — 'cited case'` }], resolve),
+      ).toThrow();
+      expect(() => certifyCitations([{ evidence: "silenced.test.ts" }], resolve)).toThrow();
+      expect(() => certifyCitations([{ evidence: "nothing-here.test.ts" }], resolve)).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries a non-empty claim in every field that states one", () => {
+    // Every field below asserts something about the binding, the host, or the
+    // characterization. None of them was defended by any other case in this
+    // file, so all nine could be emptied with the sensor green — a record that
+    // says nothing while reading as a record.
+    const claims: Readonly<Record<string, unknown>> = {
+      description: record.description,
+      platform: record.platform,
+      "host.admissionSurface": record.host.admissionSurface,
+      "host.gradeSource": record.host.gradeSource,
+      "characterization.method": record.characterization.method,
+      "modelFreeLane.launchesNothing": record.modelFreeLane.launchesNothing,
+      "liveLane.whatALiveLaneWouldAdd": record.liveLane.whatALiveLaneWouldAdd,
+      "deliveryLaneBinding.meaning": record.deliveryLaneBinding.meaning,
+      "attestationOrdering.property": record.attestationOrdering.property,
+    };
+    for (const [field, claim] of Object.entries(claims)) {
+      expect(typeof claim, field).toBe("string");
+      expect((claim as string).length, field).toBeGreaterThan(0);
+    }
+    // Two of them are tied to the tree rather than to themselves, so a claim
+    // that drifts away from what the binding composes fails here.
+    expect(record.host.admissionSurface).toContain(CODEX_HOOK_EVENT);
+    expect(record.host.gradeSource).toContain("qualifications/host-admission-capabilities.json");
+  });
+
+  it("keeps its hook-coverage disclosure true of what the binding actually composes", async () => {
+    // A LIMITATION DISCLOSED IN PROSE IS DEFENDED BY PROSE. Every other field
+    // here is checked against something outside the record; the limitations
+    // list was checked only for being non-empty, so the one entry that
+    // discharges a review finding — the `pre_tool_use`-only asymmetry, and
+    // with it the absence of any Codex counterpart to the Claude binding's
+    // projection-consumption evidence — could be deleted with this sensor
+    // green. Both directions are tied to the tree: the disclosure must name
+    // the event and the operation it has consequences for, and the composition
+    // must actually wire that one event and no other.
+    const base = await mkdtemp(path.join(tmpdir(), "codex-record-hooks-"));
+    try {
+      const composed = await composeCodexAppServerThread({
+        bindingDir: path.join(base, "binding"),
+        statePath: path.join(base, "binding", "state-1.json"),
+        hookCommand: ["node", "--import", "tsx", path.join(base, "codex-hook-main.ts")],
+        fence: 1,
+        workspaceRoot: path.join(base, "worktree"),
+        commonGitDir: path.join(base, "repo", ".git"),
+        authorityDir: path.join(base, "authority"),
+        grant: { allowedCapabilities: ["Read", "Write"], writablePaths: ["src"], protectedPaths: [".git"] },
+      });
+      const hooks = (composed.request.params.config as Record<string, unknown>)["hooks"] as Record<string, unknown>;
+      expect(Object.keys(hooks)).toEqual([CODEX_HOOK_EVENT]);
+
+      const disclosed = (record.knownLimitations as string[]).filter(
+        (entry) => entry.includes(CODEX_HOOK_EVENT) && entry.includes("recordProjectionConsumption"),
+      );
+      expect(disclosed.length, "a known limitation names the one composed hook event and what it costs").toBe(1);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("states what was NOT exercised, and what it still does not know", () => {
+    expect(record.notExercisedLive.length).toBeGreaterThan(0);
+    expect(record.knownLimitations.length).toBeGreaterThan(0);
+    for (const entry of [...record.notExercisedLive, ...record.knownLimitations] as string[]) {
+      expect(entry.length).toBeGreaterThan(0);
+    }
+  });
+});

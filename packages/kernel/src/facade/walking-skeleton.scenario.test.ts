@@ -43,6 +43,8 @@ import { maintainTrustState } from "../substrate/lifecycle.ts";
 import { createExecPort, type ExecInvocation, type ExecPort } from "../host/exec-port.ts";
 import { decideHookInvocation, type HookBindingState } from "../host/hook-main.ts";
 import type { ConfirmationEchoAttempt, RenderedConfirmationChallenge } from "../binding/host-admission.ts";
+import { claudeCodeBinding } from "../host/claude-code.ts";
+import type { HostSessionGrant, ManagedHostBinding } from "../host/managed-host-binding.ts";
 import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
 import { DEFAULT_OBSERVATION_LIFETIME_SECONDS } from "./liveness.ts";
 import { OBSERVED_HEAVIEST_VALIDATION_SECONDS } from "./liveness.fixture.ts";
@@ -814,6 +816,173 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(appended.ok, JSON.stringify(appended)).toBe(true);
     const counted = await facade.status({ deliveryId: confirmed.deliveryId, observedAt: LATER });
     expect(counted.ok && counted.status.operatorInterventions === 1).toBe(true);
+  });
+
+  it("composes the host session THROUGH the binding seam it was handed, not through a binding of its own", async () => {
+    // THE SEAM'S ONLY LOAD-BEARING CLAIM, driven end to end. Every other
+    // assertion about `ManagedHostBinding` compares two bindings to each
+    // other; none of them observes the facade USING one. A facade that kept
+    // calling `composeClaudeCodeSession` directly — or that read the seam's
+    // result and then recomposed — would satisfy all of them, and the second
+    // host would be unreachable in the only place a host is admitted.
+    // All THREE members are recorded, not just the one that is marked. A stub
+    // that delegates a member verbatim is transparent on it: the facade could
+    // go on calling the Claude definition directly at that site and nothing
+    // here would notice. That is exactly the shape this case exists to refuse,
+    // and the digest and the grading key are the two sites where reaching the
+    // wrong binding is silent — a mismatched recheck digest voids an admitted
+    // session, and a mis-keyed grade reads a second host's teardown off the
+    // first host's row.
+    const calls: { readonly fence: number; readonly workspaceRoot: string; readonly grant: HostSessionGrant }[] = [];
+    const digestCalls: string[] = [];
+    let hostIdReads = 0;
+    let digestAnswer: string | undefined;
+    const MARKER = "--composed-through-the-seam";
+    // Marker VALUES, not merely recorded calls. A stub that delegates a member
+    // verbatim is transparent on it twice over: the facade could call the
+    // Claude definition at that site (caught by the recorders below), or it
+    // could call this binding and then use a value computed some other way —
+    // which no recorder can see, because the two answers are identical. Both
+    // members therefore answer something only THIS binding can produce.
+    const MARKER_HOST_ID = "marker-host-only-this-binding-answers";
+    const MARKER_DIGEST = "d".repeat(64);
+    const recording: ManagedHostBinding = {
+      get hostId() {
+        hostIdReads += 1;
+        return MARKER_HOST_ID;
+      },
+      async composeSession(composeInput) {
+        calls.push({
+          fence: composeInput.fence,
+          workspaceRoot: composeInput.workspaceRoot,
+          grant: composeInput.grant,
+        });
+        const composed = await claudeCodeBinding.composeSession(composeInput);
+        if (!composed.ok) return composed;
+        // A value only this stub can produce: if it reaches the caller, the
+        // caller read THIS binding's answer.
+        return { ...composed, hostAdmissionArguments: [...composed.hostAdmissionArguments, MARKER] };
+      },
+      recomputeDiscoveryConfigurationDigest: async (digestInput) => {
+        digestCalls.push(digestInput.admissionConfigurationPath);
+        return digestAnswer ?? (await claudeCodeBinding.recomputeDiscoveryConfigurationDigest(digestInput));
+      },
+      admissionConfigurationPath: (bindingDir, fence) => claudeCodeBinding.admissionConfigurationPath(bindingDir, fence),
+    };
+
+    const seamFacade = createManagedDeliveryFacade({
+      repoDir,
+      policyBinding: disposablePolicyBindingForInstallation(installationPath),
+      installation: { installationPath, receiptDir },
+      hostVersion: "2.1.97",
+      exec: recordingExecPort(),
+      hostBinding: recording,
+    });
+    const presented = await seamFacade.presentContract({
+      contract: { ...DISPOSABLE_CONTRACT, contractId: "contract-greeting-3" },
+      expiry: EXPIRY,
+    });
+    expect(presented.ok, JSON.stringify(presented)).toBe(true);
+    if (!presented.ok) return;
+    const confirmed = await seamFacade.confirmContract({
+      intakeId: presented.intakeId,
+      echo: operatorEcho(presented.channelPath),
+    });
+    expect(confirmed.ok, JSON.stringify(confirmed)).toBe(true);
+    if (!confirmed.ok) return;
+
+    const worktreeE = path.join(scratch, "worktree-e");
+    git(repoDir, "worktree", "add", "--quiet", "-b", "delivery-e", worktreeE, "main");
+    const bound = await seamFacade.bindWorkspace({
+      deliveryId: confirmed.deliveryId,
+      worktreeDir: worktreeE,
+      hostTaskId: "host-task-seam",
+      observedAt: NOW,
+      attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
+    });
+    expect(bound.ok, JSON.stringify(bound)).toBe(true);
+    if (!bound.ok) return;
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.workspaceRoot).toBe(worktreeE);
+    expect(calls[0]!.fence).toBe(bound.fence);
+    // THE GRANT HANDED ACROSS THE SEAM IS THE CHECKPOINT GRANT, EXACTLY. A
+    // length check would have read as a boundary claim while passing for any
+    // non-empty list, so a seam refactor that widened or substituted the grant
+    // at the one site where a host is admitted would have survived it — and
+    // this is the only place the grant crossing the seam is observed at all.
+    const planGrant = disposablePolicyBindingForInstallation(installationPath).compiledPolicy.checkpointGrants.find(
+      (entry) => entry.stageId === "plan",
+    )?.grant;
+    expect(planGrant, "the compiled policy declares a plan checkpoint grant").toBeDefined();
+    expect(calls[0]!.grant).toEqual(planGrant);
+    // The operator's arguments are the ones THIS binding answered with.
+    expect(bound.cliArgs).toContain(MARKER);
+    expect(bound.settingsPath).toBe(
+      recording.admissionConfigurationPath(path.dirname(bound.statePath), bound.fence),
+    );
+
+    // THE RECHECK GOES THROUGH THIS BINDING TOO. The discovery-configuration
+    // digest is recomputed on every status recheck against the value the
+    // admission recorded; a facade that recomputed it with the Claude
+    // definition while a second host had written the file would report a
+    // mismatch on every recheck and void a correctly admitted session.
+    const planned = await seamFacade.submitStageResult({
+      deliveryId: confirmed.deliveryId,
+      stageId: "plan",
+      resultBytes: typedStageResultBytes({
+        stageId: "plan",
+        deliveryId: confirmed.deliveryId,
+        outputKind: "bounded-plan",
+        candidate: treeOf(worktreeE),
+      }),
+      fence: bound.fence,
+    });
+    expect(planned.ok, JSON.stringify(planned)).toBe(true);
+    expect(digestCalls).toContain(bound.settingsPath);
+
+    // AND THE GRADING KEY. Descendant teardown is graded per host; a facade
+    // still holding `"claude-code"` would grade a Codex session's teardown off
+    // the Claude row of the capability record and hand back a resume
+    // eligibility nothing observed.
+    const readsBefore = hostIdReads;
+    const provenance = await seamFacade.recordTerminationProvenance({
+      deliveryId: confirmed.deliveryId,
+      fence: bound.fence,
+    });
+    expect(provenance.ok, JSON.stringify(provenance)).toBe(true);
+    expect(hostIdReads).toBeGreaterThan(readsBefore);
+    // The VALUE, not the read. Every graded host in this tree sits at Tier 0,
+    // so the teardown verdict is `unverified` for any host id and a wrong one
+    // has no other consequence — which is exactly why the provenance record
+    // names the host it graded. A facade holding a constant, or a near-miss
+    // spelling, is visible here and nowhere else.
+    const seamStore = createJournalStore(
+      path.join(await seamFacade.namespaceDir(), "deliveries", confirmed.deliveryId, "journal.jsonl"),
+    );
+    const seamEntries = await seamStore.read();
+    expect(seamEntries.ok).toBe(true);
+    if (!seamEntries.ok) return;
+    const recorded = (seamEntries.entries as readonly { kind: string; payload: Record<string, unknown> }[]).filter(
+      (entry) => entry.kind === "termination.provenance.recorded",
+    );
+    expect(recorded.length).toBe(1);
+    expect(recorded[0]!.payload["hostId"]).toBe(MARKER_HOST_ID);
+
+    // AND THE DIGEST'S ANSWER, not merely the call. From here the seam
+    // answers a digest only it can produce; the recheck compares that answer
+    // against the one admission bound, so the delivery must refuse as tampered.
+    // A facade that called this member for its side effect and then computed
+    // the observed digest itself would sail through.
+    digestAnswer = MARKER_DIGEST;
+    const tampered = await seamFacade.recordProjectionConsumption({
+      deliveryId: confirmed.deliveryId,
+      category: "workflow-source",
+    });
+    expect(tampered.ok, JSON.stringify(tampered)).toBe(false);
+    if (tampered.ok) return;
+    expect(tampered.blockers.map((blocker) => blocker.code)).toEqual(["discovery_configuration_tampered"]);
   });
 });
 

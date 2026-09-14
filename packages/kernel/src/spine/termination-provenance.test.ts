@@ -117,6 +117,16 @@ describe("the frozen termination-provenance payload", () => {
     expect(codes(entry({ ...unverifiedTeardown, resumeEligibility: "wherever" }))).toContain("malformed_member");
   });
 
+  it("carries the host id as an OPTIONAL member, so a pre-seam journal stays readable", () => {
+    // The facade reaches its host through an injected binding, so the record
+    // names WHICH host the teardown verdict is about — but journals written
+    // before the seam existed carry no host id, and a required member would
+    // make every one of them unreadable.
+    expect(validateJournalEntry(entry({ ...unverifiedTeardown, hostId: "codex-cli" })).ok).toBe(true);
+    expect(validateJournalEntry(entry(unverifiedTeardown)).ok).toBe(true);
+    expect(codes(entry({ ...unverifiedTeardown, hostId: 7 }))).toContain("malformed_member");
+  });
+
   it("rejects a stranger member — the payload is closed", () => {
     expect(codes(entry({ ...unverifiedTeardown, priorTaskStopped: true }))).toContain("unknown_member");
   });

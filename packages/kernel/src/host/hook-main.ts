@@ -437,8 +437,16 @@ function nowInstant(): string {
 
 async function main(argv: readonly string[]): Promise<number> {
   const [subcommand, statePath, fenceArg] = argv;
-  if (statePath === undefined || (subcommand !== "pre-tool-use" && subcommand !== "post-tool-use" && subcommand !== "session-end")) {
-    process.stderr.write("usage: hook-main.ts <pre-tool-use|post-tool-use|session-end> <state-path> <session-fence>\n");
+  if (
+    statePath === undefined ||
+    (subcommand !== "pre-tool-use" &&
+      subcommand !== "codex-pre-tool-use" &&
+      subcommand !== "post-tool-use" &&
+      subcommand !== "session-end")
+  ) {
+    process.stderr.write(
+      "usage: hook-main.ts <pre-tool-use|codex-pre-tool-use|post-tool-use|session-end> <state-path> <session-fence>\n",
+    );
     return 2;
   }
   // The session's own fence, baked into the command at admission. A malformed
@@ -450,6 +458,50 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const state = loadState(statePath);
+
+  if (subcommand === "codex-pre-tool-use") {
+    // The Codex wire's entry point. Deliberately the SAME binary and the same
+    // state file as the Claude branch: the admission decision is shared, the
+    // allowed-invocation observation is written the same way, and only the
+    // host-specific surface refusal and the rendered decision document
+    // differ. Without this branch the Codex decision is reachable from no
+    // process at all — the composed hook command would name a subcommand this
+    // binary rejects with a usage error — and the "second half" the binding's
+    // own comments call required would never run.
+    let raw = "";
+    try {
+      raw = readFileSync(0, "utf8");
+    } catch {
+      raw = "";
+    }
+    // Imported lazily: `./codex-app-server-hook.ts` imports the shared
+    // decision from THIS module, so a static import here would be a cycle.
+    // The Claude branch must not pay for the Codex module either.
+    const { codexHookDecision, renderCodexHookDecision } = await import("./codex-app-server-hook.ts");
+    const observedAt = nowInstant();
+    const decision = codexHookDecision({ state, rawInput: raw, observedAt, sessionFence });
+    if (decision.allowed && state !== undefined) {
+      // THE SAME OBSERVATION THE CLAUDE BRANCH WRITES. The facade's activity
+      // reporting is host-neutral: it ages `active` to `unknown` once no
+      // invocation has been observed for the workspace's observation
+      // lifetime, and then answers `takeover-required`. A Codex branch that
+      // skipped this would tell the operator to abandon a live workspace
+      // after fifteen quiet minutes of ordinary work.
+      try {
+        writeFileSync(
+          state.observationPath,
+          `${JSON.stringify({ fence: state.expectation.invocationFence, observedAt })}\n`,
+          { mode: 0o600 },
+        );
+      } catch {
+        // An unrecorded observation only ages activity toward `unknown`; it
+        // never widens the decision.
+      }
+    }
+    const rendered = renderCodexHookDecision(decision);
+    if (rendered.length > 0) process.stdout.write(`${rendered}\n`);
+    return 0;
+  }
 
   if (subcommand === "pre-tool-use") {
     let input: HookToolInput = {};

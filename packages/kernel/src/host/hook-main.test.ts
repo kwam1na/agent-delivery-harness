@@ -6,11 +6,14 @@
  *
  * Written RED before `hook-main.ts` existed.
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { digestCanonical } from "../digest.ts";
+import { SPINE_INSTANT } from "../spine/grammar.ts";
 import {
   decideHookInvocation,
   exactWorkflowSourceRead,
@@ -68,6 +71,136 @@ const state: HookBindingState = {
   workspaceRoot: "/work/tree",
   observationPath: "/ns/observation.json",
 };
+
+describe("the Codex subcommand of this same entry", () => {
+  /**
+   * THE SECOND HALF OF THE WIRE, DRIVEN AS A PROCESS. Every other assertion
+   * about the Codex hook calls `codexHookTurn` directly. If this entry never
+   * routed `codex-pre-tool-use`, that function would be reachable from no
+   * process at all — the composed hook command would name a subcommand this
+   * binary rejects with a usage error, and the host would receive exit code 2
+   * on every tool call instead of a decision.
+   */
+  const runEntry = (
+    args: readonly string[],
+    stdin: string,
+  ): { readonly status: number; readonly stdout: string; readonly stderr: string } => {
+    const entry = fileURLToPath(new URL("./hook-main.ts", import.meta.url));
+    const result = spawnSync(process.execPath, ["--import", "tsx", entry, ...args], {
+      input: stdin,
+      encoding: "utf8",
+    });
+    return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  };
+
+  const observationOf = (dir: string): string => path.join(dir, "observation.json");
+
+  const writeState = (dir: string, expiry: string): string => {
+    const statePath = path.join(dir, "state.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        ...state,
+        workspaceRoot: dir,
+        observationPath: observationOf(dir),
+        attestation: { ...attestation, expiry },
+      }),
+      { mode: 0o600 },
+    );
+    return statePath;
+  };
+
+  it("routes the composed subcommand to the Codex wire and renders a deny the host accepts", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-entry-"));
+    try {
+      const statePath = writeState(dir, "2099-01-01T00:00:00Z");
+      const denied = runEntry(
+        ["codex-pre-tool-use", statePath, String(SESSION_FENCE)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, ".git", "config") } }),
+      );
+      expect(denied.status, denied.stderr).toBe(0);
+      const document = JSON.parse(denied.stdout) as {
+        hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string };
+      };
+      expect(document.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+      expect(document.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(document.hookSpecificOutput.permissionDecisionReason.length).toBeGreaterThan(0);
+
+      // A DENIAL IS NOT ACTIVITY. The observation is written only for an
+      // invocation that was allowed; a branch that wrote it unconditionally
+      // would keep a workspace whose every tool call is being refused reading
+      // `active` forever, and the ageing to `unknown` that hands the operator
+      // the takeover would never fire.
+      expect(existsSync(observationOf(dir))).toBe(false);
+
+      // An in-grant write renders NOTHING — the host's own "no opinion".
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      const allowed = runEntry(
+        ["codex-pre-tool-use", statePath, String(SESSION_FENCE)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, "src", "a.ts") } }),
+      );
+      expect(allowed.status, allowed.stderr).toBe(0);
+      expect(allowed.stdout.trim()).toBe("");
+
+      // AN ALLOWED INVOCATION IS ALSO AN ACTIVITY OBSERVATION. The facade's
+      // activity reporting is host-neutral and ages to `unknown` — and then to
+      // `takeover-required` — when nothing is observed for the workspace's
+      // observation lifetime. A Codex branch that rendered its decision and
+      // wrote nothing would tell the operator to abandon a live workspace.
+      expect(existsSync(observationOf(dir))).toBe(true);
+      // THE INSTANT IS THE FIELD THE AGEING RULE READS. A `toMatchObject` on
+      // the fence alone is satisfied by an observation whose `observedAt` is
+      // unparseable — the file exists, the fence is right, and the facade's
+      // `instantSeconds` reads NaN, which is precisely the "abandon a live
+      // workspace" outcome this write exists to prevent. Pin the whole object.
+      expect(JSON.parse(readFileSync(observationOf(dir), "utf8"))).toEqual({
+        fence: expectation.invocationFence,
+        observedAt: expect.stringMatching(SPINE_INSTANT),
+      });
+
+      // An expired attestation denies again, through the same entry.
+      const expiredPath = writeState(dir, "2000-01-01T00:00:00Z");
+      const expired = runEntry(
+        ["codex-pre-tool-use", expiredPath, String(SESSION_FENCE)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, "src", "a.ts") } }),
+      );
+      expect(expired.status, expired.stderr).toBe(0);
+      expect(JSON.parse(expired.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+
+      // THE SUPERSEDED-SESSION LOCK, THROUGH THE PROCESS. The fence is an
+      // ARGUMENT baked into the composed hook command, not a field of the
+      // state file. A branch that read the state's own fence instead would
+      // agree with itself forever, and a session the facade had already
+      // superseded would keep its write path for as long as it could read its
+      // own state. (`writeState` rewrites the same path, so the unexpired
+      // state has to be restored after the expiry case above clobbered it.)
+      const currentPath = writeState(dir, "2099-01-01T00:00:00Z");
+      const superseded = runEntry(
+        ["codex-pre-tool-use", currentPath, String(SESSION_FENCE + 1)],
+        JSON.stringify({ tool_name: "apply_patch", tool_input: { file_path: path.join(dir, "src", "a.ts") } }),
+      );
+      expect(superseded.status, superseded.stderr).toBe(0);
+      expect(JSON.parse(superseded.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(JSON.parse(superseded.stdout).hookSpecificOutput.permissionDecisionReason).toContain(
+        "superseded_session",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it("rejects a subcommand it does not implement, and says which it does", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-entry-usage-"));
+    try {
+      const statePath = writeState(dir, "2099-01-01T00:00:00Z");
+      const refused = runEntry(["codex-pre-tool-uses", statePath, String(SESSION_FENCE)], "{}");
+      expect(refused.status).toBe(2);
+      expect(refused.stderr).toContain("codex-pre-tool-use");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
 
 describe("decideHookInvocation", () => {
   it("allows a granted capability writing inside the grant", () => {

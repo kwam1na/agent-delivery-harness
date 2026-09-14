@@ -1,0 +1,150 @@
+{
+  "schemaVersion": "codex-app-server-integration/1",
+  "description": "Qualification record for the Codex app-server delivery binding. ONE lane ran: a model-free lane that composes the fence-scoped admission (named permission profile, synchronous pre_tool_use hook, per-thread ephemeral configuration), verifies what a host reports it applied before any attestation is minted, and drives the frozen host-integration conformance contract on a real worktree. NO live lane exists: no app-server process was started, no thread was opened, no turn ran, no credential was read, and no network call was made. Everything below is what that lane proved plus what the read-only characterization of the installed host observed. Nothing is claimed beyond it.",
+  "recordedAt": "2026-09-13T00:00:00Z",
+  "platform": "macOS 15.6.1 arm64",
+  "host": {
+    "hostId": "codex-cli",
+    "hostVersionCharacterized": "0.147.0",
+    "hostVersionPinnedByTheTrackedItem": "0.151",
+    "versionClaim": "The binding was characterized against the INSTALLED host, 0.147.0. 0.151 is the version the tracked item pins and is NOT installed here; it was never observed, so this record makes no claim about it whatsoever. A version that was not observed is recorded as uncharacterized rather than assumed to behave like the one that was.",
+    "tier": 0,
+    "gradeSource": "qualifications/host-admission-capabilities.json, keyed on host id and exact host version. That record grades codex-cli 0.147.0 at Tier 0, and this record does not restate, promote, or reinterpret it.",
+    "admissionSurface": "thread/start carrying an ephemeral per-thread config layer: a per-fence named permission profile (sandbox_mode workspace-write, writable_roots exactly the grant's writable paths, network_access false, exclude_tmpdir_env_var and exclude_slash_tmp true, plus a filesystem block whose deny_read and deny_write name the workspace root, every protected path, ambient temp, the shared Git authority and the installation authority under both path spellings), a synchronous pre_tool_use command hook carrying this session's own fence and the codex-pre-tool-use subcommand that renders the host's own decision document, enabled_tools spelled in the HOST's tool vocabulary rather than the kernel's, and every tool surface the synchronous local hook cannot adjudicate switched off (mcp_servers empty, apps/tool_registry/multi_agent_v2 false, web_search false)."
+  },
+  "characterization": {
+    "method": "model-free, read-only, and performed BEFORE any binding byte was written: `codex app-server generate-json-schema --out <scratch>` against the installed host, plus a read-only string inventory of the installed binary. No thread was started, no turn ran, no credential was read, and no configuration file was written.",
+    "observedAt": "2026-09-13T00:00:00Z",
+    "findings": [
+      {
+        "id": "per-thread-config-layer",
+        "observation": "ThreadStartParams carries a free-form `config` alongside cwd, sandbox, approvalPolicy and ephemeral, and the host's configuration-layer inventory names a session-flags layer distinct from the user, project and managed layers.",
+        "consequence": "the admission this binding composes is applied per session and never mutates shared user, project, or managed configuration."
+      },
+      {
+        "id": "named-permission-profiles",
+        "observation": "permission_profile and allowed_permission_profiles are present. The app-server schema's SandboxWorkspaceWrite carries EXACTLY four members — writable_roots, network_access, exclude_tmpdir_env_var, exclude_slash_tmp — and no deny member of any kind. The config-layer permission-profile struct in the installed binary's inventory carries a filesystem block, and deny_read appears in that struct. The filesystem special-path tokens root, minimal, project_roots, subpath, tmpdir and slash_tmp are present, as is the FileSystemAccessMode enum read/write/deny.",
+        "consequence": "a grant can be projected onto the host's own controls by name rather than by argument-passing at each turn, and the WRITE boundary is the positive writable_roots list rather than a deny list — workspace-write opens write to the listed roots and nothing else, which is the only part of the boundary this characterization actually establishes."
+      },
+      {
+        "id": "unobserved-filesystem-deny-members",
+        "observation": "filesystem.read and filesystem.deny_write were observed in NEITHER the app-server JSON schemas nor the string inventory of the installed binary. deny_write does not appear anywhere in the inventory at all.",
+        "consequence": "the filesystem block this binding composes carries two members with no recorded evidence behind them. They are emitted as defence in depth — a host that honours them narrows the boundary further, a host that ignores them leaves the characterized writable_roots boundary intact — and no acceptance criterion in this record rests on them. They are recorded here as uncharacterized rather than assumed, and they are listed under knownLimitations."
+      },
+      {
+        "id": "synchronous-pre-tool-use-hook",
+        "observation": "hooks exist with event pre_tool_use, handler type command, and execution mode sync.",
+        "consequence": "the hook is an INTERCEPTOR rather than a notification. An async hook would leave the boundary advisory, which is why composition writes sync and the applied-configuration check refuses anything else."
+      },
+      {
+        "id": "deny-only-decision-wire",
+        "observation": "the PreToolUse decision document is hookSpecificOutput.{hookEventName,permissionDecision,permissionDecisionReason}; the host rejects permissionDecision allow and ask, decision approve, continue:false, stopReason, suppressOutput and updatedInput, and rejects a deny carrying an empty reason.",
+        "consequence": "the wire is DENY-ONLY. An allowed invocation renders nothing at all, deferring to the profile the binding already narrowed; a denial renders the one accepted shape with a non-empty reason. Emitting an allow would not widen the grant, it would make the host treat the hook output as invalid."
+      }
+    ],
+    "limits": "This is a schema-and-inventory characterization, not a behavioral one. It establishes that the primitives EXIST and how they are spelled. It does not establish that the host enforces them, and nothing in this record claims it does: the applied-configuration verification exists precisely because the host's enforcement is unproved here."
+  },
+  "modelFreeLane": {
+    "status": "present",
+    "sensors": [
+      "packages/kernel/src/host/codex-app-server.test.ts",
+      "packages/kernel/src/host/codex-app-server-hook.test.ts",
+      "packages/kernel/src/host/codex-app-server-conformance.test.ts",
+      "packages/kernel/src/host/managed-host-binding.test.ts"
+    ],
+    "launchesNothing": "no app-server process, thread, turn, worktree creation, credential read, or network call occurs in any of them"
+  },
+  "liveLane": {
+    "status": "absent",
+    "reason": "A live lane is operator-owned by the tracked item's own proof boundary, and the pinned host version is not installed here. It is recorded as ABSENT rather than simulated: a fixture standing in for a live observation is not a live observation.",
+    "whatALiveLaneWouldAdd": "the host's own report of what it applied, which the model-free lane supplies through the same seam the live lane would fill, and the host's actual enforcement of the composed profile and hook."
+  },
+  "deliveryLaneBinding": {
+    "status": "composed-only",
+    "meaning": "The binding composes the admission and hands it over as DATA. The product never launches Codex, opens a thread, creates a worktree, holds a credential, or falls back to the Responses API, an SDK, MCP, or a direct API call. No delivery is driven through this host by this record."
+  },
+  "attestationOrdering": {
+    "property": "the configuration the host reports it applied is verified BEFORE an attestation is minted, and an unverified application yields no admission and no mutation-capable invocation",
+    "sensor": "packages/kernel/src/host/codex-app-server-conformance.test.ts",
+    "caseName": "before the applied configuration is verified"
+  },
+  "subagents": {
+    "capability": "removed",
+    "reason": "exact permission-profile, hook, and fence inheritance into a Codex subagent is unproved; the capability is removed rather than supervised. The probed surface reports subagentStart/subagentStop but says nothing about whether the per-thread profile and the synchronous hook are carried into a child. The rule for an unproved inheritance is monotone removal, never compensation, so the binding does not supervise, launch, or wrap agents."
+  },
+  "terminationProvenance": {
+    "descendantTeardown": "unverified",
+    "resumeEligibility": "fresh-worktree-only",
+    "sameWorkspaceResume": "closed",
+    "reason": "Codex owns interruption and cancellation, and nothing in this binding watches its process tree. The resume position is DERIVED from the graded status by the one derivation, so this record cannot claim a position the grade does not support."
+  },
+  "acceptanceCriteria": [
+    {
+      "statement": "the fence-scoped profile opens write for exactly the grant's writable paths and nothing wider, through the characterized sandbox_workspace_write.writable_roots list; the workspace root, every protected path, the shared Git authority and the installation authority are additionally named in the composed deny sets, which rest on partly uncharacterized keys and are defence in depth rather than the boundary",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/codex-app-server.test.ts — 'emits the permissions block the host actually reads'"
+    },
+    {
+      "statement": "ambient $TMPDIR and /tmp are denied under both the unresolved and the resolved spelling, and command network access is off",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/codex-app-server.test.ts — 'denies ambient temp under BOTH spellings'"
+    },
+    {
+      "statement": "the pre_tool_use hook is synchronous and carries this session's own fence",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/codex-app-server.test.ts — 'wires a SYNCHRONOUS pre_tool_use hook'"
+    },
+    {
+      "statement": "a host that applied anything other than what was composed, or reported nothing at all, admits nothing and intercepts nothing",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/codex-app-server-conformance.test.ts — 'before the applied configuration is verified'"
+    },
+    {
+      "statement": "the decision wire is deny-only: an allowed invocation renders nothing, a denial renders the one accepted shape with a non-empty reason, and no defect on the path produces a continuation",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/codex-app-server-hook.test.ts"
+    },
+    {
+      "statement": "session-wide permission widening, exec-policy amendment, an extra writable root, and an unadjudicable tool surface are refused rather than forwarded",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/codex-app-server.test.ts — 'escalation'"
+    },
+    {
+      "statement": "the frozen host-integration conformance contract is satisfied end to end by this binding",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/codex-app-server-conformance.test.ts — 'satisfies every normalized case of the frozen contract'"
+    },
+    {
+      "statement": "the Claude binding's delivered session is unchanged by the seam this binding required: same settings bytes, same admission arguments, same digest",
+      "outcome": "held",
+      "leg": "model-free",
+      "evidence": "packages/kernel/src/host/managed-host-binding.test.ts — 'the Claude binding reached through the seam'"
+    }
+  ],
+  "notExercisedLive": [
+    "starting the app server, opening a thread, or running a turn",
+    "the host's actual enforcement of the composed permission profile",
+    "the host's actual execution of the synchronous pre_tool_use hook and its handling of the rendered decision document",
+    "the host's approvals surface and any escalation arriving from it",
+    "subagent spawning and whether profile, hook, or fence are inherited",
+    "interruption, cancellation, and descendant teardown",
+    "any behavior of host version 0.151"
+  ],
+  "knownLimitations": [
+    "The applied-configuration report is supplied by the caller in the model-free lane. It is the exact seam a live operator-owned lane would fill with the host's own answer, and the verification it feeds is the same code in both lanes — but no host has answered through it here.",
+    "The characterization is schema-and-inventory only: it establishes that the primitives exist and how they are spelled, not that the host enforces them.",
+    "The host id is the graded record's key, so the grade lookup resolves; it resolves to Tier 0 with descendant teardown unsupported, which is why this record's resume position is fresh-worktree-only.",
+    "No confirmation producer is claimed. Codex exposes no opaque pre-registration operator-confirmation primitive in the probed surface, so the Tier 1 floor is unmet and the lane stays Tier 0.",
+    "The composed permissions block emits filesystem.read and filesystem.deny_write, and neither key was observed in the app-server schemas or the installed binary's inventory. They are redundant narrowing on top of the characterized sandbox_workspace_write.writable_roots boundary; no claim in this record rests on them, and a host that ignores them is left with exactly the boundary that WAS characterized. filesystem.deny_read was observed in the config-layer profile struct.",
+    "The Codex tool vocabulary this binding maps — apply_patch, shell, exec_command, unified_exec, write_stdin, view_image, update_plan — comes from the string inventory of the installed binary. The pre-invocation hook's own tool_input shape was NOT characterized: the written-path members the hook reads for apply_patch are taken from the host's apply-patch APPROVAL schema (fileChanges, keyed by path) plus the defensive spellings file_path and path. A patch that names its paths some other way is denied rather than admitted with an empty write set, so the unknown fails closed.",
+    "graph.claudeCodeBinding and the seam are exercised through the facade only by the seam's own injection test; no delivery in this repository is driven through the Codex binding.",
+    "The composed Codex admission wires ONE host hook event, pre_tool_use. The characterization observed no post-invocation or session-end hook event in the app-server surface, so nothing is composed for them, and there is therefore no Codex counterpart to the Claude binding's PostToolUse event — the sole producer of the projection-consumption observation that recordProjectionConsumption reads — or to its SessionEnd event. A delivery driven through codexAppServerBinding would record neither: recordProjectionConsumption would answer projection-not-consumed for the life of the delivery, not because the projection was not consumed but because nothing was wired to observe it. Closing this needs a characterized post-invocation primitive, not a composed guess."
+  ]
+}

@@ -106,14 +106,14 @@ import { decideFinishLine, type ExternalVerification } from "../finish-line/merg
 import {
   GENERATION_SKILLS_ARCHIVE,
   bindingStateFile,
-  composeClaudeCodeSession,
-  discoveryConfigurationDigestOf,
+  claudeCodeBinding,
   gradeResumeEligibility,
   gradedDescendantTeardown,
   materializeProjection,
   mintGrantAttestation,
   tearDownProjection,
 } from "../host/claude-code.ts";
+import type { ManagedHostBinding } from "../host/managed-host-binding.ts";
 import { PROJECTION_RECEIPT_FILE, readConsumptionMarker, verifyProjection } from "../host/projection.ts";
 import {
   emitProjectionConsumptionRecord,
@@ -273,8 +273,13 @@ async function resolveStagedHookEntry(target: string): Promise<string | undefine
   }
 }
 
-/** The host this facade's binding drives; the key into the graded record. */
-const HOST_ID = "claude-code";
+/**
+ * The host this facade's binding drives, taken from the binding itself rather
+ * than restated here: the key into the graded capability record and the host
+ * identity are one value, so a second binding cannot be reached through a
+ * facade still grading the first.
+ */
+const DEFAULT_HOST_BINDING: ManagedHostBinding = claudeCodeBinding;
 
 export interface ManagedInstallation {
   readonly installationPath: string;
@@ -289,6 +294,12 @@ export interface CreateFacadeInput {
   readonly installation: ManagedInstallation;
   readonly hostVersion: string;
   readonly exec?: ExecPort;
+  /**
+   * The one host binding this facade drives. Supplied, never discovered: the
+   * facade holds a single instance and chooses between none. Defaults to the
+   * Claude Code binding, which is what every existing caller gets, unchanged.
+   */
+  readonly hostBinding?: ManagedHostBinding;
 }
 
 /**
@@ -1126,6 +1137,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
   // Workspace admission is established before the first model-driven stage;
   // later checkpoints advertise their own policy grant in `next`.
   const exec = input.exec ?? createExecPort();
+  const hostBinding = input.hostBinding ?? DEFAULT_HOST_BINDING;
 
   const git = async (cwd: string, ...args: string[]): Promise<{ code: number; out: string }> => {
     const outcome = await exec.run({ command: "git", args, cwd });
@@ -1473,8 +1485,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         kind: "compare",
         expected: workspace.discoveryConfigurationDigest,
         observed:
-          (await discoveryConfigurationDigestOf({
-            settingsPath: workspace.settingsPath,
+          (await hostBinding.recomputeDiscoveryConfigurationDigest({
+            admissionConfigurationPath: workspace.settingsPath,
             bindingDir: path.join(dir, "binding"),
           })) ?? "unreadable-discovery-configuration",
       };
@@ -2773,7 +2785,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         );
       }
 
-      const session = await composeClaudeCodeSession({
+      const composed = await hostBinding.composeSession({
         bindingDir,
         statePath,
         hookCommand: [process.execPath, ...HOOK_RUNTIME_ARGS, hookEntry],
@@ -2786,13 +2798,23 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
         authorityDir: path.join(input.installation.installationPath, "provider-review-authority"),
         grant: stageGrant,
       });
-      if (!session.ok) {
+      if (!composed.ok) {
         return refuse(
           "session_composition_failed",
-          `Composing the host admission failed: ${session.blockers.map((blocker) => blocker.message).join("; ")}`,
+          `Composing the host admission failed: ${composed.blockers.map((blocker) => blocker.message).join("; ")}`,
           "Materialize the projection before composing the session.",
         );
       }
+      // The neutral composition under the names the rest of this operation and
+      // the persisted workspace record already use. One binding's settings
+      // file and another's thread-start request are the same thing here: the
+      // fence-scoped admission configuration, and the arguments the OPERATOR
+      // hands the host with it.
+      const session = {
+        settingsPath: composed.admissionConfigurationPath,
+        cliArgs: composed.hostAdmissionArguments,
+        discoveryConfigurationDigest: composed.discoveryConfigurationDigest,
+      };
 
       // The bundled graph rides in through the pinned generation; binding
       // validates the checkpoint mapping against it.
@@ -4546,7 +4568,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       // from this call, and not from anything a session can write.
       const descendantTeardown = await gradedDescendantTeardown({
         generationRoot: guarded.generationRoot,
-        hostId: HOST_ID,
+        hostId: hostBinding.hostId,
         hostVersion: input.hostVersion,
       });
       const resumeEligibility = gradeResumeEligibility({ descendantTeardown });
@@ -4574,6 +4596,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       const appended = await appendEntry(guarded.store, deliveryId, "termination.provenance.recorded", {
         fence: guarded.lastFence,
         hostVersion: input.hostVersion,
+        // The host this delivery was actually bound to, read from the same
+        // binding the grade above was looked up under, so the record says
+        // whose teardown this verdict is about.
+        hostId: hostBinding.hostId,
         provenance: "graceful",
         descendantTeardown,
         resumeEligibility,
