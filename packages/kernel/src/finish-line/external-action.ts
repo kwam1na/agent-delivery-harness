@@ -137,6 +137,16 @@ export interface ActionApprovalContext {
   readonly invocationFence: number;
   readonly productTrustRevocationEpoch: number;
   readonly repositoryAuthorityRevocationEpoch: number;
+  /**
+   * The chain digest this action is about to be taken under. The approval was
+   * requested against a chain, and an approval shown for "merge, first
+   * attempt" is not an approval for "merge, after an attempt that failed for a
+   * reason nobody has looked at". `sensitive-approval-assertion/1` is a closed
+   * grammar with no chain member, so the comparison is against the digest the
+   * delivery recorded when the approval was requested, carried here.
+   */
+  readonly actionChainDigest: string;
+  readonly approvedChainDigest: string;
   /** The identity the agent task runs as; it may never approve its own action. */
   readonly actingActorId: string;
   /** Nonces this delivery's journal already consumed, for replay refusal. */
@@ -207,6 +217,13 @@ export function evaluateActionApproval(
   if (assertion["invocationFence"] !== context.invocationFence) {
     refuse("approval_mismatch", "/invocationFence", "the approval binds a superseded invocation fence");
   }
+  if (context.approvedChainDigest !== context.actionChainDigest) {
+    refuse(
+      "approval_mismatch",
+      "/actionChainDigest",
+      "the approval was shown for a different action chain; the sequence that reached this action is not the one that was approved",
+    );
+  }
   if (assertion["productTrustRevocationEpoch"] !== context.productTrustRevocationEpoch) {
     refuse("approval_stale", "/productTrustRevocationEpoch", "the approval predates the current product-trust revocation epoch");
   }
@@ -276,6 +293,11 @@ export interface PlanExternalActionInput {
   readonly approvalRequiredActions?: readonly string[];
   /** The approval assertion, when policy requires one for this action. */
   readonly approval?: Record<string, unknown>;
+  /**
+   * The chain digest the delivery recorded when this approval was requested.
+   * Required exactly when `approval` is presented.
+   */
+  readonly approvedChainDigest?: string;
   readonly actingActorId: string;
   readonly invocationFence: number;
   readonly candidate: { readonly treeSha: string; readonly deliverableDigest: string };
@@ -314,6 +336,21 @@ export interface BoundActionIntent {
   readonly trackedRecordDigest: string;
 }
 
+/**
+ * The actions a requested finish line reaches, in the order they are taken.
+ * `merge-ready` reaches none — it is where the merge-ready unit stops — and
+ * `deploy` reaches the merge first, because `checkDeployPreconditions` refuses
+ * a deploy that does not follow a succeeded, verified merge.
+ */
+const FINISH_LINE_REACHED_ACTIONS: Readonly<Record<string, readonly ExternalAction[]>> = Object.freeze({
+  "merge-ready": Object.freeze([] as readonly ExternalAction[]),
+  merge: Object.freeze(["merge"] as readonly ExternalAction[]),
+  deploy: Object.freeze(["merge", "deploy"] as readonly ExternalAction[]),
+});
+
+const finishLineReaches = (requestedFinishLine: string, action: ExternalAction): boolean =>
+  (FINISH_LINE_REACHED_ACTIONS[requestedFinishLine] ?? []).includes(action);
+
 export type PlanExternalActionVerdict =
   | { readonly ok: true; readonly intent: BoundActionIntent }
   | { readonly ok: false; readonly refusals: readonly FinishLineRefusal[] };
@@ -335,9 +372,13 @@ export function planExternalAction(input: PlanExternalActionInput): PlanExternal
   });
   if (!authorized.ok) refusals.push(...authorized.refusals);
 
-  // The finish line the contract requested has to be the one this action
-  // serves: a merge contract never reaches a deploy through a wider grant.
-  if (FINISH_LINE_ACTIONS[input.contract.requestedFinishLine] !== input.action) {
+  // The finish line the contract requested has to REACH this action. A merge
+  // contract never reaches a deploy through a wider grant; a deploy contract
+  // does reach the merge it deploys, because the deploy preconditions in this
+  // same file require that merge to have been taken and reconciled. Equality
+  // here would make a deploy contract's merge unplannable and therefore its
+  // own deploy preconditions permanently unsatisfiable.
+  if (!finishLineReaches(input.contract.requestedFinishLine, input.action)) {
     refusals.push(
       refusal(
         "action_finish_line_mismatch",
@@ -379,6 +420,22 @@ export function planExternalAction(input: PlanExternalActionInput): PlanExternal
       ),
     );
   }
+  // Every obligation the CURRENT policy carries, not merely a non-empty set:
+  // a policy recompiled between merge-readiness and the action can add one,
+  // and the merge-ready reducer's per-obligation check has to keep standing at
+  // the moment the irreversible call is made.
+  const completedObligations = new Set(input.evidence.completedObligations);
+  for (const obligation of input.policy.obligations) {
+    if (!completedObligations.has(obligation.obligationId)) {
+      refusals.push(
+        refusal(
+          "obligation_unsatisfied",
+          "/evidence/completedObligations",
+          `repository obligation ${obligation.obligationId} carries no completed result`,
+        ),
+      );
+    }
+  }
   if (input.evidence.completedObligations.length === 0) {
     refusals.push(
       refusal(
@@ -407,6 +464,7 @@ export function planExternalAction(input: PlanExternalActionInput): PlanExternal
     );
   }
 
+  const chainDigest = actionChainDigest(input.chain, input.action);
   const approvalRequired = (input.approvalRequiredActions ?? []).includes(input.action);
   let approverId: string | undefined;
   if (approvalRequired) {
@@ -417,6 +475,8 @@ export function planExternalAction(input: PlanExternalActionInput): PlanExternal
     } else {
       const verdict = evaluateActionApproval(input.approval, {
         deliveryId: input.deliveryId,
+        actionChainDigest: chainDigest,
+        approvedChainDigest: input.approvedChainDigest ?? ABSENT_BY_STATE,
         action: input.action,
         candidateTreeSha: input.candidate.treeSha,
         policyDigest: input.policy.policyDigest,
@@ -462,7 +522,7 @@ export function planExternalAction(input: PlanExternalActionInput): PlanExternal
       repositoryAuthorityRevocationEpoch: input.policy.repositoryAuthorityRevocationEpoch,
       requestedFinishLine: input.contract.requestedFinishLine,
       adapterCapabilityId: input.adapter.capabilityId,
-      actionChainDigest: actionChainDigest(input.chain, input.action),
+      actionChainDigest: chainDigest,
       evidence: { externalVerification: input.evidence.externalVerification, completedObligations: [...input.evidence.completedObligations] },
       trackedRecordDigest: input.record.digest,
     },
@@ -487,6 +547,12 @@ export interface RevalidationObservation {
   readonly productTrustRevocationEpoch: number;
   readonly candidateTreeSha: string;
   readonly baseTipSha: string;
+  /**
+   * The hosted evidence as it stands NOW. A required hosted check that turns
+   * red between the bind and the call is as much a reason to stop as a fence
+   * that moved, and it is at least as mutable as the candidate sha.
+   */
+  readonly externalVerification: "passed" | "failed" | "unavailable";
   /**
    * The policy module's canonical action-authorization recheck, passed as a
    * function and CALLED during revalidation. This unit authors no authority
@@ -538,6 +604,15 @@ export function revalidateBeforeInvoke(
   if (observed.baseTipSha !== intent.baseTipSha) {
     refusals.push(refusal("base_moved", "/baseTipSha", "the base moved after the intent was bound"));
   }
+  if (observed.externalVerification !== "passed") {
+    refusals.push(
+      refusal(
+        "external_verification_missing",
+        "/externalVerification",
+        `the external verifier now resolves ${observed.externalVerification}; hosted evidence that stopped standing stops the call it was standing under`,
+      ),
+    );
+  }
 
   const authority = observed.recheckAuthority();
   if (!authority.ok) {
@@ -568,6 +643,14 @@ export interface InvokeExternalActionInput {
   /** Whether the intent was journaled before this call. Nothing else proves it. */
   readonly intentJournaled: boolean;
   /**
+   * Whether this intent already has an observed result in the journal. An
+   * intent that produced one is spent: `classifyActionOutcome`'s
+   * `replayProhibited` is advisory, and this is the fact that actually stops
+   * the second call — including the call that would rewrite
+   * `action_succeeded_verification_failed` into `completed`.
+   */
+  readonly intentAlreadyObserved?: boolean;
+  /**
    * The required post-action verification, run by the caller over the observed
    * reference. Absent means it did not run, which records `not-attempted` —
    * never `passed`.
@@ -597,6 +680,16 @@ export async function invokeExternalActionOnce(input: InvokeExternalActionInput)
         "intent_not_journaled",
         "/intentId",
         "the intent was not journaled before the call; an action is never invoked ahead of the record that it was about to be",
+      ),
+    ]);
+  }
+
+  if (input.intentAlreadyObserved === true) {
+    return notPerformed([
+      refusal(
+        "action_replay_prohibited",
+        "/intentId",
+        "this intent already has an observed result; an irreversible action is taken once per intent, and a second call under the same intent is the replay the post-action state forbids",
       ),
     ]);
   }

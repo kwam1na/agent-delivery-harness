@@ -147,6 +147,7 @@ const observationOf = (intent: BoundActionIntent, over: Partial<RevalidationObse
   productTrustRevocationEpoch: intent.productTrustRevocationEpoch,
   candidateTreeSha: intent.candidate.treeSha,
   baseTipSha: intent.baseTipSha,
+  externalVerification: "passed",
   recheckAuthority: () =>
     checkActionAuthorization({
       action: intent.action,
@@ -209,6 +210,38 @@ describe("the external-operation authority matrix", () => {
     expect(codesOf(planned)).toContain("action_finish_line_mismatch");
   });
 
+  it("plans the merge a deploy contract has to take first, so the deploy preconditions are satisfiable", () => {
+    // A deploy contract REACHES the merge it deploys: `checkDeployPreconditions`
+    // refuses a deploy that does not follow a succeeded, verified merge, so a
+    // finish-line check that demanded equality would make the merge unplannable
+    // and every deploy permanently blocked on a merge nothing could take.
+    const deployPolicy = policyOf({
+      grantedFinishLines: ["merge-ready", "merge", "deploy"],
+      grantedAuthority: ["merge", "deploy"],
+    });
+    const deployContract = contractOf({ requestedFinishLine: "deploy", requestedAuthority: ["merge", "deploy"] });
+    const merge = planExternalAction(planOf({ contract: deployContract, policy: deployPolicy }));
+    expect(merge.ok).toBe(true);
+    expect(merge.ok === true && merge.intent.action).toBe("merge");
+    expect(merge.ok === true && merge.intent.requestedFinishLine).toBe("deploy");
+
+    const deploy = planExternalAction(
+      planOf({
+        action: "deploy",
+        contract: deployContract,
+        policy: deployPolicy,
+        adapter: { capabilityId: "deploy.fly", kind: "deploy", hasCredential: true },
+        chain: [{ intentId: "intent-1", action: "merge", outcome: "succeeded", verification: "passed" }],
+      }),
+    );
+    expect(deploy.ok).toBe(true);
+
+    // A merge-ready contract still reaches no action at all.
+    expect(
+      codesOf(planExternalAction(planOf({ contract: contractOf({ requestedFinishLine: "merge-ready", requestedAuthority: ["merge"] }) }))),
+    ).toContain("action_finish_line_mismatch");
+  });
+
   it("refuses an adapter bound for another kind, and one that binds no credential", () => {
     expect(
       codesOf(planExternalAction(planOf({ adapter: { capabilityId: "deploy.fly", kind: "deploy", hasCredential: true } }))),
@@ -225,6 +258,31 @@ describe("the external-operation authority matrix", () => {
     expect(
       codesOf(planExternalAction(planOf({ evidence: { externalVerification: "passed", completedObligations: [] } }))),
     ).toContain("obligation_unsatisfied");
+    // Not merely a non-empty set: EVERY obligation the current policy carries.
+    // A policy recompiled between merge-readiness and the action can add one,
+    // and the completed set that satisfied the old policy does not satisfy it.
+    const widened = policyOf({ obligations: [{ obligationId: "review-green" }, { obligationId: "security-scan" }] });
+    const refused = planExternalAction(
+      planOf({ policy: widened, evidence: { externalVerification: "passed", completedObligations: ["review-green"] } }),
+    );
+    expect(codesOf(refused)).toContain("obligation_unsatisfied");
+    expect(
+      planExternalAction(
+        planOf({
+          policy: widened,
+          evidence: { externalVerification: "passed", completedObligations: ["review-green", "security-scan"] },
+        }),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("binds the evidence the action was taken on into the intent it returns", () => {
+    const intent = boundIntent();
+    // The allow side of the binding, not only the refusal side: an intent that
+    // dropped its obligations would be an intent nobody could later audit
+    // against the policy that authorized it.
+    expect(intent.evidence).toEqual({ externalVerification: "passed", completedObligations: ["review-green"] });
+    expect(intent.trackedRecordDigest).toBe(RECORD_DIGEST);
   });
 
   it("refuses when the candidate or the base moved away from the tracked record", () => {
@@ -253,8 +311,15 @@ describe("the external-operation authority matrix", () => {
 describe("approval binding", () => {
   const withApproval = (over: Record<string, unknown> = {}, plan: Partial<PlanExternalActionInput> = {}) => {
     const policy = plan.policy ?? policyOf();
+    const chain = plan.chain ?? [];
     return planExternalAction(
-      planOf({ policy, approvalRequiredActions: ["merge"], approval: approvalOf(policy, over), ...plan }),
+      planOf({
+        policy,
+        approvalRequiredActions: ["merge"],
+        approval: approvalOf(policy, over),
+        approvedChainDigest: actionChainDigest(chain, plan.action ?? "merge"),
+        ...plan,
+      }),
     );
   };
 
@@ -263,6 +328,36 @@ describe("approval binding", () => {
     expect(planned.ok).toBe(true);
     expect(planned.ok === true && planned.intent.approval).toBe("required");
     expect(planned.ok === true && planned.intent.approverId).toBe("release-manager");
+  });
+
+  it("records approval: not-required when policy required none, rather than claiming a human approved", () => {
+    const intent = boundIntent();
+    expect(intent.approval).toBe("not-required");
+    expect(intent.approverId).toBeUndefined();
+    // The journaled payload is the audit rail's statement of this fact.
+    expect(journalIntentPayload(intent).approval).toBe("not-required");
+  });
+
+  it("refuses an approval shown for a different action chain than the one that reached this action", () => {
+    // The approval was minted while the chain was empty; the action is now
+    // taken after an attempt that failed for a reason nobody has looked at.
+    const refused = withApproval({}, {
+      chain: [{ intentId: "intent-0", action: "merge", outcome: "failed", verification: "not-attempted" }],
+      approvedChainDigest: actionChainDigest([], "merge"),
+    });
+    expect(refused.ok).toBe(false);
+    expect(codesOf(refused)).toContain("approval_mismatch");
+    // The same chain on both sides accepts.
+    expect(
+      withApproval({}, {
+        chain: [{ intentId: "intent-0", action: "merge", outcome: "failed", verification: "not-attempted" }],
+      }).ok,
+    ).toBe(true);
+    // An approval presented with no recorded chain digest at all refuses.
+    const policy = policyOf();
+    expect(
+      codesOf(planExternalAction(planOf({ policy, approvalRequiredActions: ["merge"], approval: approvalOf(policy) }))),
+    ).toContain("approval_mismatch");
   });
 
   it("refuses an absent approval where policy requires one", () => {
@@ -300,6 +395,7 @@ describe("approval binding", () => {
             policy,
             approvalRequiredActions: ["merge"],
             approval: approvalOf(policy),
+            approvedChainDigest: actionChainDigest([], "merge"),
             consumedNonces: new Set(["nonce-1"]),
           }),
         ),
@@ -324,6 +420,7 @@ describe("approval binding", () => {
           policy,
           approvalRequiredActions: ["merge"],
           approval: approvalOf(policy, { assertionSource: "qualification-fixture" }),
+          approvedChainDigest: actionChainDigest([], "merge"),
           currentProfile: "confirmation-fixture",
         }),
       ).ok,
@@ -341,6 +438,8 @@ describe("approval binding", () => {
         invocationFence: 9,
         productTrustRevocationEpoch: 4,
         repositoryAuthorityRevocationEpoch: 7,
+        actionChainDigest: actionChainDigest([], "merge"),
+        approvedChainDigest: actionChainDigest([], "merge"),
         actingActorId: "agent-task-1",
         consumedNonces: new Set<string>(),
         currentProfile: "linear",
@@ -394,6 +493,19 @@ describe("the recheck immediately before the call", () => {
     expect(codesOf(revalidateBeforeInvoke(intent, rolled))).toContain("epoch_rollback");
   });
 
+  it("blocks when the hosted evidence stopped standing between the bind and the call", () => {
+    const intent = boundIntent();
+    // As mutable as the candidate sha and rechecked in the same breath: a
+    // required hosted check that turns red after the bind stops the call it
+    // was standing under.
+    expect(codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { externalVerification: "failed" })))).toContain(
+      "external_verification_missing",
+    );
+    expect(
+      codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { externalVerification: "unavailable" }))),
+    ).toContain("external_verification_missing");
+  });
+
   it("passes when nothing moved", () => {
     const intent = boundIntent();
     expect(revalidateBeforeInvoke(intent, observationOf(intent)).ok).toBe(true);
@@ -428,7 +540,37 @@ describe("the single invocation, against a fake adapter at every boundary", () =
     expect(codesOf(result)).toContain("fence_superseded");
   });
 
-  it("calls the adapter exactly once and records a verified success", async () => {
+  it("calls the adapter exactly once, hands it only the frozen payload, and verifies the reference it returned", async () => {
+    const intent = boundIntent();
+    const port = { invoke: vi.fn(fakePort("ok").invoke) };
+    const verified = vi.fn(async (_reference: string) => true);
+    const result = await invokeExternalActionOnce({
+      intent,
+      port,
+      observed: observationOf(intent),
+      intentJournaled: true,
+      verify: verified,
+    });
+    expect(port.invoke).toHaveBeenCalledTimes(1);
+    // What the adapter RECEIVES, not what the helper returns: minimal
+    // disclosure is a property of the call, and an adapter handed the whole
+    // bound intent would be handed the approver, both epochs and the record.
+    expect(Object.keys(port.invoke.mock.calls[0]?.[0] ?? {}).sort()).toEqual([
+      "action",
+      "approval",
+      "candidate",
+      "intentId",
+      "policyDigest",
+    ]);
+    // The post-action check runs over the reference the adapter returned, and
+    // never over the intent id: a smoke check pointed at the wrong subject
+    // passes for a reason that has nothing to do with the action.
+    expect(verified).toHaveBeenCalledTimes(1);
+    expect(verified).toHaveBeenCalledWith("https://example.test/pull/7");
+    expect(result).toMatchObject({ outcome: "succeeded", verification: "passed", externalReference: "https://example.test/pull/7" });
+  });
+
+  it("records an absent verifier as not-attempted over a succeeded action, never as passed", async () => {
     const intent = boundIntent();
     const port = { invoke: vi.fn(fakePort("ok").invoke) };
     const result = await invokeExternalActionOnce({
@@ -436,10 +578,45 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port,
       observed: observationOf(intent),
       intentJournaled: true,
+    });
+    expect(port.invoke).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      outcome: "succeeded",
+      verification: "not-attempted",
+      externalReference: "https://example.test/pull/7",
+    });
+    // And the classification of that result does not leave through success.
+    expect(classifyActionOutcome({ result, containmentMoves: [] }).state).toBe("blocked");
+  });
+
+  it("never calls the adapter a second time under an intent that already has an observed result", async () => {
+    const intent = boundIntent();
+    const port = { invoke: vi.fn(fakePort("ok").invoke) };
+    const first = await invokeExternalActionOnce({
+      intent,
+      port,
+      observed: observationOf(intent),
+      intentJournaled: true,
+      verify: async () => false,
+    });
+    expect(first).toMatchObject({ outcome: "succeeded", verification: "failed" });
+    expect(classifyActionOutcome({ result: first, containmentMoves: ["rollback"] }).state).toBe(
+      "action_succeeded_verification_failed",
+    );
+
+    // The second call is the replay that would rewrite that state into
+    // `completed`. `replayProhibited` is advisory; this is what stops it.
+    const second = await invokeExternalActionOnce({
+      intent,
+      port,
+      observed: observationOf(intent),
+      intentJournaled: true,
+      intentAlreadyObserved: true,
       verify: async () => true,
     });
     expect(port.invoke).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ outcome: "succeeded", verification: "passed", externalReference: "https://example.test/pull/7" });
+    expect(second.outcome).toBe("failed");
+    expect(codesOf(second)).toContain("action_replay_prohibited");
   });
 
   it("records a lost response as indeterminate and does not call again", async () => {
@@ -543,8 +720,31 @@ describe("reconcile before retry", () => {
       observedReference: "https://example.test/pull/7",
     });
     expect(disposition.kind).toBe("already-performed");
-    expect(disposition.kind === "already-performed" && disposition.result.outcome).toBe("succeeded");
-    expect(disposition.kind === "already-performed" && disposition.result.intentId).toBe("intent-1");
+    expect(disposition.kind === "already-performed" && disposition.result).toMatchObject({
+      intentId: "intent-1",
+      action: "merge",
+      outcome: "succeeded",
+      // The action happened; its required post-action check never ran, because
+      // the response that would have carried it was lost. Recording `passed`
+      // here would clear `merge_not_reconciled` for a merge nobody verified.
+      verification: "not-attempted",
+      externalReference: "https://example.test/pull/7",
+    });
+    expect(
+      disposition.kind === "already-performed" &&
+        checkDeployPreconditions({
+          merge: disposition.result,
+          mainTipSha: BASE,
+          mergedCommitSha: BASE,
+          workingTreeClean: true,
+          provenance: { present: true, subjectDigest: DELIVERABLE, candidateDeliverableDigest: DELIVERABLE },
+          preflight: { ran: true, passed: true },
+        }).ok,
+    ).toBe(false);
+    // Reconciliation that found the action performed but observed no reference
+    // says so by state rather than by inventing one.
+    const unreferenced = reconcileBeforeRetry({ indeterminate, finding: "performed" });
+    expect(unreferenced.kind === "already-performed" && unreferenced.result.externalReference).toBe(ABSENT_BY_STATE);
   });
 
   it("forbids a retry when reconciliation cannot tell", () => {
@@ -621,6 +821,10 @@ describe("the post-action classification", () => {
     const failed = classifyActionOutcome({ result: resultOf("failed", "not-attempted"), containmentMoves: ["escalate"] });
     expect(failed.state).toBe("blocked");
     expect(failed.replayProhibited).toBe(false);
+    // An action that did not happen still leaves through the containment the
+    // policy selected, not through nothing at all.
+    expect(failed.permittedMoves).toEqual(["escalate"]);
+    expect(codesOf(failed)).toContain("action_failed");
   });
 });
 
@@ -721,6 +925,20 @@ describe("the action chain and the post-action result grammar", () => {
       "deploy",
     );
     expect(forward).not.toBe(reversed);
+  });
+
+  it("digests every member of every link, and the action about to be taken", () => {
+    // One member at a time, so no row can pass for another row's reason. The
+    // chain is the whole mechanism by which an approval is unusable for a
+    // different sequence, which makes its member set load-bearing.
+    const base = [{ intentId: "intent-1", action: "merge" as const, outcome: "succeeded" as const, verification: "passed" as const }];
+    const digest = actionChainDigest(base, "deploy");
+    expect(actionChainDigest([{ ...base[0]!, outcome: "failed" }], "deploy")).not.toBe(digest);
+    expect(actionChainDigest([{ ...base[0]!, verification: "not-attempted" }], "deploy")).not.toBe(digest);
+    expect(actionChainDigest([{ ...base[0]!, intentId: "intent-9" }], "deploy")).not.toBe(digest);
+    expect(actionChainDigest([{ ...base[0]!, action: "deploy" }], "deploy")).not.toBe(digest);
+    // And the action about to be taken over an identical history.
+    expect(actionChainDigest(base, "merge")).not.toBe(digest);
   });
 
   it("binds the plan's intent to the chain it was taken after", () => {

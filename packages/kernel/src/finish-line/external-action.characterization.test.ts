@@ -26,7 +26,12 @@ import { PRIVILEGED_CAPABILITY_KINDS, PRIVILEGED_ACTIONS } from "../policy/capab
 import { EXTERNAL_ACTIONS } from "../spine/finish-line.ts";
 import { ACTION_VERIFICATIONS, EXTERNAL_ACTION_OUTCOMES } from "../spine/journal.ts";
 import { DELIVERY_STATES, SUSPENDED_DELIVERY_STATES } from "../spine/vocabulary.ts";
-import { UNBOUND_EXTERNAL_ACTION_PORT, authorizeFinishLineAction } from "./merge-ready.ts";
+import { DELIVERY_TRANSITION_TABLE, isDeliveryTransitionValid } from "../spine/reducer.ts";
+import { validateJournalEntry } from "../spine/journal.ts";
+import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";
+import { UNBOUND_EXTERNAL_ACTION_PORT, authorizeFinishLineAction, decideFinishLine } from "./merge-ready.ts";
+import { PRODUCT_TRUST_LABEL } from "../spine/composition.ts";
+import type { FinishLineInput } from "./merge-ready.ts";
 import type { AcceptedContract } from "../spine/contract.ts";
 import type { PolicySnapshot } from "../spine/policy.ts";
 import { digestCanonical } from "../digest.ts";
@@ -152,5 +157,111 @@ describe("characterization: the external-action seam before the actions unit", (
     expect(SUSPENDED_DELIVERY_STATES).toContain("action_succeeded_verification_failed");
     expect([...EXTERNAL_ACTION_OUTCOMES]).toEqual(["succeeded", "failed", "indeterminate"]);
     expect([...ACTION_VERIFICATIONS]).toEqual(["passed", "failed", "not-attempted"]);
+  });
+
+  it("stops the merge-ready decision at acting or awaiting_approval and invokes nothing", () => {
+    const granted = policyOf({ grantedFinishLines: ["merge-ready", "merge"], grantedAuthority: ["merge"] });
+    const contract = contractOf({ requestedFinishLine: "merge", requestedAuthority: ["merge"] });
+    const inputOf = (over: Partial<FinishLineInput> = {}): FinishLineInput => ({
+      deliveryId: "dlv-1",
+      contract,
+      policy: granted,
+      outcome: {
+        spec: "outcome-verification/1",
+        contractId: "contract-1",
+        candidate: { treeSha: "1".repeat(40), deliverableDigest: "f".repeat(64) },
+        criteria: [
+          { criterionId: "c1", disposition: "passed", evidence: { kind: "sensor", reference: "sensor.acceptance" } },
+        ],
+        reviewAttempts: [
+          {
+            attemptId: "attempt-1",
+            lensId: "lens.outcome-correctness",
+            contextDigest: "a".repeat(64),
+            personaDigest: "b".repeat(64),
+            verdict: "approved",
+          },
+        ],
+      },
+      record: { treeSha: "2".repeat(40), baseTipSha: "3".repeat(40), digest: "e".repeat(64) },
+      observed: { treeSha: "2".repeat(40), baseTipSha: "3".repeat(40) },
+      admission: { admitted: true, completedObligations: ["review-green"] },
+      externalVerification: "passed",
+      declaredProductTrustLabel: PRODUCT_TRUST_LABEL,
+      ...over,
+    });
+
+    // The decision names the action and the state it moves to. It returns no
+    // reference, no adapter and no invocation: reaching `acting` is where the
+    // merge-ready unit's authority ends and this new unit's begins.
+    expect(decideFinishLine(inputOf())).toEqual({ kind: "acting", action: "merge" });
+
+    expect(decideFinishLine(inputOf({ approvalRequiredActions: ["merge"] }))).toEqual({
+      kind: "awaiting_approval",
+      action: "merge",
+    });
+
+    // A merge-ready contract completes rather than acting at all, and the
+    // decision it returns carries a result, never an action.
+    const mergeReady = decideFinishLine(inputOf({ contract: contractOf(), policy: policyOf() }));
+    expect(mergeReady.kind).toBe("completed");
+    expect(Object.keys(mergeReady)).toEqual(["kind", "result"]);
+  });
+
+  it("already admits exactly the transitions the action path moves through, and no shortcut around acting", () => {
+    expect(isDeliveryTransitionValid("ready", "acting")).toBe(true);
+    expect(isDeliveryTransitionValid("awaiting_approval", "acting")).toBe(true);
+    // The second acting step of one delivery — the merge a deploy follows.
+    expect(isDeliveryTransitionValid("acting", "acting")).toBe(true);
+    expect(isDeliveryTransitionValid("acting", "completed")).toBe(true);
+    expect(isDeliveryTransitionValid("acting", "action_succeeded_verification_failed")).toBe(true);
+    // `acting` is never walked back into, and the verification-failed state
+    // is a suspension with no edge onward of its own: there is no path from it
+    // to `acting` (a replay) or to `completed` (a success it never had).
+    expect(isDeliveryTransitionValid("acting", "ready")).toBe(false);
+    expect(isDeliveryTransitionValid("action_succeeded_verification_failed", "acting")).toBe(false);
+    expect(isDeliveryTransitionValid("action_succeeded_verification_failed", "completed")).toBe(false);
+    expect(Object.isFrozen(DELIVERY_TRANSITION_TABLE)).toBe(true);
+  });
+
+  it("already carries the two journal pairs that are this path's audit rail, with closed payloads", () => {
+    const envelope = (kind: string, payload: Record<string, unknown>): Record<string, unknown> => ({
+      spec: JOURNAL_ENTRY_SPEC,
+      journal: "delivery",
+      subjectId: "delivery-1",
+      expectedRevision: 3,
+      idempotencyKey: `key-${kind}`,
+      kind,
+      payload,
+    });
+    const intent = {
+      intentId: "intent-1",
+      action: "merge",
+      candidate: { treeSha: "1".repeat(40), deliverableDigest: "f".repeat(64) },
+      policyDigest: "a".repeat(64),
+      approval: "not-required",
+    };
+    const codesOf = (value: unknown): string[] => {
+      const verdict = validateJournalEntry(value);
+      return verdict.ok ? [] : verdict.rejections.map((rejection) => rejection.code);
+    };
+
+    expect(validateJournalEntry(envelope("action.intent.recorded", intent))).toEqual({ ok: true });
+    // Closed: the intent payload admits no member beyond the five.
+    expect(codesOf(envelope("action.intent.recorded", { ...intent, actorId: "agent-1" }))).toContain("unknown_member");
+
+    const observed = {
+      intentId: "intent-1",
+      action: "merge",
+      outcome: "succeeded",
+      verification: "passed",
+      externalReference: "https://example.test/pull/7",
+    };
+    expect(validateJournalEntry(envelope("action.result.recorded", observed))).toEqual({ ok: true });
+    // The pairing rule the new unit's classification depends on: passing
+    // verification belongs to a succeeded action alone.
+    expect(codesOf(envelope("action.result.recorded", { ...observed, outcome: "failed" }))).toContain(
+      "unsupported_combination",
+    );
   });
 });
