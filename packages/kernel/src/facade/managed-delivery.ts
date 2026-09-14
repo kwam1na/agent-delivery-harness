@@ -153,6 +153,7 @@ import { evaluateMigrationConsumption } from "./migration.ts";
 import {
   composeManagedStatus,
   type AssertionSourceView,
+  type ListedDelivery,
   type ManagedCheckpoint,
   type ManagedDeliveryStatus,
   type ManagedStatusInput,
@@ -717,6 +718,48 @@ export interface ManagedDeliveryFacade {
    */
   status(input: { readonly deliveryId: string; readonly observedAt: string }): Promise<
     { readonly ok: true; readonly status: ManagedDeliveryStatus } | FacadeFailure
+  >;
+
+  /**
+   * The INSTALLATION-SCOPED listing mode of the same status surface: every
+   * delivery this installation registered, four members each.
+   *
+   * WHY THIS IS A MODE AND NOT A DASHBOARD. `status` answers about one
+   * delivery a caller already knows the id of. Nothing answered "what is
+   * running across this installation right now", and the caller that needs it
+   * has no delivery id to ask with — so it cannot be a member of the
+   * per-delivery model, and the per-delivery model is unchanged by it. What it
+   * returns stays deliberately four members wide (`ListedDelivery`); every
+   * further question has a delivery id by then and belongs to `status`.
+   *
+   * LIVENESS IS THE SAME GRADED RULE. Each listed delivery's activity comes
+   * from `gradeHostActivity` in ./liveness.ts, the function `status` calls,
+   * resolved lazily on this read. There is no heartbeat of its own and no
+   * polling: listing reads what the binding already stamped.
+   *
+   * READ-CLASS AND INSTALLATION-SCOPED. It writes nothing, advances no
+   * journal revision, binds no fence, and enumerates only this installation's
+   * own namespace directory — a delivery registered by another installation
+   * has no path into this result.
+   *
+   * `unreadable` NAMES WHAT IT COULD NOT LIST, rather than dropping it. A
+   * directory with no registration record, one whose journal does not reduce,
+   * or one whose durable binding records disagree with this facade's — the
+   * precondition `status` refuses on — has no state this surface may report — but this is the only installation-wide
+   * surface an operator has, and a delivery that silently vanishes from it is
+   * worse than one reported as unreadable: the CLI's own delivery resolution
+   * counts that same directory as in flight, so a silent omission leaves two
+   * surfaces contradicting each other with no id to reconcile them by. The id
+   * is returned here; `status` with that id gives the refusal and says why.
+   */
+  listDeliveries(input: { readonly observedAt: string }): Promise<
+    | {
+        readonly ok: true;
+        readonly deliveries: readonly ListedDelivery[];
+        /** Delivery ids present in the namespace that have no state to report. */
+        readonly unreadable: readonly string[];
+      }
+    | FacadeFailure
   >;
 
   nextCheckpoint(input: { readonly deliveryId: string }): Promise<{ readonly ok: true; readonly checkpoint: ManagedCheckpoint } | FacadeFailure>;
@@ -3170,6 +3213,130 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       };
 
       return { ok: true, status: composeManagedStatus(composed) };
+    },
+
+    async listDeliveries({ observedAt }) {
+      const root = path.join(await namespaceDir(), "deliveries");
+      let ids: string[];
+      try {
+        // Directories only. A stray FILE in the namespace is not a delivery
+        // whose state could not be read — it is not a delivery id at all, and
+        // reporting it as unreadable would send an operator to ask `status`
+        // about a name no delivery ever had.
+        ids = (await readdir(root, { withFileTypes: true }))
+          .filter((candidate) => candidate.isDirectory())
+          .map((candidate) => candidate.name)
+          .sort();
+      } catch (error) {
+        // ABSENCE ONLY. An installation that has registered nothing has no
+        // directory at all, and that is an EMPTY listing rather than a
+        // refusal: "nothing is running" is a true and useful answer, and
+        // refusing it would make the one surface that reports
+        // installation-wide quiet unavailable exactly when the installation is
+        // quiet. Every OTHER failure is the opposite situation — the directory
+        // exists and cannot be read — and answering it with the same empty
+        // listing would report a positive claim of quiet built out of an
+        // unreadable namespace, with not even an id left to reconcile by.
+        // ENOENT ALONE. A path component that exists as a non-directory
+        // raises `ENOTDIR`, and that is a corrupt namespace rather than an
+        // installation that has registered nothing — swallowing it would
+        // rebuild the very defect this discrimination exists to close.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") {
+          return refuse(
+            "delivery_namespace_unreadable",
+            "The installation's deliveries directory exists but cannot be read.",
+            "Inspect the product namespace directory and its permissions; a listing that cannot read it reports nothing rather than nothing running.",
+          );
+        }
+        return { ok: true, deliveries: [], unreadable: [] };
+      }
+
+      const listed: ListedDelivery[] = [];
+      const unreadable: string[] = [];
+      for (const deliveryId of ids) {
+        const dir = path.join(root, deliveryId);
+        const meta = await readJson<DeliveryMeta>(path.join(dir, "delivery.json"));
+        // No registration record: either a stray directory, or the crash
+        // window between registration's two writes. Either way there is no
+        // state to report, so the id goes to `unreadable` rather than into a
+        // listing entry with an invented state — and rather than nowhere.
+        if (meta === undefined) {
+          unreadable.push(deliveryId);
+          continue;
+        }
+        const store = await journalStoreFor(deliveryId);
+        const reduced = await store.state();
+        const read = await store.read();
+        // A journal that does not reduce has no state either. `status` with
+        // this id refuses and says why; the listing names the id so an
+        // operator can ask.
+        if (!reduced.ok || !read.ok) {
+          unreadable.push(deliveryId);
+          continue;
+        }
+        // THE SAME PRECONDITION `status` ENFORCES, with the same three-way
+        // comparison. A delivery whose two durable binding records do not both
+        // agree with this facade's binding is one `status` refuses outright, so
+        // listing its state would put the two modes of one surface in
+        // contradiction by id: the listing would report `reviewing` for a
+        // delivery the per-delivery mode will not report on at all. The id goes
+        // to `unreadable` instead, which is exactly what that member is for —
+        // `status` with it then gives the `policy_binding_mismatch` refusal and
+        // says why.
+        if (
+          meta.policyBindingDigest !== policyBindingDigest ||
+          reduced.state.policyBindingDigest !== policyBindingDigest ||
+          meta.policyBindingDigest !== reduced.state.policyBindingDigest
+        ) {
+          unreadable.push(deliveryId);
+          continue;
+        }
+
+        const views = viewsOf(read.entries);
+        const workspace = await readJson<WorkspaceMeta>(path.join(dir, "workspace.json"));
+        // Read only when a workspace is bound: a heartbeat file left behind by
+        // a workspace that is gone is not this delivery's freshness.
+        const observation =
+          workspace === undefined
+            ? undefined
+            : await readJson<{ fence: number; observedAt: string }>(path.join(dir, "binding", "observation.json"));
+        const lastActivity = lastOf(views, "activity.observed");
+        const currentFence = reduced.state.lastFence;
+        listed.push({
+          deliveryId,
+          state: reduced.state.state,
+          lastActivity: {
+            // The SAME rule the per-delivery status model applies, called
+            // rather than re-derived: two surfaces that grade liveness
+            // separately are two surfaces that eventually disagree.
+            activity: gradeHostActivity({
+              currentFence,
+              lastObservedActivity:
+                lastActivity === undefined
+                  ? undefined
+                  : {
+                      activity: lastActivity.payload["activity"] as HostActivity,
+                      fence: lastActivity.payload["fence"] as number,
+                    },
+              observationLifetimeSeconds: workspace?.observationLifetimeSeconds,
+              observation,
+              observedAt,
+            }),
+            // ONLY the stamp the grade itself accepted as evidence for this
+            // fence. A heartbeat stamped under a SUPERSEDED fence is not this
+            // invocation's freshness — `gradeHostActivity` discards it and
+            // returns `unknown` — and reporting it anyway would tell an
+            // operator "unknown, seen five seconds ago" during exactly the
+            // re-fence window where no heartbeat for the current fence exists
+            // at all. The fence advances on `invocation.fenced`; the heartbeat
+            // is only rewritten on the host's next allowed PreToolUse.
+            observedAt: observation?.fence === currentFence ? observation.observedAt : undefined,
+          },
+          pendingDecision: waiverLedgerOf(views).pending[0],
+        });
+      }
+      return { ok: true, deliveries: listed, unreadable };
     },
 
     async nextCheckpoint({ deliveryId }) {

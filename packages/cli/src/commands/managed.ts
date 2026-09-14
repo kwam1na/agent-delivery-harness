@@ -35,6 +35,7 @@ const SOURCE_ID = "delivery-harness.cli.managed";
 /** Every operation this command answers, in the order its usage lists them. */
 const MANAGED_OPERATIONS: readonly string[] = Object.freeze([
   "status",
+  "deliveries",
   "next",
   "operations",
   "blockers",
@@ -98,21 +99,28 @@ interface ResolvedManaged {
   readonly fence: number | undefined;
 }
 
+interface ResolvedInstallation {
+  readonly facade: ManagedDeliveryFacade;
+  readonly namespace: string;
+  /** Every delivery this installation registered, sorted. */
+  readonly deliveries: readonly string[];
+  /** Those whose journal has not committed a transition into a terminal state. */
+  readonly active: readonly string[];
+}
+
 /**
- * Resolves the delivery this invocation addresses.
+ * Resolves the INSTALLATION this invocation runs against, without resolving a
+ * delivery.
  *
- * `requested` exists for the retention operations alone. The skeleton's rule —
- * one delivery in flight per repository — is right for every checkpoint
- * operation, but it makes the retention lane unusable the moment a repository
- * has finished more than one delivery: `active[0] ?? deliveries.at(-1)` then
- * addresses only the newest, and every earlier terminal delivery's durable
- * detail becomes unreachable from the CLI even though the facade can export and
- * delete it. Naming one explicitly is the whole remedy, and it is deliberately
- * NOT offered to the checkpoint operations: those bind an invocation fence
- * derived from the worktree, and a delivery named by flag would not be the one
- * that worktree is bound to.
+ * WHY THE SPLIT EXISTS. Delivery resolution refuses when a repository has zero
+ * registered deliveries or more than one in flight — correct for every
+ * checkpoint operation, which drives exactly one. But those are precisely the
+ * situations the installation-scoped listing exists to report, so a listing
+ * built on top of delivery resolution would refuse in the two cases it is for.
+ * Everything above delivery selection is shared and lives here; selection and
+ * the fence stay below.
  */
-async function resolveManaged(context: CommandContext, requested?: string): Promise<ResolvedManaged | CommandResult> {
+async function resolveInstallation(context: CommandContext): Promise<ResolvedInstallation | CommandResult> {
   const common = await gitCommonDir(context.rootDir);
   if (common === undefined) {
     return blocked("not_a_repository", "The working directory is not a git repository.", "Run from the delivery worktree.");
@@ -130,7 +138,15 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
   }
   let deliveries: string[];
   try {
-    deliveries = (await readdir(path.join(namespace, "deliveries"))).sort();
+    // Directories only, the same rule the facade's listing applies. A stray
+    // FILE in the namespace is not a delivery, and counting one as in flight is
+    // the two-surfaces-contradict state the listing exists to prevent: `status`
+    // would refuse with "several deliveries are in flight" while `deliveries`
+    // named it in neither list, leaving no id to reconcile the two counts by.
+    deliveries = (await readdir(path.join(namespace, "deliveries"), { withFileTypes: true }))
+      .filter((candidate) => candidate.isDirectory())
+      .map((candidate) => candidate.name)
+      .sort();
   } catch {
     deliveries = [];
   }
@@ -161,26 +177,6 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
       active.push(candidate);
     }
   }
-  let deliveryId: string | undefined;
-  if (requested !== undefined) {
-    if (!deliveries.includes(requested)) {
-      return blocked(
-        "delivery_unresolved",
-        `No delivery ${requested} is registered for this repository.`,
-        "Name a delivery this repository registered; `managed status` reports the current one.",
-      );
-    }
-    deliveryId = requested;
-  } else {
-    deliveryId = active[0] ?? deliveries[deliveries.length - 1];
-    if (deliveryId === undefined || active.length > 1) {
-      return blocked(
-        "delivery_unresolved",
-        active.length > 1 ? "Several deliveries are in flight; the skeleton drives one." : "No registered delivery exists.",
-        "Register exactly one delivery for this repository, or name one with --delivery for export and delete.",
-      );
-    }
-  }
   let policyBinding: CompiledAdopterPolicyBinding | undefined = context.policyBinding;
   if (policyBinding === undefined) {
     try {
@@ -206,6 +202,48 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
     installation: { installationPath: pointer.installationPath, receiptDir: pointer.receiptDir },
     hostVersion: pointer.hostVersion,
   });
+  return { facade, namespace, deliveries, active };
+}
+
+/**
+ * Resolves the delivery this invocation addresses.
+ *
+ * `requested` exists for the retention operations alone. The skeleton's rule —
+ * one delivery in flight per repository — is right for every checkpoint
+ * operation, but it makes the retention lane unusable the moment a repository
+ * has finished more than one delivery: `active[0] ?? deliveries.at(-1)` then
+ * addresses only the newest, and every earlier terminal delivery's durable
+ * detail becomes unreachable from the CLI even though the facade can export and
+ * delete it. Naming one explicitly is the whole remedy, and it is deliberately
+ * NOT offered to the checkpoint operations: those bind an invocation fence
+ * derived from the worktree, and a delivery named by flag would not be the one
+ * that worktree is bound to.
+ */
+async function resolveManaged(context: CommandContext, requested?: string): Promise<ResolvedManaged | CommandResult> {
+  const installation = await resolveInstallation(context);
+  if (isCommandResult(installation)) return installation;
+  const { facade, namespace, deliveries, active } = installation;
+
+  let deliveryId: string | undefined;
+  if (requested !== undefined) {
+    if (!deliveries.includes(requested)) {
+      return blocked(
+        "delivery_unresolved",
+        `No delivery ${requested} is registered for this repository.`,
+        "Name a delivery this repository registered; `managed status` reports the current one.",
+      );
+    }
+    deliveryId = requested;
+  } else {
+    deliveryId = active[0] ?? deliveries[deliveries.length - 1];
+    if (deliveryId === undefined || active.length > 1) {
+      return blocked(
+        "delivery_unresolved",
+        active.length > 1 ? "Several deliveries are in flight; the skeleton drives one." : "No registered delivery exists.",
+        "Register exactly one delivery for this repository, or name one with --delivery for export and delete, or list them all with `managed deliveries`.",
+      );
+    }
+  }
 
   let fence: number | undefined;
   try {
@@ -222,7 +260,7 @@ async function resolveManaged(context: CommandContext, requested?: string): Prom
   return { facade, deliveryId, fence };
 }
 
-const isCommandResult = (value: ResolvedManaged | CommandResult): value is CommandResult => "kind" in value;
+const isCommandResult = (value: ResolvedManaged | ResolvedInstallation | CommandResult): value is CommandResult => "kind" in value;
 
 export const managedCommand: CommandDescriptor = {
   name: "managed",
@@ -253,6 +291,38 @@ export const managedCommand: CommandDescriptor = {
     if (operation === "operations") {
       context.write(`${JSON.stringify(FACADE_OPERATIONS, null, 2)}\n`);
       return { kind: "ok", summary: `${FACADE_OPERATIONS.length} facade operations` };
+    }
+
+    // The installation-scoped listing mode of the status surface. It answers
+    // HERE, above delivery resolution, for the same reason `operations` does:
+    // the two situations it exists to report — no delivery registered, and
+    // several in flight — are exactly the two that delivery resolution
+    // refuses, so a listing resolved through it would be unavailable whenever
+    // it had something to say. It names no delivery and binds no fence.
+    //
+    // It still requires an INSTALLATION. A repository with no product
+    // namespace pointer has registered nothing at all, and there is then no
+    // installation to scope a listing to — which is a different answer from an
+    // installation whose registered deliveries happen to number zero, and the
+    // facade reports that one as an empty listing.
+    if (operation === "deliveries") {
+      const installation = await resolveInstallation(context);
+      if (isCommandResult(installation)) return installation;
+      const listing = await installation.facade.listDeliveries({ observedAt: nowInstant() });
+      if (!listing.ok) return { kind: "blocked", blockers: [...listing.blockers] };
+      context.write(`${JSON.stringify(listing.deliveries, null, 2)}\n`);
+      // An unreadable delivery is NAMED, not dropped. Delivery resolution below
+      // counts the same directory as registered, so a listing that quietly
+      // omitted it would leave `managed status` saying several deliveries are in
+      // flight while the surface it points at shows fewer — with no id to
+      // reconcile the two by. The id here is enough to ask `managed status
+      // --delivery <id>` and get the refusal that says what is wrong.
+      const unreadable =
+        listing.unreadable.length === 0 ? "" : `; ${listing.unreadable.length} unreadable (${listing.unreadable.join(", ")})`;
+      return {
+        kind: "ok",
+        summary: `${listing.deliveries.length} delivery(ies) registered for this installation${unreadable}`,
+      };
     }
 
     // Only the retention operations may name a delivery; everything else binds

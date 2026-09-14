@@ -281,6 +281,7 @@ const TOOL_NAMES_SENTENCE = (): string => TOOLS.map((tool) => tool.name).join(",
  */
 export const MANAGED_READ_OPERATIONS: readonly string[] = Object.freeze([
   "status",
+  "deliveries",
   "next",
   "explain-blocker",
   "blockers",
@@ -363,7 +364,7 @@ const TOOLS: readonly ToolDefinition[] = [
   {
     name: managedCommand.name,
     description:
-      "Inspect the managed delivery: its typed status model, the next valid checkpoint, the current blocker and its remediation, the blocker inventory, and the facade's own operation contract. Read-only.",
+      "Inspect the managed delivery: its typed status model, the next valid checkpoint, the current blocker and its remediation, the blocker inventory, this installation's registered deliveries, and the facade's own operation contract. Read-only.",
     inputSchema: {
       type: "object",
       properties: {

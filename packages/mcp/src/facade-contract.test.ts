@@ -41,6 +41,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  */
 const CLI_OPERATION_MAP: Readonly<Record<string, string>> = Object.freeze({
   status: "status",
+  deliveries: "listDeliveries",
   next: "nextCheckpoint",
   blockers: "blockerInventory",
   "explain-blocker": "explainBlocker",
@@ -163,6 +164,23 @@ describe("the CLI surface", () => {
 describe("the MCP surface", () => {
   it("offers the managed tool alongside the evidence tools", () => {
     expect(listTools().map((tool) => tool.name)).toContain(managedCommand.name);
+  });
+
+  it("reaches every operation the inventory says the MCP surface serves", () => {
+    // The mirror of the CLI row above, and NOT the tool-schema row below: that
+    // one compares the advertised enum against `MANAGED_READ_OPERATIONS`, which
+    // is the same list agreeing with itself. This one starts from the
+    // inventory's `surfaces` declaration — the thing the acceptance criterion
+    // is about — so an operation declared on `mcp` and quietly missing from the
+    // tool is a failure rather than a consistent absence.
+    const offered = new Set(MANAGED_READ_OPERATIONS.map((name) => CLI_OPERATION_MAP[name]));
+    let judged = 0;
+    for (const operation of FACADE_OPERATIONS) {
+      if (!operation.surfaces.includes("mcp")) continue;
+      judged += 1;
+      expect(offered.has(operation.operation), `${operation.operation} is declared on MCP but not offered`).toBe(true);
+    }
+    expect(judged).toBeGreaterThan(0);
   });
 
   it("offers read-class operations and nothing else", () => {
