@@ -116,6 +116,7 @@ export function faithfullyAppliedCodexConfiguration(
     hookCommand: hooks[CODEX_HOOK_EVENT]?.[0]?.hooks[0]?.command,
     hookExecutionMode: CODEX_HOOK_EXECUTION_MODE,
     enabledUnenforceableToolSources: [],
+    enabledFeatureKeys: [],
     configurationDigest: composed.discoveryConfigurationDigest,
   };
 }

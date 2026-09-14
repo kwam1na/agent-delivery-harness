@@ -159,6 +159,25 @@ describe("the host's own tool vocabulary", () => {
       SESSION_FENCE,
     );
     expect(decision.allowed).toBe(false);
+    // DENIED FOR THE RIGHT REASON. A hook that read NO path out of the
+    // operand map also denies this input — as unreadable operands — so the
+    // bare `allowed === false` above is satisfied by a hook that cannot read
+    // the host's own patch shape at all.
+    if (!decision.allowed) expect(decision.reason).not.toContain("unreadable_write_operands");
+
+    // And the allow side of that same shape: every path in grant, allowed.
+    // Without this row, ignoring `fileChanges` entirely stays green while the
+    // binding denies every real Codex patch.
+    const allowed = decideCodexHookInvocation(
+      state,
+      {
+        tool_name: "apply_patch",
+        tool_input: { fileChanges: { "/work/tree/src/a.ts": {}, "/work/tree/src/b.ts": {} } },
+      },
+      OBSERVED_AT,
+      SESSION_FENCE,
+    );
+    expect(allowed.allowed, JSON.stringify(allowed)).toBe(true);
   });
 
   it("denies a write whose operands it cannot read, and a tool it has never heard of", () => {

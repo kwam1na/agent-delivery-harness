@@ -952,6 +952,7 @@ export {
 } from "./host/codex-app-server.ts";
 export {
   CODEX_HOOK_EVENT_NAME,
+  codexHookDecision,
   codexHookTurn,
   codexToolIsLocallyEnforceable,
   codexWrittenPaths,

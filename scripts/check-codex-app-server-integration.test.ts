@@ -43,6 +43,26 @@ const escapeForRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\
  * case off would then leave the criterion reading `held` with a sensor that no
  * longer runs, which is exactly the failure this file's header names.
  */
+const SILENCED = /\b(?:it|test|describe|suite)\.(?:only|skip|todo|fails|skipIf|concurrent\.skip)\s*\(/;
+
+/**
+ * Nothing in a cited evidence file may be switched off or made exclusive.
+ *
+ * Matching the cited NAME is not enough, because the two ways a cited case
+ * actually stops running never mention it: a `describe.skip` whose own name
+ * differs silences every `it` inside it, and a single `it.only` anywhere in
+ * the file silences every case that is not it. Either leaves the criterion
+ * reading `held` with a citation this sensor certified as live.
+ *
+ * This is deliberately a FILE-level rule rather than a scope-aware one: a
+ * cited file is evidence, and evidence that carries a disabled or exclusive
+ * declaration anywhere is evidence whose coverage nobody can read off the
+ * citation.
+ */
+function expectNothingSilenced(absolute: string, source: string, what: string): void {
+  expect(SILENCED.test(source), `${absolute}: a disabled or exclusive declaration can silence ${what}`).toBe(false);
+}
+
 function expectLiveCase(absolute: string, caseName: string): void {
   const source = readFileSync(absolute, "utf8");
   const name = escapeForRegExp(caseName);
@@ -50,6 +70,12 @@ function expectLiveCase(absolute: string, caseName: string): void {
   const disabled = new RegExp(String.raw`\b(?:it|test|describe)\.(?:skip|todo|fails|skipIf)\(\s*["'\`]${name}`);
   expect(declared.test(source), `${absolute}: no live case declares ${JSON.stringify(caseName)}`).toBe(true);
   expect(disabled.test(source), `${absolute}: ${JSON.stringify(caseName)} is declared but disabled`).toBe(false);
+  expectNothingSilenced(absolute, source, JSON.stringify(caseName));
+}
+
+/** The same rule for a criterion that cites a whole file rather than a case. */
+function expectLiveFile(absolute: string): void {
+  expectNothingSilenced(absolute, readFileSync(absolute, "utf8"), `the cited file`);
 }
 
 describe("the Codex app-server integration record", () => {
@@ -135,7 +161,8 @@ describe("the Codex app-server integration record", () => {
       const { file, caseName } = evidenceOf(criterion.evidence);
       const absolute = path.join(REPO_ROOT, file);
       expect(existsSync(absolute), file).toBe(true);
-      if (caseName !== undefined) expectLiveCase(absolute, caseName);
+      if (caseName === undefined) expectLiveFile(absolute);
+      else expectLiveCase(absolute, caseName);
     }
     const ordering = record.attestationOrdering;
     expect(existsSync(path.join(REPO_ROOT, ordering.sensor))).toBe(true);

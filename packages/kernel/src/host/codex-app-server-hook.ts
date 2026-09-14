@@ -234,12 +234,29 @@ export function codexHookTurn(input: {
   readonly observedAt: string;
   readonly sessionFence: number;
 }): string {
+  return renderCodexHookDecision(codexHookDecision(input));
+}
+
+/**
+ * The same turn, stopping one step earlier — at the decision rather than at
+ * the document. The process entry needs the decision itself, because an
+ * ALLOWED invocation is also the activity observation the facade's
+ * lazy-unknown rule consumes; rendering first would throw that away, and a
+ * Codex-bound delivery would age to `activity: "unknown"` while its session
+ * was working normally.
+ */
+export function codexHookDecision(input: {
+  readonly state: HookBindingState | undefined;
+  readonly rawInput: string;
+  readonly observedAt: string;
+  readonly sessionFence: number;
+}): HookDecision {
   const parsed = parseCodexHookInput(input.rawInput);
   if (parsed === undefined) {
-    return renderCodexHookDecision({
+    return {
       allowed: false,
       reason: "the host's hook input could not be read; an unreadable invocation is refused rather than continued",
-    });
+    };
   }
-  return renderCodexHookDecision(decideCodexHookInvocation(input.state, parsed, input.observedAt, input.sessionFence));
+  return decideCodexHookInvocation(input.state, parsed, input.observedAt, input.sessionFence);
 }

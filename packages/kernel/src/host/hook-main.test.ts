@@ -7,7 +7,7 @@
  * Written RED before `hook-main.ts` existed.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,11 +92,18 @@ describe("the Codex subcommand of this same entry", () => {
     return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
   };
 
+  const observationOf = (dir: string): string => path.join(dir, "observation.json");
+
   const writeState = (dir: string, expiry: string): string => {
     const statePath = path.join(dir, "state.json");
     writeFileSync(
       statePath,
-      JSON.stringify({ ...state, workspaceRoot: dir, attestation: { ...attestation, expiry } }),
+      JSON.stringify({
+        ...state,
+        workspaceRoot: dir,
+        observationPath: observationOf(dir),
+        attestation: { ...attestation, expiry },
+      }),
       { mode: 0o600 },
     );
     return statePath;
@@ -126,6 +133,16 @@ describe("the Codex subcommand of this same entry", () => {
       );
       expect(allowed.status, allowed.stderr).toBe(0);
       expect(allowed.stdout.trim()).toBe("");
+
+      // AN ALLOWED INVOCATION IS ALSO AN ACTIVITY OBSERVATION. The facade's
+      // activity reporting is host-neutral and ages to `unknown` — and then to
+      // `takeover-required` — when nothing is observed for the workspace's
+      // observation lifetime. A Codex branch that rendered its decision and
+      // wrote nothing would tell the operator to abandon a live workspace.
+      expect(existsSync(observationOf(dir))).toBe(true);
+      expect(JSON.parse(readFileSync(observationOf(dir), "utf8"))).toMatchObject({
+        fence: expectation.invocationFence,
+      });
 
       // An expired attestation denies again, through the same entry.
       const expiredPath = writeState(dir, "2000-01-01T00:00:00Z");

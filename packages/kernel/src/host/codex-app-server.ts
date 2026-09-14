@@ -244,7 +244,14 @@ export const codexSubagentPosture = (): { readonly capability: "removed"; readon
 export interface CodexPermissionProfile {
   readonly id: string;
   readonly sandboxMode: "workspace-write";
-  /** Read is the workspace by default; nothing wider. */
+  /**
+   * The composed read allow-list — the workspace and nothing wider. Emitted as
+   * the UNCHARACTERIZED `filesystem.read` key, so it is defence in depth and
+   * NOT the read boundary: what the characterization actually records on the
+   * read side is `filesystem.deny_read`, which is why that is the member
+   * `verifyAppliedCodexThreadConfiguration` compares and this one is not. See
+   * the WRITE BOUNDARY note below and the record's `knownLimitations`.
+   */
   readonly readRoots: readonly string[];
   readonly writableRoots: readonly string[];
   readonly denyWriteRoots: readonly string[];
@@ -486,6 +493,7 @@ export const CODEX_APPLIED_MISMATCH_CODES = Object.freeze([
   "hook_command_mismatch",
   "hook_not_synchronous",
   "unenforceable_tool_surface_enabled",
+  "disabled_feature_enabled",
   "configuration_digest_mismatch",
 ] as const);
 export type CodexAppliedMismatchCode = (typeof CODEX_APPLIED_MISMATCH_CODES)[number];
@@ -516,6 +524,16 @@ export interface CodexAppliedThreadConfiguration {
   readonly hookCommand?: unknown;
   readonly hookExecutionMode?: unknown;
   readonly enabledUnenforceableToolSources?: unknown;
+  /**
+   * Which of `CODEX_DISABLED_FEATURE_KEYS` the host reports it has ENABLED.
+   * The composition switches every one of them off, and the local hook cannot
+   * adjudicate any of them, so the only faithful answer is the empty list —
+   * the same posture `enabledUnenforceableToolSources` carries, for the same
+   * reason. Without this member a host could re-enable `tool_registry` and
+   * the gate would verify: the composed bytes say one thing and the applied
+   * configuration was never asked.
+   */
+  readonly enabledFeatureKeys?: unknown;
   readonly configurationDigest?: unknown;
 }
 
@@ -610,6 +628,13 @@ export function verifyAppliedCodexThreadConfiguration(
     mismatches.push({
       code: "unenforceable_tool_surface_enabled",
       message: "a hosted, app/MCP, dynamic, or plugin tool surface the local hook cannot adjudicate is enabled",
+    });
+  }
+  if (!Array.isArray(applied.enabledFeatureKeys) || applied.enabledFeatureKeys.length > 0) {
+    mismatches.push({
+      code: "disabled_feature_enabled",
+      message:
+        "a feature this composition switched off — the tool registry, multi-agent, or web search — is enabled in the applied configuration",
     });
   }
   if (applied.configurationDigest !== expected.discoveryConfigurationDigest) {

@@ -155,8 +155,13 @@ describe("the per-fence permission profile", () => {
     // The workspace root itself stays non-writable, so only the granted
     // descendants are reachable.
     expect(composed.profile.denyWriteRoots).toContain(path.resolve(input.workspaceRoot));
-    // Read is the workspace and nothing wider, and carries no duplicate.
-    expect(composed.profile.readRoots).toContain(path.resolve(input.workspaceRoot));
+    // The composed read allow-list is EXACTLY the workspace, under every
+    // spelling of it. `toContain` would admit a read list widened to `/` — and
+    // the emitted-bytes row below reads `composed.profile.readRoots`, so it
+    // would mirror such a widening instead of observing it.
+    expect([...composed.profile.readRoots].sort()).toEqual(
+      [...authoritySpellings(input.workspaceRoot)].sort(),
+    );
     expect(composed.profile.readRoots.length).toBe(new Set(composed.profile.readRoots).size);
   });
 
@@ -381,7 +386,14 @@ describe("verifying what the host reported it applied", () => {
       ["hook_missing", { ...faithful, hookEvent: "post_tool_use" }],
       ["hook_command_mismatch", { ...faithful, hookCommand: "true" }],
       ["hook_not_synchronous", { ...faithful, hookExecutionMode: "async" }],
+      // SAME CARDINALITY on one, a DROPPED MEMBER on the other: between them a
+      // presence-only or length-only check on either deny set fails here. A
+      // host that reports the writable roots faithfully and quietly truncates
+      // or swaps the denies has widened the boundary the attestation binds.
+      ["deny_write_roots_mismatch", { ...faithful, deniedWriteRoots: (faithful.deniedWriteRoots as string[]).map(() => "/etc") }],
+      ["deny_read_roots_mismatch", { ...faithful, deniedReadRoots: (faithful.deniedReadRoots as string[]).slice(1) }],
       ["unenforceable_tool_surface_enabled", { ...faithful, enabledUnenforceableToolSources: ["mcp"] }],
+      ["disabled_feature_enabled", { ...faithful, enabledFeatureKeys: ["tool_registry"] }],
       ["configuration_digest_mismatch", { ...faithful, configurationDigest: "c".repeat(64) }],
     ];
     for (const [code, applied] of cases) {
@@ -408,6 +420,17 @@ describe("verifying what the host reported it applied", () => {
     if (!swapped.verified) {
       expect(swapped.mismatches.map((mismatch) => mismatch.code)).toContain("writable_roots_mismatch");
     }
+    // A SEPARATOR THAT CANNOT OCCUR IN A PATH. Joined on a space, the sets
+    // ["/a b", "/c"] and ["/a", "/b c"] canonicalize to the same string and
+    // have the same length, so a host reporting different roots — any path
+    // with a space in it, which on macOS includes ordinary home directories —
+    // would compare equal and the gate would pass.
+    expect(
+      verifyAppliedCodexThreadConfiguration(composed, { ...faithful, writableRoots: ["/a b", "/c"] }).verified,
+    ).toBe(false);
+    expect(
+      verifyAppliedCodexThreadConfiguration(composed, { ...faithful, writableRoots: ["/a", "/b c"] }).verified,
+    ).toBe(false);
     // ORDER IS NOT A DIVERGENCE. A host that applies the same roots in another
     // order applied the same configuration, and failing it here would teach a
     // later delivery to sort the host's answer into agreement.
@@ -477,6 +500,10 @@ describe("escalation", () => {
         `enable${Source}Tool`,
         `${source}Tool.approve`,
         `${source}s-approve`,
+        // THE INITIALISM. `MCPServerAdd` is the spelling the tokenizer's
+        // acronym rule was written for, and it is the one spelling that
+        // escapes a tokenizer without it: `mcpserver` is not `mcp`.
+        `${source.toUpperCase()}ServerAdd`,
       ];
       for (const kind of spellings) {
         expect(evaluateCodexEscalation({ kind, oneShot: true }, profile), kind).toMatchObject({

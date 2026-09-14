@@ -83,7 +83,7 @@
       "statement": "the fence-scoped profile opens write for exactly the grant's writable paths and nothing wider, through the characterized sandbox_workspace_write.writable_roots list; the workspace root, every protected path, the shared Git authority and the installation authority are additionally named in the composed deny sets, which rest on partly uncharacterized keys and are defence in depth rather than the boundary",
       "outcome": "held",
       "leg": "model-free",
-      "evidence": "packages/kernel/src/host/codex-app-server.test.ts — 'the per-fence permission profile'"
+      "evidence": "packages/kernel/src/host/codex-app-server.test.ts — 'emits the permissions block the host actually reads'"
     },
     {
       "statement": "ambient $TMPDIR and /tmp are denied under both the unresolved and the resolved spelling, and command network access is off",
