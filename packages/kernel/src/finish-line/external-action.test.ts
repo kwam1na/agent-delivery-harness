@@ -10,8 +10,8 @@
  *     nonce, and never for the identity that is acting;
  *   - the FAKE ADAPTER AT EVERY INDETERMINATE BOUNDARY: thrown, refused,
  *     referenceless, and reconciled-after-loss;
- *   - RECONCILE BEFORE RETRY: two of three findings forbid a second call, and
- *     the third forbids reusing the intent id;
+ *   - RECONCILE BEFORE RETRY: all three findings forbid a second call, and
+ *     offering the indeterminate intent's own id keeps its sharper refusal;
  *   - the POST-ACTION CLASSIFICATION, including the success-with-failed-
  *     verification state whose only exits are policy-selected;
  *   - DEPLOYMENT's additional preconditions: a reconciled merge, a clean
@@ -23,6 +23,7 @@ import { checkActionAuthorization } from "../policy/authority.ts";
 import type { AcceptedContract } from "../spine/contract.ts";
 import { ABSENT_BY_STATE } from "../spine/grammar.ts";
 import { validateSensitiveApprovalAssertion } from "../spine/assertion.ts";
+import { WAIVER_APPROVAL_ORIGIN_PREFIX } from "../evidence/waiver.ts";
 import type { PolicySnapshot } from "../spine/policy.ts";
 import type { ExternalActionPort } from "./merge-ready.ts";
 import { UNBOUND_EXTERNAL_ACTION_PORT } from "./merge-ready.ts";
@@ -399,6 +400,21 @@ describe("the external-operation authority matrix", () => {
     expect(approved.ok).toBe(true);
     expect(approved.ok === true && approved.intent.approval).toBe("required");
     expect(approved.ok === true && approved.intent.approverId).toBe("release-manager");
+    // The JOURNALED payload, not just the in-memory intent. `approval` was
+    // pinned on the payload only for "not-required", so the derivation was
+    // proven on one value of a two-value member: a payload hardcoding
+    // "not-required" passed every row. The entry written before the
+    // irreversible call is the only record that a non-model-mintable approval
+    // was consumed, so it must say so. `toEqual` and not a member read, so the
+    // closed `action.intent.recorded` grammar also stays proven here: adding
+    // `approverId` would make the entry unwritable.
+    expect(approved.ok === true && journalIntentPayload(approved.intent)).toEqual({
+      intentId: "intent-2",
+      action: "deploy",
+      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
+      policyDigest: policy.policyDigest,
+      approval: "required",
+    });
 
     // The merge under that same policy requires none, and presenting one is
     // the disagreement `approval_unexpected` names.
@@ -488,6 +504,12 @@ describe("the external-operation authority matrix", () => {
       "candidate_moved",
     );
     expect(codesOf(planExternalAction(planOf({ baseTipSha: "9".repeat(40) })))).toContain("base_moved");
+    // Both sides of each exact-equality compare: a tree that sorts below the
+    // recorded one moved just as far as one that sorts above it.
+    expect(codesOf(planExternalAction(planOf({ candidate: { treeSha: "0".repeat(40), deliverableDigest: DELIVERABLE } })))).toContain(
+      "candidate_moved",
+    );
+    expect(codesOf(planExternalAction(planOf({ baseTipSha: "0".repeat(40) })))).toContain("base_moved");
   });
 
   it("carries no credential material into the intent it builds", () => {
@@ -576,6 +598,17 @@ describe("approval binding", () => {
     // one value, so no row can pass for another row's reason.
     expect(codesOf(withApproval({ candidateTreeSha: "9".repeat(40) }))).toContain("approval_mismatch");
     expect(codesOf(withApproval({ policyDigest: "a".repeat(64) }))).toContain("approval_mismatch");
+    // Every binding below is an EXACT-equality rule, and every probe above sits
+    // on one side of the bound value. Shas and digests are uniform hex and
+    // epochs are ordinals, so a `>` or `<` mutant would let roughly half of all
+    // real divergences through unseen. Each rule therefore gets a probe on the
+    // other side as well.
+    expect(codesOf(withApproval({ candidateTreeSha: "0".repeat(40) }))).toContain("approval_mismatch");
+    expect(codesOf(withApproval({ policyDigest: "0".repeat(64) }))).toContain("approval_mismatch");
+    expect(codesOf(withApproval({ policyDigest: "f".repeat(64) }))).toContain("approval_mismatch");
+    expect(codesOf(withApproval({ deliveryId: "delivery-0" }))).toContain("approval_mismatch");
+    expect(codesOf(withApproval({ productTrustRevocationEpoch: 5 }))).toContain("approval_stale");
+    expect(codesOf(withApproval({ repositoryAuthorityRevocationEpoch: 8 }))).toContain("approval_stale");
     expect(codesOf(withApproval({ invocationFence: 8 }))).toContain("approval_mismatch");
     expect(codesOf(withApproval({ invocationFence: 10 }))).toContain("approval_mismatch");
     expect(codesOf(withApproval({ deliveryId: "delivery-2" }))).toContain("approval_mismatch");
@@ -611,6 +644,14 @@ describe("approval binding", () => {
     );
     expect(codesOf(withApproval({ origin: `${ACTION_APPROVAL_ORIGIN_PREFIX}   ` }))).toContain("approval_unattributed");
     expect(codesOf(withApproval({ origin: "someone" }))).toContain("approval_unattributed");
+    // "someone" is SHORTER than the 16-character prefix, so deleting the
+    // startsWith guard leaves it refused for the empty-slice reason instead —
+    // the assertion was vacuous about the mechanism it names. The waiver lane's
+    // prefix is exactly as long, so under that mutant a waiver approval becomes
+    // a merge approval and its identity is accepted as the distinct approver.
+    expect(codesOf(withApproval({ origin: `${WAIVER_APPROVAL_ORIGIN_PREFIX}release-manager` }))).toContain(
+      "approval_unattributed",
+    );
   });
 
   it("refuses a fixture-sourced approval on a production profile", () => {
@@ -622,6 +663,13 @@ describe("approval binding", () => {
       codesOf(withApproval({ assertionSource: "qualification-fixture" }, { currentProfile: "production" })),
     ).toContain("approval_source_mismatch");
     expect(codesOf(withApproval({ assertionSource: "qualification-fixture" }))).toContain("approval_source_mismatch");
+    // `currentProfile` is typed `string` and the rule is fail-closed by design:
+    // anything that is not the confirmation fixture refuses. A third value
+    // proves the shape, so narrowing the rule to `=== "production"` cannot
+    // survive a profile added later or an unvalidated value crossing in.
+    expect(
+      codesOf(withApproval({ assertionSource: "qualification-fixture" }, { currentProfile: "some-other-profile" })),
+    ).toContain("approval_source_mismatch");
     const policy = policyOf();
     expect(
       planExternalAction(
@@ -728,6 +776,15 @@ describe("the recheck immediately before the call", () => {
       "candidate_moved",
     );
     expect(codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { baseTipSha: "9".repeat(40) })))).toContain(
+      "base_moved",
+    );
+    // This is the recheck that runs in the same breath as the irreversible
+    // call, so its compares matter most: under a `>` mutant a candidate that
+    // moved DOWN revalidates ok, and half of all real movements are invisible.
+    expect(codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { candidateTreeSha: "0".repeat(40) })))).toContain(
+      "candidate_moved",
+    );
+    expect(codesOf(revalidateBeforeInvoke(intent, observationOf(intent, { baseTipSha: "0".repeat(40) })))).toContain(
       "base_moved",
     );
     expect(
@@ -929,8 +986,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
     // The refusal carries NO result. A fabricated failed/not-attempted here
     // would be byte-identical, in every member the frozen payload keeps, to a
     // merge that never happened — and classifying it would report `blocked`
-    // with `action_failed` and `replayProhibited: false` about a merge that
-    // succeeded.
+    // with `action_failed` about a merge that succeeded.
     expect(second.kind).toBe("refused");
     expect(second).not.toHaveProperty("result");
     expect(codesOf(second)).toContain("action_replay_prohibited");
@@ -1311,6 +1367,7 @@ describe("deployment's additional preconditions", () => {
 
   it("refuses a main that moved past the merge, and a dirty deployment source", () => {
     expect(codesOf(checkDeployPreconditions(deployInput({ mainTipSha: "9".repeat(40) })))).toContain("main_not_clean");
+    expect(codesOf(checkDeployPreconditions(deployInput({ mainTipSha: "0".repeat(40) })))).toContain("main_not_clean");
     expect(codesOf(checkDeployPreconditions(deployInput({ workingTreeClean: false })))).toContain("main_not_clean");
   });
 
@@ -1326,6 +1383,23 @@ describe("deployment's additional preconditions", () => {
       codesOf(
         checkDeployPreconditions(
           deployInput({ provenance: { present: true, subjectDigest: "a".repeat(64), candidateDeliverableDigest: DELIVERABLE } }),
+        ),
+      ),
+    ).toContain("provenance_mismatch");
+    expect(
+      codesOf(
+        checkDeployPreconditions(
+          deployInput({ provenance: { present: true, subjectDigest: "0".repeat(64), candidateDeliverableDigest: DELIVERABLE } }),
+        ),
+      ),
+    ).toContain("provenance_mismatch");
+    // DELIVERABLE is "f" repeated, the maximum hex string, so no probe subject
+    // digest can sort above it. The other operand moves down instead, which is
+    // the same asymmetry seen from the other end.
+    expect(
+      codesOf(
+        checkDeployPreconditions(
+          deployInput({ provenance: { present: true, subjectDigest: DELIVERABLE, candidateDeliverableDigest: "a".repeat(64) } }),
         ),
       ),
     ).toContain("provenance_mismatch");

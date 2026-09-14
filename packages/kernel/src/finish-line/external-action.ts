@@ -664,7 +664,7 @@ export interface InvokeExternalActionInput {
  * member the frozen result payload keeps — to a genuine statement that the
  * action did not happen. That matters most for the replay refusal, where the
  * action DID happen: classifying such a result would report `blocked` with
- * `action_failed` and `replayProhibited: false` about an action that succeeded.
+ * `action_failed` about an action that succeeded.
  */
 export type InvocationOutcome =
   | { readonly kind: "observed"; readonly result: ObservedActionResult }
