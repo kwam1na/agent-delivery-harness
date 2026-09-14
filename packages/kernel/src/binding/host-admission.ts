@@ -341,13 +341,26 @@ const underAny = (p: string, prefixes: readonly string[]): boolean =>
  * still compare unequal — a PERMIT on exactly the class this check exists to
  * deny. Normalizing the folded result closes that.
  *
- * The boundary this holds to, stated rather than implied: canonically
- * equivalent spellings of one path compare equal, case-mapped with
- * `toLowerCase`, which is NOT full Unicode case folding — `"\u00df"` and
- * `"SS"`, `"\u0131"` and `"I"`, `"\u03c2"` and `"\u03a3"` remain distinct here, as
- * they did before this delivery.
+ * `toLowerCase` ALONE is not case folding, and the gap is a permit of exactly
+ * the same shape. `U+017F` (LATIN SMALL LETTER LONG S) is already lowercase and
+ * has no canonical decomposition, so it survives both the normalization and the
+ * lowercasing untouched — while a case-insensitive APFS or HFS+ volume folds it
+ * to `"s"` and opens the file the policy meant to protect. 101 code points sit
+ * in that class (`"\u03c2"`/`"\u03c3"`, `"\u00b5"`/`"\u03bc"`, the Greek symbol
+ * variants). Routing through `toUpperCase` first collapses every one of them:
+ * the fold becomes idempotent, leaves ASCII byte-identical, and — verified over
+ * all 0x110000 code points — merges no fewer pairs than it did before, so no
+ * existing denial is weakened.
+ *
+ * The boundary this holds to, stated rather than implied: the fold is a
+ * comparison that ERRS TOWARD DENYING. Case-mapping through upper and back
+ * merges a few spellings macOS keeps apart — `"\u00df"` with `"ss"`, `"\u0131"`
+ * with `"i"` — so a path spelled either way is treated as protected when only
+ * one of them is. That is a false deny, the closed direction, and it is the
+ * price of closing the permits above.
  */
-const folded = (value: string): string => value.normalize("NFC").toLowerCase().normalize("NFC");
+const folded = (value: string): string =>
+  value.normalize("NFC").toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
 
 export const underAnyFolded = (p: string, prefixes: readonly string[]): boolean =>
   underAny(folded(p), prefixes.map(folded));

@@ -141,11 +141,21 @@ describe("evaluateToolInvocation path scoping", () => {
     const upperDecomposed = "src/J\u030c-secrets";
     expect(lowerPrecomposed.normalize("NFC").toLowerCase()).not.toBe(upperDecomposed.normalize("NFC").toLowerCase());
 
+    // And one step past NORMALIZATION altogether: `U+017F` is already
+    // lowercase and has no decomposition, so neither the normalize nor the
+    // lowercase touches it — while a case-insensitive volume folds it to "s"
+    // and opens the same file.
+    const longS = "src/\u017fecrets";
+    const plainS = "src/secrets";
+    expect(longS.normalize("NFC").toLowerCase()).not.toBe(plainS.normalize("NFC").toLowerCase());
+
     for (const [declared, written] of [
       [composed, `${decomposed}/key.pem`],
       [decomposed, `${composed}/key.pem`],
       [lowerPrecomposed, `${upperDecomposed}/key.pem`],
       [upperDecomposed, `${lowerPrecomposed}/key.pem`],
+      [longS, `${plainS}/key.pem`],
+      [plainS, `${longS}/key.pem`],
     ] as const) {
       const scopedGrant = { ...grant, protectedPaths: [declared] };
       const scoped = { ...attestation, grantDigest: digestCanonical(scopedGrant) };

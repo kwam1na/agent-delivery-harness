@@ -74,6 +74,15 @@ describe("resolveHookRuntimeArgs", () => {
     expect(resolution.reason).toContain("no Node version");
   });
 
+  it("refuses only the compatibility runtimes it NAMES, and that boundary is stated", () => {
+    // The impostor rule is a denylist. An unlisted runtime that reports
+    // `versions.node` is admitted and handed the Node-shaped command — there
+    // is no positive Node identification available to this module. Recorded
+    // here so the residual is a row rather than a surprise.
+    expect(resolveHookRuntimeArgs(nodeProbes({ versions: { node: "22.6.0", graaljs: "24.0.0" } })).ok).toBe(true);
+    expect(resolveHookRuntimeArgs(nodeProbes({ versions: { node: "22.6.0", bun: "1.1.30" } })).ok).toBe(false);
+  });
+
   it("does not read the flag probe as an answer about which runtime this is", () => {
     // The two rules are independent: a non-Node runtime is refused whether or
     // not it accepts the flag, and a Node is accepted on the flag probe alone.

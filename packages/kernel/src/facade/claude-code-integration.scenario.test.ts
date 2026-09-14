@@ -308,7 +308,7 @@ const settingsPathOf = async (deliveryId: string): Promise<string> => {
  * the refusal. The rest of the harness — installation, receipts, exec port —
  * is the one every other scenario uses; only the probes differ.
  */
-async function bindProbed(hookRuntime: HookRuntimeProbes): Promise<{ readonly deliveryId: string; readonly bound: Awaited<ReturnType<ManagedDeliveryFacade["bindWorkspace"]>> }> {
+async function bindProbed(hookRuntime: HookRuntimeProbes | undefined): Promise<{ readonly deliveryId: string; readonly bound: Awaited<ReturnType<ManagedDeliveryFacade["bindWorkspace"]>> }> {
   const probedFacade = createManagedDeliveryFacade({
     repoDir,
     policyBinding: disposablePolicyBinding(),
@@ -378,15 +378,14 @@ describe("the pre-admission binding layer", () => {
     const command = settings.hooks["PreToolUse"]?.[0]?.hooks[0]?.command;
     expect(command, JSON.stringify(settings.hooks)).toBeTypeOf("string");
     // The emitted command names the running executable and the flag the probe
-    // observed it accepting — not a constant, and not a second runtime.
-    //
-    // WHAT THIS DOES NOT PROVE, said rather than implied: a hand-written stub
-    // that faithfully mimicked this runtime would be indistinguishable here.
-    // The live default's answers are pinned in `hook-runtime.test.ts` against
-    // the real process; what this row adds is that the facade's default path
-    // reaches a probe whose executable IS this one.
-    expect(command).toContain(process.execPath);
-    expect(command).toContain(STRIP_TYPES_FLAG);
+    // observed it accepting — not a constant, and not a second runtime. ORDER
+    // is the whole meaning of it: `composeClaudeCodeSession` renders these
+    // parts as JSON-quoted tokens joined by spaces, so the flag BEFORE the
+    // entry is a Node flag and the flag AFTER it is an argv string Node never
+    // sees — on the 22.6 floor, an interceptor that never starts. A membership
+    // assertion is order-blind, so the executable and its flag are pinned as a
+    // prefix.
+    expect(command?.startsWith(`${JSON.stringify(process.execPath)} ${JSON.stringify(STRIP_TYPES_FLAG)} `), command).toBe(true);
     expect(command).toContain("hook-main.ts");
 
     // PROVENANCE: the command is composed around the executable that was
@@ -400,13 +399,13 @@ describe("the pre-admission binding layer", () => {
         hooks: Record<string, { hooks: { command: string }[] }[]>;
       }
     ).hooks["PreToolUse"]?.[0]?.hooks[0]?.command;
-    expect(probedCommand, JSON.stringify(probedCommand)).toContain(elsewhere);
+    expect(probedCommand?.startsWith(`${JSON.stringify(elsewhere)} ${JSON.stringify(STRIP_TYPES_FLAG)} `), probedCommand).toBe(true);
     expect(probedCommand).not.toContain(process.execPath);
 
     // And the refusal is reachable: a facade told the runtime cannot run the
     // command refuses to compose one, rather than emitting a Node-shaped
     // command an interceptor would never start from.
-    const { bound: refused } = await bindProbed({
+    const { deliveryId: refusedId, bound: refused } = await bindProbed({
       execPath: "/usr/local/bin/bun",
       versions: { node: "22.6.0", bun: "1.1.30" },
       acceptsFlag: () => true,
@@ -415,7 +414,44 @@ describe("the pre-admission binding layer", () => {
     if (refused.ok) return;
     expect(refused.blockers.map((blocker) => blocker.code)).toEqual(["hook_runtime_unsupported"]);
     expect(refused.blockers[0]?.summary).toContain("bun");
+    // And it lands BEFORE anything is written. The probe is a pure observation
+    // of this process, so a refusal on this ground must not arrive after the
+    // predecessor's binding states have been voided, after the `workspace.bound`
+    // append, or after the projection was materialized — none of which a
+    // refusal can unwind.
+    expect((await journalEntries(refusedId)).map((entry) => entry.kind)).not.toContain("workspace.bound");
   });
+
+  it("reaches the REAL runtime on the default path, rather than assuming a Node-shaped one", async () => {
+    // The whole of V26-1510 rests on one expression: `input.hookRuntime ??
+    // liveHookRuntimeProbes()`. Every other row here hands the facade explicit
+    // probes, so a default that read nothing from the runtime — an always-true
+    // stub, which is precisely the pre-delivery defect — would satisfy them
+    // all. This row makes the real runtime's flag enumeration UNREADABLE and
+    // binds with no probes supplied: only a default that actually asks the
+    // process can notice.
+    const original = Object.getOwnPropertyDescriptor(process, "allowedNodeEnvironmentFlags");
+    expect(original).toBeDefined();
+    Object.defineProperty(process, "allowedNodeEnvironmentFlags", {
+      configurable: true,
+      get() {
+        throw new TypeError("unobservable");
+      },
+    });
+    let bound: Awaited<ReturnType<ManagedDeliveryFacade["bindWorkspace"]>>;
+    try {
+      ({ bound } = await bindProbed(undefined));
+    } finally {
+      Object.defineProperty(process, "allowedNodeEnvironmentFlags", original!);
+    }
+    expect(bound.ok, JSON.stringify(bound)).toBe(false);
+    if (bound.ok) return;
+    expect(bound.blockers.map((blocker) => blocker.code)).toEqual(["hook_runtime_unsupported"]);
+
+    // ...and the restore took: the next bind on the default path succeeds.
+    const { bound: again } = await bindProbed(undefined);
+    expect(again.ok, JSON.stringify(again)).toBe(true);
+  }, 120_000);
 
   it("gives the in-session layer no way to apply, expand, or replace its own grant", async () => {
     const session = await openSession();

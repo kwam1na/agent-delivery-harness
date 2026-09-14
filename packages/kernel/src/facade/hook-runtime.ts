@@ -83,8 +83,15 @@ export const STRIP_TYPES_FLAG = "--experimental-strip-types";
 /**
  * Runtimes that are not Node but answer `process.versions.node` anyway. The
  * emitted command is Node-shaped — Node's flag spellings, Node's type
- * stripping, Node's exit-code contract with the host — so a different
- * executable under a compatibility banner is refused rather than handed it.
+ * stripping, Node's exit-code contract with the host — so these are refused
+ * rather than handed it.
+ *
+ * THIS IS A DENYLIST, NOT A NODE IDENTITY CHECK, and the difference is stated
+ * rather than left to be discovered. Nothing here positively identifies Node:
+ * a runtime not on this list that reports `versions.node` and lists the flag is
+ * ACCEPTED and handed the command. The list names the two compatibility
+ * runtimes that ship today; a third would have to be added. That residual is
+ * pinned by a row of its own rather than implied by the absence of one.
  */
 const IMPOSTER_RUNTIMES = Object.freeze(["bun", "deno"] as const);
 
