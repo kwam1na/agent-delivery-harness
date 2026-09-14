@@ -898,9 +898,16 @@ describe("the thin one-handoff walking skeleton", () => {
     expect(calls.length).toBe(1);
     expect(calls[0]!.workspaceRoot).toBe(worktreeE);
     expect(calls[0]!.fence).toBe(bound.fence);
-    // The grant handed across the seam is the stage grant, not a wider one.
-    expect(calls[0]!.grant.protectedPaths).toContain(".git");
-    expect(calls[0]!.grant.allowedCapabilities.length).toBeGreaterThan(0);
+    // THE GRANT HANDED ACROSS THE SEAM IS THE CHECKPOINT GRANT, EXACTLY. A
+    // length check would have read as a boundary claim while passing for any
+    // non-empty list, so a seam refactor that widened or substituted the grant
+    // at the one site where a host is admitted would have survived it — and
+    // this is the only place the grant crossing the seam is observed at all.
+    const planGrant = disposablePolicyBindingForInstallation(installationPath).compiledPolicy.checkpointGrants.find(
+      (entry) => entry.stageId === "plan",
+    )?.grant;
+    expect(planGrant, "the compiled policy declares a plan checkpoint grant").toBeDefined();
+    expect(calls[0]!.grant).toEqual(planGrant);
     // The operator's arguments are the ones THIS binding answered with.
     expect(bound.cliArgs).toContain(MARKER);
     expect(bound.settingsPath).toBe(

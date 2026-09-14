@@ -83,6 +83,31 @@ describe("the host-neutral binding seam", () => {
 });
 
 describe("the Claude binding reached through the seam", () => {
+  it("forwards the underlying composition's REFUSAL, rather than flattening or fabricating a session", async () => {
+    // THE OTHER ARM OF THE SEAM'S RESULT. Every other row here composes a
+    // session that succeeds, so the adapter's `if (!composed.ok) return
+    // composed;` was reached by nothing: replacing it with a fabricated
+    // success — an empty admission path, an empty digest — left this file, the
+    // Claude suite, and the facade scenario all green, while the facade would
+    // have admitted a workspace whose settings file was never written and
+    // bound an empty discovery-configuration digest.
+    const refusing = await composeInput("refusing");
+    await rm(path.join(refusing.bindingDir, WORKTREE_EXCLUDES_FILE), { force: true });
+
+    const direct = await composeClaudeCodeSession(refusing);
+    expect(direct.ok).toBe(false);
+    const throughSeam = await claudeCodeBinding.composeSession(refusing);
+    expect(throughSeam.ok).toBe(false);
+    if (direct.ok || throughSeam.ok) return;
+    // The blocker set is the SAME set, not merely non-empty: an adapter that
+    // answered a generic refusal would leave the facade unable to say which
+    // half of the admission was not composable.
+    expect(throughSeam.blockers.map((blocker) => blocker.code)).toEqual(
+      direct.blockers.map((blocker) => blocker.code),
+    );
+    expect(throughSeam.blockers.map((blocker) => blocker.code)).toContain("discovery_configuration_unreadable");
+  });
+
   it("composes byte-identical settings, the same admission arguments, and the same digest", async () => {
     const direct = await composeInput("direct");
     const throughSeam = { ...(await composeInput("seam")) };

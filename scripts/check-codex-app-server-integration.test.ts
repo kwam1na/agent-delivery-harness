@@ -11,7 +11,8 @@
  * graded capability record, the binding's own constants, and the sensor files
  * themselves.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -207,6 +208,35 @@ describe("the Codex app-server integration record", () => {
       `expect(thing.skip).toBe(1);`,
     ]) {
       expect(SILENCED.test(live), live).toBe(false);
+    }
+  });
+
+  it("actually applies that rule to the files it certifies, in both directions", () => {
+    // Pinning the PATTERN is not pinning its APPLICATION. `SILENCED` is read
+    // only by `expectNothingSilenced`, which is called only from the two
+    // helpers below, and every one of those calls is an absence assertion over
+    // evidence files that are clean today — so deleting both calls changed no
+    // observable outcome and left this sensor green with every citation
+    // certified by a rule that ran nowhere. These rows drive the helpers
+    // themselves, over files written for the purpose.
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-record-citation-"));
+    try {
+      const clean = path.join(dir, "clean.test.ts");
+      const silenced = path.join(dir, "silenced.test.ts");
+      writeFileSync(clean, `it("cited case", () => {});\n`);
+      // The cited case itself is live here; what silences it is the exclusive
+      // declaration beside it, which never mentions its name.
+      writeFileSync(silenced, `it("cited case", () => {});\nit.only("other", () => {});\n`);
+
+      expect(() => expectLiveCase(clean, "cited case")).not.toThrow();
+      expect(() => expectLiveFile(clean)).not.toThrow();
+      expect(() => expectLiveCase(silenced, "cited case")).toThrow();
+      expect(() => expectLiveFile(silenced)).toThrow();
+      // And the name check itself still bites: a file that declares no such
+      // case fails even though nothing in it is silenced.
+      expect(() => expectLiveCase(clean, "a case nobody declares")).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

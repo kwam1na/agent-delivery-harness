@@ -123,6 +123,23 @@ describe("before the applied configuration is verified", () => {
     expect(results.find((result) => result.caseId === "admits-the-currently-attested-grant")?.satisfied).toBe(false);
   });
 
+  it("names the preparation step that actually failed, rather than blaming the applied configuration", async () => {
+    // A DENIAL CODE IS A STATEMENT ABOUT WHAT WAS OBSERVED. Every bail-out in
+    // `prepare()` used to surface as `applied_configuration_unverified`, so a
+    // fixture whose projection never materialized reported a verdict on a host
+    // report that was never requested — and the operator was pointed at the
+    // applied configuration while the real fault, a generation root with no
+    // pinned skills archive, was named nowhere.
+    const emptyGeneration = await mkdtemp(path.join(scratch, "generation-empty-"));
+    const port = await codexPort({ generationRoot: emptyGeneration });
+    const admission = await port.admit("current");
+    expect(admission.outcome).toBe("denied");
+    expect(admission.codes).toEqual(["projection_unmaterialized"]);
+    const interception = await port.intercept("granted-capability");
+    expect(interception.outcome).toBe("denied");
+    expect(interception.codes).toEqual(["projection_unmaterialized"]);
+  });
+
   it("admits nothing when the host applied something other than what was composed", async () => {
     // One divergence stands for the set: the ordering is what is under test
     // here, and every mismatch code is exercised member by member in

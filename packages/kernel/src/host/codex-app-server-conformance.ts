@@ -127,6 +127,15 @@ export function createCodexAppServerConformancePort(
   const exec = createExecPort();
   let expectation: CheckpointAdmissionExpectation | undefined;
   let prepared: Promise<void> | undefined;
+  /**
+   * WHICH preparation step failed, not merely THAT one did. Every bail-out
+   * below used to surface as `applied_configuration_unverified`, so a fixture
+   * whose projection never materialized reported a statement about a host
+   * report that was never requested — pointing the operator at the applied
+   * configuration and at `verifyAppliedCodexThreadConfiguration` while the
+   * actual fault was named nowhere.
+   */
+  let unprepared: "projection_unmaterialized" | "applied_configuration_unverified" | undefined;
 
   /**
    * Materializes the projection, composes the thread admission, and — only if
@@ -144,7 +153,10 @@ export function createCodexAppServerConformancePort(
       bindingDir: input.bindingDir,
       exec,
     });
-    if (!materialized.ok) return;
+    if (!materialized.ok) {
+      unprepared = "projection_unmaterialized";
+      return;
+    }
     const commonGitDir = (
       await exec.run({
         command: "git",
@@ -168,8 +180,10 @@ export function createCodexAppServerConformancePort(
     // comes before the expectation exists at all, so no attestation can be
     // minted against an unverified application.
     const applied = input.appliedConfiguration?.(composed);
-    if (applied === undefined) return;
-    if (!verifyAppliedCodexThreadConfiguration(composed, applied).verified) return;
+    if (applied === undefined || !verifyAppliedCodexThreadConfiguration(composed, applied).verified) {
+      unprepared = "applied_configuration_unverified";
+      return;
+    }
 
     expectation = {
       profile: "checkpoint",
@@ -233,7 +247,7 @@ export function createCodexAppServerConformancePort(
     async admit(scenario: HostAdmissionScenario): Promise<NormalizedAdmission> {
       const current = await ready();
       if (current === undefined) {
-        return { outcome: "denied", codes: ["applied_configuration_unverified"] };
+        return { outcome: "denied", codes: [unprepared ?? "applied_configuration_unverified"] };
       }
       const decision = evaluateHostAdmission(current, STAGE_GRANT, attestationFor(current, scenario));
       return decision.admitted
@@ -244,7 +258,7 @@ export function createCodexAppServerConformancePort(
     async intercept(scenario: HostInterceptionScenario): Promise<NormalizedInterception> {
       const current = await ready();
       if (current === undefined) {
-        return { outcome: "denied", codes: ["applied_configuration_unverified"] };
+        return { outcome: "denied", codes: [unprepared ?? "applied_configuration_unverified"] };
       }
       const decision = evaluateToolInvocation(
         current,
