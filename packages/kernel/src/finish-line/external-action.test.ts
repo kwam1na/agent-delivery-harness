@@ -276,13 +276,60 @@ describe("the external-operation authority matrix", () => {
     ).toBe(true);
   });
 
-  it("binds the evidence the action was taken on into the intent it returns", () => {
-    const intent = boundIntent();
-    // The allow side of the binding, not only the refusal side: an intent that
-    // dropped its obligations would be an intent nobody could later audit
-    // against the policy that authorized it.
-    expect(intent.evidence).toEqual({ externalVerification: "passed", completedObligations: ["review-green"] });
-    expect(intent.trackedRecordDigest).toBe(RECORD_DIGEST);
+  it("refuses an action on a policy that carries no obligation at all, so absence never passes", () => {
+    // The anti-vacuity half of the check, which the per-obligation loop cannot
+    // stand in for: a repository whose compiled policy activates no obligation
+    // would otherwise take an irreversible merge on an empty evidence set.
+    expect(
+      codesOf(
+        planExternalAction(
+          planOf({
+            policy: policyOf({ obligations: [] }),
+            evidence: { externalVerification: "passed", completedObligations: [] },
+          }),
+        ),
+      ),
+    ).toContain("obligation_unsatisfied");
+  });
+
+  it("binds every value the ticket names, asserted against a literal rather than against itself", () => {
+    // The whole intent at once, member by member, against values written out
+    // here. Asserting single members leaves the rest free, and the revalidation
+    // fixture is built FROM the intent, so a mis-bound fence or epoch would
+    // revalidate against its own mirror and then take an irreversible action.
+    const policy = policyOf();
+    expect(boundIntent()).toEqual({
+      intentId: "intent-1",
+      deliveryId: "delivery-1",
+      action: "merge",
+      actingActorId: "agent-task-1",
+      approval: "not-required",
+      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
+      baseTipSha: BASE,
+      policyDigest: policy.policyDigest,
+      invocationFence: 9,
+      productTrustRevocationEpoch: 4,
+      repositoryAuthorityRevocationEpoch: 7,
+      requestedFinishLine: "merge",
+      adapterCapabilityId: "merge.github",
+      actionChainDigest: actionChainDigest([], "merge"),
+      evidence: { externalVerification: "passed", completedObligations: ["review-green"] },
+      trackedRecordDigest: RECORD_DIGEST,
+    });
+    // The two epochs are distinct values, so an intent that carried one twice
+    // could not tell a product-trust revocation from an authority revocation.
+    expect(policy.productTrustRevocationEpoch).not.toBe(policy.repositoryAuthorityRevocationEpoch);
+    // And the approved intent names its approver, distinct from the actor.
+    const approved = planExternalAction(
+      planOf({
+        policy,
+        approvalRequiredActions: ["merge"],
+        approval: approvalOf(policy),
+        approvedChainDigest: actionChainDigest([], "merge"),
+      }),
+    );
+    expect(approved.ok === true && approved.intent.approverId).toBe("release-manager");
+    expect(approved.ok === true && approved.intent.approval).toBe("required");
   });
 
   it("refuses when the candidate or the base moved away from the tracked record", () => {
@@ -298,13 +345,16 @@ describe("the external-operation authority matrix", () => {
     // and nothing in the journaled payload could carry one.
     expect(intent.adapterCapabilityId).toBe("merge.github");
     expect(JSON.stringify(intent)).not.toContain("credential");
-    expect(Object.keys(journalIntentPayload(intent)).sort()).toEqual([
-      "action",
-      "approval",
-      "candidate",
-      "intentId",
-      "policyDigest",
-    ]);
+    // By value, not by key set: a payload carrying the record digest where the
+    // policy digest belongs has the right shape and the wrong content, and the
+    // adapter is handed this same object.
+    expect(journalIntentPayload(intent)).toEqual({
+      intentId: "intent-1",
+      action: "merge",
+      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
+      policyDigest: policyOf().policyDigest,
+      approval: "not-required",
+    });
   });
 });
 
@@ -506,8 +556,35 @@ describe("the recheck immediately before the call", () => {
     ).toContain("external_verification_missing");
   });
 
-  it("passes when nothing moved", () => {
+  it("passes when nothing moved, against an observation written out rather than copied off the intent", () => {
     const intent = boundIntent();
+    // Written out: an observation built FROM the intent agrees with it whatever
+    // the intent binds, which would make every row in this block vacuous.
+    expect(
+      revalidateBeforeInvoke(intent, {
+        invocationFence: 9,
+        productTrustRevocationEpoch: 4,
+        candidateTreeSha: TREE,
+        baseTipSha: BASE,
+        externalVerification: "passed",
+        recheckAuthority: () => ({ ok: true }),
+      }).ok,
+    ).toBe(true);
+    // Each live value one at a time against the same literal observation.
+    const observation = {
+      invocationFence: 9,
+      productTrustRevocationEpoch: 4,
+      candidateTreeSha: TREE,
+      baseTipSha: BASE,
+      externalVerification: "passed" as const,
+      recheckAuthority: () => ({ ok: true }) as const,
+    };
+    expect(codesOf(revalidateBeforeInvoke(intent, { ...observation, invocationFence: 10 }))).toContain(
+      "fence_superseded",
+    );
+    expect(codesOf(revalidateBeforeInvoke(intent, { ...observation, productTrustRevocationEpoch: 7 }))).toContain(
+      "product_trust_stale",
+    );
     expect(revalidateBeforeInvoke(intent, observationOf(intent)).ok).toBe(true);
   });
 });
@@ -521,6 +598,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port,
       observed: observationOf(intent),
       intentJournaled: false,
+      intentAlreadyObserved: false,
     });
     expect(port.invoke).not.toHaveBeenCalled();
     expect(result.outcome).toBe("failed");
@@ -535,6 +613,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port,
       observed: observationOf(intent, { invocationFence: 10 }),
       intentJournaled: true,
+      intentAlreadyObserved: false,
     });
     expect(port.invoke).not.toHaveBeenCalled();
     expect(codesOf(result)).toContain("fence_superseded");
@@ -549,19 +628,20 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port,
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
       verify: verified,
     });
     expect(port.invoke).toHaveBeenCalledTimes(1);
     // What the adapter RECEIVES, not what the helper returns: minimal
     // disclosure is a property of the call, and an adapter handed the whole
     // bound intent would be handed the approver, both epochs and the record.
-    expect(Object.keys(port.invoke.mock.calls[0]?.[0] ?? {}).sort()).toEqual([
-      "action",
-      "approval",
-      "candidate",
-      "intentId",
-      "policyDigest",
-    ]);
+    expect(port.invoke.mock.calls[0]?.[0]).toEqual({
+      intentId: "intent-1",
+      action: "merge",
+      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
+      policyDigest: policyOf().policyDigest,
+      approval: "not-required",
+    });
     // The post-action check runs over the reference the adapter returned, and
     // never over the intent id: a smoke check pointed at the wrong subject
     // passes for a reason that has nothing to do with the action.
@@ -578,6 +658,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port,
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
     });
     expect(port.invoke).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
@@ -586,7 +667,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       externalReference: "https://example.test/pull/7",
     });
     // And the classification of that result does not leave through success.
-    expect(classifyActionOutcome({ result, containmentMoves: [] }).state).toBe("blocked");
+    expect(classifyActionOutcome({ result, containmentMoves: [], requestedFinishLine: "merge" }).state).toBe("blocked");
   });
 
   it("never calls the adapter a second time under an intent that already has an observed result", async () => {
@@ -597,12 +678,13 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port,
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
       verify: async () => false,
     });
     expect(first).toMatchObject({ outcome: "succeeded", verification: "failed" });
-    expect(classifyActionOutcome({ result: first, containmentMoves: ["rollback"] }).state).toBe(
-      "action_succeeded_verification_failed",
-    );
+    expect(
+      classifyActionOutcome({ result: first, containmentMoves: ["rollback"], requestedFinishLine: "merge" }).state,
+    ).toBe("action_succeeded_verification_failed");
 
     // The second call is the replay that would rewrite that state into
     // `completed`. `replayProhibited` is advisory; this is what stops it.
@@ -622,7 +704,13 @@ describe("the single invocation, against a fake adapter at every boundary", () =
   it("records a lost response as indeterminate and does not call again", async () => {
     const intent = boundIntent();
     const port = { invoke: vi.fn(fakePort("throw").invoke) };
-    const result = await invokeExternalActionOnce({ intent, port, observed: observationOf(intent), intentJournaled: true });
+    const result = await invokeExternalActionOnce({
+      intent,
+      port,
+      observed: observationOf(intent),
+      intentJournaled: true,
+      intentAlreadyObserved: false,
+    });
     expect(port.invoke).toHaveBeenCalledTimes(1);
     expect(result.outcome).toBe("indeterminate");
     expect(result.externalReference).toBe(ABSENT_BY_STATE);
@@ -635,6 +723,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port: fakePort("no-reference"),
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
     });
     expect(result.outcome).toBe("indeterminate");
   });
@@ -646,6 +735,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port: fakePort("refuse"),
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
     });
     expect(result).toMatchObject({ outcome: "failed", verification: "not-attempted" });
     expect(codesOf(result)).toContain("adapter_refused");
@@ -658,6 +748,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port: fakePort("ok"),
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
       verify: async () => false,
     });
     expect(failed).toMatchObject({ outcome: "succeeded", verification: "failed" });
@@ -666,6 +757,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port: fakePort("ok"),
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
       verify: async () => {
         throw new Error("smoke check could not run");
       },
@@ -680,6 +772,7 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port: UNBOUND_EXTERNAL_ACTION_PORT,
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
     });
     expect(codesOf(result)).toContain("action_port_unbound");
     expect(result.outcome).toBe("failed");
@@ -692,15 +785,34 @@ describe("the single invocation, against a fake adapter at every boundary", () =
       port: fakePort("ok"),
       observed: observationOf(intent),
       intentJournaled: true,
+      intentAlreadyObserved: false,
       verify: async () => true,
     });
-    expect(Object.keys(journalResultPayload(result)).sort()).toEqual([
-      "action",
-      "externalReference",
-      "intentId",
-      "outcome",
-      "verification",
-    ]);
+    expect(journalResultPayload(result)).toEqual({
+      intentId: "intent-1",
+      action: "merge",
+      outcome: "succeeded",
+      verification: "passed",
+      externalReference: "https://example.test/pull/7",
+    });
+    // A verification that failed is journaled as failed, not as never run: the
+    // record left behind by `action_succeeded_verification_failed` is the whole
+    // evidence that the state was entered.
+    const unverified = await invokeExternalActionOnce({
+      intent,
+      port: fakePort("ok"),
+      observed: observationOf(intent),
+      intentJournaled: true,
+      intentAlreadyObserved: false,
+      verify: async () => false,
+    });
+    expect(journalResultPayload(unverified)).toEqual({
+      intentId: "intent-1",
+      action: "merge",
+      outcome: "succeeded",
+      verification: "failed",
+      externalReference: "https://example.test/pull/7",
+    });
   });
 });
 
@@ -747,6 +859,21 @@ describe("reconcile before retry", () => {
     expect(unreferenced.kind === "already-performed" && unreferenced.result.externalReference).toBe(ABSENT_BY_STATE);
   });
 
+  it("carries the reconciled action through, rather than the one the fixture happens to use", () => {
+    const disposition = reconcileBeforeRetry({
+      indeterminate: { ...indeterminate, intentId: "intent-7", action: "deploy" },
+      finding: "performed",
+      observedReference: "https://example.test/deploy/9",
+    });
+    expect(disposition.kind === "already-performed" && disposition.result).toMatchObject({
+      intentId: "intent-7",
+      action: "deploy",
+      outcome: "succeeded",
+      verification: "not-attempted",
+      externalReference: "https://example.test/deploy/9",
+    });
+  });
+
   it("forbids a retry when reconciliation cannot tell", () => {
     const disposition = reconcileBeforeRetry({ indeterminate, finding: "unknown", nextIntentId: "intent-2" });
     expect(disposition.kind).toBe("blocked");
@@ -784,8 +911,15 @@ describe("the post-action classification", () => {
     externalReference: "https://example.test/deploy/9",
   });
 
+  /** The deploy is the last action a deploy contract takes, so it completes. */
+  const classify = (
+    result: ReturnType<typeof resultOf>,
+    containmentMoves: readonly string[],
+    requestedFinishLine = "deploy",
+  ) => classifyActionOutcome({ result, containmentMoves, requestedFinishLine });
+
   it("completes only on a succeeded action with passing verification", () => {
-    expect(classifyActionOutcome({ result: resultOf("succeeded", "passed"), containmentMoves: ["rollback"] })).toEqual({
+    expect(classify(resultOf("succeeded", "passed"), ["rollback"])).toEqual({
       state: "completed",
       replayProhibited: true,
       permittedMoves: [],
@@ -793,32 +927,56 @@ describe("the post-action classification", () => {
     });
   });
 
+  it("leaves a deploy contract acting after its merge, and completes only at the action the finish line asked for", () => {
+    const merged = {
+      intentId: "intent-1",
+      action: "merge" as const,
+      outcome: "succeeded" as const,
+      verification: "passed" as const,
+      externalReference: "https://example.test/pull/7",
+    };
+    // Under a deploy contract the merge is the first of two acting steps. A
+    // `completed` here would terminate the delivery having never deployed, on
+    // a transition the journal accepts — the blocker one function downstream
+    // of the one the plan refuses.
+    const afterMerge = classifyActionOutcome({ result: merged, containmentMoves: [], requestedFinishLine: "deploy" });
+    expect(afterMerge.state).toBe("acting");
+    expect(afterMerge.permittedMoves).toEqual(["deploy"]);
+    expect(afterMerge.replayProhibited).toBe(true);
+    expect(codesOf(afterMerge)).toContain("finish_line_not_reached");
+
+    // The same merge under a merge contract is the finish line, and completes.
+    expect(
+      classifyActionOutcome({ result: merged, containmentMoves: [], requestedFinishLine: "merge" }),
+    ).toEqual({ state: "completed", replayProhibited: true, permittedMoves: [], refusals: [] });
+
+    // And the deploy that follows completes the deploy contract.
+    expect(classify(resultOf("succeeded", "passed"), []).state).toBe("completed");
+  });
+
   it("enters action_succeeded_verification_failed, prohibits replay, and offers only policy-selected moves", () => {
-    const classified = classifyActionOutcome({
-      result: resultOf("succeeded", "failed"),
-      containmentMoves: ["rollback", "escalate"],
-    });
+    const classified = classify(resultOf("succeeded", "failed"), ["rollback", "escalate"]);
     expect(classified.state).toBe("action_succeeded_verification_failed");
     expect(classified.replayProhibited).toBe(true);
     expect(classified.permittedMoves).toEqual(["rollback", "escalate"]);
     expect(codesOf(classified)).toContain("action_succeeded_verification_failed");
     // A repository that selected no containment gets no moves invented for it.
-    expect(classifyActionOutcome({ result: resultOf("succeeded", "failed"), containmentMoves: [] }).permittedMoves).toEqual([]);
+    expect(classify(resultOf("succeeded", "failed"), []).permittedMoves).toEqual([]);
   });
 
   it("does not call an unrun verification a passing one", () => {
-    const classified = classifyActionOutcome({ result: resultOf("succeeded", "not-attempted"), containmentMoves: [] });
+    const classified = classify(resultOf("succeeded", "not-attempted"), []);
     expect(classified.state).toBe("blocked");
     expect(classified.replayProhibited).toBe(true);
     expect(codesOf(classified)).toContain("verification_not_attempted");
   });
 
   it("sends an indeterminate action to reconciliation and a failed one to blocked", () => {
-    const unresolved = classifyActionOutcome({ result: resultOf("indeterminate", "not-attempted"), containmentMoves: [] });
+    const unresolved = classify(resultOf("indeterminate", "not-attempted"), []);
     expect(unresolved.state).toBe("acting");
     expect(unresolved.permittedMoves).toEqual(["reconcile"]);
     expect(unresolved.replayProhibited).toBe(true);
-    const failed = classifyActionOutcome({ result: resultOf("failed", "not-attempted"), containmentMoves: ["escalate"] });
+    const failed = classify(resultOf("failed", "not-attempted"), ["escalate"]);
     expect(failed.state).toBe("blocked");
     expect(failed.replayProhibited).toBe(false);
     // An action that did not happen still leaves through the containment the
@@ -859,6 +1017,14 @@ describe("deployment's additional preconditions", () => {
     ).toContain("merge_not_reconciled");
     expect(
       codesOf(checkDeployPreconditions(deployInput({ merge: mergeOf({ outcome: "indeterminate", verification: "not-attempted" }) }))),
+    ).toContain("merge_not_reconciled");
+    // Both halves on their own: a merge that failed with a passing verifier is
+    // as unreconciled as a merge that succeeded with a failing one.
+    expect(codesOf(checkDeployPreconditions(deployInput({ merge: mergeOf({ verification: "failed" }) })))).toContain(
+      "merge_not_reconciled",
+    );
+    expect(
+      codesOf(checkDeployPreconditions(deployInput({ merge: mergeOf({ outcome: "failed", verification: "passed" }) }))),
     ).toContain("merge_not_reconciled");
   });
 
@@ -973,10 +1139,62 @@ describe("the action chain and the post-action result grammar", () => {
     };
     expect(validateExternalActionResult(result).ok).toBe(true);
     expect(validateExternalActionResult({ ...result, verification: "passed", outcome: "indeterminate" }).ok).toBe(false);
-    expect(validateExternalActionResult({ ...result, finishLine: "deploy" }).ok).toBe(false);
+    // A deploy contract's merge is a real result and has to be recordable, by
+    // the same reachability relation the plan binds under.
+    expect(validateExternalActionResult({ ...result, finishLine: "deploy" }).ok).toBe(true);
+    // A merge contract's deploy is not reachable and stays unsayable.
+    expect(
+      validateExternalActionResult({ ...result, finishLine: "merge", action: "deploy" }).ok,
+    ).toBe(false);
     // merge-ready has its own frozen result and is not spellable here.
     expect(validateExternalActionResult({ ...result, finishLine: "merge-ready" }).ok).toBe(false);
     expect(validateExternalActionResult({ ...result, unexpected: 1 }).ok).toBe(false);
     expect(validateExternalActionResult({ ...result, externalReference: ABSENT_BY_STATE }).ok).toBe(true);
+  });
+
+  it("refuses a result whose every member fails its own check, one member at a time", () => {
+    // Closedness and the two cross-member rules were pinned; the member rules
+    // themselves were not, so the freeze the unit claims over this payload was
+    // carried by nothing. One substitution per row, so no row can pass for
+    // another row's reason.
+    const valid = {
+      spec: EXTERNAL_ACTION_RESULT_SPEC,
+      finishLine: "merge",
+      deliveryId: "delivery-1",
+      intentId: "intent-1",
+      action: "merge",
+      candidate: { treeSha: TREE, deliverableDigest: DELIVERABLE },
+      policyDigest: "a".repeat(64),
+      approval: "required",
+      outcome: "succeeded",
+      verification: "passed",
+      externalReference: "https://example.test/pull/7",
+      actionChainDigest: actionChainDigest([], "merge"),
+      invocationFence: 9,
+      productTrustRevocationEpoch: 4,
+      repositoryAuthorityRevocationEpoch: 7,
+      trackedRecordDigest: RECORD_DIGEST,
+    };
+    expect(validateExternalActionResult(valid).ok).toBe(true);
+    const ill: readonly Record<string, unknown>[] = [
+      { deliveryId: "" },
+      { intentId: "" },
+      { candidate: { treeSha: "not-an-oid", deliverableDigest: DELIVERABLE } },
+      { candidate: { treeSha: TREE, deliverableDigest: "not-a-digest" } },
+      { policyDigest: "not-a-digest" },
+      { actionChainDigest: "not-a-digest" },
+      { trackedRecordDigest: "not-a-digest" },
+      // A fence is taken, never absent: zero is not a fence anybody holds.
+      { invocationFence: 0 },
+      { productTrustRevocationEpoch: -1 },
+      { repositoryAuthorityRevocationEpoch: -1 },
+      { approval: "maybe" },
+      { outcome: "partly" },
+      { verification: "probably" },
+      { spec: "external-action-result/2" },
+    ];
+    for (const over of ill) {
+      expect(validateExternalActionResult({ ...valid, ...over })).toMatchObject({ ok: false });
+    }
   });
 });

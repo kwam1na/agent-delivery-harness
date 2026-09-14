@@ -83,7 +83,6 @@ import type { PolicySnapshot } from "../spine/policy.ts";
 import type { DeliveryState } from "../spine/vocabulary.ts";
 import {
   authorizeFinishLineAction,
-  FINISH_LINE_ACTIONS,
   type ExternalActionIntent,
   type ExternalActionPort,
   type FinishLineRefusal,
@@ -649,7 +648,7 @@ export interface InvokeExternalActionInput {
    * the second call — including the call that would rewrite
    * `action_succeeded_verification_failed` into `completed`.
    */
-  readonly intentAlreadyObserved?: boolean;
+  readonly intentAlreadyObserved: boolean;
   /**
    * The required post-action verification, run by the caller over the observed
    * reference. Absent means it did not run, which records `not-attempted` —
@@ -684,7 +683,7 @@ export async function invokeExternalActionOnce(input: InvokeExternalActionInput)
     ]);
   }
 
-  if (input.intentAlreadyObserved === true) {
+  if (input.intentAlreadyObserved) {
     return notPerformed([
       refusal(
         "action_replay_prohibited",
@@ -871,6 +870,13 @@ export interface ActionClassification {
 
 export interface ClassifyActionInput {
   readonly result: ObservedActionResult;
+  /**
+   * The finish line the accepted contract requested, carried on the intent
+   * this result answers. A succeeded, verified MERGE under a `deploy` contract
+   * is not a completed delivery: the next authorized acting step remains, and
+   * the `acting -> acting` edge of the frozen transition table is exactly it.
+   */
+  readonly requestedFinishLine: string;
   /** The containment moves the compiled policy selected for this repository. */
   readonly containmentMoves: readonly string[];
 }
@@ -886,7 +892,28 @@ export function classifyActionOutcome(input: ClassifyActionInput): ActionClassif
   const { outcome, verification } = input.result;
 
   if (outcome === "succeeded" && verification === "passed") {
-    return { state: "completed", replayProhibited: true, permittedMoves: [], refusals: [] };
+    // The action that served the requested finish line completes the delivery.
+    // An earlier action in the chain — the merge a deploy contract deploys —
+    // leaves the delivery acting, with the next step named rather than
+    // invented, and never terminates it as though the finish line were reached.
+    const remaining = (FINISH_LINE_REACHED_ACTIONS[input.requestedFinishLine] ?? []).slice(
+      (FINISH_LINE_REACHED_ACTIONS[input.requestedFinishLine] ?? []).indexOf(input.result.action) + 1,
+    );
+    if (remaining.length === 0) {
+      return { state: "completed", replayProhibited: true, permittedMoves: [], refusals: [] };
+    }
+    return {
+      state: "acting",
+      replayProhibited: true,
+      permittedMoves: [...remaining],
+      refusals: [
+        refusal(
+          "finish_line_not_reached",
+          "/requestedFinishLine",
+          `the ${input.result.action} succeeded and verified, and the contract requested the ${input.requestedFinishLine} finish line; the delivery is still acting and the next authorized step is ${remaining[0] as string}`,
+        ),
+      ],
+    };
   }
 
   if (outcome === "succeeded" && verification === "failed") {
@@ -1068,12 +1095,15 @@ export function validateExternalActionResult(value: unknown): SpineVerdict {
         "post-action verification passes only over a succeeded action",
       );
     }
-    // The finish line and the action it serves cannot disagree.
-    if (FINISH_LINE_ACTIONS[record["finishLine"] as string] !== record["action"]) {
+    // The finish line has to REACH the action, by the same relation the plan
+    // binds under: a deploy contract's merge is a real result that has to be
+    // recordable, while a merge contract's deploy is not. `merge-ready` is
+    // already unspellable through the `finishLine` member's own check.
+    if (!finishLineReaches(record["finishLine"] as string, record["action"] as ExternalAction)) {
       collector.emit(
         "unsupported_combination",
         "/action",
-        `the ${String(record["finishLine"])} finish line is not served by a ${String(record["action"])} action`,
+        `the ${String(record["finishLine"])} finish line does not reach a ${String(record["action"])} action`,
       );
     }
   }
