@@ -1192,6 +1192,11 @@ describe("explaining a journal's warnings", () => {
       // The same two branches for the COMPLETED gate, whose sentence is the
       // one the reproduction's own row carries.
       [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), completedH("gate"), completedH("record"), prOpenedH, endedH], TREE],
+      // The completed gate's ORDERED arm - the one a CLI-driven journal
+      // actually renders, where a closed round this row accepts exists and the
+      // gate precedes it. Without this vector the sentence that interpolates
+      // that round's position is never built from hostile input.
+      [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), completedH("gate"), closedH(1), completedH("record"), prOpenedH, endedH], undefined],
     ];
 
     const covered = new Set<string>();
@@ -1222,6 +1227,7 @@ describe("explaining a journal's warnings", () => {
     expect([...covered].sort()).toEqual([...RUN_JOURNAL_VIOLATIONS].sort());
     expect([...arms].sort()).toEqual([
       "gate-before-closed-round|no round",
+      "gate-before-closed-round|ordered",
       "gate-before-closed-round|other tree",
       "gate-reported-before-closed-round|no round",
       "gate-reported-before-closed-round|ordered",

@@ -828,6 +828,10 @@ describe("verify's run-journal completeness row", () => {
     expect(required.err).toContain("gate-reported-before-closed-round: the governing gate.reported at seq");
     expect(required.err).toContain("(a consequence of round-not-bound-to-record)");
     expect(required.err).toContain("none of the above blocks admission");
+    // The remediation says to emit the run events this delivery did not
+    // journal; this list is the only place the refusal names them, so it has
+    // to survive the 600-character cap on a detail with two warnings in it.
+    expect(required.err).toContain("missing: command.completed:gate");
   });
 
   it("resolves two journals binding the record's tree to one run, naming the other in alsoMatching", { timeout: 120000 }, async () => {
