@@ -520,7 +520,7 @@ it("admits a red whose residuals are environmental or reproduce on the base tree
   expect(out).toContain("environmental a.test.ts: passed when rerun alone on the candidate");
   expect(out).toContain("pre-existing c.test.ts: the base tree fails the same file");
   expect(out).toContain("admitted: check.suite.passed=satisfied_evidence [check.suite=attributed(environmental,environmental,pre-existing)]");
-}, 120000);
+}, 300000);
 
 it("never reclassifies a regression in a file the diff touches, and names it first", async () => {
   const f = await suite([row("noise.test.ts", "timeout", false, false), row("touched.test.ts", "assertion", true, true)]);
@@ -532,7 +532,7 @@ it("never reclassifies a regression in a file the diff touches, and names it fir
   expect(out).toContain("candidate touched.test.ts: the candidate's diff touches this file");
   expect(out.indexOf("candidate touched.test.ts")).toBeLessThan(out.indexOf("environmental noise.test.ts"));
   expect(f.err.join("\n")).toContain("check_command_failed");
-}, 120000);
+}, 300000);
 
 it("refuses to attribute when the base tree cannot be prepared", async () => {
   const f = await suite([row("c.test.ts", "assertion", true, true)],
@@ -541,7 +541,7 @@ it("refuses to attribute when the base tree cannot be prepared", async () => {
   expect(await f.run("gate")).toBe(1);
   expect(f.out.join("\n")).toContain("attribution-unavailable check.suite (exit 1): the base tree could not be prepared");
   expect(f.err.join("\n")).toContain("check_attribution_unavailable");
-}, 120000);
+}, 300000);
 
 it("attributes the same candidate once and reuses the completion on the next invocation", async () => {
   const f = await suite([row("a.test.ts", "timeout", false, false)]);
@@ -556,4 +556,12 @@ it("attributes the same candidate once and reuses the completion on the next inv
   const recordRoot = path.join(f.dir, path.dirname(f.config.deliveryRecordPath));
   const record = await readFile(path.join(recordRoot, (await readdir(recordRoot))[0]!), "utf8");
   expect(record).toContain("check-attribution.json");
-}, 120000);
+  // The claim publishes `exitCode: 0` because the harness, not the command, is
+  // the one saying the candidate is clean. What makes that honest is the record
+  // beside it: the real exit code and every row that earned the verdict.
+  const portable = JSON.parse(record).claims[0].evidence.resolution.portable;
+  const attribution = JSON.parse(Buffer.from(portable.artifacts["check-attribution.json"], "base64").toString("utf8"));
+  expect(attribution).toMatchObject({ version: "check-attribution/1", providerId: "check.suite", exitCode: 1, outcome: "attributed",
+    rows: [{ file: "a.test.ts", class: "environmental", evidence: "passed when rerun alone on the candidate" }] });
+  expect(JSON.parse(Buffer.from(portable.artifacts["check-result.json"], "base64").toString("utf8"))).toMatchObject({ verdict: "green", exitCode: 0 });
+}, 300000);

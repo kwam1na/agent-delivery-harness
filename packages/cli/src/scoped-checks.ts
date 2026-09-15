@@ -116,14 +116,20 @@ export class ScopedChecks {
   }
   async submitMechanical(): Promise<void> { for (const submit of this.submissions) await submit(); this.submissions.length = 0; }
   /**
-   * Repository-relative paths the candidate's diff touches. A failure in one of
-   * these is the candidate's by construction, so an unreadable diff yields no
-   * paths only when the comparison itself is impossible — and then every residual
-   * stays `candidate` because nothing below can prove otherwise.
+   * The paths the candidate's diff touches, expressed relative to `cwd` — the
+   * directory the declared check runs in, and so the frame the file names in its
+   * log are written in. Git answers relative to the repository root, and a
+   * scoped check rooted anywhere below it would otherwise compare
+   * `packages/cli/src/a.test.ts` against `src/a.test.ts` and match nothing.
+   *
+   * A diff that cannot be read is reported as `unavailable`, never as an empty
+   * list: the ladder's first rung exists to keep a file the candidate edited out
+   * of reach of the reruns, and a silent empty list would disable it.
    */
-  private async touched(): Promise<readonly string[]> {
+  private async touched(cwd: string): Promise<readonly string[] | "unavailable"> {
     const diff = await runGitCommand(["git", "diff", "--name-only", this.candidate.base.mergeBaseSha, this.candidate.treeSha], { cwd: this.context.rootDir });
-    return diff.exitCode === 0 ? diff.stdout.split("\n").map(line => line.trim()).filter(Boolean) : [];
+    if (diff.exitCode !== 0) return "unavailable";
+    return diff.stdout.split("\n").map(line => line.trim()).filter(Boolean).map(line => path.relative(cwd === "." ? "." : cwd, line));
   }
   /**
    * Walk the attribution ladder for one failed declared check. Reruns carry the
@@ -145,7 +151,7 @@ export class ScopedChecks {
     let base: CheckSnapshot | undefined;
     try {
       return await attributeCheckFailure({
-        providerId: provider.id, exitCode, log, touched: await this.touched(),
+        providerId: provider.id, exitCode, log, touched: await this.touched(check.scope!.cwd),
         rerunCandidate: files => run(snapshot.rootDir, { ...snapshot.environment, ...injected }, files),
         rerunBase: async files => {
           if (base === undefined) {
@@ -187,6 +193,11 @@ export class ScopedChecks {
       const secrets = check.scope!.environment.filter(e => e.kind === "credential").map(e => this.context.env[e.name]).filter((v): v is string => !!v);
       const redact = (s: string) => secrets.reduce((text, secret) => text.split(secret).join("[REDACTED]"), s);
       payload = { outputs: [], durationMs: Date.now() - started, log: redact(`${result.stdout}\n${result.stderr}`).slice(-4000), dependencyDigest: snapshot.dependencyDigest };
+      // Retain the declared command's own outputs before anything reruns: the
+      // attribution ladder below clears and regenerates them, and a retained
+      // output produced by a one-file rerun would attest the declared check
+      // while covering a fraction of it.
+      const outputs = await captureCheckOutputSnapshots(snapshot.rootDir, check.outputs ?? []);
       // A cancelled invocation is never attributed: an interruption is the
       // operator's, and the ladder below would spend the reruns it asked to stop.
       if (this.context.signal?.aborted) throw new CheckSnapshotError("check_command_failed", `Declared scoped check ${provider.id} did not complete successfully (exit ${result.code}).`);
@@ -202,7 +213,6 @@ export class ScopedChecks {
         }
       }
       await snapshot.verify();
-      const outputs = await captureCheckOutputSnapshots(snapshot.rootDir, check.outputs ?? []);
       if (!outputs || outputs.some(o => secrets.some(secret => Buffer.from(o.base64, "base64").includes(Buffer.from(secret))))) throw new CheckSnapshotError("check_output_missing", "A retained output is absent, corrupt, escaped or contains credential bytes.");
       payload = { ...payload, outputs };
       await store.finish(attempt, "passed", payload); terminal = true;

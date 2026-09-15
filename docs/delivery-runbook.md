@@ -188,20 +188,23 @@ failing file alone on the candidate snapshot, rerunning whatever still fails on 
 snapshot built at the recorded base, and classifying every row:
 
 - `candidate` — the candidate's own diff touches the file (never reclassified,
-  whatever the reruns say), or the failure reproduces alone while the base passes
-  it with a real assertion. Any such row keeps the gate red.
-- `pre-existing` — the base tree fails the same file.
-- `environmental` — the file passes when rerun alone, or its failure carries no
-  assertion (a bare timeout or a spawn stall) and the diff does not touch it.
+  whatever the reruns say), or the failure reproduces alone and the base tree
+  passes it. The signal in the original log does not soften this: a file that
+  timed out in a crowded run and then failed alone is still the candidate's.
+  Any such row keeps the gate red.
+- `pre-existing` — the base tree fails that same file.
+- `environmental` — the file passes when rerun alone on the candidate.
 
 A red whose every row is `pre-existing` or `environmental` is admitted, and the
 gate prints `attributed <provider> (exit N): …` with one line per row. The real
 exit code and every row travel with the evidence as `check-attribution.json`, so
-the delivery record carries why a red was admitted. Three things keep this from
+the delivery record carries why a red was admitted. Four things keep this from
 turning a genuine failure green: a base tree that cannot be prepared exits 1 with
 `check_attribution_unavailable`, a log that names no failing test file is
-`candidate`, and the rerun budget (6) leaves anything it did not examine
-`candidate`. A check command that reads the newline-separated
+`candidate`, a candidate diff that cannot be read leaves every row `candidate`
+(the touched-file guard cannot run, so nothing may be reclassified), and the
+rerun budget (6) leaves anything it did not examine `candidate` — including the
+base comparison it could not afford. A check command that reads the newline-separated
 `DELIVERY_CHECK_ATTRIBUTION_FILES` reruns only those files; one that ignores it
 reruns everything and reaches the same verdict more slowly.
 

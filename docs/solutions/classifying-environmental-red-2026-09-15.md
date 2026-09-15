@@ -25,9 +25,12 @@ in an order where each answer is cheap and decisive:
 2. **Does it pass when rerun alone?** Then the failure was contention, not code.
 3. **Does the pristine base fail the same file?** Then it is not this delivery's.
 
-What is left — reproduces alone, base passes, carries an assertion — is a
-defect. What is left but carries *no* assertion (a bare timeout, a spawn stall)
-in an untouched file is the environment again.
+What is left — reproduces alone, base passes — is a defect, whatever the
+original log's signal said. The signal is read once, from the crowded run that
+provoked the contention, so a file that timed out there and then failed alone on
+a real assertion still carries `timeout`; forgiving it would forgive exactly the
+hang, deadlock or unawaited promise this ladder is most likely to meet. The
+signal survives only as evidence text on the row.
 
 ## Why it is safe to admit a red
 
@@ -35,7 +38,10 @@ Because every direction the ladder can fail in leaves the row `candidate`:
 
 - a check log it cannot parse names no rows, so the whole check stays candidate;
 - a base tree it cannot prepare is `attribution-unavailable`, which exits 1;
-- a bounded rerun budget marks everything it did not examine candidate.
+- a bounded rerun budget marks everything it did not examine candidate,
+  including the base comparison it cannot afford;
+- a candidate diff it cannot read disables the touched-file rung, so it
+  reclassifies nothing at all.
 
 The asymmetry is the whole design. An attribution that is wrong in the
 conservative direction costs one manual rerun; wrong in the other direction it

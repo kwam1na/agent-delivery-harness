@@ -62,19 +62,78 @@ it("never reclassifies a failure in a file the diff touches and names it first",
   expect(attribution.summary).toMatch(/^candidate .*b\.test\.ts/);
 });
 
-it("classifies a persistent failure the base tree passes as candidate unless it is a bare timeout", async () => {
-  const persistentAssertion = await ladder({
-    log: assertion("a.test.ts"),
-    rerunCandidate: async () => ({ code: 1, log: assertion("a.test.ts") }),
+it.each(["assertion", "timeout"] as const)("classifies a persistent %s failure the base tree passes as candidate", async signal => {
+  const emit = signal === "timeout" ? timeout : assertion;
+  const attribution = await ladder({
+    log: emit("a.test.ts"),
+    rerunCandidate: async () => ({ code: 1, log: emit("a.test.ts") }),
     rerunBase: async () => ({ code: 0, log: "" }),
   });
-  expect(persistentAssertion.rows).toEqual([{ file: "a.test.ts", class: "candidate", evidence: "the failure reproduces alone and the base tree passes it" }]);
-  const persistentTimeout = await ladder({
+  expect(attribution.outcome).toBe("candidate");
+  expect(attribution.rows).toEqual([{ file: "a.test.ts", class: "candidate", evidence: `the failure reproduces alone (${signal}) and the base tree passes it` }]);
+});
+
+it("keeps a residual candidate when the base run fails without naming any file", async () => {
+  const attribution = await ladder({
     log: timeout("a.test.ts"),
     rerunCandidate: async () => ({ code: 1, log: timeout("a.test.ts") }),
+    rerunBase: async () => ({ code: 1, log: "the base image could not be built" }),
+  });
+  expect(attribution.outcome).toBe("candidate");
+  expect(attribution.rows[0]!.class).toBe("candidate");
+});
+
+it("reads a FAIL block with no recognizable marker as an unknown signal, and still calls it the candidate's", async () => {
+  expect(parseCheckFailure(" FAIL  a.test.ts > does a thing\nthe worker said something nobody has taught this parser\n")).toEqual([
+    { file: "a.test.ts", signal: "unknown" },
+  ]);
+  const attribution = await ladder({
+    log: " FAIL  a.test.ts > does a thing\nthe worker said something nobody has taught this parser\n",
+    rerunCandidate: async () => ({ code: 1, log: " FAIL  a.test.ts\n?\n" }),
     rerunBase: async () => ({ code: 0, log: "" }),
   });
-  expect(persistentTimeout.rows).toEqual([{ file: "a.test.ts", class: "environmental", evidence: "the failure carries no assertion and the diff does not touch this file" }]);
+  expect(attribution.outcome).toBe("candidate");
+  expect(attribution.rows).toEqual([{ file: "a.test.ts", class: "candidate", evidence: "the failure reproduces alone (unknown) and the base tree passes it" }]);
+});
+
+it("calls a residual the base tree does not name candidate, even when the base run is red for another file", async () => {
+  const attribution = await ladder({
+    log: `${assertion("a.test.ts")}${assertion("b.test.ts")}`,
+    rerunCandidate: async () => ({ code: 1, log: "" }),
+    rerunBase: async () => ({ code: 1, log: assertion("b.test.ts") }),
+  });
+  expect(attribution.outcome).toBe("candidate");
+  expect(attribution.rows).toEqual([
+    { file: "a.test.ts", class: "candidate", evidence: "the failure reproduces alone (assertion) and the base tree passes it" },
+    { file: "b.test.ts", class: "pre-existing", evidence: "the base tree fails the same file" },
+  ]);
+});
+
+it("never spends a rerun on the base comparison once the budget is gone", async () => {
+  const files = Array.from({ length: ATTRIBUTION_RERUN_LIMIT }, (_unused, index) => `f${index}.test.ts`);
+  let baseRuns = 0;
+  const attribution = await ladder({
+    log: files.map(assertion).join(""),
+    rerunCandidate: async () => ({ code: 1, log: "" }),
+    rerunBase: async () => { baseRuns++; return { code: 0, log: "" }; },
+  });
+  expect(baseRuns).toBe(0);
+  expect(attribution.budget).toEqual({ reruns: ATTRIBUTION_RERUN_LIMIT, limit: ATTRIBUTION_RERUN_LIMIT, exhausted: true });
+  expect(attribution.outcome).toBe("candidate");
+  expect(attribution.rows.every(row => row.class === "candidate" && row.evidence === "the rerun budget was exhausted before the base comparison")).toBe(true);
+});
+
+it("reclassifies nothing when the candidate's diff cannot be read", async () => {
+  let reruns = 0;
+  const attribution = await ladder({
+    log: `${timeout("a.test.ts")}${assertion("b.test.ts")}`,
+    touched: "unavailable",
+    rerunCandidate: async () => { reruns++; return { code: 0, log: "" }; },
+  });
+  expect(reruns).toBe(0);
+  expect(attribution.outcome).toBe("candidate");
+  expect(attribution.rows.map(row => [row.file, row.class])).toEqual([["a.test.ts", "candidate"], ["b.test.ts", "candidate"]]);
+  expect(attribution.rows[0]!.evidence).toBe("the candidate's diff could not be read, so no failure can be reclassified");
 });
 
 it("refuses to attribute a red it cannot read or a base tree it cannot reach", async () => {

@@ -58,8 +58,13 @@ export interface AttributionRequest {
   readonly providerId: string;
   readonly exitCode: number;
   readonly log: string;
-  /** Repository-relative paths the candidate's diff touches. */
-  readonly touched: readonly string[];
+  /**
+   * The paths the candidate's diff touches, in the same frame as the files the
+   * check log names. `unavailable` when the diff could not be read at all: the
+   * guard that protects touched files cannot then run, so the ladder refuses to
+   * reclassify anything rather than silently forgiving an unguarded file.
+   */
+  readonly touched: readonly string[] | "unavailable";
   /** Run the declared check over exactly these files on the candidate tree. */
   rerunCandidate(files: readonly string[]): Promise<RerunOutcome>;
   /** The same, on a tree prepared at the recorded base; `unavailable` when no such tree can be built. */
@@ -134,6 +139,14 @@ export async function attributeCheckFailure(request: AttributionRequest): Promis
     return finish("candidate", [{ file: "(whole check)", class: "candidate", evidence: "the check log names no failing test file" }]);
   }
 
+  // An empty touched list and an unreadable diff look identical to the loop
+  // below, and the difference is the whole guard: with no diff, a file the
+  // candidate edited is indistinguishable from one it never saw, and a rerun
+  // that happens to pass would forgive it. Fail closed instead.
+  if (touched === "unavailable") {
+    return finish("candidate", failures.map(failure => ({ file: failure.file, class: "candidate" as const, evidence: "the candidate's diff could not be read, so no failure can be reclassified" })));
+  }
+
   const rows: AttributedRow[] = [];
   const residual: ParsedFailure[] = [];
   for (const failure of failures) {
@@ -164,13 +177,16 @@ export async function attributeCheckFailure(request: AttributionRequest): Promis
 
   const baseFailed = new Set(parseCheckFailure(base.log).map(failure => failure.file));
   for (const failure of residual) {
-    if (base.code !== 0 && baseFailed.has(failure.file)) {
-      rows.push({ file: failure.file, class: "pre-existing", evidence: "the base tree fails the same file" });
-    } else if (failure.signal === "timeout" || failure.signal === "spawn") {
-      rows.push({ file: failure.file, class: "environmental", evidence: "the failure carries no assertion and the diff does not touch this file" });
-    } else {
-      rows.push({ file: failure.file, class: "candidate", evidence: "the failure reproduces alone and the base tree passes it" });
-    }
+    // A residual the base tree passes is the candidate's, whatever the original
+    // log's signal said. The signal is read once, from the crowded full run, and
+    // a file that timed out there and then failed alone on a real assertion
+    // still carries `timeout`; believing it would forgive exactly the hang,
+    // deadlock or unawaited promise this ladder is most likely to meet. A row
+    // whose reruns say "fails on the candidate, passes on the base" has been
+    // examined, and the examination says candidate.
+    rows.push(base.code !== 0 && baseFailed.has(failure.file)
+      ? { file: failure.file, class: "pre-existing", evidence: "the base tree fails the same file" }
+      : { file: failure.file, class: "candidate", evidence: `the failure reproduces alone (${failure.signal}) and the base tree passes it` });
   }
   return finish(rows.some(row => row.class === "candidate") ? "candidate" : "attributed", rows);
 }
