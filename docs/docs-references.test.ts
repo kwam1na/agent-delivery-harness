@@ -1339,6 +1339,24 @@ describe("the rules the documentation states in prose", () => {
       ).not.toContain(`\`${refused}\``);
     }
 
+    // The page's inline cost literal — the shape an agent copies when its host
+    // meters nothing — is not an `emit` line, so the payload harvester never
+    // reaches it, and its coverage is quoted inside one inline-code span, so no
+    // backtick-delimited token exists for the refusal above to see. Three
+    // guards passed over it and none could. It goes through the same validator
+    // the harvested commands do.
+    const inlineCosts = [...raw.matchAll(/`(\{"coverage"[\s\S]*?\})`/g)].map((match) =>
+      match[1]!.replace(/\s+/g, "").split("<actual-host-id>").join("claude-code"),
+    );
+    expect(inlineCosts.length, "docs/delivery-runbook.md no longer prints a cost shape inline").toBeGreaterThan(0);
+    for (const shape of inlineCosts) {
+      expect(shape, `the runbook's inline cost shape still carries a placeholder: ${shape}`).not.toMatch(/[<$]/);
+      expect(
+        validateRunEventInput(closedPayload({ cost: JSON.parse(shape) })).ok,
+        `docs/delivery-runbook.md prints an inline cost the frozen grammar refuses: ${shape}`,
+      ).toBe(true);
+    }
+
     // The two shapes the paragraph describes, each checked against the arm it
     // describes. The unreported arm carrying a zero total, and the measured arm
     // with `reportedBy` dropped, are the two mutations that make the page
@@ -1357,8 +1375,16 @@ describe("the rules the documentation states in prose", () => {
     expect(runbook, "docs/delivery-runbook.md no longer states where a round's coverage is recorded").toContain(
       "`coverage` is where that shows",
     );
+    // The whole clause, in order: the short form was satisfied by its own
+    // inversion ("as the cost rather than as a floor on what the round cost"),
+    // which reads as the opposite instruction and matched the same substring.
     expect(runbook, "docs/delivery-runbook.md no longer says a round's total is a floor rather than the cost").toContain(
-      "floor on what the round cost",
+      "Read a round's total as a floor on what the round cost rather than as the cost",
+    );
+    // The same sentence's second clause. A figure that may be added across
+    // hosts is a figure the page has stopped calling a per-host floor.
+    expect(runbook, "docs/delivery-runbook.md no longer refuses totals added across hosts").toContain(
+      "do not add totals across rounds that different hosts reported",
     );
     // `reportedBy` is required in BOTH arms, so both arms are probed: the
     // measured one above, and the unreported one here. The page states the
@@ -1489,7 +1515,15 @@ describe("the corrections the delivery runbook carries", () => {
    * own text.
    */
   const briefBlock = (): string => {
-    const fence = /```text\n## Checks this lens runs\n([\s\S]*?)```/.exec(textOf("docs/delivery-runbook.md"));
+    const page = textOf("docs/delivery-runbook.md");
+    // Matched by first occurrence, so uniqueness is part of the pin: a verbatim
+    // decoy inserted above would absorb every assertion below while the real
+    // fence — the one an executor pastes from — went unread.
+    expect(
+      (page.match(/```text\n## Checks this lens runs\n/g) ?? []).length,
+      "docs/delivery-runbook.md carries more than one lens-brief block, so the pins below read only the first",
+    ).toBe(1);
+    const fence = /```text\n## Checks this lens runs\n([\s\S]*?)```/.exec(page);
     expect(fence, "docs/delivery-runbook.md no longer carries the verbatim lens-brief block").not.toBeNull();
     return fence![1]!.replace(/\s+/g, " ");
   };
@@ -1651,13 +1685,20 @@ describe("the corrections the delivery runbook carries", () => {
         .map((sentence) => sentence.trim())
         .filter((sentence) => subject.test(sentence));
     expect(
-      briefSentencesAbout(/`npm run check`|full suite/i),
+      briefSentencesAbout(/`npm run check`|full suite|whole suite|entire suite|every test file in the repository/i),
       "the verbatim lens-brief block says something about the full suite that no assertion here pins",
     ).toEqual([
       "Do not run the repository's full suite: `npm run check` belongs to the delivery's tail, once, outside this round.",
     ]);
     expect(
-      briefSentencesAbout(/widen/i),
+      briefSentencesAbout(/checkout|worktree/i),
+      "the verbatim lens-brief block says something about where the lens works that no assertion here pins",
+    ).toEqual([
+      "Run a scoped check set in your own checkout.",
+      "This checkout is yours for the whole delivery and is re-pointed at each round's candidate, so its dependencies are already installed.",
+    ]);
+    expect(
+      briefSentencesAbout(/widen|vitest run [^`\s]*\//i),
       "the verbatim lens-brief block says something about widening that no assertion here pins",
     ).toEqual([
       "Needing evidence beyond that set is ordinary; widening the run is not.",
