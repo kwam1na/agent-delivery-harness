@@ -273,7 +273,10 @@ no shared context, the filled round brief from
 in its prompt. Realize the round's two lenses in parallel — they share no
 context, so serializing them buys nothing and doubles the round's wall clock —
 unless the machine is already thrashing under sibling deliveries, in which case
-run them one after the other and say so in the round's notes.
+run them one after the other and record why in a `decision.recorded`. Neither
+round event has a free-text member to put it in: `review.round.closed` takes
+exactly the six listed below, and `decision.recorded` — `fork`, `choice`, and an
+optional `cited` — is where a departure from this page is narrated.
 
 | lens id | persona id | charter, verbatim into the brief |
 |---|---|---|
@@ -330,10 +333,30 @@ are required:
 git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-at" <candidate-commit-sha>
 git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-oc" <candidate-commit-sha>
 cd "$REPO/.worktrees/v26-0000-at" && npm install
+cd "$REPO/.worktrees/v26-0000-oc" && npm install
 
 # every round after the first, in each lens worktree
+git -C "$REPO/.worktrees/v26-0000-at" status --porcelain   # must be empty first
 git -C "$REPO/.worktrees/v26-0000-at" checkout --detach <candidate-commit-sha>
 ```
+
+**Both** lens worktrees are installed, not only the one that plants mutations.
+The outcome-correctness lens is a read-only reviewer of the candidate and an
+executor of the scoped checks below, and it runs those in its own worktree; a
+`-oc` created without `npm install` fails on the lens's first `npm run
+typecheck` with the same `TS2307` that a skipped conditional reinstall produces,
+and the lens has no way to tell the two apart.
+
+**The empty `status --porcelain` above is a precondition, not a diagnostic.**
+Per-round worktrees were pristine because they were new. A reused one is
+pristine only if the previous round put it back, and this page documents the
+case where it did not: an interrupted lens leaves its plant in place, because
+the restore is the lens's own last step. `git checkout --detach` carries an
+unconflicting local modification straight across, and the lens's own start-of-
+round identity check does not catch it — that check compares `HEAD^{tree}`, and
+a dirty working tree does not move `HEAD`. So the next round reads a mutated
+tree as the candidate. Restore the paths `status --porcelain` names before
+re-pointing.
 
 `node_modules` is untracked, so it survives the re-point and the reinstall
 becomes conditional rather than routine: run `npm install` in a lens worktree
@@ -381,13 +404,20 @@ worktree as your own.
 
 ### The checks a lens runs
 
-A lens runs, inside its own lens worktree, exactly the scoped set §3 defines for
-the executor: `npm run typecheck && npm run sensor && npm run sensor:cli` — plus
-`npm run sensor:policy` when the candidate touches `harness.config.ts` — and
+A lens runs, inside its own lens worktree, the scoped set §3 defines for the
+executor: `npm run typecheck && npm run sensor && npm run sensor:cli`, and
 `npx vitest run` over every test file the candidate's diff touches together with
 every test file that imports a module the diff changed. It does not run
 `npm run check`. The full suite runs once per delivery, in the serialized tail,
 and a lens running it is the same hour of shared machine spent twice over.
+
+§3's out-of-`check` sensors come with it, on §3's own triggers rather than on a
+narrower one: `npm run sensor:policy` when the candidate touches policy —
+`.agents/policy/` or `harness.config.ts` — and `npm run sensor:standalone` and
+`npm run qualify:provider` when it touches packaging or the provider. Naming
+only `harness.config.ts` there reads as the whole trigger and is not: the
+policy-projection check also owns the installed-generation integrity assertion
+that a candidate editing `.agents/policy/` can move.
 
 **A lens that wants evidence beyond that set names the extra files.** The
 escalation is a list of paths, each with what that file is evidence *for*;
@@ -403,9 +433,13 @@ defect, not the lens.
 through a symlink into `.agent-skills/generations/<digest>/`, whose
 `release-manifest.json` pins every file's `sha256` and whose own
 `contentSha256` covers the set; editing the template in this checkout changes
-bytes the installed generation is receipted against, and the provider
-qualification is what notices. The template's own copy of this rule belongs to
-the agent-skills repository and is tracked there. Until it ships, the executor
+bytes the installed generation is receipted against. `npm run sensor:policy` is
+what notices, rejecting with `installed_generation_file_drift`; the provider
+qualification does not, because it pins two installed provider modules and never
+reads the skills tree. The template's own copy of this rule belongs to the
+agent-skills repository, where it is filed as
+[`kwam1na/agent-skills#69`](https://github.com/kwam1na/agent-skills/issues/69).
+Until it ships, the executor
 appends the block below to the filled brief, verbatim, for **both** lenses of
 **every** round — it is written as brief text, addressed to the lens, and takes
 only the two fills at its end:
@@ -417,7 +451,9 @@ Run a scoped check set in your own checkout. Do not run the repository's full
 suite: `npm run check` belongs to the delivery's tail, once, outside this round.
 
 - `npm run typecheck && npm run sensor && npm run sensor:cli`, adding
-  `npm run sensor:policy` when the candidate changes `harness.config.ts`.
+  `npm run sensor:policy` when the candidate touches `.agents/policy/` or
+  `harness.config.ts`, and `npm run sensor:standalone` or
+  `npm run qualify:provider` when it touches packaging or the provider.
 - `npx vitest run <file>` for every test file the candidate's diff touches and
   every test file that imports a module the diff changed.
 
