@@ -43,7 +43,15 @@ import {
   type SpineCollector,
   type SpineVerdict,
 } from "./grammar.ts";
-import { DELIVERY_STATES, HOST_ACTIVITY_STATES, INTAKE_STATES, JOURNALS, classifyEventKind } from "./vocabulary.ts";
+import {
+  DELIVERY_STATES,
+  EVENT_VOCABULARY,
+  HOST_ACTIVITY_STATES,
+  INTAKE_STATES,
+  JOURNALS,
+  classifyEventKindIn,
+  type EventKindEntry,
+} from "./vocabulary.ts";
 
 export const JOURNAL_ENTRY_SPEC = "journal-entry/1";
 
@@ -636,6 +644,24 @@ const ENVELOPE_RULES: readonly MemberRule[] = [
 ];
 
 export function validateJournalEntry(value: unknown): SpineVerdict {
+  return validateJournalEntryIn(EVENT_VOCABULARY, value);
+}
+
+/**
+ * The same validation against a SUPPLIED enumeration, so the ordering this
+ * file's header states — a reserved pair rejects `reserved_kind` BEFORE any
+ * payload question is asked — is reachable by a test. No pair is reserved in
+ * the frozen vocabulary today, so without this seam the reserved branch is
+ * unreachable and its removal is unobservable: a reserved pair would fall
+ * through to the payload table, miss, and be reported as `unknown_kind`, which
+ * says the pair is outside the vocabulary when it is enumerated and owned.
+ * `validateJournalEntry` is the frozen export and delegates; the freeze is
+ * unchanged.
+ */
+export function validateJournalEntryIn(
+  vocabulary: readonly EventKindEntry[],
+  value: unknown,
+): SpineVerdict {
   const collector = createSpineCollector();
   if (!isSpineRecord(value)) {
     collector.emit("not_an_object", "", "expected a JSON object");
@@ -662,7 +688,7 @@ export function validateJournalEntry(value: unknown): SpineVerdict {
   const kind = value["kind"];
   if (typeof journal !== "string" || typeof kind !== "string") return collector.verdict();
 
-  const classification = classifyEventKind(journal, kind);
+  const classification = classifyEventKindIn(vocabulary, journal, kind);
   if (classification.status === "reserved") {
     collector.emit(
       "reserved_kind",

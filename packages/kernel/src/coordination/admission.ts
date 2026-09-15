@@ -52,8 +52,16 @@ export interface CoordinationAdmissionView {
   readonly deliveryId: string;
   /** Connector-provisioned key ids this installation trusts, from local config. */
   readonly trustedKeyIds: readonly string[];
-  /** Channel digests currently established, from the transport. */
-  readonly establishedChannelDigests: readonly string[];
+  /**
+   * THE established mutually authenticated channel this view is scoped to,
+   * from the transport. Singular, and that is the point: `consumedNonces` and
+   * `highestSequence` below are rebuilt per channel by `replayLedgerOf`, so a
+   * view carrying a SET of acceptable channels beside a single channel's
+   * ledger admits a message captured on one established channel against
+   * another established channel's replay ledger. One view, one channel, one
+   * ledger — an installation with two live channels builds two views.
+   */
+  readonly establishedChannelDigest: string;
   /**
    * The release-signing trust root's key ids. A coordination key that is also
    * a release-signing key is refused outright rather than accepted: the
@@ -62,7 +70,7 @@ export interface CoordinationAdmissionView {
    * where it is observable.
    */
   readonly releaseSigningKeyIds: readonly string[];
-  /** The replay ledger: nonces already mirrored for this delivery. */
+  /** The replay ledger: nonces already mirrored on THIS channel for this delivery. */
   readonly consumedNonces: ReadonlySet<string>;
   /**
    * The highest sequence already mirrored on this channel, or -1 when none
@@ -141,12 +149,17 @@ export function admitCoordinationMessage(value: unknown, view: CoordinationAdmis
       refusal("channel_unrecognized", "/authentication/keyId", "no connector-provisioned key with this id is trusted by this installation"),
     );
   }
-  if (!view.establishedChannelDigests.includes(channelDigest)) {
+  // Equality, not membership: the message must be bound to the ONE channel
+  // whose replay ledger this view carries. A membership test against a set of
+  // established channels would admit a verbatim replay captured on channel A
+  // against channel B's nonce set and high-water mark, which is the exact
+  // replay the ledger exists to refuse.
+  if (channelDigest !== view.establishedChannelDigest) {
     refusals.push(
       refusal(
         "channel_unrecognized",
         "/authentication/channelDigest",
-        "the message is not bound to an established mutually authenticated channel; a valid key id on an unbound channel is a replay",
+        "the message is not bound to the established mutually authenticated channel this view is scoped to; a valid key id on any other channel is a replay",
       ),
     );
   }

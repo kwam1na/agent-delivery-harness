@@ -198,14 +198,38 @@ export type EventClassification =
  * can say so without ever accepting the pair.
  */
 export function classifyEventKind(journal: string, kind: string): EventClassification {
-  const match = EVENT_VOCABULARY.find((candidate) => candidate.journal === journal && candidate.kind === kind);
+  return classifyEventKindIn(EVENT_VOCABULARY, journal, kind);
+}
+
+/**
+ * The same classification against a SUPPLIED enumeration. It exists so the
+ * reserved branch is reachable by a test.
+ *
+ * No pair is reserved in `EVENT_VOCABULARY` today — every enumerated pair has
+ * been defined by its owning unit — and the branch is still live because it is
+ * the path the next tranche takes. That combination is exactly the shape that
+ * rots: a branch nothing can reach is a branch nothing notices the loss of,
+ * and deleting it downgrades the next tranche's reserved pair from
+ * `reserved_kind` ("enumerated, owned, payload not yet defined") to
+ * `unknown_kind` ("outside the frozen vocabulary") — two different facts with
+ * two different remedies. The enumeration is a parameter here rather than a
+ * fixture layer over the frozen one: `classifyEventKind` is the frozen export
+ * and delegates, so the freeze is unchanged and the branch is falsifiable.
+ */
+export function classifyEventKindIn(
+  vocabulary: readonly EventKindEntry[],
+  journal: string,
+  kind: string,
+): EventClassification {
+  const match = vocabulary.find((candidate) => candidate.journal === journal && candidate.kind === kind);
   if (match !== undefined) {
     return match.status === "active"
       ? { status: "active", observationOnly: match.observationOnly }
       : { status: "reserved" };
   }
-  const knownIn = EVENT_VOCABULARY.filter((candidate) => candidate.kind === kind).map(
-    (candidate) => candidate.journal,
-  );
+  const knownIn = vocabulary.filter((candidate) => candidate.kind === kind).map((candidate) => candidate.journal);
   return { status: "unknown", knownIn };
 }
+
+/** Builds one vocabulary entry. Exported so a caller can supply an enumeration to `classifyEventKindIn`. */
+export const eventKindEntry = entry;

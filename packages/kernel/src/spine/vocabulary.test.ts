@@ -17,6 +17,8 @@ import {
   SUSPENDED_DELIVERY_STATES,
   TERMINAL_DELIVERY_STATES,
   classifyEventKind,
+  classifyEventKindIn,
+  eventKindEntry,
 } from "./vocabulary.ts";
 
 describe("the frozen journals", () => {
@@ -228,6 +230,35 @@ describe("classifyEventKind", () => {
 
   it("classifies a kind outside the enumeration as unknown", () => {
     expect(classifyEventKind("delivery", "delivery.invented")).toEqual({ status: "unknown", knownIn: [] });
+  });
+
+  // The reserved branch, falsified over a supplied enumeration. No pair is
+  // reserved in `EVENT_VOCABULARY` today, so through the frozen export the
+  // branch cannot be reached and its collapse into the active arm is
+  // unobservable — a reserved pair would be classified `active` and, with no
+  // payload table behind it, silently downgraded by the validator.
+  it("classifies a reserved pair as reserved, over a supplied enumeration", () => {
+    const NEXT_TRANCHE = [
+      ...EVENT_VOCABULARY,
+      eventKindEntry("delivery", "delivery.next.tranche.recorded", "reserved", false, "the next tranche"),
+    ];
+    expect(classifyEventKindIn(NEXT_TRANCHE, "delivery", "delivery.next.tranche.recorded")).toEqual({
+      status: "reserved",
+    });
+    // Anti-vacuity: the same pair enumerated as active classifies as active,
+    // and absent from the enumeration classifies as unknown. The status is
+    // what is read, not the pair.
+    expect(
+      classifyEventKindIn(
+        [...EVENT_VOCABULARY, eventKindEntry("delivery", "delivery.next.tranche.recorded", "active", true)],
+        "delivery",
+        "delivery.next.tranche.recorded",
+      ),
+    ).toEqual({ status: "active", observationOnly: true });
+    expect(classifyEventKind("delivery", "delivery.next.tranche.recorded")).toEqual({
+      status: "unknown",
+      knownIn: [],
+    });
   });
 
   it("classifies a known kind in the wrong journal as unknown — pairs, not a kind→journal map", () => {

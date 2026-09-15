@@ -5,8 +5,8 @@
  * rejects as unknown; an active kind's payload is a closed member table.
  */
 import { describe, expect, it } from "vitest";
-import { JOURNAL_ENTRY_SPEC, validateJournalEntry } from "./journal.ts";
-import { EVENT_VOCABULARY } from "./vocabulary.ts";
+import { JOURNAL_ENTRY_SPEC, validateJournalEntry, validateJournalEntryIn } from "./journal.ts";
+import { EVENT_VOCABULARY, eventKindEntry, type EventKindEntry } from "./vocabulary.ts";
 
 const DIGEST = "a".repeat(64);
 const OID = "b".repeat(40);
@@ -56,6 +56,47 @@ describe("the journal-entry envelope", () => {
   // silently left behind.
   it("carries no reserved pair today — every enumerated pair has been defined by its owning unit", () => {
     expect(EVENT_VOCABULARY.filter((candidate) => candidate.status === "reserved")).toEqual([]);
+  });
+
+  // The reserved branch itself, falsified. The enumeration above carries no
+  // reserved pair, so through the frozen export that branch is unreachable —
+  // and a branch nothing can reach is a branch whose deletion nothing notices.
+  // `validateJournalEntryIn` takes the enumeration as a parameter for exactly
+  // this row: the next tranche's reserved pair must reject `reserved_kind`
+  // BEFORE the payload question is asked, not fall through to `unknown_kind`,
+  // which says the pair is outside the vocabulary when it is enumerated, owned,
+  // and merely undefined.
+  it("rejects a reserved pair as reserved_kind before any payload question — with a payload and without one", () => {
+    const NEXT_TRANCHE: readonly EventKindEntry[] = [
+      ...EVENT_VOCABULARY,
+      eventKindEntry("delivery", "delivery.next.tranche.recorded", "reserved", false, "the next tranche"),
+    ];
+    const reserved = (overrides: Record<string, unknown>): Record<string, unknown> =>
+      entry({ kind: "delivery.next.tranche.recorded", ...overrides });
+    const codesIn = (vocabulary: readonly EventKindEntry[], value: unknown): string[] => {
+      const verdict = validateJournalEntryIn(vocabulary, value);
+      return verdict.ok ? [] : verdict.rejections.map((rejection) => rejection.code);
+    };
+    // A payload that would satisfy some other kind's table, an empty payload,
+    // and no payload member at all: the same single rejection each time.
+    expect(codesIn(NEXT_TRANCHE, reserved({ payload: { treeSha: OID, branchRefValue: OID } }))).toEqual([
+      "reserved_kind",
+    ]);
+    expect(codesIn(NEXT_TRANCHE, reserved({ payload: {} }))).toEqual(["reserved_kind"]);
+    const withoutPayload = reserved({});
+    delete withoutPayload["payload"];
+    expect(codesIn(NEXT_TRANCHE, withoutPayload)).toEqual(["reserved_kind"]);
+    // Anti-vacuity, twice. `reserved_kind` is the RESERVED status speaking and
+    // nothing else: the identical pair enumerated as ACTIVE reports the absent
+    // payload table instead, and the frozen enumeration — which does not carry
+    // the pair — reports it as outside the vocabulary. Three enumerations,
+    // three distinct codes, one unchanged entry.
+    const PROMOTED: readonly EventKindEntry[] = [
+      ...EVENT_VOCABULARY,
+      eventKindEntry("delivery", "delivery.next.tranche.recorded", "active"),
+    ];
+    expect(codesIn(PROMOTED, reserved({ payload: {} }))).toEqual(["unknown_kind"]);
+    expect(codesOf(reserved({ payload: {} }))).toEqual(["unknown_kind"]);
   });
 
   it("rejects an out-of-vocabulary kind as unknown", () => {

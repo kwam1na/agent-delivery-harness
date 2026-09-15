@@ -39,7 +39,7 @@ import {
 import { COORDINATION_PORT_UNBOUND_CODE, UNBOUND_COORDINATION_PORT } from "./port.ts";
 import { createCoordinationSimulator } from "./simulator.ts";
 import { OBSERVATION_ONLY_KINDS } from "../spine/vocabulary.ts";
-import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";
+import { JOURNAL_ENTRY_SPEC, validateJournalEntry } from "../spine/journal.ts";
 import { reduceDeliveryJournal } from "../spine/reducer.ts";
 import { evaluateCanonicalRecheck } from "../checkpoint/recheck.ts";
 import { evaluateMigrationConsumption } from "../facade/migration.ts";
@@ -69,7 +69,7 @@ const view = (overrides: Partial<CoordinationAdmissionView> = {}): CoordinationA
   repositoryId: "repo-1",
   deliveryId: "delivery-1",
   trustedKeyIds: [KEY],
-  establishedChannelDigests: [CHANNEL],
+  establishedChannelDigest: CHANNEL,
   releaseSigningKeyIds: [RELEASE_KEY],
   consumedNonces: new Set<string>(),
   highestSequence: 3,
@@ -443,6 +443,37 @@ describe("the replay ledger rebuilt from the journal", () => {
     expect(replayLedgerOf([], CHANNEL)).toEqual({ consumedNonces: new Set(), highestSequence: -1 });
     expect(admitCoordinationMessage(simulator.mint({ sequence: 0 }), view({ highestSequence: -1 })).ok).toBe(true);
   });
+
+  // Round 4 found this one. The two channel-scoped members below it
+  // (`consumedNonces`, `highestSequence`) are rebuilt per channel by
+  // `replayLedgerOf`, but the channel check was a MEMBERSHIP test against a
+  // set of established digests — so a verbatim replay captured on one
+  // established channel was re-admitted against another established channel's
+  // ledger, which has never seen that nonce and sits below that sequence.
+  it("binds a message to the one channel its view's ledger was rebuilt from — a replay captured on another established channel is refused", () => {
+    const simulator = createCoordinationSimulator(simulatorOptions);
+    // Two channels are live at once, same connector key, both established.
+    // A message is admitted and mirrored on the other one.
+    const onOther = simulator.mint({ sequence: 7, channelDigest: OTHER_CHANNEL });
+    expect(
+      admitCoordinationMessage(onOther, view({ establishedChannelDigest: OTHER_CHANNEL, highestSequence: 6 })).ok,
+    ).toBe(true);
+
+    // The same bytes are replayed here. This channel's ledger, rebuilt from
+    // this channel's records alone, has never seen the nonce and sits below
+    // the sequence — so neither replay member can refuse it, and the channel
+    // binding is the only thing that can.
+    const ledger = replayLedgerOf([mirroredFrom(onOther)], CHANNEL);
+    expect(ledger.consumedNonces.has(onOther.nonce)).toBe(false);
+    expect(onOther.sequence).toBeGreaterThan(ledger.highestSequence);
+    const rebuilt = view({ consumedNonces: ledger.consumedNonces, highestSequence: ledger.highestSequence });
+    expect(codesOf(admitCoordinationMessage(onOther, rebuilt))).toEqual(["channel_unrecognized"]);
+
+    // The presence half: this channel's own legitimate traffic is admitted
+    // against the very same view, so the refusal above is the binding rather
+    // than a view that refuses everything.
+    expect(admitCoordinationMessage(simulator.mint({ sequence: 0 }), rebuilt).ok).toBe(true);
+  });
 });
 
 // ── The conflict truth table ───────────────────────────────────────────────
@@ -486,6 +517,39 @@ describe("reconciliation", () => {
     expect(first.advancesJournalRevision).toBe(true);
     expect(first.blockerCode).toBe(CONTROL_PLANE_CONFLICT_BLOCKER_CODE);
     expect(first.mirrored).toBe(true);
+  });
+
+  // The line above compares the constant to itself and is satisfied by any
+  // string whatever — including one the journal grammar refuses, which would
+  // make the single permitted advancing blocker UNAPPENDABLE and satisfy
+  // "at most one advancing blocker" by costing zero. So the code is pinned
+  // verbatim, the way this file pins every other frozen literal, and then run
+  // through the real `delivery/blocker.recorded` grammar it has to satisfy.
+  it("pins the conflict blocker code verbatim, and proves the journal grammar accepts it", () => {
+    expect(CONTROL_PLANE_CONFLICT_BLOCKER_CODE).toBe("control-plane.claim-contradicted");
+    const blockerEntry = (code: string): Record<string, unknown> => ({
+      spec: JOURNAL_ENTRY_SPEC,
+      journal: "delivery",
+      subjectId: "delivery-1",
+      expectedRevision: 7,
+      idempotencyKey: "key-7",
+      kind: "blocker.recorded",
+      payload: { code, summary: "a remote claim contradicted local history" },
+    });
+    expect(validateJournalEntry(blockerEntry(CONTROL_PLANE_CONFLICT_BLOCKER_CODE))).toEqual({ ok: true });
+    // Anti-vacuity: the entry is not accepted regardless of its code. The
+    // grammar checks `code` with the spine id rule, and a value outside it —
+    // exactly what a careless edit to the constant would produce — rejects.
+    expect(validateJournalEntry(blockerEntry("control plane/claim contradicted!"))).toEqual({
+      ok: false,
+      rejections: [
+        {
+          code: "malformed_member",
+          pointer: "/payload/code",
+          message: expect.any(String) as unknown as string,
+        },
+      ],
+    });
   });
 
   // Both rows below used to hand-write `localFactEpoch: 6` alongside
