@@ -509,9 +509,20 @@ the gate runs. Flags are `--flag value`, never `--flag=value`.
 The journal ordering the completeness evaluator requires: `run.started` first
 and once; `ticket.read`, `posture.declared` and `lens.selected` all before the
 first `review.round.opened`; a round closes only after it opened; the governing
-(last) `gate` completion after a closed round and bound to the record's tree
-SHA; the `record` completion after that gate; `pr.opened` after the *first* gate
+`gate` completion after a closed round and bound to the record's tree SHA; the
+`record` completion after that gate; `pr.opened` after the *first* gate
 completion; `run.ended` last.
+
+**Governing means the ADMITTING completion, not the last one.** A `gate` or
+`record` re-run after the delivery was already admitted — the ordinary shape
+when the base moves under a finished tail — completes with `policy` and changes
+nothing; the completion every gate-anchored rule is about is the last one whose
+`outcome` is `ok`, and later refusals are reported beside it rather than read as
+the gate the delivery stood on. Only where nothing ever admitted does the last
+completion govern. In an executor-only journal `gate.reported` is read the same
+way, with `pass` in place of `ok`. `pr.opened` is the one rule that still
+anchors on the FIRST gate completion of any outcome, because what it asks is
+whether the delivery proposed a change before it had gated at all.
 
 ## 6. When `origin/main` moves
 
@@ -564,7 +575,13 @@ about doing that here:
   opening what you expect to be the last round, not after: a base move landing
   between the last round and the merge has nowhere left to go. A green replay
   reopens the round: the next `review.round.opened` carries `reopensRoundId`
-  naming the round it continues. A red one needs a fix, which changes delivered
+  naming the round it continues — under a **new** `roundId`, never the
+  predecessor's own. The chain then reads as one logical round: it spends one
+  of the bound, and the close that the gate stood on may be any close in the
+  chain, so a replay that closes after the governing gate is not a gate that
+  outran its review. Reusing the id instead draws
+  `round-reopened-under-same-id`, because two openings under one key are
+  indistinguishable to every reader of the journal. A red one needs a fix, which changes delivered
   bytes, which is a new round.
 
 ## 7. Pull request and merge
@@ -747,10 +764,13 @@ missing tracker is recorded and the loop proceeds.
 - **A row that drives the CLI end to end *and* waits on wall-clock time needs
   its own `--testTimeout`.** The 5000 ms default is spent before the assertion
   is reached.
-- **`verify --require-run-journal` on a reopened round of a version-1 run**
-  reports `gate-before-closed-round` and `round-not-bound-to-record` even when
-  the ordering is correct, because the second opening cannot carry
-  `reopensRoundId` and both fold into one round bound to the first candidate.
-  `verify` itself and `gate.yml` read the record, not the journal, so this is
-  cosmetic — but the flag cannot be cleared on such a run.
+- **`verify --require-run-journal` on a round reopened under its ORIGINAL
+  `roundId`** reports `round-reopened-under-same-id`, and names the fix: reopen
+  under a fresh `roundId` whose `reopensRoundId` points at the round it
+  continues. Until V26-2075 the same journal reported `gate-before-closed-round`
+  and `round-not-bound-to-record` instead, for an ordering that was correct, and
+  neither could be cleared. A version-1 run can only draw the new warning: its
+  frozen grammar refuses `reopensRoundId`, so clearing it means starting the run
+  at version 2. `verify` itself and `gate.yml` read the record, not the journal,
+  so none of this is ever an admission decision.
 - **Exit codes**: `0` pass, `1` policy block, `2` usage, `130` interrupted.

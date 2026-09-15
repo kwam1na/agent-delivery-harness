@@ -39,6 +39,22 @@
  * explanation names `round-not-bound-to-record` as the warning it is a
  * consequence of, so an operator reading three rows does not go looking for
  * three separate mistakes.
+ *
+ * A REOPENED ROUND IS ONE ROUND, AND A REFUSED RE-GATE IS NOT THE GATE. Two
+ * readings this evaluator got wrong until V26-2075, both found by real journals
+ * in this repository's own store rather than by a fixture:
+ *
+ *   - A round replayed onto a moved base is REOPENED, not re-reviewed. Its
+ *     opening carries a new `roundId` and names its predecessor in
+ *     `reopensRoundId`; the chain is one logical round, an earlier close in it
+ *     can be the review the gate stood on, and `logicalRounds` reports the
+ *     count the bound is spent against. Reopening under the ORIGINAL id — all a
+ *     version-1 journal can do, and what `run-752c1ec0d1804258` did at seq 84 —
+ *     leaves two openings under one key. That is now paired from the LATEST
+ *     opening and reported as `round-reopened-under-same-id` with the fix in
+ *     the message, in place of the false `gate-before-closed-round` and
+ *     `round-not-bound-to-record` pair it used to draw.
+ *   - The governing CLI completion is the ADMITTING one. See `admitting`.
  */
 
 import type { RunEvent, RunEventKind } from "./run-event.ts";
@@ -60,6 +76,7 @@ const VIOLATION = Object.freeze({
   prBeforeGateReported: "pr-before-gate-reported",
   mandatedPairMismatch: "mandated-pair-mismatch",
   roundNotBoundToRecord: "round-not-bound-to-record",
+  roundReopenedUnderSameId: "round-reopened-under-same-id",
 } as const);
 
 const REQUIRED = Object.freeze({
@@ -95,6 +112,7 @@ export const RUN_JOURNAL_VIOLATIONS = Object.freeze([
   VIOLATION.prBeforeGateReported,
   VIOLATION.mandatedPairMismatch,
   VIOLATION.roundNotBoundToRecord,
+  VIOLATION.roundReopenedUnderSameId,
 ] as const);
 
 export type RunJournalViolation = (typeof RUN_JOURNAL_VIOLATIONS)[number];
@@ -182,6 +200,21 @@ export interface RunJournalDiagnostics {
   readonly explanations: readonly RunJournalExplanation[];
   /** Absent unless a record tree sha bound the evaluation. */
   readonly roundBinding?: RunJournalRoundBinding;
+  /**
+   * Rounds the bound was spent on, with each reopen chain counted once. Not a
+   * violation and not a verdict: the journal states no bound this evaluator
+   * could compare it against, and the count is here so a reader of a journal
+   * with thirteen openings and nine reviews is told which number is which.
+   */
+  readonly logicalRounds: number;
+  /**
+   * `command.completed:gate` entries positioned after the governing one, by
+   * `seq`. REPORTED, NEVER GOVERNING: a gate re-run after the delivery had
+   * already been admitted is an attempt that changed nothing, and saying so is
+   * how an operator who sees a refusal at the end of a journal learns that it
+   * is not the gate the delivery stood on. Absent when there are none.
+   */
+  readonly supersededGates?: readonly number[];
 }
 
 /**
@@ -255,21 +288,52 @@ function indexBy(events: readonly RunEvent[], kind: RunEventKind): Indexed[] {
  * governing-completion reading its gate and record orderings are judged on the
  * second pass, which is the pass the delivery was recorded from.
  */
+function completionsOf(events: readonly RunEvent[], command: string): readonly Indexed[] {
+  return indexBy(events, "command.completed").filter(
+    (entry) => entry.event.actor.role === "cli" && payloadOf(entry.event)["command"] === command,
+  );
+}
+
+/**
+ * THE ADMITTING COMPLETION, NOT MERELY THE LAST (settled 2026-09-15 under
+ * V26-2075). `ok` is the CLI boundary's only admitting outcome — `gate` returns
+ * it exactly where `runProviderBackedAdmission` admitted — so the completion a
+ * delivery STOOD ON is the last admitting one, and a later `policy` refusal is
+ * an attempt that changed nothing. Reading the last completion of any outcome
+ * instead let a refused re-gate govern: `run-752c1ec0d1804258` in this
+ * repository's own store — the V26-1504 delivery — gates `ok` at seq 95 and
+ * records `ok` at 98, then replays the round onto a moved base and re-gates to
+ * `policy` at 107 with a `policy` record at 110. Under the positional reading
+ * the governing gate was the refusal at 107 and the governing record the
+ * refusal at 110, so every gate-anchored constraint was answered about a pass
+ * the delivery never made. Where nothing ever admitted there is no admitting
+ * completion to prefer and the last one governs, so a delivery that never got
+ * past its gate is still judged on the gate it has.
+ */
+const admitting = (entries: readonly Indexed[]): Indexed | undefined =>
+  last(entries.filter((entry) => payloadOf(entry.event)["outcome"] === "ok")) ?? last(entries);
+
 function cliCompletion(
   events: readonly RunEvent[],
   command: string,
-  pick: (entries: readonly Indexed[]) => Indexed | undefined = last,
+  pick: (entries: readonly Indexed[]) => Indexed | undefined = admitting,
 ): Indexed | undefined {
-  return pick(
-    indexBy(events, "command.completed").filter(
-      (entry) => entry.event.actor.role === "cli" && payloadOf(entry.event)["command"] === command,
-    ),
-  );
+  return pick(completionsOf(events, command));
+}
+
+interface Paired {
+  readonly round: unknown;
+  readonly openedAt: number;
+  readonly closedAt: number;
+  readonly opened: RunEvent;
+  readonly closed: RunEvent;
+  /** The opening this pair reads from follows a close of its own round key. */
+  readonly reopenedUnderSameId: boolean;
 }
 
 interface Pairing {
   /** Rounds whose opened event precedes a closed event of the same round. */
-  readonly paired: readonly { readonly round: unknown; readonly openedAt: number; readonly closedAt: number; readonly closed: RunEvent }[];
+  readonly paired: readonly Paired[];
   /** Rounds that carry both an opened and a closed event, closed first. */
   readonly inverted: boolean;
 }
@@ -283,23 +347,110 @@ function roundKey(event: RunEvent): unknown {
     : payload["round"];
 }
 
+/**
+ * WHICH OPENING A ROUND KEY IS READ FROM, WHERE ONE KEY WAS OPENED TWICE
+ * (settled 2026-09-15 under V26-2075). The LATEST opening of the key, paired
+ * with the first close that follows it. Pairing the FIRST of each instead left
+ * a key reopened under its own id with a pair — the original one — that
+ * `governingRound` could never select, because it selects on the journal's
+ * latest opening and latest close; the key then contributed no governing round
+ * at all and the journal drew `gate-before-closed-round` and
+ * `round-not-bound-to-record` for an ordering that was correct.
+ * `run-752c1ec0d1804258` reopens `round-6` under `round-6` at seq 84, and the
+ * runbook carried the resulting pair of warnings as a known-cosmetic defect of
+ * `verify --require-run-journal`. A key whose latest opening has no later close
+ * still contributes nothing: an unfinished reopen may not borrow the earlier
+ * pass's completed review, which is the rule `governingRound` already stated.
+ */
 function pairRounds(events: readonly RunEvent[]): Pairing {
   const opened = indexBy(events, "review.round.opened");
   const closed = indexBy(events, "review.round.closed");
   const rounds = new Set<unknown>([...opened, ...closed].map((entry) => roundKey(entry.event)));
-  const paired: { round: unknown; openedAt: number; closedAt: number; closed: RunEvent }[] = [];
+  const paired: Paired[] = [];
   let inverted = false;
   for (const round of rounds) {
-    const firstOpened = first(opened.filter((entry) => roundKey(entry.event) === round));
-    const firstClosed = first(closed.filter((entry) => roundKey(entry.event) === round));
+    const openings = opened.filter((entry) => roundKey(entry.event) === round);
+    const closes = closed.filter((entry) => roundKey(entry.event) === round);
+    const firstOpened = first(openings);
+    const firstClosed = first(closes);
     if (firstOpened === undefined || firstClosed === undefined) continue;
     if (firstClosed.at < firstOpened.at) {
       inverted = true;
       continue;
     }
-    paired.push({ round, openedAt: firstOpened.at, closedAt: firstClosed.at, closed: firstClosed.event });
+    const opening = last(openings);
+    if (opening === undefined) continue;
+    const closing = first(closes.filter((entry) => entry.at > opening.at));
+    if (closing === undefined) continue;
+    paired.push({
+      round,
+      openedAt: opening.at,
+      closedAt: closing.at,
+      opened: opening.event,
+      closed: closing.event,
+      reopenedUnderSameId: closes.some((entry) => entry.at < opening.at) || selfReopening(opening.event),
+    });
   }
   return { paired, inverted };
+}
+
+/** A v2 opening that names ITSELF as the round it continues. */
+function selfReopening(event: RunEvent): boolean {
+  const payload = payloadOf(event);
+  return typeof payload["reopensRoundId"] === "string" && payload["reopensRoundId"] === payload["roundId"];
+}
+
+/**
+ * ONE LOGICAL ROUND PER REOPEN CHAIN.
+ *
+ * A round reopened under a new `roundId` naming its predecessor in
+ * `reopensRoundId` is the SAME review continued on a replayed candidate, not a
+ * second review: `obtain-review` reopens rather than counts when the delivered
+ * bytes are unchanged, so the bound is spent by what was reviewed and not by
+ * how many times a replay was announced. This groups the journal's round keys
+ * into those chains, which is what lets the count below fold them and what lets
+ * the gate constraint read an earlier close of the SAME chain.
+ *
+ * A same-id reopen lands in one chain for free — the two openings share a key —
+ * which is why it is reported rather than corrected: the chain reads right and
+ * the two openings are still indistinguishable to every other reader.
+ */
+function reopenChains(events: readonly RunEvent[]): (key: unknown) => string {
+  const opened = indexBy(events, "review.round.opened");
+  const asString = (key: unknown): string => JSON.stringify(key ?? null);
+  const parent = new Map<string, string>();
+  const find = (key: string): string => {
+    let current = key;
+    while (parent.get(current) !== undefined && parent.get(current) !== current) current = parent.get(current) as string;
+    return current;
+  };
+  const union = (a: string, b: string): void => {
+    const [rootA, rootB] = [find(a), find(b)];
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  };
+  const byRoundId = new Map<string, Indexed>();
+  for (const entry of opened) {
+    const key = asString(roundKey(entry.event));
+    if (parent.get(key) === undefined) parent.set(key, key);
+    const roundId = payloadOf(entry.event)["roundId"];
+    if (typeof roundId === "string" && !byRoundId.has(roundId)) byRoundId.set(roundId, entry);
+  }
+  for (const entry of opened) {
+    const payload = payloadOf(entry.event);
+    const reopens = payload["reopensRoundId"];
+    if (typeof reopens !== "string" || selfReopening(entry.event)) continue;
+    const predecessor = byRoundId.get(reopens);
+    // An unresolvable `reopensRoundId` names no opening in this journal, so
+    // there is no chain to join and the round stands on its own.
+    if (predecessor !== undefined) union(asString(roundKey(entry.event)), asString(roundKey(predecessor.event)));
+  }
+  return (key: unknown) => find(asString(key));
+}
+
+/** How many rounds the bound was actually spent on. */
+export function runJournalLogicalRounds(events: readonly RunEvent[]): number {
+  const chainOf = reopenChains(events);
+  return new Set(indexBy(events, "review.round.opened").map((entry) => chainOf(roundKey(entry.event)))).size;
 }
 
 function governingRound(events: readonly RunEvent[], pairing = pairRounds(events)): Pairing["paired"][number] | undefined {
@@ -376,8 +527,13 @@ export function explainRunJournal(
   mandatedLensIds?: readonly string[],
   reviewedTreeShas: readonly string[] = [],
 ): RunJournalDiagnostics {
-  const { explanations, roundBinding } = analyze(events, treeSha, mandatedLensIds, reviewedTreeShas);
-  return { explanations, ...(roundBinding === undefined ? {} : { roundBinding }) };
+  const { explanations, roundBinding, logicalRounds, supersededGates } = analyze(events, treeSha, mandatedLensIds, reviewedTreeShas);
+  return {
+    explanations,
+    logicalRounds,
+    ...(roundBinding === undefined ? {} : { roundBinding }),
+    ...(supersededGates === undefined ? {} : { supersededGates }),
+  };
 }
 
 /**
@@ -422,8 +578,11 @@ function analyze(
   const roundsOpened = indexBy(events, "review.round.opened");
   const prOpened = first(indexBy(events, "pr.opened"));
   const runEnded = first(indexBy(events, "run.ended"));
-  const gateReported = last(indexBy(events, "gate.reported"));
-  const openingGateReported = first(indexBy(events, "gate.reported"));
+  const reportedGates = indexBy(events, "gate.reported");
+  // The executor-written stand-in for the gate completion, chosen the same way:
+  // `pass` is its admitting outcome, and a later `fail` is an attempt.
+  const gateReported = last(reportedGates.filter((entry) => payloadOf(entry.event)["outcome"] === "pass")) ?? last(reportedGates);
+  const openingGateReported = first(reportedGates);
   const completions = indexBy(events, "command.completed");
   const gateCompletion = cliCompletion(events, "gate");
   const recordCompletion = cliCompletion(events, "record");
@@ -450,6 +609,25 @@ function analyze(
   const requiredRound = currentRound !== undefined &&
     (treeSha === undefined || acceptedTrees.has(String(payloadOf(currentRound.closed)["candidateTreeSha"])))
     ? currentRound : undefined;
+
+  /**
+   * THE REVIEW THE GOVERNING GATE STOOD ON, WHICH MAY HAVE CLOSED EARLIER IN
+   * THE SAME CHAIN. A round reopened after the gate is the same review replayed
+   * onto a moved base, so the question `gate-before-closed-round` asks — did
+   * this gate stand on a completed review of a candidate the record accepts —
+   * is answered by ANY close of the governing round's own reopen chain that the
+   * record accepts, not only by the last one. A FRESH round closing after the
+   * gate is different and still fires: that is new review, and the gate that
+   * preceded it did not stand on it.
+   */
+  const chainOf = reopenChains(events);
+  const governingChain = currentRound === undefined ? undefined : chainOf(currentRound.round);
+  const chainCloses = governingChain === undefined ? [] : indexBy(events, "review.round.closed").filter(
+    (entry) => chainOf(roundKey(entry.event)) === governingChain &&
+      (treeSha === undefined || acceptedTrees.has(String(payloadOf(entry.event)["candidateTreeSha"]))),
+  );
+  const reviewedBefore = (at: number): boolean => chainCloses.some((entry) => entry.at < at);
+  const logicalRounds = runJournalLogicalRounds(events);
 
   // ── Required entries ─────────────────────────────────────────────────────
   //
@@ -518,7 +696,8 @@ function analyze(
   }
 
   if (gateCompletion !== undefined) {
-    const closedFirst = requiredRound !== undefined && requiredRound.closedAt < gateCompletion.at;
+    const closedFirst = requiredRound !== undefined &&
+      (requiredRound.closedAt < gateCompletion.at || reviewedBefore(gateCompletion.at));
     if (!closedFirst) {
       raise(
         VIOLATION.gateBeforeClosedRound,
@@ -557,7 +736,8 @@ function analyze(
   // completion: in a journal that has any CLI completion it carries no
   // ordering constraint and the CLI completion's constraints govern.
   if (executorOnly && gateReported !== undefined) {
-    const closedFirst = requiredRound !== undefined && requiredRound.closedAt < gateReported.at;
+    const closedFirst = requiredRound !== undefined &&
+      (requiredRound.closedAt < gateReported.at || reviewedBefore(gateReported.at));
     if (!closedFirst) {
       raise(
         VIOLATION.gateReportedBeforeClosedRound,
@@ -599,6 +779,24 @@ function analyze(
     );
   }
 
+  // Raised of the GOVERNING round only. An earlier same-id reopen that a later
+  // round has since superseded is history the journal retains, exactly as the
+  // prerequisite ordering above is; what this names is the round being read
+  // right now, whose two openings no reader can tell apart.
+  if (currentRound !== undefined && currentRound.reopenedUnderSameId) {
+    const earlier = last(indexBy(events, "review.round.closed").filter(
+      (entry) => roundKey(entry.event) === currentRound.round && entry.at < currentRound.openedAt,
+    ));
+    raise(
+      VIOLATION.roundReopenedUnderSameId,
+      `the governing review.round.opened at seq ${seqOf(currentRound.opened)} continues a round that ${
+        earlier === undefined
+          ? "it names as itself in reopensRoundId"
+          : `already closed at seq ${seqOf(earlier.event)} under the same round key`
+      }, so the two openings are one key to every reader of this journal; reopen it under a new roundId whose reopensRoundId names the round it continues, which is a version-2 journal's own form for saying so`,
+    );
+  }
+
   // ── Status ───────────────────────────────────────────────────────────────
   //
   // The status describes the JOURNAL, not the repository: any violation forces
@@ -616,5 +814,13 @@ function analyze(
   const status: RunJournalStatus =
     violations.length > 0 || outstanding.size > 0 ? "incomplete" : executorOnly ? "complete-executor-only" : "complete";
 
-  return { status, missing, violations, boundToRecord, explanations, ...(roundBinding === undefined ? {} : { roundBinding }) };
+  const supersededGates = gateCompletion === undefined ? [] : completionsOf(events, "gate")
+    .filter((entry) => entry.at > gateCompletion.at)
+    .map((entry) => seqOf(entry.event));
+
+  return {
+    status, missing, violations, boundToRecord, explanations, logicalRounds,
+    ...(roundBinding === undefined ? {} : { roundBinding }),
+    ...(supersededGates.length === 0 ? {} : { supersededGates }),
+  };
 }

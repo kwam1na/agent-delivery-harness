@@ -1,0 +1,3185 @@
+{
+  "purpose": "Golden vectors for the run-journal completeness evaluator, taken from two REAL deliveries rather than hand-authored, because the reopen and re-gate shapes they carry are the ones that falsified the evaluator. Each entry is one journal reduced to the ten kinds the evaluator reads — run.started, ticket.read, posture.declared, lens.selected, review.round.opened, review.round.closed, command.completed, gate.reported, pr.opened, run.ended — with repo.commonDir normalized to /repo/.git and every other member and the original seq left byte-identical; the reduction is verdict-preserving and was checked to be, by evaluating the full journal and the reduced one and comparing. `recordTreeSha` is the tree the delivery's `pr.opened` names, and `reviewedTreeShas` are the other raw trees its closed rounds bound — the set `verify` reads out of the record's retained review-neutral projection. DRIFT REPAIR: regenerate from the journals named in `source`; never hand-edit an `expect`.",
+  "journals": [
+    {
+      "ticket": "V26-1485",
+      "runId": "run-d6dd99f9034d9012",
+      "source": ".git/managed-delivery/runs/run-d6dd99f9034d9012.jsonl",
+      "note": "Seven rebase replays, every one reopened under a NEW roundId naming the round it continues in reopensRoundId (seq 80, 92, 101, 110). Its governing gate completion (seq 150) is the second of two admitting gates. This is the form the wave adopted as the workaround, and the form this evaluator now documents and pins.",
+      "recordTreeSha": "883e436ed0ceaaa6f4cfc76be00f1c80e17b5eb5",
+      "reviewedTreeShas": [
+        "4cdf7445f819cbbb2e9d71ba7c798e60d66fa9af",
+        "e2b9b4a960cd6473c54aed3f9c0e0b05129ade15",
+        "b521597aa30f668c250bbb4ea0c32529a3b8261a",
+        "e9b243cb916a152d9df3e0e6f4dd7f201ca8aa0a",
+        "2a314c8e6b6e445c23b3ff0fd1687aabcf2135c9",
+        "5583bd74f69ddce0d9f589bbf6b9be4dfd6d1914",
+        "0893a89791fe353c51f7d31ff807762fcde5cc17",
+        "1ae68ac7f5d14b133128403a891adc7374f83f86",
+        "eb5cd7bcde352d74abde0f33bd1b49f0169b3374",
+        "2ead406ae17d292fd002c578007ae6b3ea55ef48",
+        "0bd8b322db174928190b67007c35a01f910fd7e8",
+        "7e538bf75edc60ce1f87fdf4f0f074c67b1e9480",
+        "f1ae8268981b7c73e52ac0f3c6642025fdb17693"
+      ],
+      "mandatedLensIds": [
+        "lens.outcome-correctness",
+        "lens.adversarial-testing"
+      ],
+      "expect": {
+        "status": "complete",
+        "missing": [],
+        "violations": [],
+        "boundToRecord": true,
+        "roundBinding": "reviewed-tree",
+        "logicalRounds": 9
+      },
+      "events": [
+        {
+          "version": "run-event/2",
+          "eventId": "run-started-1485",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 1,
+          "at": "2026-09-14T20:38:15Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "run.started",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1485",
+          "attestation": "self",
+          "payload": {
+            "ticket": "V26-1485",
+            "host": "claude-code",
+            "workflow": {
+              "releaseId": "linear-concurrent-delivery-v1",
+              "profile": "linear"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "ticket-read-1485",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 2,
+          "at": "2026-09-14T20:38:19Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "ticket.read",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1485",
+          "attestation": "self",
+          "payload": {
+            "ticket": "V26-1485",
+            "tracker": "linear",
+            "posture": "characterization-first"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "posture-1485",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 3,
+          "at": "2026-09-14T20:38:23Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "posture.declared",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1485",
+          "attestation": "self",
+          "payload": {
+            "posture": "characterization-first",
+            "ticket": "V26-1485"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "lens-selected-1485",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 4,
+          "at": "2026-09-14T20:38:25Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "lens.selected",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "mandated": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "selected": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "rationale": "The repository policy activates exactly the two mandated lenses. This change promotes a reserved spine event kind into its observation-only partition and adds an optional coordination port whose whole purpose is to accept remote claims without letting any of them advance local state. The outcome lens owns whether the non-advancement and the one-blocker-per-epoch rule are actually right; the testing lens owns whether the refusals are falsifiable rather than passing vacuously, which matters unusually much here because most of the acceptance criteria are absence claims and absence assertions pass for free when the mechanism is missing. No further category is activated: no credential or secret crosses this unit, and no transport is implemented."
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "738b93a2-4a3d-43fb-878a-ffaa61f6722c",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 7,
+          "at": "2026-09-14T21:01:27Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 13597,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "5a180d6d-c848-41ec-82e8-2814b4fa0f0a",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 10,
+          "at": "2026-09-14T21:01:31Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 852
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-r1-open",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 11,
+          "at": "2026-09-14T21:01:39Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "4cdf7445f819cbbb2e9d71ba7c798e60d66fa9af",
+          "attestation": "self",
+          "payload": {
+            "round": 1,
+            "roundId": "v26-1485-r1",
+            "candidateTreeSha": "4cdf7445f819cbbb2e9d71ba7c798e60d66fa9af",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 4
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-r1-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 12,
+          "at": "2026-09-14T21:17:52Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "4cdf7445f819cbbb2e9d71ba7c798e60d66fa9af",
+          "attestation": "self",
+          "payload": {
+            "round": 1,
+            "roundId": "v26-1485-r1",
+            "candidateTreeSha": "4cdf7445f819cbbb2e9d71ba7c798e60d66fa9af",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 1,
+              "P1": 0,
+              "P2": 1,
+              "P3": 2
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 288893,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "4f9d2a99-ea06-499b-993f-a2600e7913be",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 15,
+          "at": "2026-09-14T21:24:13Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 11494,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "51665930-84bd-47cd-ba03-93fe31b01c76",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 18,
+          "at": "2026-09-14T21:24:17Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 858
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-r2-open",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 19,
+          "at": "2026-09-14T21:24:24Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "e2b9b4a960cd6473c54aed3f9c0e0b05129ade15",
+          "attestation": "self",
+          "payload": {
+            "round": 2,
+            "roundId": "v26-1485-r2",
+            "candidateTreeSha": "e2b9b4a960cd6473c54aed3f9c0e0b05129ade15",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 4
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-r2-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 20,
+          "at": "2026-09-14T22:31:31Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "e2b9b4a960cd6473c54aed3f9c0e0b05129ade15",
+          "attestation": "self",
+          "payload": {
+            "round": 2,
+            "roundId": "v26-1485-r2",
+            "candidateTreeSha": "e2b9b4a960cd6473c54aed3f9c0e0b05129ade15",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 1,
+              "P1": 1,
+              "P2": 1,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 358341,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "98f8f87d-bc28-4194-9119-73e26a1fb70e",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 23,
+          "at": "2026-09-14T23:07:07Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 17718,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "54e7975d-c10a-4b83-b6c6-861e121b9a8b",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 26,
+          "at": "2026-09-14T23:07:16Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 796
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-r3-open",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 27,
+          "at": "2026-09-14T23:07:25Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "b521597aa30f668c250bbb4ea0c32529a3b8261a",
+          "attestation": "self",
+          "payload": {
+            "round": 3,
+            "roundId": "v26-1485-r3",
+            "candidateTreeSha": "b521597aa30f668c250bbb4ea0c32529a3b8261a",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 4
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-r3-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 28,
+          "at": "2026-09-15T00:43:32Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "b521597aa30f668c250bbb4ea0c32529a3b8261a",
+          "attestation": "self",
+          "payload": {
+            "round": 3,
+            "roundId": "v26-1485-r3",
+            "candidateTreeSha": "b521597aa30f668c250bbb4ea0c32529a3b8261a",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 1,
+              "P1": 1,
+              "P2": 2,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 398285,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "2fdb3d6d-0f84-4cba-8b9c-1e97ffc4d2e3",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 31,
+          "at": "2026-09-15T00:48:53Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9966,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "4573314d-353e-4095-8c3b-36ec0ac0f23b",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 34,
+          "at": "2026-09-15T00:48:56Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 733
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-r4-open",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 35,
+          "at": "2026-09-15T00:49:02Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "e9b243cb916a152d9df3e0e6f4dd7f201ca8aa0a",
+          "attestation": "self",
+          "payload": {
+            "round": 4,
+            "roundId": "v26-1485-r4",
+            "candidateTreeSha": "e9b243cb916a152d9df3e0e6f4dd7f201ca8aa0a",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 4
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r4-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 36,
+          "at": "2026-09-15T01:14:49Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "e9b243cb916a152d9df3e0e6f4dd7f201ca8aa0a",
+          "attestation": "self",
+          "payload": {
+            "round": 4,
+            "roundId": "v26-1485-r4",
+            "candidateTreeSha": "e9b243cb916a152d9df3e0e6f4dd7f201ca8aa0a",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 0,
+              "P1": 3,
+              "P2": 0,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 400156,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "d262cff4-42e8-46da-a676-21c44cbd1bfc",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 40,
+          "at": "2026-09-15T01:15:19Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9788,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "33934636-536e-46c8-a180-be1269f9ce72",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 43,
+          "at": "2026-09-15T01:15:21Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 727
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r5-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 44,
+          "at": "2026-09-15T01:15:25Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "2a314c8e6b6e445c23b3ff0fd1687aabcf2135c9",
+          "attestation": "self",
+          "payload": {
+            "round": 5,
+            "roundId": "v26-1485-r5",
+            "candidateTreeSha": "2a314c8e6b6e445c23b3ff0fd1687aabcf2135c9",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 5
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r5-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 45,
+          "at": "2026-09-15T01:44:53Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "2a314c8e6b6e445c23b3ff0fd1687aabcf2135c9",
+          "attestation": "self",
+          "payload": {
+            "round": 5,
+            "roundId": "v26-1485-r5",
+            "candidateTreeSha": "2a314c8e6b6e445c23b3ff0fd1687aabcf2135c9",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 1,
+              "P1": 0,
+              "P2": 1,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 411451,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "20b20975-62d8-4734-a482-fcf09a888f32",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 49,
+          "at": "2026-09-15T01:45:09Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9653,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "6b6466a9-e032-4998-bcb9-37f73a706328",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 52,
+          "at": "2026-09-15T01:45:11Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 730
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r6-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 53,
+          "at": "2026-09-15T01:45:16Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "5583bd74f69ddce0d9f589bbf6b9be4dfd6d1914",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "v26-1485-r6",
+            "candidateTreeSha": "5583bd74f69ddce0d9f589bbf6b9be4dfd6d1914",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 6
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r6-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 54,
+          "at": "2026-09-15T02:08:14Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "5583bd74f69ddce0d9f589bbf6b9be4dfd6d1914",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "v26-1485-r6",
+            "candidateTreeSha": "5583bd74f69ddce0d9f589bbf6b9be4dfd6d1914",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 1,
+              "P1": 0,
+              "P2": 1,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 303489,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "325189b1-c3de-43f6-aba4-0ecc88dc60ee",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 58,
+          "at": "2026-09-15T02:08:30Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9773,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "8e9a2758-845a-418f-b81a-de9590634d92",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 61,
+          "at": "2026-09-15T02:08:33Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 737
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r7-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 62,
+          "at": "2026-09-15T02:09:04Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "0893a89791fe353c51f7d31ff807762fcde5cc17",
+          "attestation": "self",
+          "payload": {
+            "round": 7,
+            "roundId": "v26-1485-r7",
+            "candidateTreeSha": "0893a89791fe353c51f7d31ff807762fcde5cc17",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 7
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r7-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 63,
+          "at": "2026-09-15T02:31:43Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "0893a89791fe353c51f7d31ff807762fcde5cc17",
+          "attestation": "self",
+          "payload": {
+            "round": 7,
+            "roundId": "v26-1485-r7",
+            "candidateTreeSha": "0893a89791fe353c51f7d31ff807762fcde5cc17",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 0,
+              "P1": 1,
+              "P2": 0,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 297219,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "416fe700-de14-4fdc-ab93-143bc7bb1b28",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 67,
+          "at": "2026-09-15T02:32:33Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9794,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "b54dd1e2-827e-4a26-8e31-b4478d8bb5e5",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 70,
+          "at": "2026-09-15T02:32:35Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 754
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r8-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 71,
+          "at": "2026-09-15T02:33:08Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "1ae68ac7f5d14b133128403a891adc7374f83f86",
+          "attestation": "self",
+          "payload": {
+            "round": 8,
+            "roundId": "v26-1485-r8",
+            "candidateTreeSha": "1ae68ac7f5d14b133128403a891adc7374f83f86",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 8
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r8-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 72,
+          "at": "2026-09-15T02:55:44Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "1ae68ac7f5d14b133128403a891adc7374f83f86",
+          "attestation": "self",
+          "payload": {
+            "round": 8,
+            "roundId": "v26-1485-r8",
+            "candidateTreeSha": "1ae68ac7f5d14b133128403a891adc7374f83f86",
+            "outcome": "aligned",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 365723,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "f2f4a001-8c45-4f77-9a58-256ab78edfe8",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 75,
+          "at": "2026-09-15T03:01:37Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9923,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "a7e4fcbc-94b9-4db2-a486-b4dff4b97c52",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 78,
+          "at": "2026-09-15T03:01:40Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 739
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r8-replay-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 80,
+          "at": "2026-09-15T03:03:18Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "eb5cd7bcde352d74abde0f33bd1b49f0169b3374",
+          "attestation": "self",
+          "payload": {
+            "round": 9,
+            "roundId": "v26-1485-r8-replay",
+            "reopensRoundId": "v26-1485-r8",
+            "candidateTreeSha": "eb5cd7bcde352d74abde0f33bd1b49f0169b3374",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 8
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r8-replay-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 81,
+          "at": "2026-09-15T03:25:45Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "eb5cd7bcde352d74abde0f33bd1b49f0169b3374",
+          "attestation": "self",
+          "payload": {
+            "round": 9,
+            "roundId": "v26-1485-r8-replay",
+            "candidateTreeSha": "eb5cd7bcde352d74abde0f33bd1b49f0169b3374",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 1,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 349594,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r10-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 83,
+          "at": "2026-09-15T03:25:46Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "2ead406ae17d292fd002c578007ae6b3ea55ef48",
+          "attestation": "self",
+          "payload": {
+            "round": 10,
+            "roundId": "v26-1485-r10",
+            "candidateTreeSha": "2ead406ae17d292fd002c578007ae6b3ea55ef48",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 10
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "6ecf0a5a-a621-48af-886f-817358d5ea5a",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 86,
+          "at": "2026-09-15T03:26:01Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9724,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "3835d681-4b16-477e-aacd-7a733b35cf46",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 89,
+          "at": "2026-09-15T03:26:04Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 759
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r10-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 90,
+          "at": "2026-09-15T03:45:35Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "2ead406ae17d292fd002c578007ae6b3ea55ef48",
+          "attestation": "self",
+          "payload": {
+            "round": 10,
+            "roundId": "v26-1485-r10",
+            "candidateTreeSha": "2ead406ae17d292fd002c578007ae6b3ea55ef48",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 324090,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r11-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 92,
+          "at": "2026-09-15T03:45:36Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "0bd8b322db174928190b67007c35a01f910fd7e8",
+          "attestation": "self",
+          "payload": {
+            "round": 11,
+            "roundId": "v26-1485-r10-replay",
+            "reopensRoundId": "v26-1485-r10",
+            "candidateTreeSha": "0bd8b322db174928190b67007c35a01f910fd7e8",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 10
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "de34c743-7624-4944-b789-3aab2add3a42",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 95,
+          "at": "2026-09-15T03:45:52Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9830,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "b3fa20f2-601f-4e7a-8b16-f48091ef744a",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 98,
+          "at": "2026-09-15T03:45:54Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 736
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r11-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 99,
+          "at": "2026-09-15T04:05:53Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "0bd8b322db174928190b67007c35a01f910fd7e8",
+          "attestation": "self",
+          "payload": {
+            "round": 11,
+            "roundId": "v26-1485-r10-replay",
+            "candidateTreeSha": "0bd8b322db174928190b67007c35a01f910fd7e8",
+            "outcome": "aligned",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 292202,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r12-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 101,
+          "at": "2026-09-15T04:05:54Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "7e538bf75edc60ce1f87fdf4f0f074c67b1e9480",
+          "attestation": "self",
+          "payload": {
+            "round": 12,
+            "roundId": "v26-1485-r11-replay",
+            "reopensRoundId": "v26-1485-r10-replay",
+            "candidateTreeSha": "7e538bf75edc60ce1f87fdf4f0f074c67b1e9480",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 10
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "f0b5ead5-2cb9-4f70-9589-2d630f37ea35",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 104,
+          "at": "2026-09-15T04:06:04Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9777,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "a144f337-85c0-4486-bfa3-62eed153bac8",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 107,
+          "at": "2026-09-15T04:06:07Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 744
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r12-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 108,
+          "at": "2026-09-15T04:19:56Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "7e538bf75edc60ce1f87fdf4f0f074c67b1e9480",
+          "attestation": "self",
+          "payload": {
+            "round": 12,
+            "roundId": "v26-1485-r11-replay",
+            "candidateTreeSha": "7e538bf75edc60ce1f87fdf4f0f074c67b1e9480",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 237877,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r13-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 110,
+          "at": "2026-09-15T04:19:57Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "f1ae8268981b7c73e52ac0f3c6642025fdb17693",
+          "attestation": "self",
+          "payload": {
+            "round": 13,
+            "roundId": "v26-1485-r12-replay",
+            "reopensRoundId": "v26-1485-r11-replay",
+            "candidateTreeSha": "f1ae8268981b7c73e52ac0f3c6642025fdb17693",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "bound": 10
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "c-1485-r13-closed",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 111,
+          "at": "2026-09-15T04:24:23Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "f1ae8268981b7c73e52ac0f3c6642025fdb17693",
+          "attestation": "self",
+          "payload": {
+            "round": 13,
+            "roundId": "v26-1485-r12-replay",
+            "candidateTreeSha": "f1ae8268981b7c73e52ac0f3c6642025fdb17693",
+            "outcome": "aligned",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "tokens",
+              "total": 297728,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "7629673c-a8b3-4052-b18a-a343d13b8dcf",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 114,
+          "at": "2026-09-15T05:48:16Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9790,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "23bd1e7b-aa33-4a43-b03a-0ffc4001b611",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 117,
+          "at": "2026-09-15T05:48:18Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 755
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "72b22f97-6cda-4aaa-8dbd-45dea9f7a97e",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 120,
+          "at": "2026-09-15T05:51:16Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "emit-review-evidence",
+            "outcome": "ok",
+            "durationMs": 865
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "709d6499-8ade-44fa-9dac-09f7dcfa5723",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 123,
+          "at": "2026-09-15T05:51:19Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "submit-evidence",
+            "outcome": "ok",
+            "durationMs": 822
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "f8807cce-a838-4d66-beb7-63fe452a26b8",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 126,
+          "at": "2026-09-15T05:51:23Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "gate",
+            "outcome": "ok",
+            "durationMs": 840,
+            "digest": "3cadabfa111c843f48746bcdb9f6cbfd9d098d188892ea3af7c31e3bbe367e2f"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "5a62c003-fbf8-421b-81b2-46dd78b7ee40",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 129,
+          "at": "2026-09-15T05:51:28Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "record",
+            "outcome": "ok",
+            "durationMs": 1871
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "1b92c645-9143-47fb-873a-a776b82f2e60",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 132,
+          "at": "2026-09-15T05:51:36Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "verify",
+            "outcome": "ok",
+            "durationMs": 1651
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "efe6238b-f268-4dad-b5e7-8d0e22455a7e",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 135,
+          "at": "2026-09-15T05:53:20Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9725,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "ac9545b2-a94d-4663-a868-836404775a24",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 138,
+          "at": "2026-09-15T05:53:22Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 753
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "5f03e755-5d1c-4912-90b7-20d4fb65accc",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 141,
+          "at": "2026-09-15T05:53:36Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 9585,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "f93a631c-9d77-4e1b-ad5f-7bca4962b25c",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 144,
+          "at": "2026-09-15T05:53:42Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "emit-review-evidence",
+            "outcome": "ok",
+            "durationMs": 753
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "0dc23345-6d8c-4ea6-9008-40fbb0f2fbf8",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 147,
+          "at": "2026-09-15T05:53:46Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "submit-evidence",
+            "outcome": "ok",
+            "durationMs": 813
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "1deb818d-a550-4bee-a585-22a977d9e4cb",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 150,
+          "at": "2026-09-15T05:53:49Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "gate",
+            "outcome": "ok",
+            "durationMs": 833,
+            "digest": "3cadabfa111c843f48746bcdb9f6cbfd9d098d188892ea3af7c31e3bbe367e2f"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "61d38008-94bb-4409-9868-5d66fe5d8c47",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 153,
+          "at": "2026-09-15T05:53:54Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "record",
+            "outcome": "ok",
+            "durationMs": 1858
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "6c41e1a5-cf37-4d81-aa80-41b38330b96e",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 156,
+          "at": "2026-09-15T05:54:02Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "verify",
+            "outcome": "ok",
+            "durationMs": 1628
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-pr-opened",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 157,
+          "at": "2026-09-15T05:55:47Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "pr.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1485",
+          "candidateTreeSha": "883e436ed0ceaaa6f4cfc76be00f1c80e17b5eb5",
+          "attestation": "self",
+          "payload": {
+            "url": "https://github.com/kwam1na/agent-delivery-harness/pull/153",
+            "candidateTreeSha": "883e436ed0ceaaa6f4cfc76be00f1c80e17b5eb5",
+            "ticket": "V26-1485"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "v26-1485-run-ended",
+          "runId": "run-d6dd99f9034d9012",
+          "seq": 158,
+          "at": "2026-09-15T05:56:25Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "run.ended",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "result": "complete",
+            "cost": {
+              "unit": "tokens",
+              "total": 4325048,
+              "reportedBy": "lens-subagent-usage"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "ticket": "V26-1504",
+      "runId": "run-752c1ec0d1804258",
+      "source": ".git/managed-delivery/runs/run-752c1ec0d1804258.jsonl",
+      "note": "Both shapes the evaluator got wrong. Seq 84 reopens round-6 under its OWN roundId (reopensRoundId === roundId), which the position-based pairing mis-paired; seq 103 then reopens it properly as round-6-replay, and that new-id pair governs, so the same-id reopen at 84 is retained history rather than the governing round. Seq 95 gate ok and 98 record ok are the completions this delivery stood on; the later seq 107 gate policy and seq 110 record policy are refusals that must not govern.",
+      "recordTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+      "reviewedTreeShas": [
+        "e8cd1b6509ec15582662b92364873640a002bd48",
+        "72a5f241d750caf687c9ea946b54880a9f7d6d42",
+        "b37228684e843ef59bf83848e89ab1c43afce255",
+        "a50abf98ae102c65a7113329f6885a50d042e2cb",
+        "7c61e765159f704d5e782deafe4b9c7b01da5c84",
+        "1719d6e950f51503c8b0f9de2f896f1e785da8a5"
+      ],
+      "mandatedLensIds": [
+        "lens.outcome-correctness",
+        "lens.adversarial-testing"
+      ],
+      "expect": {
+        "status": "complete",
+        "missing": [],
+        "violations": [],
+        "boundToRecord": true,
+        "roundBinding": "record-tree",
+        "logicalRounds": 6,
+        "supersededGateSeqs": [
+          107
+        ]
+      },
+      "events": [
+        {
+          "version": "run-event/2",
+          "eventId": "start-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 1,
+          "at": "2026-09-13T23:23:09Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "run.started",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "host": "claude-code",
+            "workflow": {
+              "releaseId": "linear-concurrent-delivery-v1",
+              "profile": "linear"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "ticket-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 2,
+          "at": "2026-09-13T23:25:07Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "ticket.read",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1504",
+          "attestation": "self",
+          "payload": {
+            "ticket": "V26-1504",
+            "tracker": "linear"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "ticket-2",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 3,
+          "at": "2026-09-13T23:25:08Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "ticket.read",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1513",
+          "attestation": "self",
+          "payload": {
+            "ticket": "V26-1513",
+            "tracker": "linear"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "posture-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 4,
+          "at": "2026-09-13T23:25:08Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "posture.declared",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1504",
+          "attestation": "self",
+          "payload": {
+            "posture": "characterization-first",
+            "ticket": "V26-1504"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "posture-2",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 5,
+          "at": "2026-09-13T23:25:09Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "posture.declared",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1513",
+          "attestation": "self",
+          "payload": {
+            "posture": "characterization-first",
+            "ticket": "V26-1513"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "lens-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 6,
+          "at": "2026-09-13T23:25:17Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "lens.selected",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "mandated": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "selected": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "rationale": "the repository-mandated pair only: this delivery is documentation plus one new prose-pinning sensor over docs/managed-delivery.md, so correctness of the restated gate claim and the falsifiability of the new pin are the whole risk surface; no additional lens would reach a surface those two do not."
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "d32ed2e2-2fc6-4a15-8fa2-44c0578687a5",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 9,
+          "at": "2026-09-14T03:31:49Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 2511513,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "a6843b95-3900-4dfa-9744-93eda32cc9dc",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 12,
+          "at": "2026-09-14T03:39:45Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 384777
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "505a9a6a-878e-4986-9efa-88a875fc9450",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 15,
+          "at": "2026-09-14T03:42:04Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 106147
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r1-open",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 16,
+          "at": "2026-09-14T03:42:25Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "e8cd1b6509ec15582662b92364873640a002bd48",
+          "attestation": "self",
+          "payload": {
+            "round": 1,
+            "roundId": "round-1",
+            "bound": 4,
+            "candidateTreeSha": "e8cd1b6509ec15582662b92364873640a002bd48",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ]
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r1-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 17,
+          "at": "2026-09-14T04:09:53Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "e8cd1b6509ec15582662b92364873640a002bd48",
+          "attestation": "self",
+          "payload": {
+            "round": 1,
+            "roundId": "round-1",
+            "candidateTreeSha": "e8cd1b6509ec15582662b92364873640a002bd48",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 4,
+              "P1": 1,
+              "P2": 2,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 251871,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "gate-scoped-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 18,
+          "at": "2026-09-14T05:45:47Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "gate.reported",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "npm run typecheck && npm run sensor && npm run sensor:cli",
+            "outcome": "pass",
+            "durationMs": 112000
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "gate-scoped-2",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 19,
+          "at": "2026-09-14T05:45:57Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "gate.reported",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "npx vitest run docs/docs-references.test.ts docs/docs-examples.test.ts",
+            "outcome": "pass",
+            "durationMs": 133000
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "gate-scoped-3",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 20,
+          "at": "2026-09-14T05:46:34Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "gate.reported",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "npx vitest run scripts/check-standalone-install.test.ts --testTimeout 60000",
+            "outcome": "pass",
+            "durationMs": 41570
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "4377511f-df21-4fe0-a20e-cedb8ddf9d2d",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 25,
+          "at": "2026-09-14T05:50:35Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 157217,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "a94435ff-9b49-4c0b-a4f1-e9c0152aa720",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 28,
+          "at": "2026-09-14T05:52:08Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 79131
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "8bcc08c1-dbc6-4502-a5a2-ca6c470e4509",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 31,
+          "at": "2026-09-14T05:53:26Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 71987
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r2-open",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 32,
+          "at": "2026-09-14T05:53:41Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "72a5f241d750caf687c9ea946b54880a9f7d6d42",
+          "attestation": "self",
+          "payload": {
+            "round": 2,
+            "roundId": "round-2",
+            "bound": 4,
+            "candidateTreeSha": "72a5f241d750caf687c9ea946b54880a9f7d6d42",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ]
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r2-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 33,
+          "at": "2026-09-14T06:32:21Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "72a5f241d750caf687c9ea946b54880a9f7d6d42",
+          "attestation": "self",
+          "payload": {
+            "round": 2,
+            "roundId": "round-2",
+            "candidateTreeSha": "72a5f241d750caf687c9ea946b54880a9f7d6d42",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 1,
+              "P1": 1,
+              "P2": 0,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 215918,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "8efbbfe1-5245-4a55-9f12-a7245705ec68",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 36,
+          "at": "2026-09-14T06:36:48Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "usage",
+            "durationMs": 2199
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "594d062a-350b-400a-a9b5-59a23d110208",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 39,
+          "at": "2026-09-14T06:37:04Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 12211,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "311654d3-5728-4217-af32-0539e7f5b3b6",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 42,
+          "at": "2026-09-14T06:37:18Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 5201
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r3-open",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 43,
+          "at": "2026-09-14T06:37:42Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "b37228684e843ef59bf83848e89ab1c43afce255",
+          "attestation": "self",
+          "payload": {
+            "round": 3,
+            "roundId": "round-3",
+            "bound": 4,
+            "candidateTreeSha": "b37228684e843ef59bf83848e89ab1c43afce255",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ]
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r3-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 44,
+          "at": "2026-09-14T07:16:11Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "b37228684e843ef59bf83848e89ab1c43afce255",
+          "attestation": "self",
+          "payload": {
+            "round": 3,
+            "roundId": "round-3",
+            "candidateTreeSha": "b37228684e843ef59bf83848e89ab1c43afce255",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 2,
+              "P3": 1
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 234403,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "2d258295-8a33-4b7b-9d79-3746a8647f9e",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 47,
+          "at": "2026-09-14T07:37:42Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 60841,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "b9a70f0a-301a-4146-b76e-21e85ae9b62a",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 50,
+          "at": "2026-09-14T07:38:26Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 39460
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r4-open",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 51,
+          "at": "2026-09-14T07:38:54Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "a50abf98ae102c65a7113329f6885a50d042e2cb",
+          "attestation": "self",
+          "payload": {
+            "round": 4,
+            "roundId": "round-4",
+            "bound": 4,
+            "candidateTreeSha": "a50abf98ae102c65a7113329f6885a50d042e2cb",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ]
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r4-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 52,
+          "at": "2026-09-14T08:08:04Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "a50abf98ae102c65a7113329f6885a50d042e2cb",
+          "attestation": "self",
+          "payload": {
+            "round": 4,
+            "roundId": "round-4",
+            "candidateTreeSha": "a50abf98ae102c65a7113329f6885a50d042e2cb",
+            "outcome": "changes-requested",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 1,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 233803,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "17c71e3a-66cc-44cc-81a7-e61c87148e66",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 56,
+          "at": "2026-09-14T08:13:49Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 60849,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "02af7368-427e-4e5f-b918-a0cd233d4730",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 59,
+          "at": "2026-09-14T08:13:54Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 3891
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r5-open",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 60,
+          "at": "2026-09-14T08:14:03Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "7c61e765159f704d5e782deafe4b9c7b01da5c84",
+          "attestation": "self",
+          "payload": {
+            "round": 5,
+            "roundId": "round-5",
+            "bound": 5,
+            "candidateTreeSha": "7c61e765159f704d5e782deafe4b9c7b01da5c84",
+            "lenses": [
+              "lens.adversarial-testing"
+            ]
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r5-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 61,
+          "at": "2026-09-14T08:27:11Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "7c61e765159f704d5e782deafe4b9c7b01da5c84",
+          "attestation": "self",
+          "payload": {
+            "round": 5,
+            "roundId": "round-5",
+            "candidateTreeSha": "7c61e765159f704d5e782deafe4b9c7b01da5c84",
+            "outcome": "aligned",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 174244,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "a1986733-69a5-4c00-8c22-bb401d6bfe54",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 64,
+          "at": "2026-09-14T08:44:55Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 66665,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "8b39717e-0df7-4c2c-961e-9617a4cafe33",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 67,
+          "at": "2026-09-14T08:44:59Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 3942
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r6-open",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 69,
+          "at": "2026-09-14T08:45:16Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "1719d6e950f51503c8b0f9de2f896f1e785da8a5",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "round-6",
+            "bound": 6,
+            "candidateTreeSha": "1719d6e950f51503c8b0f9de2f896f1e785da8a5",
+            "lenses": [
+              "lens.outcome-correctness"
+            ]
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r6-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 70,
+          "at": "2026-09-14T08:49:15Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "1719d6e950f51503c8b0f9de2f896f1e785da8a5",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "round-6",
+            "candidateTreeSha": "1719d6e950f51503c8b0f9de2f896f1e785da8a5",
+            "outcome": "aligned",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 85797,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "tail-gate-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 73,
+          "at": "2026-09-14T12:53:58Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "gate.reported",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "DELIVERY_HARNESS_MAX_WORKERS=4 npm run check",
+            "outcome": "fail",
+            "durationMs": 1156837
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "tail-gate-attrib-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 74,
+          "at": "2026-09-14T12:53:59Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "gate.reported",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "npx vitest run --testTimeout 60000 <20 tail-gate red files> (rerun alone)",
+            "outcome": "fail",
+            "durationMs": 354300
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "tail-gate-docs-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 75,
+          "at": "2026-09-14T12:54:00Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "gate.reported",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "npx vitest run docs/docs-references.test.ts docs/docs-examples.test.ts (candidate e69cdd5)",
+            "outcome": "pass",
+            "durationMs": 23290
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "tail-gate-attrib-2",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 76,
+          "at": "2026-09-14T12:54:08Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "gate.reported",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "npx vitest run lifecycle.test.ts preparation-telemetry.test.ts @ pristine origin/main",
+            "outcome": "fail",
+            "durationMs": 32130
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "2ec292c0-8eed-407e-b40d-36864d58d547",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 80,
+          "at": "2026-09-14T12:54:31Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "prepare",
+            "outcome": "ok",
+            "durationMs": 12011,
+            "preparation": {
+              "checks": "executed",
+              "reason": "ordinary"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "d2d739cc-4bc3-42c8-aba9-95d6861a6bbf",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 83,
+          "at": "2026-09-14T12:54:39Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "review-context",
+            "outcome": "ok",
+            "durationMs": 4260
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r6-reopen",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 84,
+          "at": "2026-09-14T12:55:34Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "round-6",
+            "bound": 6,
+            "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "reopensRoundId": "round-6"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r6-reopen-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 86,
+          "at": "2026-09-14T12:55:45Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "round-6",
+            "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+            "outcome": "aligned",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 0,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "0304ae0c-f3ca-415b-a77a-f4522f252003",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 89,
+          "at": "2026-09-14T12:56:12Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "emit-review-evidence",
+            "outcome": "ok",
+            "durationMs": 4106
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "39e1ced5-82fa-47c4-8bd4-37d85d645405",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 92,
+          "at": "2026-09-14T12:56:17Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "submit-evidence",
+            "outcome": "ok",
+            "durationMs": 4466
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "9d53723a-c95e-4f21-8721-9d38aba33264",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 95,
+          "at": "2026-09-14T12:56:24Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "gate",
+            "outcome": "ok",
+            "durationMs": 4388,
+            "digest": "b8a1132191df60077d62228f8512e5af3eb3a93ca7a4b7840dd9dc8caa2d0cdf"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "58b41172-ec63-44d0-a154-7d0ec9d4fe9e",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 98,
+          "at": "2026-09-14T12:56:45Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "record",
+            "outcome": "ok",
+            "durationMs": 15259
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "8d3edd13-21ea-4a86-839b-ae8afc2b01d5",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 101,
+          "at": "2026-09-14T12:56:58Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "verify",
+            "outcome": "ok",
+            "durationMs": 8898
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r6-replay-open",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 103,
+          "at": "2026-09-14T12:57:59Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "round-6-replay",
+            "bound": 6,
+            "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+            "lenses": [
+              "lens.outcome-correctness",
+              "lens.adversarial-testing"
+            ],
+            "reopensRoundId": "round-6"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "r6-replay-close",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 104,
+          "at": "2026-09-14T12:57:59Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "review.round.closed",
+          "actor": {
+            "role": "executor"
+          },
+          "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+          "attestation": "self",
+          "payload": {
+            "round": 6,
+            "roundId": "round-6-replay",
+            "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+            "outcome": "aligned",
+            "findings": {
+              "P0": 0,
+              "P1": 0,
+              "P2": 0,
+              "P3": 0
+            },
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 0,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "7e9b1ec7-47e5-47cf-b959-e409da6d4cfa",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 107,
+          "at": "2026-09-14T12:58:06Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "gate",
+            "outcome": "policy",
+            "durationMs": 3993
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "84ac920e-6e8b-49fa-9f94-46ee05da15dd",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 110,
+          "at": "2026-09-14T12:58:11Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "record",
+            "outcome": "policy",
+            "durationMs": 4026
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "b487d0b7-bc97-4765-a98f-8f01623299bd",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 113,
+          "at": "2026-09-14T12:58:20Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "verify",
+            "outcome": "ok",
+            "durationMs": 8858
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "pr-1",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 114,
+          "at": "2026-09-14T13:00:16Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "pr.opened",
+          "actor": {
+            "role": "executor"
+          },
+          "ticket": "V26-1504",
+          "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+          "attestation": "self",
+          "payload": {
+            "url": "https://github.com/kwam1na/agent-delivery-harness/pull/147",
+            "candidateTreeSha": "d076093e94f260f8f0603035be5f9770e632471b",
+            "ticket": "V26-1504"
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "4603cc39-dd48-4b4c-accf-58c51eb696b6",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 118,
+          "at": "2026-09-14T13:01:43Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "verify",
+            "outcome": "ok",
+            "durationMs": 13455
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "36ccfcc0-927b-42bb-a85d-973bf389a206",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 121,
+          "at": "2026-09-14T13:13:47Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "command.completed",
+          "actor": {
+            "role": "cli"
+          },
+          "attestation": "self",
+          "payload": {
+            "command": "verify",
+            "outcome": "ok",
+            "durationMs": 720491
+          }
+        },
+        {
+          "version": "run-event/2",
+          "eventId": "run-end",
+          "runId": "run-752c1ec0d1804258",
+          "seq": 122,
+          "at": "2026-09-14T13:20:36Z",
+          "repo": {
+            "commonDir": "/repo/.git"
+          },
+          "kind": "run.ended",
+          "actor": {
+            "role": "executor"
+          },
+          "attestation": "self",
+          "payload": {
+            "result": "complete",
+            "cost": {
+              "unit": "subagent-tokens",
+              "total": 1196036,
+              "reportedBy": "claude-code",
+              "coverage": "partial"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
