@@ -53,7 +53,16 @@ export function redactSecretText(text: string): RedactedText {
   return { text: result, redacted };
 }
 
-function firstSecretIn(text: string): string | undefined {
+/**
+ * The id of the first corpus pattern this string matches, or `undefined`.
+ *
+ * Exported because secret shape is worth deciding BEFORE a value becomes
+ * durable as well as at the append. A member whose value can never survive
+ * `applySecretDiscipline` is a member whose append is already lost; a caller
+ * that admits such a value and only discovers it at the store has, by then,
+ * often done something else irreversible on the strength of the admission.
+ */
+export function firstSecretIn(text: string): string | undefined {
   for (const pattern of SECRET_PATTERNS) {
     if (new RegExp(pattern.source, "g").test(text)) return pattern.id;
   }

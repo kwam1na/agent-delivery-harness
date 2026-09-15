@@ -116,6 +116,26 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
     `import { sha256 } from "../digest.ts";\n` +
     `import { FINISH_LINE_RESULT_SPEC } from "../spine/finish-line.ts";\n` +
     `export const resultDigestOf = (v: string): string => sha256(v + FINISH_LINE_RESULT_SPEC);\n`,
+  // The coordination unit: one module on each side of its registered edge, so
+  // the clean fixture actually makes `kernel-coordination` `present` and the
+  // rows below have something legal to plant next to. Round 3 found the class
+  // registered with no fixture entry at all, which silently downgraded it to
+  // `pending` — the clean-fixture row went red, and with it the suite's only
+  // proof that the sensor reports NO findings on a legal tree.
+  // All three allowlisted edges are exercised here, the redaction corpus
+  // included: an allowlist entry no clean-tree file uses is an entry whose
+  // removal nothing notices.
+  "packages/kernel/src/coordination/message.ts":
+    `import { SPINE_INSTANT } from "../spine/grammar.ts";\n` +
+    `import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";\n` +
+    `import { SECRET_PATTERNS } from "../checkpoint/redaction.ts";\n` +
+    `export const messageOk = (v: string): boolean =>\n` +
+    `  SPINE_INSTANT.test(v) && JOURNAL_ENTRY_SPEC.length > 0 && SECRET_PATTERNS.length > 0;\n`,
+  "packages/kernel/src/coordination/reconcile.ts":
+    `import { messageOk } from "./message.ts";\n` +
+    `export const reconcile = (v: string): boolean => messageOk(v);\n`,
+  "packages/kernel/src/checkpoint/redaction.ts":
+    `export const SECRET_PATTERNS = Object.freeze([{ id: "github-token", source: "ghp_" }] as const);\n`,
   "packages/kernel/src/checkpoint/journal-store.ts":
     `import { appendFile } from "node:fs/promises";\nexport const append = (p: string, line: string): Promise<void> => appendFile(p, line);\n`,
   "packages/kernel/src/host/claude-code.ts":
@@ -253,6 +273,48 @@ describe("the clean fixture", () => {
     expect(registry.every((entry) => entry.status === "present")).toBe(true);
     const result = runImportBoundarySensor({ root, protectedClasses: registry });
     expect(result.findings, `\n${JSON.stringify(result.findings, null, 2)}`).toEqual([]);
+  });
+
+  it("enforces the coordination class's d1 allowlist — a peer-unit import is a violation", () => {
+    // The allowlist is a policy claim ("it imports no peer unit ... so a remote
+    // message can reach no decision module by riding an import edge"), and a
+    // policy claim with no falsification row is a comment. Round 3 planted two
+    // widenings of this entry and neither turned a row red; these are the rows
+    // that now go red.
+    const findings = expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/coordination/reconcile.ts":
+          `import { messageOk } from "./message.ts";\n` +
+          `import { policyDigestOf } from "../policy/disposable.ts";\n` +
+          `export const reconcile = (v: string): boolean => messageOk(policyDigestOf(v));\n`,
+      },
+      "packages/kernel/src/coordination/reconcile.ts",
+    );
+    expect(findings.some((finding) => finding.message.includes("policy/disposable.ts"))).toBe(true);
+  });
+
+  it("enforces d1 purity in the coordination class — the fs family is a violation there too", () => {
+    expectFalsified(
+      "d1-kernel-purity",
+      {
+        "packages/kernel/src/coordination/reconcile.ts":
+          `import { readFileSync } from "node:fs";\n` +
+          `export const reconcile = (p: string): number => readFileSync(p).length;\n`,
+      },
+      "packages/kernel/src/coordination/reconcile.ts",
+    );
+  });
+
+  it("enforces the GEN-5 time ban in the coordination class", () => {
+    expectFalsified(
+      "e-time-ban",
+      {
+        "packages/kernel/src/coordination/reconcile.ts":
+          `export const reconcile = (entry: { recordedAt: string }): string => entry.recordedAt;\n`,
+      },
+      "packages/kernel/src/coordination/reconcile.ts",
+    );
   });
 
   it("keeps a legal in-function process.env read green", () => {

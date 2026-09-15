@@ -17,6 +17,8 @@ import {
   SUSPENDED_DELIVERY_STATES,
   TERMINAL_DELIVERY_STATES,
   classifyEventKind,
+  classifyEventKindIn,
+  eventKindEntry,
 } from "./vocabulary.ts";
 
 describe("the frozen journals", () => {
@@ -137,22 +139,30 @@ describe("the frozen event-kind vocabulary", () => {
         // `journal.ts`, and the external-actions unit extends them.
         "action.intent.recorded",
         "action.result.recorded",
+        // Defined out of reservation by the control-plane coordination unit,
+        // on the same sanctioned path: the mirror payload is now frozen in
+        // `journal.ts`. It is active AND observation-only — the only kind
+        // that is both, and the only one carrying content from outside this
+        // installation.
+        "control.plane.mirror.recorded",
       ].sort(),
     );
   });
 
   it("enumerates the reserved kinds with their owning journals verbatim", () => {
     expect(kindsIn("intake", "reserved")).toEqual([]);
-    expect(kindsIn("delivery", "reserved")).toEqual(["control.plane.mirror.recorded"]);
+    // Nothing is reserved any more: the mirror pair was the last one, and the
+    // control-plane coordination unit defined it out of reservation.
+    expect(kindsIn("delivery", "reserved")).toEqual([]);
     expect(kindsIn("maintenance", "reserved")).toEqual([]);
     // Both maintenance families are now defined by their owning units: the
     // maintenance lane and the retention/export/deletion contract family.
     expect(kindsIn("maintenance", "active")).toEqual(["maintenance.action.recorded", "retention.action.recorded"]);
   });
 
-  it("counts 29 active and 1 reserved (journal, kind) pairs", () => {
-    expect(activePairs.length).toBe(29);
-    expect(reservedPairs.length).toBe(1);
+  it("counts 30 active and 0 reserved (journal, kind) pairs", () => {
+    expect(activePairs.length).toBe(30);
+    expect(reservedPairs.length).toBe(0);
   });
 
   it("homes operator.confirmation.recorded in exactly two journals — the vocabulary is keyed by (journal, kind) pairs", () => {
@@ -200,8 +210,11 @@ describe("classifyEventKind", () => {
     });
   });
 
-  it("classifies an enumerated reserved pair as reserved — even the observation-only mirror kind", () => {
-    expect(classifyEventKind("delivery", "control.plane.mirror.recorded")).toEqual({ status: "reserved" });
+  it("classifies the mirror kind as active AND observation-only, now that it is defined", () => {
+    expect(classifyEventKind("delivery", "control.plane.mirror.recorded")).toEqual({
+      status: "active",
+      observationOnly: true,
+    });
   });
 
   it("classifies the retention kind as active in the maintenance journal only", () => {
@@ -217,6 +230,35 @@ describe("classifyEventKind", () => {
 
   it("classifies a kind outside the enumeration as unknown", () => {
     expect(classifyEventKind("delivery", "delivery.invented")).toEqual({ status: "unknown", knownIn: [] });
+  });
+
+  // The reserved branch, falsified over a supplied enumeration. No pair is
+  // reserved in `EVENT_VOCABULARY` today, so through the frozen export the
+  // branch cannot be reached and its collapse into the active arm is
+  // unobservable — a reserved pair would be classified `active` and, with no
+  // payload table behind it, silently downgraded by the validator.
+  it("classifies a reserved pair as reserved, over a supplied enumeration", () => {
+    const NEXT_TRANCHE = [
+      ...EVENT_VOCABULARY,
+      eventKindEntry("delivery", "delivery.next.tranche.recorded", "reserved", false, "the next tranche"),
+    ];
+    expect(classifyEventKindIn(NEXT_TRANCHE, "delivery", "delivery.next.tranche.recorded")).toEqual({
+      status: "reserved",
+    });
+    // Anti-vacuity: the same pair enumerated as active classifies as active,
+    // and absent from the enumeration classifies as unknown. The status is
+    // what is read, not the pair.
+    expect(
+      classifyEventKindIn(
+        [...EVENT_VOCABULARY, eventKindEntry("delivery", "delivery.next.tranche.recorded", "active", true)],
+        "delivery",
+        "delivery.next.tranche.recorded",
+      ),
+    ).toEqual({ status: "active", observationOnly: true });
+    expect(classifyEventKind("delivery", "delivery.next.tranche.recorded")).toEqual({
+      status: "unknown",
+      knownIn: [],
+    });
   });
 
   it("classifies a known kind in the wrong journal as unknown — pairs, not a kind→journal map", () => {

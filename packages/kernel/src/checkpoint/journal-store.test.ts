@@ -104,7 +104,34 @@ describe("the append-only checkpoint path", () => {
     });
     expect(invalidTransition.ok).toBe(false);
 
-    const reserved = await store.append({
+    // The kind-level refusal. This row used to send `control.plane.mirror.recorded`
+    // and assert `reserved_kind`; that kind is now active, defined by the
+    // control-plane coordination unit, so the reserved rejection it was written
+    // to prove can no longer be produced by any pair. Editing the expected code
+    // to match whatever the promoted kind now returns would pin nothing, so the
+    // row keeps its subject — a kind the vocabulary refuses before it asks any
+    // payload question, writing nothing — with a kind that is genuinely outside
+    // the vocabulary.
+    const outOfVocabulary = await store.append({
+      spec: "journal-entry/1",
+      journal: "delivery",
+      subjectId: "dlv-3",
+      expectedRevision: 1,
+      idempotencyKey: "e1-control.plane.mirror.replayed",
+      kind: "control.plane.mirror.replayed",
+      payload: {},
+    });
+    expect(outOfVocabulary.ok).toBe(false);
+    if (!outOfVocabulary.ok) {
+      expect(outOfVocabulary.rejections.map((rejection) => rejection.code)).toContain("unknown_kind");
+    }
+
+    // And the promoted kind itself is not a hole: active means its frozen
+    // payload table is enforced, so an empty payload still refuses and still
+    // writes nothing. Without this companion the row above would pass for free
+    // if the mirror kind had been dropped from the vocabulary rather than
+    // defined.
+    const promotedWithoutPayload = await store.append({
       spec: "journal-entry/1",
       journal: "delivery",
       subjectId: "dlv-3",
@@ -113,9 +140,9 @@ describe("the append-only checkpoint path", () => {
       kind: "control.plane.mirror.recorded",
       payload: {},
     });
-    expect(reserved.ok).toBe(false);
-    if (!reserved.ok) {
-      expect(reserved.rejections.map((rejection) => rejection.code)).toContain("reserved_kind");
+    expect(promotedWithoutPayload.ok).toBe(false);
+    if (!promotedWithoutPayload.ok) {
+      expect(promotedWithoutPayload.rejections.map((rejection) => rejection.code)).toContain("missing_member");
     }
 
     expect(readFileSync(journalPath, "utf8")).toBe(before);
@@ -247,7 +274,15 @@ describe("interrupted checkpoint commits — append/crash fault injection", () =
     expect(blockedAppend.ok).toBe(false);
   });
 
-  it("fails closed on a foreign journal line of a reserved control-plane kind", async () => {
+  // Previously "fails closed on a foreign journal line of a reserved
+  // control-plane kind", asserting `reserved_kind`. The mirror kind is active
+  // now, so that code is unreachable — but the hostile line this row was
+  // written against is the same line, and what must fail closed about it is
+  // unchanged: it carries a remote claim in a member the frozen payload does
+  // not define, and the durable path must refuse it rather than absorb it.
+  // The refusal simply comes from the closed payload table instead of from the
+  // reservation.
+  it("fails closed on a foreign journal line carrying a remote claim the mirror payload does not define", async () => {
     const journalPath = path.join(scratch, "foreign", "journal.jsonl");
     const store = createJournalStore(journalPath);
     expect((await store.append(registration("dlv-t4"))).ok).toBe(true);
@@ -266,8 +301,11 @@ describe("interrupted checkpoint commits — append/crash fault injection", () =
     const state = await store.state();
     expect(state.ok).toBe(false);
     if (!state.ok) {
-      expect(state.rejections.map((rejection) => rejection.code)).toContain("reserved_kind");
+      expect(state.rejections.map((rejection) => rejection.code)).toContain("unknown_member");
     }
+    // Failing closed means the store stays shut, not merely that one read
+    // complained.
+    expect((await store.append(pin("dlv-t4", 1))).ok).toBe(false);
   });
 
   it("serializes racing appends — at most one of two same-revision writers becomes durable", async () => {

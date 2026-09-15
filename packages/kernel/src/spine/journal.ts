@@ -43,7 +43,15 @@ import {
   type SpineCollector,
   type SpineVerdict,
 } from "./grammar.ts";
-import { DELIVERY_STATES, HOST_ACTIVITY_STATES, INTAKE_STATES, JOURNALS, classifyEventKind } from "./vocabulary.ts";
+import {
+  DELIVERY_STATES,
+  EVENT_VOCABULARY,
+  HOST_ACTIVITY_STATES,
+  INTAKE_STATES,
+  JOURNALS,
+  classifyEventKindIn,
+  type EventKindEntry,
+} from "./vocabulary.ts";
 
 export const JOURNAL_ENTRY_SPEC = "journal-entry/1";
 
@@ -55,6 +63,26 @@ export const WORKSPACE_DISPOSITIONS = Object.freeze([
 ] as const);
 
 export const APPROVAL_REQUEST_KINDS = Object.freeze(["waiver", "amendment"] as const);
+
+/**
+ * What an optional control plane can claim about a delivery, frozen here
+ * because the MIRROR RECORD is a durable journal payload and every durable
+ * payload's vocabulary belongs to the spine. The coordination unit's wire
+ * grammar imports this list rather than restating it, so the wire can never
+ * express a claim the journal cannot record, and the journal can never record
+ * one the wire cannot express.
+ */
+export const CONTROL_PLANE_CLAIM_KINDS = Object.freeze([
+  "enqueued",
+  "advanced",
+  "completed",
+  "cancelled",
+  "approval-notified",
+  "host-start-requested",
+] as const);
+
+/** How the local delivery reconciled the claim. Three outcomes, no fourth. */
+export const CONTROL_PLANE_DISPOSITIONS = Object.freeze(["mirror-only", "blocker", "coalesced"] as const);
 
 /**
  * The maintenance journal's frozen action vocabulary. The sensitive subset
@@ -516,6 +544,51 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
     { name: "productTrustEpoch", check: nonNegativeInt },
     { name: "repositoryAuthorityEpoch", check: nonNegativeInt },
   ]),
+  // The control-plane mirror: one minimally redacted projection of one
+  // ADMITTED remote claim, and the only durable payload whose content
+  // originates outside this installation.
+  //
+  // What it deliberately does NOT carry is the point of the shape. No state,
+  // no transition, no evidence reference, no obligation, no fence, no
+  // digest of anything local — there is no member here through which a remote
+  // claim could be mistaken for a local fact, because the grammar is closed
+  // and offers none. What it does carry is enough to audit the claim later:
+  // who said it (`messageId` on a named channel), what they said (`claim`),
+  // where it sat in their sequence (`remoteSequence`), which local fact epoch
+  // it was judged against (`localFactEpoch`), how it was reconciled
+  // (`disposition`), and one bounded sentence of detail.
+  //
+  // `summary` is named `summary` on purpose: it is the durable path's
+  // redactable free-text member, so a control plane that puts a credential in
+  // its claim detail has it redacted rather than stored, and a credential in
+  // any other member is rejected outright.
+  "delivery/control.plane.mirror.recorded": table([
+    { name: "messageId", check: spineId },
+    { name: "channelKeyId", check: spineId },
+    // The two members the replay ledger is rebuilt from. `message.ts` says of
+    // the wire nonce that "the replay ledger is the local journal", and
+    // `admission.ts` says the same of its consumed-nonce set and its
+    // per-channel high-water mark — so the journal has to be able to answer
+    // both questions after a restart, and round 3 found that it could not:
+    // the record kept no nonce at all, and identified the peer by KEY where
+    // the high-water mark is per CHANNEL. A ledger that empties on reconnect
+    // is not replay protection, and reconnect is the ticket's own scenario.
+    { name: "nonce", check: spineId },
+    { name: "channelDigest", check: sha256 },
+    { name: "claim", check: oneOf(CONTROL_PLANE_CLAIM_KINDS) },
+    { name: "remoteSequence", check: nonNegativeInt },
+    // The local fact epoch this record was APPENDED at — not the one the claim
+    // was judged against, when those differ. They differ for exactly one
+    // disposition: a `blocker` record follows the advancing `blocker.recorded`
+    // append that it reports, so it carries one more. Written that way on
+    // purpose: the coordination unit reads the coalescing window straight back
+    // off these records (`conflictBlockerEpochOf`) rather than recomputing it,
+    // and a reader that had to add one somewhere would be a second definition
+    // of the window.
+    { name: "localFactEpoch", check: nonNegativeInt },
+    { name: "disposition", check: oneOf(CONTROL_PLANE_DISPOSITIONS) },
+    { name: "summary", check: boundedText },
+  ]),
   "delivery/blocker.recorded": table([
     { name: "code", check: spineId },
     { name: "summary", check: boundedText },
@@ -571,6 +644,24 @@ const ENVELOPE_RULES: readonly MemberRule[] = [
 ];
 
 export function validateJournalEntry(value: unknown): SpineVerdict {
+  return validateJournalEntryIn(EVENT_VOCABULARY, value);
+}
+
+/**
+ * The same validation against a SUPPLIED enumeration, so the ordering this
+ * file's header states — a reserved pair rejects `reserved_kind` BEFORE any
+ * payload question is asked — is reachable by a test. No pair is reserved in
+ * the frozen vocabulary today, so without this seam the reserved branch is
+ * unreachable and its removal is unobservable: a reserved pair would fall
+ * through to the payload table, miss, and be reported as `unknown_kind`, which
+ * says the pair is outside the vocabulary when it is enumerated and owned.
+ * `validateJournalEntry` is the frozen export and delegates; the freeze is
+ * unchanged.
+ */
+export function validateJournalEntryIn(
+  vocabulary: readonly EventKindEntry[],
+  value: unknown,
+): SpineVerdict {
   const collector = createSpineCollector();
   if (!isSpineRecord(value)) {
     collector.emit("not_an_object", "", "expected a JSON object");
@@ -597,7 +688,7 @@ export function validateJournalEntry(value: unknown): SpineVerdict {
   const kind = value["kind"];
   if (typeof journal !== "string" || typeof kind !== "string") return collector.verdict();
 
-  const classification = classifyEventKind(journal, kind);
+  const classification = classifyEventKindIn(vocabulary, journal, kind);
   if (classification.status === "reserved") {
     collector.emit(
       "reserved_kind",

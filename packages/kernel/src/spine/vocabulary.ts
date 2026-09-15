@@ -19,13 +19,17 @@
  *      them. Active kinds have their payloads frozen in `journal.ts`;
  *      reserved kinds reject unconditionally — with or without a payload —
  *      until their owning unit defines them; a pair outside the enumeration
- *      rejects as unknown.
+ *      rejects as unknown. No pair is reserved today: every enumerated pair
+ *      has been defined by its owning unit, and the reserved branch stays
+ *      because it is the path the next tranche takes.
  *   3. The three-kind observation-only exemption: `activity.observed`,
  *      `trust.epoch.observed`, and `control.plane.mirror.recorded` never
  *      advance the expected journal revision that fences, assertions, and
- *      confirmations bind. The mirror kind is simultaneously reserved: the
- *      exemption records where it will sit once its owning unit defines it,
- *      and until then the reserved rejection wins.
+ *      confirmations bind. All three are now active; the mirror kind was
+ *      defined out of reservation by the control-plane coordination unit. It
+ *      is the only exempt kind whose content originates outside this
+ *      installation, and the exemption is what keeps a remote peer from
+ *      voiding a pending confirmation or assertion by talking.
  *
  * Adding any kind, state, or journal — active or reserved — is a spine
  * contract revision requiring contract-freeze owner approval. The vocabulary
@@ -163,8 +167,16 @@ export const EVENT_VOCABULARY: readonly EventKindEntry[] = Object.freeze([
   // in `journal.ts`. The external-actions unit extends them; it adds no pair.
   entry("delivery", "action.intent.recorded", "active"),
   entry("delivery", "action.result.recorded", "active"),
-  // Reserved — payloads belong to their owning units; reject until defined.
-  entry("delivery", "control.plane.mirror.recorded", "reserved", true, "control-plane coordination"),
+  // Defined by the control-plane coordination unit out of reservation — the
+  // sanctioned per-tranche path: the pair was enumerated with this owner from
+  // the start, and its payload (one minimally redacted projection of one
+  // admitted remote claim) is now frozen in `journal.ts`. It is the third and
+  // last member of the observation-only exemption, and the only one whose
+  // content originates outside this installation — which is precisely why it
+  // advances nothing: a kind that both carries a remote claim and moved the
+  // expected journal revision would let a talkative peer void every pending
+  // confirmation and assertion by talking.
+  entry("delivery", "control.plane.mirror.recorded", "active", true),
 ]);
 
 /** The three-kind observation-only exemption, verbatim. */
@@ -186,14 +198,38 @@ export type EventClassification =
  * can say so without ever accepting the pair.
  */
 export function classifyEventKind(journal: string, kind: string): EventClassification {
-  const match = EVENT_VOCABULARY.find((candidate) => candidate.journal === journal && candidate.kind === kind);
+  return classifyEventKindIn(EVENT_VOCABULARY, journal, kind);
+}
+
+/**
+ * The same classification against a SUPPLIED enumeration. It exists so the
+ * reserved branch is reachable by a test.
+ *
+ * No pair is reserved in `EVENT_VOCABULARY` today — every enumerated pair has
+ * been defined by its owning unit — and the branch is still live because it is
+ * the path the next tranche takes. That combination is exactly the shape that
+ * rots: a branch nothing can reach is a branch nothing notices the loss of,
+ * and deleting it downgrades the next tranche's reserved pair from
+ * `reserved_kind` ("enumerated, owned, payload not yet defined") to
+ * `unknown_kind` ("outside the frozen vocabulary") — two different facts with
+ * two different remedies. The enumeration is a parameter here rather than a
+ * fixture layer over the frozen one: `classifyEventKind` is the frozen export
+ * and delegates, so the freeze is unchanged and the branch is falsifiable.
+ */
+export function classifyEventKindIn(
+  vocabulary: readonly EventKindEntry[],
+  journal: string,
+  kind: string,
+): EventClassification {
+  const match = vocabulary.find((candidate) => candidate.journal === journal && candidate.kind === kind);
   if (match !== undefined) {
     return match.status === "active"
       ? { status: "active", observationOnly: match.observationOnly }
       : { status: "reserved" };
   }
-  const knownIn = EVENT_VOCABULARY.filter((candidate) => candidate.kind === kind).map(
-    (candidate) => candidate.journal,
-  );
+  const knownIn = vocabulary.filter((candidate) => candidate.kind === kind).map((candidate) => candidate.journal);
   return { status: "unknown", knownIn };
 }
+
+/** Builds one vocabulary entry. Exported so a caller can supply an enumeration to `classifyEventKindIn`. */
+export const eventKindEntry = entry;

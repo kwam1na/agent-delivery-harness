@@ -249,10 +249,39 @@ describe("the delivery journal reducer", () => {
     ).toContain("revision_mismatch");
   });
 
-  it("rejects a reserved kind — the exemption list does not resurrect it", () => {
-    expect(reduceCodes([...openingEntries(), deliveryEntry(6, "control.plane.mirror.recorded", {})])).toContain(
-      "reserved_kind",
-    );
+  it("exempts the control-plane mirror from advancing the revision — a remote claim moves no local number", () => {
+    const mirror = (revision: number, key: string): Entry =>
+      deliveryEntry(
+        revision,
+        "control.plane.mirror.recorded",
+        {
+          messageId: "message-1",
+          channelKeyId: "connector-key-1",
+          nonce: "nonce-1",
+          channelDigest: "d".repeat(64),
+          claim: "advanced",
+          remoteSequence: 7,
+          localFactEpoch: 6,
+          disposition: "mirror-only",
+          summary: "the control plane claims the delivery advanced",
+        },
+        key,
+      );
+    const outcome = reduceDeliveryJournal([
+      ...openingEntries(),
+      mirror(6, "mirror-a"),
+      mirror(6, "mirror-b"),
+      deliveryEntry(6, "transition.committed", { from: "preparing", to: "planning" }),
+    ]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // Two mirrors and one real transition: the revision moved exactly once.
+    expect(outcome.state.expectedRevision).toBe(7);
+    expect(outcome.state.state).toBe("planning");
+
+    // And a mirror that claims to have advanced the revision is a mismatch,
+    // so a peer cannot buy an advance by asserting one.
+    expect(reduceCodes([...openingEntries(), mirror(7, "mirror-c")])).toContain("revision_mismatch");
   });
 
   it("rejects a duplicate idempotency key", () => {

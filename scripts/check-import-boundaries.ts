@@ -279,6 +279,37 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     d1SiblingAllowance: true,
   },
   {
+    id: "kernel-coordination",
+    path: "packages/kernel/src/coordination",
+    kind: "dir",
+    rules: ["d1", "e"],
+    status: "present",
+    // The coordination unit consumes two frozen spine contracts and authors
+    // no primitive of its own: the member grammar its wire family is written
+    // in, and the journal payload table that owns the mirror record's claim
+    // vocabulary — imported rather than restated so the wire can never
+    // express a claim the journal cannot record.
+    //
+    // It imports no peer unit. Everything it needs to know about local
+    // authority, local evidence and the local fact epoch is passed in as
+    // values and predicates, never imported, so a remote message can reach no
+    // decision module by riding an import edge. d1 also keeps it away from
+    // the fs/process/os family: a transport belongs to the adapter that binds
+    // the port, never to the unit that decides what a message is worth.
+    //
+    // The third entry is the durable path's SECRET CORPUS, and it is here for
+    // the same reason the claim vocabulary is: so the wire cannot admit what
+    // the journal will refuse. `messageId` and `nonce` are authored by the
+    // peer and reach the durable mirror payload, a spine id can be shaped like
+    // a credential, and a structural member carrying one is rejected at the
+    // append — by which point the reconciliation already owes an advancing
+    // blocker. The corpus is a frozen list of patterns with no I/O and no
+    // authority of its own; importing it restates nothing and lets this unit
+    // refuse the message before anything is owed.
+    d1Allowlist: ["spine/grammar.ts", "spine/journal.ts", "checkpoint/redaction.ts"],
+    d1SiblingAllowance: true,
+  },
+  {
     id: "kernel-finish-line",
     path: "packages/kernel/src/finish-line",
     kind: "dir",

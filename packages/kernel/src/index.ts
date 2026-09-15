@@ -525,6 +525,8 @@ export {
   ACTION_APPROVALS,
   ACTION_VERIFICATIONS,
   APPROVAL_REQUEST_KINDS,
+  CONTROL_PLANE_CLAIM_KINDS,
+  CONTROL_PLANE_DISPOSITIONS,
   DESCENDANT_TEARDOWN_STATUSES,
   EXTERNAL_ACTION_OUTCOMES,
   JOURNAL_ENTRY_SPEC,
@@ -1075,6 +1077,57 @@ export {
   type ReconciliationFinding,
   type RevalidationObservation,
 } from "./finish-line/external-action.ts";
+// The control-plane coordination unit: the optional coordination wire, the
+// decision about what one remote message is worth, and the refusing port this
+// product actually ships. Nothing here can advance local state — that is the
+// unit's entire contract, and the closed grammars are what make it mechanical.
+export {
+  COORDINATION_MESSAGE_KINDS,
+  COORDINATION_MESSAGE_SPEC,
+  COORDINATION_PROTOCOL_VERSION,
+  CONTROL_PLANE_CLAIMS,
+  validateCoordinationMessage,
+  type ControlPlaneClaim,
+  type CoordinationAuthentication,
+  type CoordinationMessage,
+  type CoordinationMessageKind,
+} from "./coordination/message.ts";
+export {
+  COORDINATION_REFUSALS,
+  admitCoordinationMessage,
+  type CoordinationAdmission,
+  type CoordinationAdmissionView,
+  replayLedgerOf,
+  type CoordinationRefusal,
+  type CoordinationRefusalCode,
+  type CoordinationReplayLedger,
+  type MirroredMessageView,
+} from "./coordination/admission.ts";
+export {
+  CONTROL_PLANE_CONFLICT_BLOCKER_CODE,
+  claimContradictsLocalHistory,
+  conflictBlockerEpochOf,
+  localFactEpochOf,
+  reconcileRemoteClaim,
+  type LocalHistoryView,
+  type ClaimDisposition,
+  type ClaimReconciliation,
+  type MirrorRecordView,
+} from "./coordination/reconcile.ts";
+export {
+  COORDINATION_PORT_UNBOUND_CODE,
+  UNBOUND_COORDINATION_PORT,
+  type CoordinationDispatch,
+  type CoordinationPort,
+} from "./coordination/port.ts";
+export {
+  SIMULATED_MESSAGE_OPTION_NAMES,
+  createCoordinationSimulator,
+  type CoordinationSimulator,
+  type CoordinationSimulatorOptions,
+  type SimulatedExchange,
+  type SimulatedMessageOptions,
+} from "./coordination/simulator.ts";
 export {
   createManagedDeliveryFacade,
   type CreateFacadeInput,
