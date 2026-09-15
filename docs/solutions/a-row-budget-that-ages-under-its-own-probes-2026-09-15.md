@@ -143,10 +143,19 @@ from outside, and the bare `Test timed out in Nms` is back with the guard row
 still green. The row asserted the table it read, not the wiring it described —
 and `expect(bounded.length).toBe(4)` counted entries in that same table, so it
 could only fail by editing itself. A budget is now one record keyed by the row's
-own name, and a row names itself and nothing else: `itBoundedRow` takes the
-bound, the ceiling and the sampler from that one key, and the guard row asserts
-that the rows carrying a budget are exactly the rows the record names. There is
-nowhere left to write a bound.
+own name, and a row names itself and nothing else.
+
+That first attempt at the repair was itself the same mistake one level up, and
+the next round caught it. The registry it added recorded row *names*, so the
+guard asserted that a row HAD a budget and still nothing about the two numbers
+the row ran under: passing a ceiling where a bound belonged satisfied every
+assertion, and the bare timeout came back. A record compared against a registry
+that both sides derive from the same key observes the table, not the wiring —
+which is the sentence above, rewritten one level down. So `registerBudget` is
+now the only expression in the file that turns a name into two numbers, it
+registers exactly what it hands out, every declaration passes what it returned,
+and the guard row orders the registered numbers. There is nowhere left to write
+a bound and nowhere to pass one that is not the one asserted.
 
 The same reading applies to the instrument's own test. It drove the sampler at a
 5 ms interval against a 60 ms probe, so a sampler that timed the whole cycle —

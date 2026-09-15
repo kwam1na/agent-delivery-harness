@@ -55,8 +55,9 @@ import { buildProductRuntime } from "./build-product-runtime.ts";
  * with the bare `Test timed out in Nms` this ticket was filed for. Neither the
  * constants nor any assertion over them can see that. So a row does not get to
  * name its own numbers — it names itself, and `itBoundedRow` takes both from
- * this record, which is also what the vitest ceiling is read from. There is no
- * longer anywhere to write a bound.
+ * this record through `registerBudget`, which registers exactly what it hands
+ * out — so the numbers the guard row orders are the numbers the row ran under,
+ * not a second reading of the same table.
  *
  * - the build: one esbuild pass over four entry points plus two rollup
  *   declaration passes, measured 1 425 ms cold and 1 061 ms warm.
@@ -225,6 +226,22 @@ export function startExecSampler(intervalMs: number, probe: () => Promise<void> 
 }
 
 /**
+ * One row's name and its two numbers, travelling together.
+ *
+ * `runRowWithStallAttribution` takes the whole thing rather than a loose
+ * `boundMs`, which makes this the only place in the file that reads a bound at
+ * all: the object the guard row orders is, by identity, the object the wrapper
+ * ran under. A use site that reached for the ceiling where the bound belongs
+ * would have to reach inside the wrapper, where the short-bound row below
+ * observes it directly.
+ */
+export interface RowBudget {
+  readonly row: string;
+  readonly boundMs: number;
+  readonly ceilingMs: number;
+}
+
+/**
  * Run one row's work under its own bound, with its refusal attributed.
  *
  * Two things the row cannot do for itself. The bound is enforced HERE rather
@@ -235,11 +252,11 @@ export function startExecSampler(intervalMs: number, probe: () => Promise<void> 
  * it at all.
  */
 export async function runRowWithStallAttribution<T>(options: {
-  readonly row: string;
-  readonly boundMs: number;
+  readonly budget: RowBudget;
   readonly sampler: ExecSampler;
   readonly work: () => Promise<T>;
 }): Promise<T> {
+  const { row, boundMs } = options.budget;
   let bound: ReturnType<typeof setTimeout> | undefined;
   try {
     const working = options.work();
@@ -249,14 +266,14 @@ export async function runRowWithStallAttribution<T>(options: {
     return await Promise.race([
       working,
       new Promise<never>((_, reject) => {
-        bound = setTimeout(() => { reject(new Error(`exceeded its ${options.boundMs} ms bound`)); }, options.boundMs);
+        bound = setTimeout(() => { reject(new Error(`exceeded its ${boundMs} ms bound`)); }, boundMs);
       }),
     ]);
   } catch (error) {
     // A bare `gate expected exit 0` is what sent this row to three separate
     // deliveries as a suspected product defect. Say which it is.
     throw new Error(attributeRowFailure({
-      row: options.row,
+      row,
       failure: error instanceof Error ? error.message : String(error),
       execSampleMs: options.sampler.stop(),
     }).message, { cause: error });
@@ -267,34 +284,58 @@ export async function runRowWithStallAttribution<T>(options: {
 }
 
 /**
- * Every row that was in fact declared through the budget, in declaration order.
+ * The two numbers each bounded row was actually declared with, in declaration
+ * order.
  *
- * `itBoundedRow` appends here, so the guard row can assert that the set of rows
- * carrying a budget is exactly the set of rows in `ROW_BUDGET` — a row declared
- * with a bare `it` and a hand-written bound is then a named failure rather than
- * a silent one, and a stale entry left in the record is too.
+ * The names are not the interesting part, and a registry that carried only
+ * names was the round-4 defect: it proved a row HAD a budget and nothing at all
+ * about the numbers that reached `boundMs:` and vitest's timeout argument, so
+ * passing a ceiling as a bound satisfied it. What is registered here is what
+ * was passed — the same two values, not a second reading of the record — so the
+ * guard row orders the numbers a row RUNS under, and the set of names still
+ * catches a row declared with a bare `it` or a stale record entry.
  */
-const declaredBoundedRows: BudgetedRow[] = [];
+const declaredBoundedRows: RowBudget[] = [];
 
 /**
- * Declare one bounded row.
+ * Read one row's budget, and register exactly what was read.
+ *
+ * This is the only place in the file that turns a row name into two numbers.
+ * Every consumer takes them from the object it returns, which is the object the
+ * guard row asserts over, so no expression producing a bound goes unobserved.
+ */
+function registerBudget(row: BudgetedRow): RowBudget {
+  const declared: RowBudget = { row, boundMs: ROW_BUDGET[row].bound, ceilingMs: ROW_BUDGET[row].ceiling };
+  declaredBoundedRows.push(declared);
+  return declared;
+}
+
+/** The bounded, sampled, attributed body every budgeted row runs as. */
+function boundedBody(declared: RowBudget, work: () => Promise<void>): () => Promise<void> {
+  return async () => {
+    await runRowWithStallAttribution({ budget: declared, sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS), work });
+  };
+}
+
+/**
+ * Declare one bounded row, or the one bounded hook.
  *
  * The row's name is the only thing a caller supplies: the inner bound, the
  * outer vitest ceiling and the sampler all come from `ROW_BUDGET` under that
  * one key, and the name is also the title vitest reports and the string the
  * attribution prints. A row cannot be given a bound above its own ceiling
- * because it cannot be given a bound at all.
+ * because it cannot be given a bound at all — and the hook goes through the
+ * same door as the rows, because it is the file's only producer and a bare
+ * `Test timed out` there fails every row at once.
  */
 function itBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
-  declaredBoundedRows.push(row);
-  it(row, async () => {
-    await runRowWithStallAttribution({
-      row,
-      boundMs: ROW_BUDGET[row].bound,
-      sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
-      work,
-    });
-  }, ROW_BUDGET[row].ceiling);
+  const declared = registerBudget(row);
+  it(row, boundedBody(declared, work), declared.ceilingMs);
+}
+
+function beforeAllBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
+  const declared = registerBudget(row);
+  beforeAll(boundedBody(declared, work), declared.ceilingMs);
 }
 
 /**
@@ -308,21 +349,13 @@ function itBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
 let shared: string;
 let sharedRuntime: string;
 
-declaredBoundedRows.push("the shared runtime build");
-beforeAll(async () => {
-  await runRowWithStallAttribution({
-    row: "the shared runtime build",
-    boundMs: ROW_BUDGET["the shared runtime build"].bound,
-    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
-    work: async () => {
-      shared = await mkdtemp(path.join(os.tmpdir(), "product-runtime-shared-"));
-      const manifest = path.join(shared, "workflow.json");
-      await writeFile(manifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: "a".repeat(64) }));
-      sharedRuntime = path.join(shared, "runtime");
-      await buildProductRuntime(process.cwd(), manifest, sharedRuntime);
-    },
-  });
-}, ROW_BUDGET["the shared runtime build"].ceiling);
+beforeAllBoundedRow("the shared runtime build", async () => {
+  shared = await mkdtemp(path.join(os.tmpdir(), "product-runtime-shared-"));
+  const manifest = path.join(shared, "workflow.json");
+  await writeFile(manifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: "a".repeat(64) }));
+  sharedRuntime = path.join(shared, "runtime");
+  await buildProductRuntime(process.cwd(), manifest, sharedRuntime);
+});
 
 afterAll(async () => { await rm(shared, { recursive: true, force: true }); });
 
@@ -561,7 +594,8 @@ it("refuses through the attribution on its own bound, and carries the cause", as
 
   // The wrapper reads the sampler it was given: the same failure attributes to
   // the host or to the candidate on those samples alone.
-  const attributed = await runRowWithStallAttribution({ row, boundMs: 60_000, sampler: stalled, work: async () => { throw cause; } })
+  const patient: RowBudget = { row, boundMs: 60_000, ceilingMs: 120_000 };
+  const attributed = await runRowWithStallAttribution({ budget: patient, sampler: stalled, work: async () => { throw cause; } })
     .then(() => undefined, (error: unknown) => error as Error);
   expect(attributed?.message).toContain("environment:");
   expect(attributed?.message).toContain("9000 ms");
@@ -569,17 +603,21 @@ it("refuses through the attribution on its own bound, and carries the cause", as
   // The original refusal is not replaced, only named.
   expect(attributed?.cause).toBe(cause);
 
-  await expect(runRowWithStallAttribution({ row, boundMs: 60_000, sampler: quiet, work: async () => { throw cause; } }))
+  await expect(runRowWithStallAttribution({ budget: patient, sampler: quiet, work: async () => { throw cause; } }))
     .rejects.toThrow("candidate:");
 
   // Its own bound is what refuses, not vitest's ceiling: a row aborted from
   // outside never reaches this catch, and `Test timed out in Nms` is the exact
   // message V26-2084 was filed for.
-  await expect(runRowWithStallAttribution({ row, boundMs: 20, sampler: stalled, work: () => new Promise<never>(() => {}) }))
+  // The bound it enforces is the `boundMs` of the budget it was handed, not the
+  // `ceilingMs` sitting beside it: work that never settles refuses in 20 ms, and
+  // a wrapper reaching for the wrong field of the same object would sit here for
+  // two minutes and be killed by vitest without an attribution.
+  await expect(runRowWithStallAttribution({ budget: { row, boundMs: 20, ceilingMs: 120_000 }, sampler: stalled, work: () => new Promise<never>(() => {}) }))
     .rejects.toThrow("exceeded its 20 ms bound");
 
   // And a row that finishes returns its value rather than being wrapped.
-  await expect(runRowWithStallAttribution({ row, boundMs: 60_000, sampler: quiet, work: async () => "qualified" }))
+  await expect(runRowWithStallAttribution({ budget: patient, sampler: quiet, work: async () => "qualified" }))
     .resolves.toBe("qualified");
 });
 
@@ -608,23 +646,27 @@ it("keeps every inner bound under its own ceiling, and every bounded row on the 
   // restores the bare `Test timed out in Nms` this ticket was filed for: vitest
   // aborts the row from outside and its catch never runs. Every row still
   // passes on a healthy host, so nothing else here would notice.
-  const entries = Object.entries(ROW_BUDGET) as ReadonlyArray<readonly [BudgetedRow, (typeof ROW_BUDGET)[BudgetedRow]]>;
-  for (const [row, budget] of entries) {
-    expect(budget.bound, `${row}: bound under ceiling`).toBeLessThan(budget.ceiling);
+  // Ordering the record's own numbers would not be enough: it says nothing
+  // about the numbers a row RUNS under, and that gap is what let a ceiling be
+  // passed as a bound while every pair in the record stayed ordered. So the
+  // assertion is over what was registered at the declaration — the same two
+  // values that reached `runRowWithStallAttribution` and vitest.
+  expect(declaredBoundedRows.length).toBeGreaterThan(0);
+  for (const declared of declaredBoundedRows) {
+    expect(declared.boundMs, `${declared.row}: bound under ceiling`).toBeLessThan(declared.ceilingMs);
   }
 
-  // Ordering the record's own numbers is not enough on its own: it says nothing
-  // about the numbers a row RUNS under, and a row given a hand-written bound is
-  // invisible to it. So the rows that carry a budget are exactly the rows this
-  // record names — a row declared with a bare `it` drops out of the left side,
-  // and an entry kept here after its row went away is left on the right.
-  expect([...declaredBoundedRows].sort()).toEqual(entries.map(([row]) => row).sort());
+  // And the rows that carry a budget are exactly the rows the record names — a
+  // row declared with a bare `it` drops out of the left side, an entry kept
+  // here after its row went away is left on the right, and a row registered
+  // twice lengthens the left.
+  expect(declaredBoundedRows.map((declared) => declared.row).sort()).toEqual(Object.keys(ROW_BUDGET).sort());
 
   // And the sampler has to get several starts in before the tightest of those
   // bounds, or the verdict rests on one reading — at a large enough interval it
   // takes one sample and sleeps past every row, which is the v1 defect restored
   // by a single constant.
-  expect(EXEC_SAMPLE_INTERVAL_MS * 10).toBeLessThan(Math.min(...entries.map(([, budget]) => budget.bound)));
+  expect(EXEC_SAMPLE_INTERVAL_MS * 10).toBeLessThan(Math.min(...declaredBoundedRows.map((declared) => declared.boundMs)));
 });
 
 itBoundedRow("qualifies scoped execution through the actual bundled runtime", scopedRow);
