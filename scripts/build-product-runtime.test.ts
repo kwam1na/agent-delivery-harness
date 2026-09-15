@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { getHooks } from "vitest/suite";
 import { buildProductRuntime } from "./build-product-runtime.ts";
 
 /**
@@ -333,9 +334,19 @@ function registerBudget(row: BudgetedRow): RowBudget {
  *   assertion green. `task.timeout` is what vitest will enforce, so that is
  *   what is read.
  *
- * `beforeAll` can consume no fixtures and vitest exposes no hook timeout, so
- * the hook passes `undefined` and only the first check runs for it. That
- * residue is real, and is stated rather than papered over.
+ * The hook is not exempt from the second check. `beforeAll` consumes no
+ * fixtures, so there is no `task` to read — but the suite's registered hooks
+ * carry the timeout vitest will enforce on them, and `getHooks` from
+ * `vitest/suite` reaches them. An earlier version of this comment claimed
+ * "vitest exposes no hook timeout" and treated the hook as an accepted residue;
+ * that was false at vitest 4.1.11, and a ceiling lowered onto the hook's own
+ * bound survived every assertion here while restoring the bare `Test timed out
+ * in 120000ms` for the file's ONLY producer — the worst place in the file to
+ * lose the attribution. The hook now reads its ceiling back like every row.
+ *
+ * `undefined` is still accepted, because the read-back can return nothing; what
+ * makes that safe is that the hook's own work asserts the number it recorded,
+ * so a read-back that yields nothing fails rather than silently skips.
  *
  * What was checked is recorded, because a check nothing records is a check that
  * can be deleted from the one path that calls it while the row proving the
@@ -393,7 +404,20 @@ function itBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
 function beforeAllBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
   const declared = registerBudget(row);
   const body = boundedBody(declared, work);
-  beforeAll(async () => { await body(undefined); }, declared.ceilingMs);
+  // The hook's counterpart to `it`'s `task.timeout`. The suite's registered
+  // `beforeAll` hooks carry the ceiling vitest will enforce on them; this hook
+  // is the last one registered, and `VITEST_CLEANUP_TIMEOUT` is where the
+  // runner keeps that number. Reading it here is what makes a ceiling lowered
+  // onto the hook's own bound fail instead of quietly restoring the bare
+  // `Test timed out` for the file's only producer. The hook keeps the same
+  // irreducible residue the rows do, for the same reason: a body rewritten to
+  // hand the check `declared.ceilingMs` instead of the read-back would pass,
+  // and no assertion inside the process can tell a number read from the runner
+  // from an equal number that was not.
+  beforeAll(async ({}, suite) => {
+    const registered = getHooks(suite as never).beforeAll as unknown as ReadonlyArray<Record<symbol, unknown>>;
+    await body(registered.at(-1)?.[Symbol.for("VITEST_CLEANUP_TIMEOUT")] as number | undefined);
+  }, declared.ceilingMs);
 }
 
 /**
@@ -408,8 +432,10 @@ let shared: string;
 let sharedRuntime: string;
 
 beforeAllBoundedRow("the shared runtime build", async () => {
-  // Same evidence for the hook, which is the half that gets no ceiling.
-  expect(checkedDeclarations).toContain("the shared runtime build:hook");
+  // Same evidence for the hook, on the number vitest is actually enforcing on
+  // it. Spelt out rather than derived, so a read-back that returns nothing —
+  // or the registered ceiling — has to restate this line to pass.
+  expect(checkedDeclarations).toContain("the shared runtime build:240000");
   shared = await mkdtemp(path.join(os.tmpdir(), "product-runtime-shared-"));
   const manifest = path.join(shared, "workflow.json");
   await writeFile(manifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: "a".repeat(64) }));
@@ -714,15 +740,19 @@ it("refuses a budgeted row that is not running on what it declared", () => {
   // abort on top of the inner bound and brings the bare timeout back.
   expect(() => { assertRunsOnItsDeclaration(declared, declared.boundMs); }).toThrow("vitest ceiling is the registered ceiling");
   expect(() => { assertRunsOnItsDeclaration(declared, declared.ceilingMs); }).not.toThrow();
-  // A hook consumes no fixtures, so `undefined` is all it can be given — and
-  // the identity check still runs for it.
+  // A read-back that yields nothing skips the ceiling half rather than
+  // asserting a wrong number; what keeps that honest is the hook's own work,
+  // which names the figure it recorded.
   expect(() => { assertRunsOnItsDeclaration(declared, undefined); }).not.toThrow();
   // An unregistered budget is what a `registerBudget` handing back a copy of
   // what it pushed would produce: the registry holds an honest pair while the
-  // row runs on another one. `toContain` compares by reference, which is the
-  // whole of the claim.
-  const unregistered: RowBudget = { row: "never declared", boundMs: 1, ceilingMs: 2 };
-  expect(() => { assertRunsOnItsDeclaration(unregistered, 2); }).toThrow("runs on the budget it registered");
+  // row runs on another one. The fixture is therefore a COPY of a registered
+  // budget carrying its real ceiling — field-for-field equal, a different
+  // object — because that is the only shape that separates `toContain` from
+  // `toContainEqual`. An unequal fixture would pass under either, and the
+  // by-reference claim is the whole of this check.
+  const unregistered: RowBudget = { ...declared };
+  expect(() => { assertRunsOnItsDeclaration(unregistered, declared.ceilingMs); }).toThrow("runs on the budget it registered");
 });
 
 it("keeps every inner bound under its own ceiling, and every bounded row on the budget", () => {

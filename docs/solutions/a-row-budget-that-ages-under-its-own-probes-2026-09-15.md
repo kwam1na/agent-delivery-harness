@@ -167,15 +167,26 @@ row body now reads `task.timeout`, which is what vitest will actually enforce,
 and compares it to the ceiling its budget registered; it also checks by
 reference that the budget it is running on is the one in the registry. A row
 with no work is declared through the same door purely so that both checks are
-exercised in seconds rather than only in the rows that cost minutes. A
-`beforeAll` hook can consume no fixtures and vitest exposes no hook timeout, so
-the hook's ceiling stays unread; that residue is written down rather than
-papered over.
+exercised in seconds rather than only in the rows that cost minutes.
 
-**Three times, the repair asserted one level above the thing that could go
+And a fourth pass, on the half the third pass had excused. The hook was written
+off as unreachable — "a `beforeAll` consumes no fixtures and vitest exposes no
+hook timeout" — and the residue was written down as if writing it down settled
+it. It was simply false at vitest 4.1.11: the suite's registered hooks carry the
+timeout the runner will enforce, and `getHooks` from `vitest/suite` reaches it.
+Lowering the hook's ceiling onto its own bound left the whole suite green and
+restored the bare `Test timed out in 120000ms` for the file's ONLY producer — a
+build every row waits on, so the one site where losing the attribution fails
+every row at once. **A residue accepted on a claim about the tool, rather than
+on a claim about the evidence, is a hole with a comment over it.** The cheap way
+to tell the two apart is to try to disprove the claim before writing it down;
+the expensive way is what happened here.
+
+**Four times, the repair asserted one level above the thing that could go
 wrong.** The record instead of the wiring, the names instead of the numbers, the
-numbers instead of what the runner enforces. Each time the giveaway was the
-same: the assertion could be satisfied without the mechanism existing.
+numbers instead of what the runner enforces, and the rows instead of the hook.
+Each time the giveaway was the same: the assertion could be satisfied without
+the mechanism existing.
 
 The same reading applies to the instrument's own test. It drove the sampler at a
 5 ms interval against a 60 ms probe, so a sampler that timed the whole cycle —
