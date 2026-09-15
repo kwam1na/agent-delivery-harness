@@ -415,6 +415,49 @@ describe("parseDeliveryRecord", () => {
     expect(parsed.blockers[0]?.code).toBe("delivery_record_malformed");
   });
 
+  /**
+   * THE SPAN IS OPERATOR-EDITABLE TEXT TOO. `runSpan` is optional, so the
+   * absent case must parse; every other shape a hand-edited record can carry
+   * there must not, or `verify`'s later comparison reads members it never
+   * checked. One vector per rejection branch, and the accept side pinned
+   * beside them so a guard that refused everything would fail here.
+   */
+  it("accepts a well-formed run span and rejects every other shape of one", () => {
+    const record = buildFreshRecord();
+    const withSpan = (runSpan: unknown) => parseDeliveryRecord(`${JSON.stringify({ ...record, runSpan })}\n`);
+
+    expect(parseDeliveryRecord(`${JSON.stringify(record)}\n`).ok, "an absent span parses").toBe(true);
+    expect(withSpan({ startedAt: "2026-09-15T09:00:00Z", endedAt: "2026-09-15T15:00:00Z" }).ok).toBe(true);
+    // Equal instants are a span: a record written in the same second the run
+    // started is not malformed.
+    expect(withSpan({ startedAt: "2026-09-15T09:00:00Z", endedAt: "2026-09-15T09:00:00Z" }).ok).toBe(true);
+
+    for (const rejected of [
+      // Out of order.
+      { startedAt: "2026-09-15T15:00:00Z", endedAt: "2026-09-15T09:00:00Z" },
+      // An extra member, which a comparison would never look at.
+      { startedAt: "2026-09-15T09:00:00Z", endedAt: "2026-09-15T15:00:00Z", note: "trust me" },
+      // Half a span.
+      { startedAt: "2026-09-15T09:00:00Z" },
+      { endedAt: "2026-09-15T15:00:00Z" },
+      {},
+      // Instants that are not the fixed-width UTC shape the journal writes.
+      { startedAt: "2026-09-15T09:00:00.000Z", endedAt: "2026-09-15T15:00:00Z" },
+      { startedAt: "2026-09-15T09:00:00+01:00", endedAt: "2026-09-15T15:00:00Z" },
+      { startedAt: "yesterday", endedAt: "2026-09-15T15:00:00Z" },
+      { startedAt: 1, endedAt: 2 },
+      // Not an object at all.
+      "2026-09-15T09:00:00Z",
+      null,
+      [],
+    ]) {
+      const parsed = withSpan(rejected);
+      expect(parsed.ok, `expected ${JSON.stringify(rejected)} to be refused`).toBe(false);
+      if (parsed.ok) continue;
+      expect(parsed.blockers[0]?.code).toBe("delivery_record_malformed");
+    }
+  });
+
   it("accepts every outcome the evaluator can actually produce", () => {
     const record = buildFreshRecord();
     for (const outcome of RESOLUTION_OUTCOMES.filter((kind) => kind !== "blocked")) {

@@ -152,6 +152,7 @@ interface InventoryRow {
   readonly status: string;
   readonly open: boolean;
   readonly current: boolean;
+  readonly durationSeconds: number | null;
   readonly bytes: number;
 }
 
@@ -191,7 +192,7 @@ describe("runs list --json", () => {
     expect(inventory["truncated"]).toBe(false);
 
     const [row] = rowsOf(inventory);
-    expect(Object.keys(row!).sort()).toEqual(["bytes", "current", "open", "runId", "status"]);
+    expect(Object.keys(row!).sort()).toEqual(["bytes", "current", "durationSeconds", "open", "runId", "status"]);
     expect(row!.runId).toBe(runId);
     // A run with nothing but `run.started` is open and cannot be complete.
     expect(row!.status).toBe("incomplete");
@@ -477,7 +478,7 @@ describe("the human runs listing", () => {
     const bytes = rowsOf(await listJson(dir))[0]!.bytes;
     expect(listed.out).toBe(
       `runs in ${runsDir}\n  (${READOUT_LABELS})\n` +
-        `  ${runId}  incomplete  open current  ${bytes} bytes\n` +
+        `  ${runId}  incomplete  open current  0s  ${bytes} bytes\n` +
         `total ${bytes} bytes across 1 run(s)\n`,
     );
   });

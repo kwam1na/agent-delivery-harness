@@ -285,6 +285,77 @@ export async function resolveRunJournalRow(input: {
 }
 
 /**
+ * The instants a delivery record stamps: the journal's own first and last.
+ *
+ * `endedAt` is the last instant the journal had REACHED when it was read, not
+ * the run's ending — `record` runs long before `run.ended`, and a record that
+ * waited for the run to end would never be written. So the pair is the span the
+ * delivery had spent by the time it recorded, which is the figure the record is
+ * for; `runs show` is where the run's own ending is read.
+ */
+export interface RunSpanRow {
+  readonly runId: string;
+  readonly startedAt: string;
+  readonly endedAt: string;
+}
+
+/**
+ * The span of the journal that describes this candidate, or nothing.
+ *
+ * FOUND BY TREE SHA FIRST, for the reason `resolveRunJournalRow` is: a journal
+ * bound to this candidate is one that provably describes it, and by verify time
+ * the run has usually ended and cleared the worktree pointer. The pointer is a
+ * FALLBACK and only where the caller says so, because the two callers need
+ * different things from a miss. `record` is stamping: it runs mid-run, before
+ * anything need have journaled this exact tree, and the worktree's current run
+ * is the run it is recording from — a best-effort stamp is better than none.
+ * `verify` is refusing: a refusal must rest on a journal that binds the
+ * candidate the record binds, never on whichever run happens to be current in
+ * the checkout someone verified from, so it asks without the fallback and
+ * reports the miss as unchecked.
+ *
+ * MORE THAN ONE RUN CAN BIND ONE CANDIDATE, and the store says so: a delivery
+ * that recorded in run A and is verified from a later run B in the same
+ * worktree has two journals naming that tree, and `findByCandidateTreeSha`
+ * returns the most recently started one with the rest in `alsoMatching`.
+ * Refusing on whichever sorted first would block an honest record whose span
+ * run A reports exactly. So a caller that already knows the span it is checking
+ * passes `preferStartedAt`, and the matching run whose journal starts there is
+ * the one returned; only where NO matching run starts there does the
+ * top-ranked run stand, which is the case a refusal may rest on.
+ *
+ * Every failure is nothing found: no store, no match, an unreadable journal, an
+ * empty one. Nothing here decides what a miss means.
+ */
+export async function resolveRunSpan(input: {
+  readonly cwd: string;
+  readonly treeSha: string;
+  readonly allowCurrentRun?: boolean;
+  readonly preferStartedAt?: string;
+}): Promise<RunSpanRow | undefined> {
+  const resolved = await resolveRunSurface(input.cwd);
+  if (!resolved.ok) return undefined;
+  const matched = await resolved.surface.store.findByCandidateTreeSha(input.treeSha);
+  const runIds: string[] = matched === undefined ? [] : [matched.runId, ...matched.alsoMatching];
+  if (runIds.length === 0 && input.allowCurrentRun === true) {
+    const current = await resolved.surface.store.current(resolved.surface.worktreeKey);
+    if (current.ok && current.runId !== undefined) runIds.push(current.runId);
+  }
+  let fallback: RunSpanRow | undefined;
+  for (const runId of runIds) {
+    const read = await resolved.surface.store.read(runId);
+    if (!read.ok) continue;
+    const startedAt = read.events[0]?.at;
+    const endedAt = read.events[read.events.length - 1]?.at;
+    if (startedAt === undefined || endedAt === undefined) continue;
+    const row: RunSpanRow = { runId, startedAt, endedAt };
+    if (input.preferStartedAt === undefined || startedAt === input.preferStartedAt) return row;
+    fallback ??= row;
+  }
+  return fallback;
+}
+
+/**
  * What the round binding means to someone deciding whether to act on the row.
  *
  * The `reviewed-tree` sentence is the one this ticket's readout exists for: it

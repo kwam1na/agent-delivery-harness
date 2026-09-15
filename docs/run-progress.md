@@ -182,6 +182,31 @@ exports remain supported. Artifact metadata in this contract does not itself
 retain a file; acquisition capture and portable attachment transport use the
 separate retention capability when installed.
 
+## Cycle time
+
+`runs show <id>` prints a `phases:` block above its rounds, and
+`runs show <id> --json` carries the same figures under `summary.phases`.
+
+- `implementation` runs from the journal's first event to its first round event.
+- `review` runs from that first round event to the last `review.round.closed`,
+  so the fix time between two rounds is review time rather than a gap.
+- `tail` runs from the last closed round to the journal's last event, and is
+  still accruing while the run is open.
+
+The three phases always tile the run's own total: a breakdown that did not add
+up would tell an operator two different things about one delivery. Where two
+writers' clocks disagree — a round opened, by its own instant, before the run
+started — each boundary is held inside the run's span rather than reported as a
+negative phase.
+
+`gate time` is reported separately, because a gate runs inside whichever phase
+it was invoked from. It sums `durationMs` over the journal's `gate.reported`
+events and the CLI's own `command.completed` entries for `gate`, counting a
+superseded gate too. A journal carrying no gate completion reads as `unseen`,
+never as free: the gate this delivery ran is simply missing from the figures
+above it. A gate that journaled no readable duration is counted and reported as
+under-reporting the sum.
+
 Selected acquisition reports can be retained through [run artifact capture](run-artifacts.md).
 
 See [the operational run view](run-view.md) for browser, terminal and JSON access.

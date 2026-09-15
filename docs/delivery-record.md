@@ -34,8 +34,19 @@ the same candidate is byte-identical — a no-op diff, not churn:
 | `manifestDigest` | The single manifest digest backing the evidence claims, or `null` when there is not exactly one. |
 | `workspaceId` | The original workspace, retained inside evidence. CI has a different workspace; it validates this original binding without rewriting it. |
 | `context` | Exact policy, preparation wiring, installed release and reviewer inputs; see [portable evidence](portable-evidence.md). |
+| `runSpan` | Optional `startedAt`/`endedAt` UTC instants: the span of the run journal this record was written from, absent when no journal bound the candidate. |
 | `integrityDigest` | Canonical transport checksum, with no signature or provenance claim. |
 | `attestation.level` | `"self"` — the only level v1 produces or verifies. |
+
+`runSpan` is a timestamp, not evidence. It is stamped best-effort: a record
+written with no resolvable journal carries none, and its absence never refuses.
+Where it is present and a journal in the verifying repository binds this
+record's own candidate, `verify` checks the two against each other and refuses
+on a contradiction (`record_run_span_mismatch`); where no such journal exists —
+a CI checkout, for instance — the row reads `unchecked` and `verify` passes
+exactly as before. Because the record is sealed over every other member, a
+forged span has to be re-sealed to survive the integrity digest, which is
+precisely the forgery this check is for.
 
 A claim outcome must be one of the evaluator's six resolution kinds. The
 parser rejects anything else: a committed file is editable, and an invented

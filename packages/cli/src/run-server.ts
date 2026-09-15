@@ -320,6 +320,15 @@ const EMPTY_SUMMARY: RunSummary = {
   startedAt: "",
   lastAt: "",
   durationSeconds: 0,
+  // Nothing was read, so every phase is empty and the gate is unseen rather
+  // than summed to zero: an unreadable journal reports no gate, not a free one.
+  phases: {
+    implementationSeconds: 0,
+    reviewSeconds: 0,
+    tailSeconds: 0,
+    rounds: 0,
+    gate: { totalMs: 0, counted: 0, unreadable: 0, unseen: true },
+  },
   roundsOpened: 0,
   roundsClosed: 0,
   findings: { P0: 0, P1: 0, P2: 0, P3: 0 },

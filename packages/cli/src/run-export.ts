@@ -71,6 +71,21 @@ function comparableReadout(readout: object): Record<string, unknown> {
   return comparable;
 }
 
+/**
+ * The summary members a stored export is CHECKED against.
+ *
+ * `phases` is derived from the same events by the same pass on every read, for
+ * exactly the reason the readout's sentences are: an archive written before the
+ * phase breakdown existed stays valid, and one carrying invented phases gains
+ * nothing, because the value returned below is rebuilt from the recomputation
+ * either way. Compare what the events fix; recompute what they derive.
+ */
+function comparableSummary(summary: object): Record<string, unknown> {
+  const comparable: Record<string, unknown> = { ...summary };
+  delete comparable["phases"];
+  return comparable;
+}
+
 export type DeliveryRunExport = ReturnType<typeof buildRunExport> & {
   readonly attachments?: RunAttachments;
 };
@@ -148,7 +163,8 @@ export function parseRunExport(text: string): RunExportParseResult {
     )
       return invalid;
     if (
-      canonicalize(value["summary"]) !== canonicalize(expected.summary) ||
+      !isRecord(value["summary"]) ||
+      canonicalize(comparableSummary(value["summary"])) !== canonicalize(comparableSummary(expected.summary)) ||
       canonicalize(value["costs"]) !== canonicalize(expected.costs)
     )
       return invalid;

@@ -44,7 +44,8 @@ import {
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
-import { RUN_JOURNAL_ADMISSION_ROW, oneLine, resolveRunJournalRow, runJournalRows } from "../run-surface.ts";
+import { RUN_JOURNAL_ADMISSION_ROW, oneLine, resolveRunJournalRow, resolveRunSpan, runJournalRows } from "../run-surface.ts";
+import { durationLabel } from "../run-projection.ts";
 
 const USAGE = "Usage: delivery-harness verify [--require-run-journal] [--mandated-lens <id>]...";
 
@@ -161,6 +162,74 @@ function runJournalBlocker(row: RunJournalRow) {
       },
     ],
   });
+}
+
+/**
+ * The record's own span, checked against the journal that binds its candidate.
+ *
+ * WHAT IS CHECKED, AND WHY THOSE TWO THINGS. `startedAt` must EQUAL the
+ * journal's first instant: a journal is append-only, so its first event never
+ * moves and a record that disagrees about when the delivery began is describing
+ * some other run. `endedAt` must lie inside the journal's span, because the
+ * journal keeps growing after the record is written — `verify`, `pr.opened` and
+ * `run.ended` all land later — so equality there would fail on every honest
+ * record, while an `endedAt` after the journal's last instant or before its
+ * first could not have been read off it at all.
+ *
+ * WHY A MISS IS NOT A REFUSAL. A journal is self-attested observability that
+ * anything the owner executes can append to, and this command runs in CI over
+ * checkouts that carry no run store whatever. So the refusal is available only
+ * where a journal BINDS this record's candidate — never on whichever run is
+ * current in the checkout someone verified from, and never as a demand that a
+ * journal exist. Where none binds it the span is reported unchecked, which is
+ * what `verify` could honestly say before this member existed too.
+ */
+async function runSpanRows(
+  rootDir: string,
+  record: { readonly runSpan?: { readonly startedAt: string; readonly endedAt: string }; readonly candidateBinding: { readonly treeSha: string } },
+): Promise<{ readonly rows: readonly string[]; readonly blocker?: ReturnType<typeof commandBlocker> }> {
+  const span = record.runSpan;
+  if (span === undefined) return { rows: [] };
+  const spent = (Date.parse(span.endedAt) - Date.parse(span.startedAt)) / 1000;
+  const recorded = `recorded run span: ${span.startedAt} to ${span.endedAt} (${durationLabel(spent)})`;
+  // `preferStartedAt` is what keeps a SECOND run in the same worktree — the one
+  // this verify is itself running under, say — from refusing a record whose own
+  // run reports exactly this span. A refusal stands only where no journal
+  // binding this candidate starts where the record says it did.
+  const journal = await resolveRunSpan({
+    cwd: rootDir,
+    treeSha: record.candidateBinding.treeSha,
+    preferStartedAt: span.startedAt,
+  });
+  if (journal === undefined) {
+    return { rows: [`${recorded}; unchecked: no run journal in this repository binds this candidate`] };
+  }
+  const disagreement =
+    span.startedAt !== journal.startedAt
+      ? `the record starts at ${span.startedAt} but run ${oneLine(journal.runId, 128)} starts at ${journal.startedAt}`
+      : span.endedAt > journal.endedAt
+        ? `the record ends at ${span.endedAt}, after the last instant run ${oneLine(journal.runId, 128)} reached (${journal.endedAt})`
+        : undefined;
+  if (disagreement === undefined) {
+    return { rows: [`${recorded}; checked against run ${oneLine(journal.runId, 128)}`] };
+  }
+  return {
+    rows: [],
+    blocker: commandBlocker({
+      code: "record_run_span_mismatch",
+      sourceId: "delivery-harness.cli.verify",
+      summary: "The delivery record's run span disagrees with the run journal that binds its candidate.",
+      details: disagreement,
+      remediations: [
+        {
+          id: "re-record-the-span",
+          kind: "command",
+          command: ["delivery-harness", "record"],
+          summary: "Re-record this candidate so its span is the one its own run journal reports.",
+        },
+      ],
+    }),
+  };
 }
 
 export const verifyCommand: CommandDescriptor = {
@@ -280,6 +349,11 @@ export const verifyCommand: CommandDescriptor = {
       return { kind: "blocked", blockers: [runJournalBlocker(runJournal)] };
     }
 
+    // Judged in the same place and for the same reason: a record that fails its
+    // own verification is never told its span is the problem.
+    const span = await runSpanRows(context.rootDir, parsed.record);
+    if (span.blocker !== undefined) return { kind: "blocked", blockers: [span.blocker] };
+
     const relaxation = check.baseMovementRelaxed
       ? ` (base movement relaxed by policy: ${check.relaxedDriftClasses.join(", ")})`
       : "";
@@ -293,6 +367,7 @@ export const verifyCommand: CommandDescriptor = {
         `verified ${relativePath}${relaxation}; attestation: ${check.attestationLabel}`,
         `recorded base: ${oneLine(parsed.record.candidateBinding.baseRef, 256)} at ${parsed.record.candidateBinding.baseTipSha}`,
         `observed base: ${oneLine(base.ref, 256)} at ${base.tipSha}`,
+        ...span.rows,
         ...hostedCheckRow,
         ...runJournalRows(runJournal),
       ].join("\n"),
