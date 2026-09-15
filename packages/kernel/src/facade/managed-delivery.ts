@@ -1315,9 +1315,16 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
    * exit codes for the same command, and a residual read that fails where the
    * default runner succeeds is a difference this facade cannot afford: it is
    * the surface that turns a finish line into an authorized merge. So the cap
-   * is lifted here to match the runner this one stands in for. (The residual
-   * projection also no longer reads a failed blob as an absent path, so the
-   * two halves fail closed independently.)
+   * is lifted here to match the runner this one stands in for.
+   *
+   * AND THIS HALF IS THE LOAD-BEARING ONE. The residual projection also refuses
+   * a blob it could not read rather than calling it an absent path, but that
+   * refusal is `unresolvable`, and `decideResidual` makes an `unresolvable`
+   * fatal only for a record whose reviewed coordinate claims `provenNeutral`;
+   * every other record is admitted, which is the leniency that predates this
+   * ticket. So for the ordinary record the two halves are NOT independent: a
+   * capped read would be admitted, and this ceiling is what keeps the facade
+   * reading the same bytes `verify` and the Action read.
    */
   const candidateRunner: CandidateCommandRunner = async (command, options) => {
     const [executable, ...args] = command;

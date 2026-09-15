@@ -336,10 +336,24 @@ implementation, as the reason the *tree-ish* is resolved up front; the blob read
 had no equivalent guard because, until the runner became injectable, it could
 not fail for any reason but git's own.
 
-Both halves are fixed, and deliberately both: the port is asked for the ceiling
-the runner it stands in for has, and the projection now separates git's `128`
-("no such path in that tree") from every other non-zero exit, which becomes
-`unresolvable` like the three reads beside it already did.
+Both halves are fixed — but they are not two independent guards, and saying so
+would be the comfortable lie. The load-bearing half is the ceiling: the port is
+asked for the same uncapped stdout the runner it stands in for has, so the read
+does not fail in the first place. The second half — the projection separating
+git's `128` from every other non-zero exit, which becomes `unresolvable` — only
+*refuses* the residual, and `decideResidual` treats `unresolvable` as fatal just
+for a record claiming `provenNeutral`; for an ordinary record it is reported as
+`not computed` and does not block. So the second half narrows the blast radius
+of a failed read from "admitted as `rebase`" to "not computed"; it does not stop
+a capped runner on its own.
+
+The `128` separation took a second round to get right as well. `cat-file blob`
+returns `128` for a path a tree does not carry *and* for a path whose object the
+repository does not hold — the blobless clone the module header names as its own
+threat model — so the exit code alone still read a missing object as a deletion.
+The projection now takes a second probe on a `128`, `git cat-file -e`, which git
+answers `128` for a name that does not resolve and `1` for a name that resolves
+to an object it does not have.
 
 **The generalisable form, and it is the sharpest one in this delivery.** Routing
 a call through a seam is not a refactor — a seam is a *different implementation*

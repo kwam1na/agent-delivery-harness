@@ -608,11 +608,18 @@ retires every record ever computed under the token, so `docs/delivery-runbook.md
 stays inside the digest and is neutral only to this later predicate. And it does
 not admit a residual it cannot recompute — in `record`, a reviewed tree this
 clone no longer holds is a refusal, because a record is a claim being authored.
-"Cannot recompute" covers the blobs as well as the trees: `git cat-file` exits
-`128` for a path a tree does not carry, and *that* exit is an absence, while any
-other non-zero exit is a read this checkout could not perform and refuses as
-`not computed`. Reading them alike would let four failed reads compare equal as
-four deletions and admit an uninspectable residual as `rebase`.
+"Cannot recompute" covers the blobs as well as the trees, and the blobs need two
+questions rather than one. `git cat-file blob <tree>:<path>` exits `128` both for
+a path that tree does not carry **and** for a path it does carry whose object this
+repository does not hold — a blobless or partial clone, or a submodule gitlink.
+The exit code alone therefore cannot say which happened, so on a `128` the
+projection asks a second question, `git cat-file -e <tree>:<path>`: git answers
+`128` again when the *name* does not resolve, which is the absence, and `1` when
+the name resolves to an object that is not here, which is a read this checkout
+could not perform and refuses as `not computed`. Every other non-zero exit from
+the first read — a runner's own ceiling, for instance — refuses the same way.
+Reading them alike would let four failed reads compare equal as four deletions
+and admit an uninspectable residual as `rebase`.
 `verify` reports that same case as `not computed` and does not block — unless
 the record's projection is on the `proven-neutral-post-round-residual` basis
 below, in which case it blocks. The lenient half is for a record whose

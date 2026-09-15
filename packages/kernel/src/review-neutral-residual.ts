@@ -63,7 +63,7 @@ async function objectExists(run: CandidateCommandRunner, rootDir: string, treeis
   return probe.exitCode === 0;
 }
 
-/** `git cat-file`'s answer for "no such path in that tree". */
+/** `git`'s fatal exit: what `cat-file` returns for a name it cannot resolve. */
 const GIT_FATAL = 128;
 
 /**
@@ -77,26 +77,36 @@ const GIT_FATAL = 128;
  * deletion compares equal to a deletion, so four failed reads classify as
  * `rebase` and a residual nobody could inspect is admitted.
  *
- * Until the runner became injectable that conflation was unreachable — with
- * the tree resolved, the only non-zero `cat-file` could return was git's own
- * 128. It is reachable now: the managed-delivery facade runs these reads
- * through its exec port, which caps stdout, and a capped read fails with a
- * code that is not 128. So 128 is the one exit that means absence, and every
- * other non-zero exit is returned as a failure and refused as `unresolvable`,
- * which is what the other three reads in this module already do.
+ * WHY THE EXIT CODE IS NOT ENOUGH, AND A SECOND PROBE IS. `cat-file blob`
+ * answers with 128 for BOTH halves of the header's conflation: a path the tree
+ * does not carry, and a path it does carry whose object this repository does
+ * not hold — a blobless or partial clone, or a submodule gitlink, whose entry
+ * is a commit and not a blob at all. A run that reads 128 as absence alone is
+ * the header's own threat model left open; a run that refuses every 128 turns
+ * every ordinary deletion across a moved base into a refusal. So a 128 asks one
+ * more question, and only a 128 does: `cat-file -e` on the same name, which
+ * answers 128 when the *name* does not resolve and 1 when it resolves to an
+ * object this repository does not hold. Absence is the first; everything else,
+ * including a read the exec port's ceiling killed, is a failure and refuses as
+ * `unresolvable`, which is what the other three reads in this module already do.
  */
 type BlobRead =
   | { readonly kind: "read"; readonly content: string | null }
   | { readonly kind: "failed"; readonly detail: string };
 
 async function blobAt(run: CandidateCommandRunner, rootDir: string, treeish: string, repoPath: string): Promise<BlobRead> {
-  const read = await run(["git", "cat-file", "blob", `${treeish}:${repoPath}`], { cwd: rootDir });
+  const name = `${treeish}:${repoPath}`;
+  const read = await run(["git", "cat-file", "blob", name], { cwd: rootDir });
   if (read.exitCode === 0) return { kind: "read", content: read.stdout };
-  if (read.exitCode === GIT_FATAL) return { kind: "read", content: null };
-  return {
+  const failed = (why: string): BlobRead => ({
     kind: "failed",
-    detail: `reading ${repoPath} at ${treeish} exited ${read.exitCode}${read.stderr === "" ? "" : `: ${read.stderr.trim()}`}`,
-  };
+    detail: `reading ${repoPath} at ${treeish} ${why}${read.stderr === "" ? "" : `: ${read.stderr.trim()}`}`,
+  });
+  if (read.exitCode !== GIT_FATAL) return failed(`exited ${read.exitCode}`);
+  const resolves = await run(["git", "cat-file", "-e", name], { cwd: rootDir });
+  return resolves.exitCode === GIT_FATAL
+    ? { kind: "read", content: null }
+    : failed("named an object this repository does not hold");
 }
 
 /**

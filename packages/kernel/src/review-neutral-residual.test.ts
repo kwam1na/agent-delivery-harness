@@ -717,6 +717,106 @@ describe("the runner the caller supplies", () => {
     expect(outcome.kind, "an absent path is not an unreadable one").toBe("projected");
     expect(outcome.kind === "projected" ? outcome.projection.admitted : false).toBe(true);
   });
+
+  /**
+   * EVERY one of the four reads may refuse, not just the first.
+   *
+   * The refusal is a search over the four reads, and a search is exactly the
+   * shape that can be narrowed without any row noticing: restrict it to the
+   * first read, or to the first three, and the suite stays green while three
+   * quarters or one quarter of the mechanism stops working. The runner below
+   * fails the nth read and nothing else, and the row drives all four.
+   */
+  it("refuses whichever of the four reads is the one it could not perform", async () => {
+    const root = await repository();
+    await put(root, "src/logic.ts", "export const admit = true;\n");
+    const base = commit(root, "base");
+    await put(root, "src/logic.ts", "export const admit = false;\n");
+    const moved = commit(root, "a logic change after the round");
+
+    const failNth = (nth: number) => {
+      let seen = 0;
+      return async (command: readonly string[], options: { readonly cwd: string }) => {
+        if (command[1] === "cat-file" && command[2] === "blob") {
+          seen += 1;
+          if (seen === nth) return { exitCode: 1, stdout: "", stderr: "stdout maxBuffer length exceeded" };
+        }
+        try {
+          return { exitCode: 0, stdout: execFileSync(command[0] as string, command.slice(1), { cwd: options.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+        } catch (error) {
+          return { exitCode: (error as { status?: number }).status ?? 1, stdout: "", stderr: "" };
+        }
+      };
+    };
+
+    const request = {
+      rootDir: root,
+      config: config(),
+      reviewedCandidates: [{ treeSha: base.tree, mergeBaseSha: base.commit, provenNeutral: true }],
+      recordCandidate: { treeSha: moved.tree, mergeBaseSha: base.commit },
+    };
+
+    for (const nth of [1, 2, 3, 4]) {
+      const outcome = await projectPostRoundResidual({ ...request, run: failNth(nth) });
+      expect(outcome.kind, `read ${nth} of four must be able to refuse`).toBe("unresolvable");
+    }
+  });
+
+  /**
+   * The other half of git's 128, and the reason the exit code alone is not the
+   * answer: `cat-file blob` says 128 both for a path a tree does not carry and
+   * for a path it does carry whose object this repository does not hold. The
+   * second is the module header's own threat model — a blobless or partial
+   * clone, which the header names as the population `changedPaths` fails closed
+   * for. Read as an absence it is four deletions, and four deletions across a
+   * moved base classify as `rebase`: the residual is admitted at every surface
+   * at once, so nothing anywhere refuses it.
+   */
+  it("refuses a path whose blob object this repository does not hold", async () => {
+    const root = await repository();
+    await put(root, "src/logic.ts", "export const admit = true;\n");
+    const base = commit(root, "base");
+    await put(root, "src/logic.ts", "export const admit = false; // BACKDOOR\n");
+    const moved = commit(root, "a logic change after the round");
+
+    const request = {
+      rootDir: root,
+      config: config(),
+      reviewedCandidates: [{ treeSha: base.tree, mergeBaseSha: base.commit, provenNeutral: true }],
+      recordCandidate: { treeSha: moved.tree, mergeBaseSha: base.commit },
+    };
+
+    // Read whole first, so the row is about the missing object and not about
+    // the fixture: the same two trees classify as `non-neutral` while the blob
+    // is there.
+    const whole = await projectPostRoundResidual(request);
+    expect(whole.kind).toBe("projected");
+    expect(whole.kind === "projected" ? whole.projection.admitted : true).toBe(false);
+
+    // Now take the reviewed revision's blob out of the object store. The trees
+    // still resolve and `git diff --name-only` still lists the path, because
+    // both compare tree entries by sha; only the read of the bytes fails.
+    const blob = git(root, "rev-parse", `${base.tree}:src/logic.ts`);
+    await rm(path.join(root, ".git", "objects", blob.slice(0, 2), blob.slice(2)), { force: true });
+
+    // The fixture is only worth anything if git now answers 128 here, the very
+    // same code an absent path gets, which is the whole reason the exit code
+    // alone cannot be the answer.
+    const codes: number[] = [];
+    const watched = async (command: readonly string[], options: { readonly cwd: string }) => {
+      try {
+        return { exitCode: 0, stdout: execFileSync(command[0] as string, command.slice(1), { cwd: options.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+      } catch (error) {
+        const status = (error as { status?: number }).status ?? 1;
+        if (command[1] === "cat-file" && command[2] === "blob") codes.push(status);
+        return { exitCode: status, stdout: "", stderr: "" };
+      }
+    };
+
+    const outcome = await projectPostRoundResidual({ ...request, run: watched });
+    expect(codes, "the missing object must look exactly like an absent path").toContain(128);
+    expect(outcome.kind, "a blob this repository does not hold is not a deletion").toBe("unresolvable");
+  });
 });
 
 describe("the residual decision the deciding surfaces share", () => {
@@ -819,6 +919,19 @@ describe("the residual decision the deciding surfaces share", () => {
         surface: "the managed-delivery facade's runner",
         file: path.join(here, "facade", "managed-delivery.ts"),
         call: /maxBuffer: UNCAPPED_STDOUT,/g,
+        sites: 1,
+      },
+      // The VALUE and not only its use. A named constant whose value is not
+      // pinned is a tripwire a maintainer steps over: give UNCAPPED_STDOUT a
+      // finite value "to be safe" and every other row here still passes while
+      // the parity it names is gone. That matters because the second half of
+      // the fix does not cover it — a capped read refuses as `unresolvable`,
+      // and `decideResidual` admits an `unresolvable` for every record that
+      // does not claim `provenNeutral`, which is the ordinary one.
+      {
+        surface: "the managed-delivery facade's ceiling",
+        file: path.join(here, "facade", "managed-delivery.ts"),
+        call: /const UNCAPPED_STDOUT = Number\.MAX_SAFE_INTEGER;/g,
         sites: 1,
       },
     ];
