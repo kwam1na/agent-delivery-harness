@@ -1056,8 +1056,15 @@ describe("a message this unit admits can always be mirrored", () => {
    * pinned by nothing and a probe that skipped that one pattern stayed green.
    *
    * An empty array means "no spine id can spell this one", and the row below
-   * does not take that on trust either: it checks the pattern's own source
-   * requires whitespace, which `SPINE_ID` admits nowhere.
+   * does not take that on trust either: the entry owes whitespace-free
+   * spellings of its own shape in `WHITESPACE_FREE_SPELLINGS`, and the row
+   * asserts the corpus matches none of them. Round 7 found why that has to be a
+   * property of the PATTERN rather than of its source text: the first version
+   * of this row asked whether the source MENTIONED whitespace, which `\s*`,
+   * `[\s\S]` and a space inside a character class all satisfy while requiring
+   * none — so widening `bearer-credential` from `\s+` to `\s*`, the most
+   * ordinary edit a credential pattern receives, made it spine-id spellable
+   * with this row green.
    *
    * Where a shape has a case-insensitive spelling, both are listed. All-
    * uppercase vectors alone cannot tell the corpus probe apart from a
@@ -1076,6 +1083,38 @@ describe("a message this unit admits can always be mirrored", () => {
     "google-api-key": [`AIza${"A".repeat(32)}`, `AIza${"a".repeat(32)}`],
     jwt: [`eyJhbGciOiJI.eyJzdWIiOiI.${"A".repeat(10)}`, `eyJhbGciOiJI.eyJzdWIiOiI.${"a".repeat(10)}`],
   };
+  /**
+   * For each entry claiming unspellability: whitespace-free spellings of that
+   * credential's own shape, including the separators a spine id CAN hold
+   * (`.`, `_`, `-`). If the corpus matches any of them, the pattern does not
+   * require whitespace and the entry's `[]` is wrong.
+   *
+   * What this proves and what it does not, stated plainly rather than
+   * overclaimed — round 7 found the first version of this check asserting a
+   * universal ("no spine id can spell this one") while executing a substring
+   * test over the regex source. Sampling cannot prove a universal either.
+   * What it does prove is that the pattern still rejects the spellings a
+   * widening would most plausibly admit, which is the case round 7 actually
+   * demonstrated. The universal the delivery genuinely relies on is a
+   * different one and is pinned separately: `reference` consults the WHOLE
+   * corpus, not a subset — delete that call, replace it with a heuristic, or
+   * skip a single pattern, and a row goes red.
+   */
+  const WHITESPACE_FREE_SPELLINGS: Readonly<Record<string, readonly string[]>> = {
+    "private-key-block": [
+      `-----BEGINPRIVATEKEY-----${"A".repeat(24)}-----ENDPRIVATEKEY-----`,
+      `BEGINPRIVATEKEY${"A".repeat(24)}`,
+      `PRIVATEKEY_${"A".repeat(24)}`,
+      `PRIVATE-KEY-${"A".repeat(24)}`,
+    ],
+    "bearer-credential": [
+      `Bearer${"A".repeat(24)}`,
+      `Bearer.${"A".repeat(24)}`,
+      `Bearer_${"A".repeat(24)}`,
+      `Bearer-${"A".repeat(24)}`,
+    ],
+  };
+
   const spellableSecrets = (): readonly (readonly [string, string])[] =>
     SECRET_PATTERNS.flatMap((pattern) =>
       (CORPUS_SPELLINGS[pattern.id] ?? []).map((value) => [pattern.id, value] as const),
@@ -1087,18 +1126,42 @@ describe("a message this unit admits can always be mirrored", () => {
     // silently fall behind it, and each half is checked against the product's
     // own grammar and its own matcher rather than a restatement of either.
     expect(Object.keys(CORPUS_SPELLINGS).sort()).toEqual(SECRET_PATTERNS.map((pattern) => pattern.id).sort());
+    // And the unspellable half owes exactly as many whitespace-free spellings
+    // as it claims entries, so neither table can drift behind the other.
+    expect(Object.keys(WHITESPACE_FREE_SPELLINGS).sort()).toEqual(
+      Object.entries(CORPUS_SPELLINGS)
+        .filter(([, spellings]) => spellings.length === 0)
+        .map(([id]) => id)
+        .sort(),
+    );
     for (const pattern of SECRET_PATTERNS) {
       const spellings = CORPUS_SPELLINGS[pattern.id] ?? [];
       if (spellings.length === 0) {
-        // Unspellable for a checkable reason rather than by assertion: the
-        // pattern's source requires whitespace, and SPINE_ID admits none.
-        const requiresWhitespace = /\s/.test(pattern.source) || pattern.source.includes(String.raw`\s`);
-        expect(requiresWhitespace, `${pattern.id} requires whitespace`).toBe(true);
+        // Unspellable for a checkable reason rather than by assertion, and the
+        // reason is a property of the pattern: strip the whitespace out of the
+        // credential's own shape and the corpus stops matching it, so no value
+        // SPINE_ID can hold is a match. A source-text check would pass here on
+        // `\s*` or `[\s\S]` while the pattern required nothing.
+        const candidates = WHITESPACE_FREE_SPELLINGS[pattern.id] ?? [];
+        expect(candidates.length, `${pattern.id} owes whitespace-free spellings`).toBeGreaterThan(0);
+        for (const candidate of candidates) {
+          expect(firstSecretIn(candidate), `${pattern.id} matched "${candidate}" without whitespace`).toBeUndefined();
+        }
         continue;
       }
       for (const value of spellings) {
         expect(SPINE_ID.test(value), `${pattern.id}: ${value} is spine-id shaped`).toBe(true);
         expect(firstSecretIn(value), `${pattern.id}: ${value} is a corpus match`).toBe(pattern.id);
+      }
+      // Where the pattern accepts a lowercase spelling, one is owed. An
+      // all-uppercase vector set cannot tell the corpus probe apart from a
+      // character-class heuristic — round 6's second surviving mutation — and
+      // a spelling silently trimmed from the list would restore that.
+      if (firstSecretIn((spellings[0] ?? "").toLowerCase()) === pattern.id) {
+        expect(
+          spellings.some((value) => !/[A-Z]/.test(value)),
+          `${pattern.id} accepts a lowercase spelling and owes one`,
+        ).toBe(true);
       }
     }
     // Seven of the nine, which is what `message.ts` says. Pinned as a number
