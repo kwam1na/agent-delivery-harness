@@ -136,7 +136,7 @@ export interface CoordinationMessage {
  * rejects a member that looks like a key rather than a reference".
  *
  * It matters here rather than only at the durable append. `SPINE_ID` admits
- * `_`, `-` and `.`, so six of the nine corpus patterns are expressible as a
+ * `_`, `-` and `.`, so seven of the nine corpus patterns are expressible as a
  * valid spine id, and `messageId` and `nonce` are authored entirely by the
  * peer. The durable path's secret discipline REJECTS a secret in a structural
  * member — correctly — which means a peer that shapes its own message id like

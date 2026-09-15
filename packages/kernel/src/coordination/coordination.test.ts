@@ -44,7 +44,8 @@ import { reduceDeliveryJournal } from "../spine/reducer.ts";
 import { evaluateCanonicalRecheck } from "../checkpoint/recheck.ts";
 import { evaluateMigrationConsumption } from "../facade/migration.ts";
 import { CONFIRMATION_FIXTURE_PROFILE } from "../substrate/manifest.ts";
-import { applySecretDiscipline, SECRET_PATTERNS } from "../checkpoint/redaction.ts";
+import { applySecretDiscipline, firstSecretIn, SECRET_PATTERNS } from "../checkpoint/redaction.ts";
+import { SPINE_ID } from "../spine/grammar.ts";
 import { CONTROL_PLANE_CLAIM_KINDS } from "../spine/journal.ts";
 
 const CHANNEL = "d".repeat(64);
@@ -1046,32 +1047,68 @@ describe("a message this unit admits can always be mirrored", () => {
     payload: mirrorPayloadOf(message),
   });
 
-  // Every corpus pattern that a spine id can actually spell. Composed from
-  // SECRET_PATTERNS rather than hand-listed, so a pattern added to the corpus
-  // is covered here the day it lands.
-  const SPINE_ID_SHAPED_SECRETS: readonly (readonly [string, string])[] = [
-    ["aws-access-key-id", `AKIA${"A".repeat(16)}`],
-    ["github-token", `ghp_${"A".repeat(24)}`],
-    ["github-fine-grained-token", `github_pat_${"A".repeat(24)}`],
-    ["openai-key", `sk-${"A".repeat(24)}`],
-    ["google-api-key", `AIza${"A".repeat(32)}`],
-    ["jwt", `eyJhbGciOiJI.eyJzdWIiOiI.${"A".repeat(10)}`],
-  ];
+  /**
+   * One entry per corpus pattern, and the row below asserts the KEYS are the
+   * corpus — so a tenth pattern turns that row red the day it lands, until
+   * someone classifies it. Round 6 found what a hand-listed table costs: it
+   * said "six of the nine" and missed `slack-token`, whose hyphen-and-alnum
+   * shape is a perfectly good spine id, so one seventh of the hazard was
+   * pinned by nothing and a probe that skipped that one pattern stayed green.
+   *
+   * An empty array means "no spine id can spell this one", and the row below
+   * does not take that on trust either: it checks the pattern's own source
+   * requires whitespace, which `SPINE_ID` admits nowhere.
+   *
+   * Where a shape has a case-insensitive spelling, both are listed. All-
+   * uppercase vectors alone cannot tell the corpus probe apart from a
+   * character-class heuristic — a rule of "credential material is mixed case"
+   * would have passed every vector in the round-5 table while admitting the
+   * lowercase spelling of the same credential.
+   */
+  const CORPUS_SPELLINGS: Readonly<Record<string, readonly string[]>> = {
+    "private-key-block": [],
+    "bearer-credential": [],
+    "aws-access-key-id": [`AKIA${"A".repeat(16)}`],
+    "github-token": [`ghp_${"A".repeat(24)}`, `ghp_${"a".repeat(24)}`],
+    "github-fine-grained-token": [`github_pat_${"A".repeat(24)}`, `github_pat_${"a".repeat(24)}`],
+    "slack-token": [`xoxb-${"A".repeat(12)}`, `xoxb-${"a".repeat(12)}`],
+    "openai-key": [`sk-${"A".repeat(24)}`, `sk-${"a".repeat(24)}`],
+    "google-api-key": [`AIza${"A".repeat(32)}`, `AIza${"a".repeat(32)}`],
+    jwt: [`eyJhbGciOiJI.eyJzdWIiOiI.${"A".repeat(10)}`, `eyJhbGciOiJI.eyJzdWIiOiI.${"a".repeat(10)}`],
+  };
+  const spellableSecrets = (): readonly (readonly [string, string])[] =>
+    SECRET_PATTERNS.flatMap((pattern) =>
+      (CORPUS_SPELLINGS[pattern.id] ?? []).map((value) => [pattern.id, value] as const),
+    );
 
-  it("spells those corpus patterns as valid spine ids — the premise of the whole hazard", () => {
-    // If this row ever goes green-by-vacuity because the corpus changed, the
-    // rows below would pass without testing anything, so the premise is pinned
-    // first: each value below IS a well-formed spine id but for the rule added
-    // here, and each IS a secret the durable path refuses.
-    const corpusIds = SECRET_PATTERNS.map((pattern) => pattern.id);
-    for (const [id, value] of SPINE_ID_SHAPED_SECRETS) {
-      expect(corpusIds, id).toContain(id);
-      expect(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value), `${id} is spine-id shaped`).toBe(true);
+  it("classifies every corpus pattern — spellable as a spine id, or requiring whitespace", () => {
+    // The premise of everything below, and the part a hand-written table gets
+    // wrong. The classification is asserted to COVER the corpus, so it cannot
+    // silently fall behind it, and each half is checked against the product's
+    // own grammar and its own matcher rather than a restatement of either.
+    expect(Object.keys(CORPUS_SPELLINGS).sort()).toEqual(SECRET_PATTERNS.map((pattern) => pattern.id).sort());
+    for (const pattern of SECRET_PATTERNS) {
+      const spellings = CORPUS_SPELLINGS[pattern.id] ?? [];
+      if (spellings.length === 0) {
+        // Unspellable for a checkable reason rather than by assertion: the
+        // pattern's source requires whitespace, and SPINE_ID admits none.
+        const requiresWhitespace = /\s/.test(pattern.source) || pattern.source.includes(String.raw`\s`);
+        expect(requiresWhitespace, `${pattern.id} requires whitespace`).toBe(true);
+        continue;
+      }
+      for (const value of spellings) {
+        expect(SPINE_ID.test(value), `${pattern.id}: ${value} is spine-id shaped`).toBe(true);
+        expect(firstSecretIn(value), `${pattern.id}: ${value} is a corpus match`).toBe(pattern.id);
+      }
     }
+    // Seven of the nine, which is what `message.ts` says. Pinned as a number
+    // so the prose and the corpus cannot drift apart silently.
+    expect(SECRET_PATTERNS.filter((pattern) => (CORPUS_SPELLINGS[pattern.id] ?? []).length > 0)).toHaveLength(7);
+    expect(SECRET_PATTERNS).toHaveLength(9);
   });
 
   it("refuses a credential-shaped value in every peer-authored reference member", () => {
-    for (const [id, token] of SPINE_ID_SHAPED_SECRETS) {
+    for (const [id, token] of spellableSecrets()) {
       expect(codesOf(admitCoordinationMessage(message({ messageId: token }), view())), id).toEqual([
         "message_malformed",
       ]);
@@ -1082,8 +1119,13 @@ describe("a message this unit admits can always be mirrored", () => {
     const token = `ghp_${"A".repeat(24)}`;
     // The rule is stated over every reference member the peer authors, not
     // only the two that reach the durable payload, so it is pinned over all of
-    // them. These three also earn their scope refusal, which is the
-    // no-short-circuit corpus doing its job rather than a second malformation.
+    // them. These three earn the shape refusal ALONE: a malformed member
+    // short-circuits admission before any scope question is asked, which is
+    // deliberate — no scope verdict can honestly be computed over a member
+    // whose shape was never established — and is pinned in its own right by
+    // "refuses a malformed message as malformed and asks no further question
+    // of it". The no-short-circuit corpus governs the checks that run AFTER
+    // the shape verdict, and is pinned separately beside it.
     expect(codesOf(admitCoordinationMessage(message({ repositoryId: token }), view()))).toEqual([
       "message_malformed",
     ]);
