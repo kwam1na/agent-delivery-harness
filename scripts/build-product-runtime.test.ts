@@ -37,28 +37,50 @@ import { buildProductRuntime } from "./build-product-runtime.ts";
  * in Nms` that says nothing about whether the product stopped or the host did.
  * That is precisely the symptom this ticket was filed for, so a ceiling that
  * merely moves it to another row moves the ticket with it. Every row that
- * drives subprocesses therefore carries TWO numbers: an inner `_BOUND_MS` it
- * enforces itself through `runRowWithStallAttribution`, and an outer
- * `_TIMEOUT_MS` ceiling well above it that vitest never reaches in practice. A
+ * drives subprocesses therefore carries TWO numbers, both taken from
+ * `ROW_BUDGET` under the row's own name: an inner `bound` it enforces itself
+ * through `runRowWithStallAttribution`, and an outer `ceiling` well above it
+ * that vitest never reaches in practice. A
  * refusal here names the host or the candidate; it is not left as a bare
  * timeout for the next reader to guess at.
  */
 
 /**
- * One esbuild pass over four entry points plus two rollup declaration passes.
- * The build measured 1 425 ms cold and 1 061 ms warm; the bound is three orders
- * above that so it is reached only by something that stopped.
+ * The two numbers for every bounded row, in one place, keyed by the row's own
+ * name.
+ *
+ * They were eight loose constants, and a pair of constants ordered correctly
+ * says nothing about the pair a row actually runs under: a row is free to pass
+ * its own ceiling as its inner bound, and vitest then aborts it from outside
+ * with the bare `Test timed out in Nms` this ticket was filed for. Neither the
+ * constants nor any assertion over them can see that. So a row does not get to
+ * name its own numbers — it names itself, and `itBoundedRow` takes both from
+ * this record, which is also what the vitest ceiling is read from. There is no
+ * longer anywhere to write a bound.
+ *
+ * - the build: one esbuild pass over four entry points plus two rollup
+ *   declaration passes, measured 1 425 ms cold and 1 061 ms warm.
+ * - the consumer row: three bundled executions plus a `tsc --noEmit` over the
+ *   shipped declarations.
+ * - the admission row: three bundled executions plus the eight git invocations
+ *   of a disposable consumer.
+ * - the scoped row: forty-five executions, each observed at 8.5 s, plus three
+ *   repositories' git plumbing, with room left for the suite at four workers.
+ *   Fifteen minutes is far above anything this row has cost and still short
+ *   enough to fail a genuine hang inside one delivery.
+ *
+ * Each bound is far above the cost observed either way, so it is reached only
+ * by something that stopped; each ceiling is far above its bound, so vitest
+ * never reaches it first.
  */
-const RUNTIME_BUILD_BOUND_MS = 120_000;
-const RUNTIME_BUILD_TIMEOUT_MS = 240_000;
+const ROW_BUDGET = {
+  "the shared runtime build": { bound: 120_000, ceiling: 240_000 },
+  "runs bundled CLI and a typed consumer config without installed packages": { bound: 180_000, ceiling: 360_000 },
+  "runs composite admission from bundled runtime bytes in a disposable consumer": { bound: 240_000, ceiling: 480_000 },
+  "qualifies scoped execution through the actual bundled runtime": { bound: 900_000, ceiling: 1_020_000 },
+} as const satisfies Readonly<Record<string, { readonly bound: number; readonly ceiling: number }>>;
 
-/** Three bundled executions plus a `tsc --noEmit` over the shipped declarations. */
-const CONSUMER_ROW_BOUND_MS = 180_000;
-const CONSUMER_ROW_TIMEOUT_MS = 360_000;
-
-/** Three bundled executions plus the eight git invocations of a disposable consumer. */
-const ADMISSION_ROW_BOUND_MS = 240_000;
-const ADMISSION_ROW_TIMEOUT_MS = 480_000;
+type BudgetedRow = keyof typeof ROW_BUDGET;
 
 /**
  * The executions `runScopedRuntimeQualification` made when this budget was
@@ -69,20 +91,12 @@ const ADMISSION_ROW_TIMEOUT_MS = 480_000;
 const BUDGETED_BUNDLED_COMMANDS = 45;
 
 /**
- * Forty-five executions, each of which has been observed at 8.5 s, plus the
- * three repositories' git plumbing, with room left for the whole suite running
- * at four workers. Fifteen minutes is far above anything this row has cost and
- * still short enough to fail a genuine hang inside one delivery.
- */
-const SCOPED_ROW_BOUND_MS = 900_000;
-
-/**
  * The one row here whose whole subject is a single bare start, so it cannot
- * bound that start without bounding what it measures. The slowest start
+ * bound that start without bounding what it measures. It carries a ceiling and
+ * no inner bound, which is why it is not in `ROW_BUDGET`. The slowest start
  * observed on this host during the storm that produced this file was 445 s.
  */
 const BARE_START_ROW_TIMEOUT_MS = 900_000;
-const SCOPED_ROW_TIMEOUT_MS = 1_020_000;
 
 /** A bare `node -e 0` on a quiet host here is 40-150 ms. */
 const NOMINAL_EXEC_MS = 250;
@@ -253,6 +267,37 @@ export async function runRowWithStallAttribution<T>(options: {
 }
 
 /**
+ * Every row that was in fact declared through the budget, in declaration order.
+ *
+ * `itBoundedRow` appends here, so the guard row can assert that the set of rows
+ * carrying a budget is exactly the set of rows in `ROW_BUDGET` — a row declared
+ * with a bare `it` and a hand-written bound is then a named failure rather than
+ * a silent one, and a stale entry left in the record is too.
+ */
+const declaredBoundedRows: BudgetedRow[] = [];
+
+/**
+ * Declare one bounded row.
+ *
+ * The row's name is the only thing a caller supplies: the inner bound, the
+ * outer vitest ceiling and the sampler all come from `ROW_BUDGET` under that
+ * one key, and the name is also the title vitest reports and the string the
+ * attribution prints. A row cannot be given a bound above its own ceiling
+ * because it cannot be given a bound at all.
+ */
+function itBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
+  declaredBoundedRows.push(row);
+  it(row, async () => {
+    await runRowWithStallAttribution({
+      row,
+      boundMs: ROW_BUDGET[row].bound,
+      sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
+      work,
+    });
+  }, ROW_BUDGET[row].ceiling);
+}
+
+/**
  * One build for the file.
  *
  * Every row used to rebuild the runtime, which is the same bytes three times
@@ -263,10 +308,11 @@ export async function runRowWithStallAttribution<T>(options: {
 let shared: string;
 let sharedRuntime: string;
 
+declaredBoundedRows.push("the shared runtime build");
 beforeAll(async () => {
   await runRowWithStallAttribution({
     row: "the shared runtime build",
-    boundMs: RUNTIME_BUILD_BOUND_MS,
+    boundMs: ROW_BUDGET["the shared runtime build"].bound,
     sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
     work: async () => {
       shared = await mkdtemp(path.join(os.tmpdir(), "product-runtime-shared-"));
@@ -276,7 +322,7 @@ beforeAll(async () => {
       await buildProductRuntime(process.cwd(), manifest, sharedRuntime);
     },
   });
-}, RUNTIME_BUILD_TIMEOUT_MS);
+}, ROW_BUDGET["the shared runtime build"].ceiling);
 
 afterAll(async () => { await rm(shared, { recursive: true, force: true }); });
 
@@ -318,14 +364,7 @@ const consumerRow = async (): Promise<void> => {
   } finally { await rm(temporary, { recursive: true, force: true }); }
 };
 
-it("runs bundled CLI and a typed consumer config without installed packages", async () => {
-  await runRowWithStallAttribution({
-    row: "runs bundled CLI and a typed consumer config without installed packages",
-    boundMs: CONSUMER_ROW_BOUND_MS,
-    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
-    work: consumerRow,
-  });
-}, CONSUMER_ROW_TIMEOUT_MS);
+itBoundedRow("runs bundled CLI and a typed consumer config without installed packages", consumerRow);
 
 const admissionRow = async (): Promise<void> => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "product-runtime-admit-"));
@@ -413,14 +452,7 @@ const admissionRow = async (): Promise<void> => {
   } finally { await rm(temporary, { recursive: true, force: true }); }
 };
 
-it("runs composite admission from bundled runtime bytes in a disposable consumer", async () => {
-  await runRowWithStallAttribution({
-    row: "runs composite admission from bundled runtime bytes in a disposable consumer",
-    boundMs: ADMISSION_ROW_BOUND_MS,
-    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
-    work: admissionRow,
-  });
-}, ADMISSION_ROW_TIMEOUT_MS);
+itBoundedRow("runs composite admission from bundled runtime bytes in a disposable consumer", admissionRow);
 
 it("names the environment when a start stalled while the row ran", () => {
   const row = "qualifies scoped execution through the actual bundled runtime";
@@ -454,9 +486,16 @@ it("samples repeatedly, and reports the duration it measured rather than one it 
   // that returns nothing, that samples once and stops, or that reports a figure
   // it did not measure produces a confident verdict from no observation at all
   // — and the first two of those are the v1 defect exactly.
+  // The interval is deliberately several times the probe. Under an interval
+  // SMALLER than the band's own tolerance, a sampler that timed the whole cycle
+  // — start plus the sleep after it — would report a number inside the band and
+  // pass, and at the production interval every sample would then read ten
+  // seconds and attribute EVERY failure to the environment: the v1 defect
+  // inverted, a real product defect blamed on the host forever.
   const PROBE_MS = 60;
-  const sampler = startExecSampler(5, async () => { await new Promise((resolve) => { setTimeout(resolve, PROBE_MS); }); });
-  await new Promise((resolve) => { setTimeout(resolve, 400); });
+  const INTERVAL_MS = PROBE_MS * 5;
+  const sampler = startExecSampler(INTERVAL_MS, async () => { await new Promise((resolve) => { setTimeout(resolve, PROBE_MS); }); });
+  await new Promise((resolve) => { setTimeout(resolve, (PROBE_MS + INTERVAL_MS) * 4); });
   const samples = sampler.stop();
 
   expect(samples.length).toBeGreaterThanOrEqual(2);
@@ -473,7 +512,7 @@ it("samples repeatedly, and reports the duration it measured rather than one it 
   // Stopping is what ends it, and it stays stopped — observed across a real
   // interval, because two `stop` calls in one tick cannot see a sampler that
   // never stopped.
-  await new Promise((resolve) => { setTimeout(resolve, PROBE_MS * 4); });
+  await new Promise((resolve) => { setTimeout(resolve, (PROBE_MS + INTERVAL_MS) * 2); });
   expect(sampler.stop().length).toBe(samples.length);
 });
 
@@ -563,36 +602,29 @@ const scopedRow = async (): Promise<void> => {
   } finally { await rm(temporary, { recursive: true, force: true }); }
 };
 
-it("keeps every inner bound under its own ceiling, and the sampler under every bound", () => {
-  // The bounds are the AT-2 remedy, and prose is what ordered them until now:
-  // "an outer `_TIMEOUT_MS` ceiling well above it". An inner bound raised above
-  // its own ceiling silently restores the bare `Test timed out in Nms` this
-  // ticket was filed for — vitest aborts the row from outside and its catch
-  // never runs — and every row still passes on a healthy host, so nothing else
-  // here would notice.
-  const bounded: ReadonlyArray<readonly [string, number, number]> = [
-    ["the shared runtime build", RUNTIME_BUILD_BOUND_MS, RUNTIME_BUILD_TIMEOUT_MS],
-    ["the consumer row", CONSUMER_ROW_BOUND_MS, CONSUMER_ROW_TIMEOUT_MS],
-    ["the admission row", ADMISSION_ROW_BOUND_MS, ADMISSION_ROW_TIMEOUT_MS],
-    ["the scoped row", SCOPED_ROW_BOUND_MS, SCOPED_ROW_TIMEOUT_MS],
-  ];
-  expect(bounded.length).toBe(4);
-  for (const [name, bound, ceiling] of bounded) {
-    expect(bound, `${name}: bound under ceiling`).toBeLessThan(ceiling);
+it("keeps every inner bound under its own ceiling, and every bounded row on the budget", () => {
+  // Two numbers ordered by prose until now — "an outer `_TIMEOUT_MS` ceiling
+  // well above it" — and an inner bound raised above its own ceiling silently
+  // restores the bare `Test timed out in Nms` this ticket was filed for: vitest
+  // aborts the row from outside and its catch never runs. Every row still
+  // passes on a healthy host, so nothing else here would notice.
+  const entries = Object.entries(ROW_BUDGET) as ReadonlyArray<readonly [BudgetedRow, (typeof ROW_BUDGET)[BudgetedRow]]>;
+  for (const [row, budget] of entries) {
+    expect(budget.bound, `${row}: bound under ceiling`).toBeLessThan(budget.ceiling);
   }
+
+  // Ordering the record's own numbers is not enough on its own: it says nothing
+  // about the numbers a row RUNS under, and a row given a hand-written bound is
+  // invisible to it. So the rows that carry a budget are exactly the rows this
+  // record names — a row declared with a bare `it` drops out of the left side,
+  // and an entry kept here after its row went away is left on the right.
+  expect([...declaredBoundedRows].sort()).toEqual(entries.map(([row]) => row).sort());
 
   // And the sampler has to get several starts in before the tightest of those
   // bounds, or the verdict rests on one reading — at a large enough interval it
-  // takes one sample and sleeps past every row, which is the round-1 defect
-  // restored by a single constant.
-  expect(EXEC_SAMPLE_INTERVAL_MS * 10).toBeLessThan(Math.min(...bounded.map(([, bound]) => bound)));
+  // takes one sample and sleeps past every row, which is the v1 defect restored
+  // by a single constant.
+  expect(EXEC_SAMPLE_INTERVAL_MS * 10).toBeLessThan(Math.min(...entries.map(([, budget]) => budget.bound)));
 });
 
-it("qualifies scoped execution through the actual bundled runtime", async () => {
-  await runRowWithStallAttribution({
-    row: "qualifies scoped execution through the actual bundled runtime",
-    boundMs: SCOPED_ROW_BOUND_MS,
-    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
-    work: scopedRow,
-  });
-}, SCOPED_ROW_TIMEOUT_MS);
+itBoundedRow("qualifies scoped execution through the actual bundled runtime", scopedRow);
