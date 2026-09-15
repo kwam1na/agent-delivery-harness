@@ -107,7 +107,7 @@ vitest `_TIMEOUT_MS` sits well above it as a backstop nothing reaches. The
 sampler is a parameter of that wrapper rather than a local, which is what lets a
 row prove the wrapper reads it.
 
-### Two self-corrections worth keeping
+### Three self-corrections worth keeping
 
 The first version of the attribution sampled on the way *out* of the catch, and
 on its first real failure — a check crossing the qualification's own 30 000 ms
@@ -133,8 +133,15 @@ empty at exactly the moment the verdict mattered, `attributeRowFailure` read
 `unsampled`, and two rows blamed the candidate for a host that had stalled them
 — the v1 defect wearing a different hat. A start outstanding for `n` ms is
 already evidence the host took at least `n` ms, so `stop` now returns the
-in-flight elapsed alongside the completed samples. The first real run after that
-read `a bare start on this host took 101490 ms` and named the environment.
+in-flight elapsed alongside the completed samples.
+
+The provenance of the evidence matters here, in a note whose thesis is that a
+reading taken after the thing it reads is not a measurement of it. The run that
+read `a bare start on this host took 101490 ms` and named the environment was
+the run BEFORE this third fix, and it is evidence for the per-row bound, not for
+the in-flight change: it was an ordinary completed sample in the consumer row.
+The in-flight change is evidenced by its own row and has not yet been observed
+on a subprocess row on this host.
 
 **An instrument that shares a resource with the thing it measures is part of the
 measurement.** All three corrections are that one sentence: the first took its

@@ -172,8 +172,10 @@ export interface ExecSampler {
  * Times starts until stopped.
  *
  * A start is the cost every bundled execution pays before it runs a line, so
- * this measures the same scarce resource the row spends: one start per interval
- * against the row's own forty-five.
+ * this measures the same scarce resource the row spends. It is not free of that
+ * resource either: one start per interval over a long-bounded row can add up to
+ * more starts than the row itself makes, which is honest — the host is why each
+ * one is slow — but it is the reason the interval is coarse rather than fine.
  *
  * A completed sample is not the only observation available, and on the host
  * this file was written for it is the rarer one. When a row refuses because the
@@ -458,11 +460,20 @@ it("samples repeatedly, and reports the duration it measured rather than one it 
   const samples = sampler.stop();
 
   expect(samples.length).toBeGreaterThanOrEqual(2);
-  for (const sample of samples) {
-    expect(sample).toBeGreaterThanOrEqual(PROBE_MS - 5);
-    expect(sample).toBeLessThan(PROBE_MS * 20);
-  }
-  // Stopping is what ends it, and it stays stopped.
+  // The band is asserted over the samples that COMPLETED, not over all of them.
+  // `stop` may append a start that has not come back yet, and that one is
+  // partial by construction — uniform over the probe's duration — so a
+  // per-element lower bound over the whole list is a bet on where the stop
+  // landed inside a cycle. A row that refuses for host timing, in the file whose
+  // whole subject is refusals that blame the wrong side, is the defect twice.
+  expect(samples.filter((sample) => sample >= PROBE_MS - 5 && sample < PROBE_MS * 3).length).toBeGreaterThanOrEqual(2);
+  // And nothing it reports is a figure it chose rather than measured.
+  expect(Math.max(...samples)).toBeLessThan(PROBE_MS * 20);
+
+  // Stopping is what ends it, and it stays stopped — observed across a real
+  // interval, because two `stop` calls in one tick cannot see a sampler that
+  // never stopped.
+  await new Promise((resolve) => { setTimeout(resolve, PROBE_MS * 4); });
   expect(sampler.stop().length).toBe(samples.length);
 });
 
@@ -485,7 +496,8 @@ it("counts a start that has not come back yet, which is when a stall is worth na
   // A start outstanding past the degraded threshold names the host, which is
   // the case the completed-sample list could never reach.
   expect(attributeRowFailure({ row: "any row", failure, execSampleMs: [NOMINAL_EXEC_MS * DEGRADED_EXEC_FACTOR + 1] }).attribution).toBe("environment");
-  // Stopping is still what ends it: no further start is begun.
+  // The in-flight start is reported ONCE. A `stop` that pushed it into the
+  // completed list would hand the next caller two readings of one start.
   expect(sampler.stop().length).toBe(1);
 });
 
@@ -550,6 +562,31 @@ const scopedRow = async (): Promise<void> => {
     await expect(runScopedRuntimeQualification(runtime)).rejects.toThrow("runtime checksum mismatch: cli.mjs");
   } finally { await rm(temporary, { recursive: true, force: true }); }
 };
+
+it("keeps every inner bound under its own ceiling, and the sampler under every bound", () => {
+  // The bounds are the AT-2 remedy, and prose is what ordered them until now:
+  // "an outer `_TIMEOUT_MS` ceiling well above it". An inner bound raised above
+  // its own ceiling silently restores the bare `Test timed out in Nms` this
+  // ticket was filed for — vitest aborts the row from outside and its catch
+  // never runs — and every row still passes on a healthy host, so nothing else
+  // here would notice.
+  const bounded: ReadonlyArray<readonly [string, number, number]> = [
+    ["the shared runtime build", RUNTIME_BUILD_BOUND_MS, RUNTIME_BUILD_TIMEOUT_MS],
+    ["the consumer row", CONSUMER_ROW_BOUND_MS, CONSUMER_ROW_TIMEOUT_MS],
+    ["the admission row", ADMISSION_ROW_BOUND_MS, ADMISSION_ROW_TIMEOUT_MS],
+    ["the scoped row", SCOPED_ROW_BOUND_MS, SCOPED_ROW_TIMEOUT_MS],
+  ];
+  expect(bounded.length).toBe(4);
+  for (const [name, bound, ceiling] of bounded) {
+    expect(bound, `${name}: bound under ceiling`).toBeLessThan(ceiling);
+  }
+
+  // And the sampler has to get several starts in before the tightest of those
+  // bounds, or the verdict rests on one reading — at a large enough interval it
+  // takes one sample and sleeps past every row, which is the round-1 defect
+  // restored by a single constant.
+  expect(EXEC_SAMPLE_INTERVAL_MS * 10).toBeLessThan(Math.min(...bounded.map(([, bound]) => bound)));
+});
 
 it("qualifies scoped execution through the actual bundled runtime", async () => {
   await runRowWithStallAttribution({
