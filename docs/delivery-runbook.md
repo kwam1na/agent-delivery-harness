@@ -206,7 +206,12 @@ prepared exits 1 with `check_attribution_unavailable`, a log that names no
 failing test file is `candidate`, a candidate diff that cannot be read leaves
 every row `candidate` (the touched-file guard cannot run, so nothing may be
 reclassified), and the rerun budget (6) leaves anything it did not examine
-`candidate` — including the base comparison it could not afford. A check
+`candidate` — including the base comparison it could not afford. The
+`pre-existing` rung reads the base run's log only when that run went red, and
+so assumes a check command whose log names only the files it did not recover:
+a runner that prints `FAIL` for a file its own internal retry then passes, in a
+base run that some other file takes red, would have that file read as failing
+on the base. A check
 command that reads the newline-separated
 `DELIVERY_CHECK_ATTRIBUTION_FILES` reruns only those files; one that ignores it
 reruns everything and reaches the same verdict more slowly.

@@ -184,10 +184,13 @@ export async function attributeCheckFailure(request: AttributionRequest): Promis
     // deadlock or unawaited promise this ladder is most likely to meet. A row
     // whose reruns say "fails on the candidate, passes on the base" has been
     // examined, and the examination says candidate.
-    // The base exit code is the authority, not its log: a runner that retries
-    // internally prints FAIL for a file it then recovers and still exits 0, and
-    // reading that log alone would hand the candidate's own regression to the
-    // base tree.
+    // The base run's exit code gates its log. A runner that retries internally
+    // prints FAIL for a file it then recovers and still exits 0, so a green base
+    // run is read as passing every file its log named, and reading that log
+    // alone would hand the candidate's own regression to the base tree. Inside a
+    // red base run the log is still read per file, which is what lets one honest
+    // base failure carry its own row; that much assumes a runner whose log names
+    // only the files it did not recover. The runbook states the assumption.
     if (base.code !== 0 && baseFailed.has(failure.file)) {
       rows.push({ file: failure.file, class: "pre-existing", evidence: "the base tree fails the same file" });
       continue;

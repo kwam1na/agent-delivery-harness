@@ -498,19 +498,23 @@ const selected=focus.length?rows.filter(r=>focus.includes(r.file)):rows;
 const failed=selected.filter(r=>focus.length===0?true:(base?r.failsOnBase:r.failsAlone));
 for(const r of failed)console.log(' FAIL  '+r.file+' > a case\\n'+(r.signal==='timeout'?'Error: Test timed out in 5000ms.':'AssertionError: expected 1 to be 2'));
 fs.writeFileSync('suite-run.json',JSON.stringify({focus}));
+if(focus.length&&process.env.SUITE_ESCAPE)fs.writeFileSync(process.env.SUITE_ESCAPE,'escaped');
 process.exit(failed.length?1:0);
 `] as [string, ...string[]];
 
-async function suite(rows: readonly Record<string, unknown>[], profile: Record<string, unknown> = {}, cwd = ".") {
+async function suite(rows: readonly Record<string, unknown>[], profile: Record<string, unknown> = {}, cwd = ".", escape = "") {
   const f = await fixture();
   f.env["SUITE_ROWS"] = JSON.stringify(rows);
+  // Only a rerun writes it, and only where a row asks for one: the declared run
+  // is given no focus list, so every other row's snapshot stays as it was.
+  f.env["SUITE_ESCAPE"] = escape;
   await mkdir(path.join(f.dir, cwd), { recursive: true });
   await writeFile(path.join(f.dir, cwd, "mode.txt"), "candidate");
   // A declared output makes the retained evidence observable: the command writes
   // the focus list it was given, so an output captured after the ladder's reruns
   // would name one file where the declared run named none.
   const outputs = cwd === "." ? ["suite-run.json"] : [];
-  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 240000, outputs, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd, profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
+  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 240000, outputs, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd, profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }, { name: "SUITE_ESCAPE", kind: "flag" }] } } };
   f.setConfig({ ...f.config, providers: [provider], obligations: [{ ...f.config.obligations[0]!, id: "check.suite.passed", providers: ["check.suite"] }],
     scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "suite", gitContext: "none", dependencyInputs: [], mutableOutputs: outputs, credentialIdentities: {}, ...profile }] } } as unknown as HarnessConfigInput);
   return f;
@@ -553,6 +557,20 @@ it("keeps the touched-file guard in the frame the check's own log speaks", async
   expect(out).toContain("candidate touched.test.ts: the candidate's diff touches this file");
   expect(out).toContain("candidate check.suite (exit 1): touched.test.ts first");
   expect(f.err.join("\n")).toContain("check_command_failed");
+}, 600000);
+
+// The snapshot is verified after the ladder, not before it. An attribution
+// rerun is a second execution inside the same private snapshot, so a rerun that
+// writes outside the profile's mutable outputs has escaped its scope exactly as
+// the declared command would have. Verifying before the ladder would let that
+// escape ride out of the gate on an `attributed` verdict.
+it("catches an attribution rerun that escapes the snapshot", async () => {
+  const f = await suite([row("a.test.ts", "timeout", false, false)], {}, ".", "escaped.txt");
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate")).toBe(1);
+  // The ladder ran and cleared the row; the snapshot check is what stops it.
+  expect(f.out.join("\n")).toContain("attributed check.suite (exit 1): 1 environmental");
+  expect(f.err.join("\n")).toContain("check_snapshot_drift");
 }, 600000);
 
 it("refuses to attribute when the base tree cannot be prepared", async () => {
