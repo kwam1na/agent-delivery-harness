@@ -546,6 +546,52 @@ describe("reopened rounds and the admitting completion", () => {
     expect(evaluateRunJournal(fresh, TREE, MANDATED).violations).toEqual(["gate-reported-before-closed-round"]);
   });
 
+  it("names the LATEST earlier announcement of the governing key, and only that key's", () => {
+    // Every other row that reaches the prior-opening arm carries one round key
+    // and one earlier announcement, so the arm's two selections — same key,
+    // latest — are unproven for any journal with more than one round in it,
+    // which is every real journal this evaluator reads.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(opened(1), "round-1"),
+      v2Round(opened(2), "round-2"), v2Round(closed(2), "round-2"),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    // seq 6 is the governing key's own second announcement: not seq 7, which is
+    // a DIFFERENT key's opening, and not seq 5, which is stale.
+    expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("was already announced at seq 6");
+  });
+
+  it("still reports a self-naming governing round as self-naming when other rounds precede it", () => {
+    // The guard on the row above. Without the round-key filter an unrelated
+    // earlier opening would be read as this round's own announcement and the
+    // message would take the wrong arm entirely.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      v2Round(opened(2), "round-2", "round-2"), v2Round(closed(2), "round-2"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("it names as itself in reopensRoundId");
+  });
+
+  it("does not join two round numbers that share a roundId through a self-naming reopen", () => {
+    // `reopenChains` skips a self-naming opening because `byRoundId` resolves
+    // it to the FIRST opening under that id, which is a different round key
+    // whenever one roundId was reused across two round numbers. Without the
+    // skip the two rounds merge into one chain and the bound is undercounted.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-x"), v2Round(closed(1), "round-x"),
+      v2Round(opened(2), "round-x", "round-x"), v2Round(closed(2), "round-x"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(explainRunJournal(events, TREE, MANDATED).logicalRounds).toBe(2);
+  });
+
   it("does not let a chain close bound to an unaccepted tree support the gate", () => {
     const events = journal([
       started, ticketRead, posture, lenses(),
@@ -580,7 +626,7 @@ describe("the two real journals V26-2075 was taken from", () => {
     });
   }
 
-  it("keeps both journals free of the two warnings the wave saw them draw falsely", () => {
+  it("keeps both journals free of the two warnings a regression here would draw", () => {
     for (const vector of RUN_JOURNAL_VECTORS.journals) {
       const { violations } = evaluateRunJournal(
         vector.events as readonly RunEvent[], vector.recordTreeSha, vector.mandatedLensIds, vector.reviewedTreeShas,

@@ -41,10 +41,13 @@ rather than claiming it had already landed: `run-752c1ec0d1804258` carries a
 same-id reopen at seq 84, and read clean only because a later new-id replay
 superseded it and became the round the journal is read from. Had the delivery
 merged one round earlier, the same journal would have drawn the pair. **An
-evaluator that is right by accident of which event came last is not right**, and
-the committed vectors now pin that both journals read clean before and after, so
-the fix is recorded as the regression guard it is rather than as a repair of a
-failure nobody can reproduce.
+evaluator that is right by accident of which event came last is not right**. The
+committed vectors pin the AFTER — no committed row can exercise an evaluator
+that is no longer in the tree — so the before was established by running the
+replaced evaluator over the same vectors by hand and is recorded here rather
+than asserted there. Both read clean under both, which is why the change is
+recorded as the regression guard it is rather than as a repair of a failure
+nobody can reproduce.
 
 ## The rule
 

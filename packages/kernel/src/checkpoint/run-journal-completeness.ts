@@ -58,10 +58,12 @@
  *     `round-6-replay` at seq 103 — still reads clean. Where the same-id reopen
  *     IS the governing round, the old first-opening pairing produced a pair no
  *     later rule could select and the journal drew a false
- *     `gate-before-closed-round` and `round-not-bound-to-record` together; the
- *     committed vectors pin that both real journals read clean before and after
- *     this change, so for them this is a regression guard and the live error was
- *     the completion selection below.
+ *     `gate-before-closed-round` and `round-not-bound-to-record` together. The
+ *     committed vectors pin the AFTER for both real journals — a committed row
+ *     cannot exercise an evaluator that is no longer in the tree — and running
+ *     the replaced one over the same vectors by hand showed the BEFORE was
+ *     clean too, so for these journals this is a regression guard and the live
+ *     error was the completion selection below.
  *   - The governing CLI completion is the ADMITTING one. See `admitting`.
  */
 

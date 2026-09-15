@@ -774,8 +774,9 @@ missing tracker is recorded and the loop proceeds.
   the journal for repeated `roundId`s if that is the question. Before V26-2075 a
   governing same-id reopen drew `gate-before-closed-round` and
   `round-not-bound-to-record` instead — two identifiers for an ordering that was
-  correct, which is what the version-1 bullet here used to describe and what
-  neither could be cleared. A version-1 run can only draw the new warning: its
+  correct, and neither could be cleared. That is what the bullet this entry
+  replaces described, against the version-1 run it was first seen on. A
+  version-1 run can only draw the new warning: its
   frozen grammar refuses `reopensRoundId`, so clearing it means starting the run
   at version 2. `verify` itself and `gate.yml` read the record, not the journal,
   so none of this is ever an admission decision.
