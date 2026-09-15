@@ -22,6 +22,7 @@ import {
   COORDINATION_MESSAGE_SPEC,
   COORDINATION_PROTOCOL_VERSION,
   type ControlPlaneClaim,
+  type CoordinationAuthentication,
   type CoordinationMessage,
   type CoordinationMessageKind,
 } from "./message.ts";
@@ -59,17 +60,39 @@ export interface SimulatedMessageOptions {
 }
 
 /**
- * Every declared override, as a value rather than only as a type.
+ * Every member of the WIRE a corpus is allowed to bend, flattened: the message's
+ * own members except `spec`, plus the two members of its authentication block.
  *
- * The record below is typed over `Required<SimulatedMessageOptions>`, so a
- * member added to the interface without being added here is a compile error,
- * and a member removed from the interface is one too. That is what lets a
- * caller — the conformance corpus in particular — enumerate the kit's override
- * surface and check that `mint` honours all of it, rather than trusting a
- * sentence in a doc comment. Round 9 found six of the ten declared overrides
- * honoured by nothing any row could tell apart from a hardcoded default.
+ * `spec` is the one exclusion and it is structural rather than chosen:
+ * `CoordinationMessage["spec"]` is the literal `COORDINATION_MESSAGE_SPEC`, so
+ * a message carrying any other value is not a `CoordinationMessage` and `mint`
+ * could not return one. The foreign-envelope vector belongs to the grammar,
+ * which takes `unknown`.
  */
-const OPTION_PRESENCE: { readonly [K in keyof Required<SimulatedMessageOptions>]: true } = {
+type BendableWireMember =
+  | Exclude<keyof CoordinationMessage, "spec" | "authentication">
+  | keyof CoordinationAuthentication;
+
+/**
+ * Every declared override, as a value rather than only as a type — and the one
+ * declaration that ties the kit's override surface to the wire in BOTH
+ * directions.
+ *
+ * The record is typed over `Required<SimulatedMessageOptions>` intersected with
+ * `BendableWireMember`, and it is an object literal, so all four drifts are
+ * compile errors: a member added to or removed from the options interface, a
+ * member added to the WIRE and not declared here, and a key here that is
+ * neither. Round 9 found six of the ten declared overrides honoured by nothing
+ * any row could tell apart from a hardcoded default; round 10 found that the
+ * remaining claim — that the kit declares every member of the message — was
+ * circular, since "every member" meant "every member we remembered to declare",
+ * and a new wire member hardcoded in `mint` left the whole suite green. This
+ * type is what makes that claim answer to the message type instead of to
+ * itself.
+ */
+const OPTION_PRESENCE: { readonly [K in keyof Required<SimulatedMessageOptions>]: true } & {
+  readonly [K in BendableWireMember]: true;
+} = {
   messageId: true,
   kind: true,
   claim: true,
@@ -107,9 +130,10 @@ export interface CoordinationSimulator extends CoordinationPort {
   /**
    * Mints a well-formed message; every member is overridable so a corpus can
    * bend exactly one. "Every" is `SIMULATED_MESSAGE_OPTION_NAMES`, which is
-   * the interface itself rather than a restatement of it, and every entry of
-   * that list is pinned as actually honoured by "honours every override it
-   * declares, and declares every member of the message".
+   * `OPTION_PRESENCE`'s keys — tied by that record's type to the message's own
+   * members, not merely to this interface — and every entry of that list is
+   * pinned as actually honoured by "honours every override it declares, and
+   * declares every member of the message".
    */
   mint(options?: SimulatedMessageOptions): CoordinationMessage;
   /** Runs one message through the real admission and, if admitted, the real reconciliation. */

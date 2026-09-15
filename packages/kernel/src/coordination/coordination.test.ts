@@ -943,6 +943,19 @@ describe("the deterministic simulator", () => {
     expect(Object.keys(BENT).sort()).toEqual([...SIMULATED_MESSAGE_OPTION_NAMES].sort());
 
     const simulator = createCoordinationSimulator(options);
+    // The second clause of this row's name, read off a message the kit
+    // actually minted rather than off the list that claims to describe it.
+    // Round 10 found the clause circular: "every member" meant "every member
+    // the kit remembered to declare", so a member added to the wire and
+    // hardcoded in `mint` left the suite green. `OPTION_PRESENCE`'s type now
+    // makes that a compile error; this is the same fact stated where a reader
+    // of the row can see it, and it fails at runtime on a minted message that
+    // carries a member no override can bend.
+    const wireMembers = [
+      ...Object.keys(simulator.mint()).filter((name) => name !== "spec" && name !== "authentication"),
+      ...Object.keys(simulator.mint().authentication),
+    ].sort();
+    expect([...SIMULATED_MESSAGE_OPTION_NAMES].sort()).toEqual(wireMembers);
     for (const name of SIMULATED_MESSAGE_OPTION_NAMES) {
       const bent = BENT[name];
       expect(bent, `${name} is declared but this row says nothing about it`).toBeDefined();
