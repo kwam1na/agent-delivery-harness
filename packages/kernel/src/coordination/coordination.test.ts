@@ -1096,9 +1096,11 @@ describe("a message this unit admits can always be mirrored", () => {
    * What it does prove is that the pattern still rejects the spellings a
    * widening would most plausibly admit, which is the case round 7 actually
    * demonstrated. The universal the delivery genuinely relies on is a
-   * different one and is pinned separately: `reference` consults the WHOLE
-   * corpus, not a subset — delete that call, replace it with a heuristic, or
-   * skip a single pattern, and a row goes red.
+   * different one and is pinned separately, over all nine patterns rather than
+   * over these seven, by "consults every corpus pattern when it decides a
+   * reference is key material": `reference` consults the WHOLE corpus, not a
+   * subset — delete that call, replace it with a heuristic, or skip a single
+   * pattern, and that row goes red for the pattern it dropped.
    */
   const WHITESPACE_FREE_SPELLINGS: Readonly<Record<string, readonly string[]>> = {
     "private-key-block": [
@@ -1114,6 +1116,29 @@ describe("a message this unit admits can always be mirrored", () => {
       `Bearer-${"A".repeat(24)}`,
     ],
   };
+
+  /**
+   * One value per corpus pattern that the corpus actually matches, whether or
+   * not a spine id can hold it. The two whitespace-requiring shapes are spelled
+   * here with their whitespace, so the row below can state its universal over
+   * ALL NINE patterns rather than over the seven a spine id can spell.
+   *
+   * Round 8 found why that distinction matters: while the only row exercising
+   * `reference` against the corpus iterated the spellable seven, skipping
+   * `private-key-block` or `bearer-credential` inside `firstSecretIn` left the
+   * suite green. Harmless today — neither is spine-id spellable, so the skip
+   * changes no verdict until someone widens the pattern — but the comment
+   * beside it claimed a universal the suite did not hold, and a claim that
+   * outruns its evidence is the defect, not the mutant it failed to catch.
+   */
+  const WHITESPACE_BEARING_SPELLINGS: Readonly<Record<string, string>> = {
+    "private-key-block": `-----BEGIN RSA PRIVATE KEY-----\n${"A".repeat(24)}\n-----END RSA PRIVATE KEY-----`,
+    "bearer-credential": `Bearer ${"A".repeat(24)}`,
+  };
+
+  /** A value the corpus matches for `id` — the spine-id spelling if there is one. */
+  const matchingValueFor = (id: string): string | undefined =>
+    (CORPUS_SPELLINGS[id] ?? [])[0] ?? WHITESPACE_BEARING_SPELLINGS[id];
 
   const spellableSecrets = (): readonly (readonly [string, string])[] =>
     SECRET_PATTERNS.flatMap((pattern) =>
@@ -1208,6 +1233,40 @@ describe("a message this unit admits can always be mirrored", () => {
     expect(verdict.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([
       ["malformed_member", "/nonce"],
     ]);
+  });
+
+  it("consults every corpus pattern when it decides a reference is key material", () => {
+    // The universal the delivery actually relies on, stated over the WHOLE
+    // corpus rather than over the part a spine id can spell. For every entry
+    // of `SECRET_PATTERNS` there is a value the corpus matches, and that value
+    // in `messageId` draws a rejection naming that pattern id — so removing
+    // any single pattern from the consultation, or swapping the corpus call
+    // for a heuristic, turns this row red for the pattern it dropped.
+    //
+    // The two whitespace-bearing values are rejected TWICE over, by the spine
+    // id grammar and by the corpus check, because `reference` runs both and
+    // the collector keeps both rejections. That is the point: the corpus
+    // verdict is not conditional on the grammar verdict, so it stays a real
+    // assertion about the corpus even where the grammar would have refused the
+    // value anyway.
+    for (const pattern of SECRET_PATTERNS) {
+      const value = matchingValueFor(pattern.id);
+      expect(value, `${pattern.id} owes a matching value`).toBeDefined();
+      if (value === undefined) continue;
+      expect(firstSecretIn(value), `${pattern.id}: its own value is a corpus match`).toBe(pattern.id);
+      const verdict = validateCoordinationMessage(message({ messageId: value }));
+      expect(verdict.ok, `${pattern.id} was admitted into a reference member`).toBe(false);
+      if (verdict.ok) continue;
+      expect(
+        verdict.rejections.some(
+          (rejection) =>
+            rejection.code === "malformed_member" &&
+            rejection.pointer === "/messageId" &&
+            rejection.message.includes(`${pattern.id} shape`),
+        ),
+        `${pattern.id} was not named in the rejection of /messageId`,
+      ).toBe(true);
+    }
   });
 
   it("mirrors what it admits — and would have failed to mirror what it used to admit", () => {
