@@ -1111,10 +1111,56 @@ describe("the delivery record's run span", () => {
     // The journal is gone, as it is in the CI checkout that verifies this
     // record. The record is unchanged and still verifies.
     await rm(path.join(runsDir, `${runId}.jsonl`));
+    // And a DIFFERENT run is current in this worktree, which is the shape that
+    // separates "unchecked because nothing binds this candidate" from "checked
+    // against whichever run happened to be open here". The second run binds
+    // nothing of this record's; a verify that fell back to it would refuse an
+    // honest record on a journal that never described it.
+    await startRun(harness);
 
     const verified = await harness.cli(["verify"]);
     expect(verified.code, verified.err).toBe(EXIT_OK);
     expect(verified.out).toContain("unchecked: no run journal in this repository binds this candidate");
+  });
+
+  it("stamps the span from the current run when no round has journaled the candidate yet", { timeout: 120000 }, async () => {
+    // `record` runs mid-delivery. A delivery that records before any round
+    // event has journaled this tree has no journal BOUND to the candidate yet,
+    // and the worktree's own current run is the run it is recording from — the
+    // one case the stamping fallback exists for.
+    const harness = await makeHarness();
+    const runId = await startRun(harness);
+    await emitAll(harness, [...prerequisites()]);
+    await deliverRecord(harness);
+    await commitRecord(harness.dir);
+
+    const span = (await recordOf(harness.dir))["runSpan"] as { startedAt: string; endedAt: string } | undefined;
+    expect(span, "a record written mid-run carries the span of the run it recorded from").toBeDefined();
+    const { store } = await storeOf(harness.dir);
+    const read = await store.read(runId);
+    if (!read.ok) throw new Error("the journal is unreadable");
+    expect(span?.startedAt).toBe(read.events[0]!.at);
+  });
+
+  it("checks the span against the run that started where the record says, not the newest one", { timeout: 120000 }, async () => {
+    // TWO runs bind this candidate: the one that recorded it, and a later one
+    // opened in the same worktree — a tail, a follow-up session, a re-verify.
+    // The later run starts hours after the record's own span. Refusing on it
+    // would block a record whose journal agrees with it exactly.
+    const harness = await makeHarness();
+    const recordingRun = await journaledDelivery(harness);
+    const laterRun = await startRun(harness);
+    expect(laterRun).not.toBe(recordingRun);
+    await emitAll(harness, [roundOpened(harness.treeSha), roundClosed(harness.treeSha)]);
+    const { store } = await storeOf(harness.dir);
+    const both = await store.findByCandidateTreeSha(harness.treeSha);
+    expect(both?.alsoMatching.length, "both runs bind this candidate").toBe(1);
+    // The later run is journaled seconds after the first, so an implementation
+    // that refused on the newest matching run would refuse here. The record is
+    // honest, so `verify` passes and names a run it agrees with.
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    expect(verified.out).toContain("checked against run ");
   });
 
   it("records no span at all when the delivery ran under no journal", { timeout: 120000 }, async () => {

@@ -192,7 +192,15 @@ async function runSpanRows(
   if (span === undefined) return { rows: [] };
   const spent = (Date.parse(span.endedAt) - Date.parse(span.startedAt)) / 1000;
   const recorded = `recorded run span: ${span.startedAt} to ${span.endedAt} (${durationLabel(spent)})`;
-  const journal = await resolveRunSpan({ cwd: rootDir, treeSha: record.candidateBinding.treeSha });
+  // `preferStartedAt` is what keeps a SECOND run in the same worktree — the one
+  // this verify is itself running under, say — from refusing a record whose own
+  // run reports exactly this span. A refusal stands only where no journal
+  // binding this candidate starts where the record says it did.
+  const journal = await resolveRunSpan({
+    cwd: rootDir,
+    treeSha: record.candidateBinding.treeSha,
+    preferStartedAt: span.startedAt,
+  });
   if (journal === undefined) {
     return { rows: [`${recorded}; unchecked: no run journal in this repository binds this candidate`] };
   }

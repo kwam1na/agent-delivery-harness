@@ -145,6 +145,42 @@ describe("projectRunPhases", () => {
     tiles(events);
   });
 
+  it("still tiles when a round closes AFTER the journal's last instant", () => {
+    // The other direction of the same skew, and the one the low clamp cannot
+    // catch: by this journal's own instants the round closed two hours after
+    // the run ended. Without the high clamp on the review end, review runs to
+    // 14:00 and the three phases sum to five hours of a three-hour run.
+    const events = [
+      event(1, at(9), "run.started", { host: "vitest", workflow: { releaseId: "r", profile: "linear" } }),
+      event(2, at(10), "review.round.opened", { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] }),
+      event(3, at(14), "review.round.closed", { round: 1, candidateTreeSha: TREE_SHA, outcome: "aligned" }),
+      event(4, at(12), "run.ended", { result: "complete" }),
+    ];
+    const phases = projectRunPhases(events);
+    expect(phases.implementationSeconds).toBe(3600);
+    expect(phases.reviewSeconds).toBe(2 * 3600);
+    expect(phases.tailSeconds).toBe(0);
+    tiles(events);
+  });
+
+  it("still tiles when a round closes BEFORE the round that opened it", () => {
+    // The review end is held at the review START, not at the run's start: a
+    // close skewed behind its own open leaves an empty review phase and a tail
+    // measured from the open, rather than a tail that double-counts the hour
+    // before it.
+    const events = [
+      event(1, at(9), "run.started", { host: "vitest", workflow: { releaseId: "r", profile: "linear" } }),
+      event(2, at(11), "review.round.opened", { round: 1, candidateTreeSha: TREE_SHA, lenses: ["lens.outcome-correctness"] }),
+      event(3, at(10), "review.round.closed", { round: 1, candidateTreeSha: TREE_SHA, outcome: "aligned" }),
+      event(4, at(12), "run.ended", { result: "complete" }),
+    ];
+    const phases = projectRunPhases(events);
+    expect(phases.implementationSeconds).toBe(2 * 3600);
+    expect(phases.reviewSeconds).toBe(0);
+    expect(phases.tailSeconds).toBe(3600);
+    tiles(events);
+  });
+
   it("reports an empty journal as no time at all", () => {
     expect(projectRunPhases([])).toMatchObject({ implementationSeconds: 0, reviewSeconds: 0, tailSeconds: 0, rounds: 0 });
   });

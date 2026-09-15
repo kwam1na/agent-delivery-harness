@@ -400,6 +400,27 @@ it("parses an export whose stored readout predates per-violation explanations", 
   expect(parsedOlder.ok).toBe(true);
   if (parsedOlder.ok) expect(parsedOlder.value.readout.explanations).toEqual(built.readout.explanations);
 
+  // The same loosening, for the same reason, on the summary: an export written
+  // before the summary carried phases must still parse, and the phases a reader
+  // gets back are recomputed from the events rather than taken from the file.
+  const prePhases = JSON.parse(JSON.stringify(built));
+  delete prePhases.summary.phases;
+  const parsedPrePhases = parseRunExport(JSON.stringify(prePhases));
+  expect(parsedPrePhases.ok).toBe(true);
+  if (parsedPrePhases.ok) expect(parsedPrePhases.value.summary.phases).toEqual(built.summary.phases);
+  // And a forged phase figure is discarded rather than believed.
+  const forgedPhases = JSON.parse(JSON.stringify(built));
+  forgedPhases.summary.phases.implementationSeconds = 99_999;
+  const parsedForgedPhases = parseRunExport(JSON.stringify(forgedPhases));
+  expect(parsedForgedPhases.ok).toBe(true);
+  if (parsedForgedPhases.ok) expect(parsedForgedPhases.value.summary.phases).toEqual(built.summary.phases);
+
+  // Every other member of the summary is still compared, so a stored export
+  // that claims a different span over the same events is refused.
+  const spanTampered = JSON.parse(JSON.stringify(built));
+  spanTampered.summary.durationSeconds = 4242;
+  expect(parseRunExport(JSON.stringify(spanTampered)).ok).toBe(false);
+
   // The loosening reaches exactly one key. Everything else in the readout is
   // still checked against the recomputation, so a stored export that claims a
   // clean journal over events that say otherwise is still refused.

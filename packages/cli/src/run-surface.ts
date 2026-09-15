@@ -314,6 +314,16 @@ export interface RunSpanRow {
  * the checkout someone verified from, so it asks without the fallback and
  * reports the miss as unchecked.
  *
+ * MORE THAN ONE RUN CAN BIND ONE CANDIDATE, and the store says so: a delivery
+ * that recorded in run A and is verified from a later run B in the same
+ * worktree has two journals naming that tree, and `findByCandidateTreeSha`
+ * returns the most recently started one with the rest in `alsoMatching`.
+ * Refusing on whichever sorted first would block an honest record whose span
+ * run A reports exactly. So a caller that already knows the span it is checking
+ * passes `preferStartedAt`, and the matching run whose journal starts there is
+ * the one returned; only where NO matching run starts there does the
+ * top-ranked run stand, which is the case a refusal may rest on.
+ *
  * Every failure is nothing found: no store, no match, an unreadable journal, an
  * empty one. Nothing here decides what a miss means.
  */
@@ -321,22 +331,28 @@ export async function resolveRunSpan(input: {
   readonly cwd: string;
   readonly treeSha: string;
   readonly allowCurrentRun?: boolean;
+  readonly preferStartedAt?: string;
 }): Promise<RunSpanRow | undefined> {
   const resolved = await resolveRunSurface(input.cwd);
   if (!resolved.ok) return undefined;
   const matched = await resolved.surface.store.findByCandidateTreeSha(input.treeSha);
-  let runId = matched?.runId;
-  if (runId === undefined && input.allowCurrentRun === true) {
+  const runIds: string[] = matched === undefined ? [] : [matched.runId, ...matched.alsoMatching];
+  if (runIds.length === 0 && input.allowCurrentRun === true) {
     const current = await resolved.surface.store.current(resolved.surface.worktreeKey);
-    if (current.ok) runId = current.runId;
+    if (current.ok && current.runId !== undefined) runIds.push(current.runId);
   }
-  if (runId === undefined) return undefined;
-  const read = await resolved.surface.store.read(runId);
-  if (!read.ok) return undefined;
-  const startedAt = read.events[0]?.at;
-  const endedAt = read.events[read.events.length - 1]?.at;
-  if (startedAt === undefined || endedAt === undefined) return undefined;
-  return { runId, startedAt, endedAt };
+  let fallback: RunSpanRow | undefined;
+  for (const runId of runIds) {
+    const read = await resolved.surface.store.read(runId);
+    if (!read.ok) continue;
+    const startedAt = read.events[0]?.at;
+    const endedAt = read.events[read.events.length - 1]?.at;
+    if (startedAt === undefined || endedAt === undefined) continue;
+    const row: RunSpanRow = { runId, startedAt, endedAt };
+    if (input.preferStartedAt === undefined || startedAt === input.preferStartedAt) return row;
+    fallback ??= row;
+  }
+  return fallback;
 }
 
 /**
