@@ -19,8 +19,58 @@ export interface ReviewContextDocument {
 }
 const REVIEW_CONTEXT_SPEC = "review-context/1";
 const OUTCOME_SPEC = "review-outcome/1";
+/**
+ * The claim a review-context projection artifact makes about why the prepared
+ * candidate is not the tree the reviewers read.
+ *
+ * Two different claims, and the difference is the whole point of V26-2079. The
+ * first says the deliverable identity never moved: only paths the identity
+ * function already excludes changed, so the digest the round was bound to is
+ * still the digest in hand and nothing needs proving. The second says the
+ * digest DID move and the move was proven review-neutral by the post-round
+ * residual classifier against the repository, hunk by hunk.
+ *
+ * The basis is derived, never asserted: both the emitter and the portable
+ * verifier compute it from the two candidates the artifact already carries, so
+ * an artifact cannot claim the cheaper basis for the harder case.
+ */
+export const PROJECTION_BASIS_UNCHANGED = "unchanged-deliverable-and-review-inputs";
+export const PROJECTION_BASIS_PROVEN_NEUTRAL = "proven-neutral-post-round-residual";
+
+/** Which basis these two candidates put the projection on. */
+export function projectionBasis(reviewedCandidate: unknown, preparedCandidate: unknown): string {
+  return deliverableDigestOf(reviewedCandidate) === deliverableDigestOf(preparedCandidate)
+    ? PROJECTION_BASIS_UNCHANGED
+    : PROJECTION_BASIS_PROVEN_NEUTRAL;
+}
+
+function deliverableDigestOf(candidate: unknown): string | undefined {
+  if (!isRecord(candidate)) return undefined;
+  const deliverable = candidate["deliverable"];
+  if (!isRecord(deliverable)) return undefined;
+  const digest = deliverable["digest"];
+  return typeof digest === "string" ? digest : undefined;
+}
+
+/** How far the reviewed context is allowed to sit from the current one. */
+export interface ReviewedContextTolerance {
+  /**
+   * Admit a prepared candidate whose deliverable digest differs from the one
+   * the round was bound to.
+   *
+   * Off by default, and every caller that turns it on owes a proof. The emitter
+   * turns it on only after the post-round residual classifier has read the
+   * repository and admitted every differing path; the portable verifier turns
+   * it on only for a manifest that carries a projection artifact, whose bytes
+   * it then pins exactly — including the derived basis, which names the harder
+   * claim. Nothing else moves: identity token, base, policy, wiring, release
+   * and charters are still compared byte for byte.
+   */
+  readonly admitDeliverableDigestShift?: boolean;
+}
+
 /** Reuse only the existing deliverable identity, with base, policy and wiring fixed. */
-export function validateReviewedContext(original: unknown, current: ReviewContextDocument, outcome: unknown): void {
+export function validateReviewedContext(original: unknown, current: ReviewContextDocument, outcome: unknown, tolerance: ReviewedContextTolerance = {}): void {
   if (!isRecord(original) || original["spec"] !== REVIEW_CONTEXT_SPEC ||
       Object.keys(original).sort().join(",") !== "binding,digest,spec" || !isRecord(original["binding"]) ||
       original["digest"] !== digestCanonical(original["binding"])) {
@@ -38,9 +88,17 @@ export function validateReviewedContext(original: unknown, current: ReviewContex
   // Raw tree and head may move when only review-neutral paths changed. Keep
   // the original coordinates in the retained context, while the manifest binds
   // the current prepared candidate, exactly as submission requires.
+  const projectedDeliverable = tolerance.admitDeliverableDigestShift === true && isRecord(candidate["deliverable"])
+    ? { deliverable: { ...candidate["deliverable"], digest: current.binding.candidate.deliverable.digest } }
+    : {};
   const comparable = {
     ...binding,
-    candidate: { ...candidate, treeSha: current.binding.candidate.treeSha, headSha: current.binding.candidate.headSha },
+    candidate: {
+      ...candidate,
+      treeSha: current.binding.candidate.treeSha,
+      headSha: current.binding.candidate.headSha,
+      ...projectedDeliverable,
+    },
   };
   if (digestCanonical(comparable) !== digestCanonical(current.binding)) {
     throw new OutcomeError("the reviewed context differs from the current candidate, base, policy, wiring, release, or charters; acquire review for the current context");

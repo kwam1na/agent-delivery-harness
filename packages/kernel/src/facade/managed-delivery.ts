@@ -74,6 +74,7 @@ import {
   parseDeliveryRecord,
   verifyDeliveryRecord,
   type CandidateTreeEntry,
+  type ReviewedCandidateCoordinate,
 } from "../delivery-record.ts";
 import { publishPreparationReceipt } from "../preparation.ts";
 import { discoverRecords, resolveRecordStorage } from "../records.ts";
@@ -82,6 +83,8 @@ import { reviewFindingCoherenceCodes, reviewFindingCoherenceCodesV2 } from "../v
 import { REVIEW_GREEN_1, REVIEW_GREEN_2 } from "../validator/codes.ts";
 import { createCandidateCapture, evaluateCandidateActivation, type CandidateCommandRunner } from "../candidate.ts";
 import { isRecordNeutralPath, isReviewNeutralPath, withDeliverableIdentity } from "../identity.ts";
+import { reproveResidual, type ResidualDecision } from "../review-neutral-residual.ts";
+import { nonNeutralHunks } from "../review-neutral-projection.ts";
 import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
 import { validateHarnessConfig, type HarnessConfig } from "../config.ts";
 import type { CaptureCandidate, CapturedCandidate } from "../candidate.types.ts";
@@ -205,6 +208,60 @@ const refuse = (code: string, summary: string, remediation: string): FacadeFailu
 });
 
 const refuseWith = (blockers: readonly Blocker[]): FacadeFailure => ({ ok: false, blockers });
+
+/**
+ * The post-round residual, re-proved here rather than read off the record.
+ *
+ * WHY THIS SURFACE NEEDS IT AT ALL. `verifyDeliveryRecord` admits a record whose
+ * retained review context carries a `review-context-projection` on the
+ * `proven-neutral-post-round-residual` basis, because portable verification can
+ * only recompute that artifact from the manifest — off the repository there is
+ * nothing else to read. The artifact therefore proves it is internally
+ * consistent and nothing about the two trees. The classification is a statement
+ * about bytes in git, and the only workspace that ever ran it is the one asking
+ * to finish.
+ *
+ * AND WHY IT IS THIS SURFACE AND NOT SOME OTHER. `commitRecord` stands a
+ * delivery up as `ready`, and `completeFinishLine` turns `check.ok` into
+ * `externalVerification: "passed"`, which `decideFinishLine` requires before an
+ * authorized merge or deployment is issued. Those are irreversible. A rule that
+ * only the pull-request Action enforced would make this path the permissive one,
+ * and the finish-line vocabulary has no way to say which proofs produced a
+ * `"passed"` — so a narrower check here would be indistinguishable at the point
+ * of use from the full one.
+ *
+ * The decision is the kernel's shared one, so this surface, `harness verify` and
+ * the Action answer identically by construction. A record that did not move
+ * after its round reads no git at all.
+ */
+async function residualDecisionFor(
+  rootDir: string,
+  config: HarnessConfig,
+  check: { readonly reviewedCandidates: readonly ReviewedCandidateCoordinate[] },
+  recordBinding: { readonly treeSha: string; readonly mergeBaseSha: string },
+): Promise<ResidualDecision> {
+  return reproveResidual({
+    rootDir,
+    config,
+    reviewedCandidates: check.reviewedCandidates,
+    recordCandidate: { treeSha: recordBinding.treeSha, mergeBaseSha: recordBinding.mergeBaseSha },
+  });
+}
+
+/** The facade's refusal for a residual the record's own round never covered. */
+const refuseResidual = (decision: ResidualDecision): FacadeFailure | undefined => {
+  if (decision.kind === "unprovable") {
+    return refuse("review_residual_not_neutral",
+      `The record claims a moved deliverable identity was review-neutral, and that claim could not be re-proved here: ${decision.detail}.`,
+      "Complete the delivery from a worktree holding the reviewed candidate's objects, or open a review round bound to the recorded candidate.");
+  }
+  if (decision.kind === "not-neutral") {
+    return refuse("review_residual_not_neutral",
+      `The recorded candidate differs from the reviewed one by changes the owner's policy does not call review-neutral: ${nonNeutralHunks(decision.projection).join("; ")}.`,
+      "Open a review round bound to the recorded candidate, or reduce the post-round change to what postRoundNeutral admits.");
+  }
+  return undefined;
+};
 
 /**
  * A maintenance-lane refusal, reported with the substrate's own code and
@@ -4602,9 +4659,10 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       if (!parsed.ok) return refuseWith(parsed.blockers);
 
       // The compiled external verifier's pure core — the same check the
-      // repository's pull-request Action runs — over the committed tree's own
-      // paths, so a candidate carrying a projection or discovery-configuration
-      // path is rejected on the tree's evidence alone.
+      // repository's pull-request Action runs, followed by the same re-proof of
+      // a post-round residual the Action and `harness verify` run — over the
+      // committed tree's own paths, so a candidate carrying a projection or
+      // discovery-configuration path is rejected on the tree's evidence alone.
       const check = verifyDeliveryRecord(
         config,
         parsed.record,
@@ -4614,6 +4672,8 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           executionContext: { kind: "agent", signal: "managed-delivery" } },
       );
       if (!check.ok) return refuseWith(check.blockers);
+      const residualRefusal = refuseResidual(await residualDecisionFor(rootDir, config, check, parsed.record.candidateBinding));
+      if (residualRefusal !== undefined) return residualRefusal;
 
       const treeSha = (await git(rootDir, "rev-parse", "HEAD^{tree}")).out;
       const branchRefValue = (await git(rootDir, "rev-parse", `refs/heads/${workspace.branchRef}`)).out;
@@ -4656,8 +4716,9 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
 
       // TERMINAL SUCCESS IS A RECHECK SITE. The candidate and its base are
       // re-observed here, and the external verifier — the same pure core the
-      // repository's pull-request Action runs — is re-run over the committed
-      // record, so hosted and local merge-ready evidence are both current.
+      // repository's pull-request Action runs, with the same residual re-proof
+      // beside it — is re-run over the committed record, so hosted and local
+      // merge-ready evidence are both current.
       const rootDir = workspace.worktreeDir;
       const capture = await captureFor(rootDir, config, candidateRunner, storageGitRunner);
       if (!capture.ok) return capture.failure;
@@ -4701,7 +4762,13 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
             { candidateTreePaths, ...await capturePortableVerificationInputs(rootDir, config, captured, parsed.record, candidateRunner),
           executionContext: { kind: "agent", signal: "managed-delivery" } },
           );
-          externalVerification = check.ok ? "passed" : "failed";
+          // A residual this surface cannot re-prove, or one the policy does not
+          // admit, resolves to "failed" and not to "passed": there is no third
+          // literal, and the two things the finish line must never confuse are
+          // "the proof ran and held" and "the proof was not run".
+          externalVerification = check.ok
+            && refuseResidual(await residualDecisionFor(rootDir, config, check, parsed.record.candidateBinding)) === undefined
+            ? "passed" : "failed";
         }
       }
 

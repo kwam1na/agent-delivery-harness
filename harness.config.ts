@@ -47,6 +47,24 @@ export default defineHarnessConfig({
   // The stricter predicate: what a recorded candidate is not bound to.
   recordNeutral: [{ prefix: "delivery/records/" }],
 
+  // WHAT A CLOSED ROUND STILL GOVERNS. A round binds its reviewers to one raw
+  // tree, and three things routinely move that tree afterwards: the solution
+  // note a delivery only learns how to write once it has delivered, a comment
+  // header a finding asked for, and the rebase the serialized tail forces onto
+  // every holder but the first. None of the three changes the program the
+  // reviewers read, and each of them used to cost a further round or a
+  // hand-rolled reset. This block says so in policy; `record` and `verify`
+  // prove the claim against the two trees and refuse anything else by hunk.
+  //
+  // It is NOT `reviewNeutral`. That set is the deliverable identity function,
+  // and widening it retires every record ever computed under the token. The
+  // runbook below is deliberately inside the digest and neutral only here.
+  postRoundNeutral: {
+    paths: [{ prefix: "docs/solutions/" }, { prefix: "docs/delivery-runbook.md" }],
+    commentOnlyHunks: true,
+    rebase: true,
+  },
+
   pathClassification: {
     generated: [{ kind: "prefix", value: "packages/conformance/vectors/" }],
     test: [{ kind: "glob", value: "**/*.test.ts" }],

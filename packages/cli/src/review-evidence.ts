@@ -18,6 +18,7 @@ import path from "node:path";
 import {
   resolveReviewCharters,
   validateReviewedContext, parseReviewOutcome, deriveTelemetry, reviewerLists,
+  nonNeutralHunks, projectionBasis,
   capturePortableEvidenceContext, repositoryEvidenceReader, createArtifactsPort,
   ReviewInputError as OutcomeError,
   BlockedError,
@@ -31,6 +32,7 @@ import {
   REVIEW_GREEN_2,
 } from "@agent-delivery-harness/kernel";
 import type { CommandContext } from "./boundary.ts";
+import { projectPostRoundResidual } from "./review-neutral-residual.ts";
 
 // ── The charters the compiled policy activates ───────────────────────────────
 
@@ -164,6 +166,73 @@ export interface EmitResult {
  * same identity computation): anything else describes a tree the recorder will
  * refuse to recognise.
  */
+/**
+ * WHERE A CLOSED ROUND EITHER SURVIVES A POST-ROUND EDIT OR STOPS GOVERNING.
+ *
+ * Submission is the first surface that compares what the reviewers read with
+ * what is in the tree now, and before V26-2079 it compared the two deliverable
+ * digests for equality and said nothing else. That made exactly one kind of
+ * post-round change survivable — a change to a path the identity function
+ * already excludes, which moves the raw tree but not the digest — and every
+ * other kind, a corrected sentence in a comment as much as a rewritten
+ * conditional, produced the same undifferentiated refusal: acquire review for
+ * the current context. The owner's `postRoundNeutral` policy had no surface to
+ * act on, because `record` and `verify` only ever see candidates submission
+ * already let through.
+ *
+ * So the digest comparison is split in two. Strict equality is tried first and
+ * is still the ordinary answer. Only when the digest alone is what differs is
+ * the residual computed against the repository, path by path, and only an
+ * admitted residual relaxes the comparison — and it relaxes the digest, never
+ * the identity token, the base, the policy, the wiring, the release or the
+ * charters, each of which is still compared byte for byte.
+ *
+ * A refusal here names the hunk. That is the difference an operator can act on:
+ * "the round no longer governs because of `src/admit.ts:41 if (count > 0) {`"
+ * is a sentence about their edit, and "acquire review for the current context"
+ * is a sentence about the tool.
+ *
+ * An unprovable residual is a refusal, not a caveat, and for the same reason it
+ * is one in `record`: this surface authors the evidence a later gate trusts.
+ */
+async function proveNeutralResidual(
+  context: CommandContext,
+  original: unknown,
+  current: ReviewContextDocument,
+  document: unknown,
+): Promise<boolean> {
+  try {
+    validateReviewedContext(original, current, document);
+    return false;
+  } catch (strict) {
+    // Anything the relaxed comparison still refuses is a difference the
+    // residual has no bearing on; the original refusal is the honest one.
+    try {
+      validateReviewedContext(original, current, document, { admitDeliverableDigestShift: true });
+    } catch {
+      throw strict;
+    }
+    const reviewed = (original as ReviewContextDocument).binding.candidate;
+    const residual = await projectPostRoundResidual({
+      rootDir: context.rootDir,
+      config: context.config,
+      reviewedCandidates: [{ treeSha: reviewed.treeSha, mergeBaseSha: reviewed.base.mergeBaseSha }],
+      recordCandidate: { treeSha: current.binding.candidate.treeSha, mergeBaseSha: current.binding.candidate.base.mergeBaseSha },
+    });
+    if (residual.kind === "unresolvable") {
+      throw new OutcomeError(`the deliverable moved after the review round and the residual could not be computed here: ${residual.detail}; acquire review for the current context`);
+    }
+    // Two identical trees cannot carry two different deliverable digests under
+    // one identity function, so this is a contradiction in the inputs rather
+    // than a neutral move; the strict refusal is the one that describes it.
+    if (residual.kind === "unchanged") throw strict;
+    if (!residual.projection.admitted) {
+      throw new OutcomeError(`the candidate changed after the review round by changes postRoundNeutral does not admit: ${nonNeutralHunks(residual.projection).join("; ")}; acquire review for the current context`);
+    }
+    return true;
+  }
+}
+
 export async function emitReviewEvidence(context: CommandContext, original: unknown, document: unknown): Promise<EmitResult> {
   const { rootDir, config } = context;
   const wiring = await context.wire();
@@ -173,7 +242,8 @@ export async function emitReviewEvidence(context: CommandContext, original: unkn
   const preparation = await evaluatePreparationReceipt(rootDir, { config, candidate: captured }, wiring.storageOptions);
   if (!preparation.prepared) throw new BlockedError([...preparation.blockers]);
   const current = await buildReviewContext(rootDir, config, captured, preparation.receipt);
-  validateReviewedContext(original, current, document);
+  const admitDeliverableDigestShift = await proveNeutralResidual(context, original, current, document);
+  validateReviewedContext(original, current, document, { admitDeliverableDigestShift });
   const charters = current.binding.charters.map((charter) => charter.reviewerId).sort();
   const outcome = parseReviewOutcome(document, charters);
   const binding = current.binding.gate;
@@ -218,7 +288,7 @@ export async function emitReviewEvidence(context: CommandContext, original: unkn
   if (digestCanonical(reviewed.binding.candidate) !== digestCanonical(candidate)) {
     const bytes = `${JSON.stringify({
       spec: "review-context-projection/1",
-      basis: "unchanged-deliverable-and-review-inputs",
+      basis: projectionBasis(reviewed.binding.candidate, candidate),
       originalContextDigest: reviewed.digest,
       reviewedCandidate: reviewed.binding.candidate,
       preparedCandidate: candidate,

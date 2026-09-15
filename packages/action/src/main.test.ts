@@ -40,7 +40,7 @@ import {
   type HarnessConfig,
   type HarnessConfigInput,
 } from "@agent-delivery-harness/kernel";
-import { ACTION_EXIT_OK, ACTION_EXIT_POLICY, runAction, type ActionRuntime } from "./main.ts";
+import { ACTION_EXIT_OK, ACTION_EXIT_POLICY, runAction, reproveProvenNeutralMove, type ActionRuntime } from "./main.ts";
 
 const run = promisify(execFile);
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "events");
@@ -1069,5 +1069,138 @@ describe("the summary says nothing it does not know", () => {
     const result = await runAction(runtime);
     expect(result.ok).toBe(false);
     expect(codesOf(result.blockers)).toContain("event_payload_unreadable");
+  });
+});
+
+/**
+ * The merge gate re-proves a proven-neutral move, or refuses it.
+ *
+ * WHY THESE ROWS EXIST. Admitting a post-round residual required relaxing the
+ * portable comparison of the deliverable digest, and that relaxation is granted
+ * off-repository on bytes the submitting workspace authored — there is nothing
+ * else in an archive to read. For most of this delivery the repository proof
+ * lived in the operator CLI, so the one surface that actually decides whether a
+ * change merges took the claim on trust while `harness verify` refused it. The
+ * rows below are the falsification of that asymmetry: the same two refusals the
+ * command makes, made here, driven against real git objects.
+ *
+ * `reproveProvenNeutralMove` is called directly rather than through `runAction`
+ * because what is under test is the decision and not the plumbing, and building
+ * a record carrying a proven-neutral projection artifact through the fixture
+ * emitter would test the emitter. The call site is asserted separately, so a
+ * refactor that dropped it does not pass by leaving these rows green.
+ */
+describe("re-proving a proven-neutral move at the merge gate", () => {
+  const SOURCE = "packages/example/admit.ts";
+
+  /**
+   * A reviewed commit and a later one differing only as `edit` writes it.
+   * Returns both coordinates, the reviewed tree still present in the clone.
+   */
+  async function movedAfterTheRound(reviewed: string, edit: string): Promise<{
+    readonly dir: string;
+    readonly reviewedCandidate: { treeSha: string; mergeBaseSha: string };
+    readonly recordCandidate: { treeSha: string; mergeBaseSha: string };
+  }> {
+    const dir = await initRepo();
+    const mergeBaseSha = await git(dir, "rev-parse", "--verify", "main^{tree}");
+    await writeAt(dir, SOURCE, reviewed);
+    await commit(dir, "the reviewed candidate");
+    const reviewedTreeSha = await git(dir, "rev-parse", "--verify", "HEAD^{tree}");
+    await writeAt(dir, SOURCE, edit);
+    await commit(dir, "the post-round edit");
+    const recordTreeSha = await git(dir, "rev-parse", "--verify", "HEAD^{tree}");
+    return {
+      dir,
+      reviewedCandidate: { treeSha: reviewedTreeSha, mergeBaseSha },
+      recordCandidate: { treeSha: recordTreeSha, mergeBaseSha },
+    };
+  }
+
+  it("refuses a logic change the round never saw, naming the hunk", TIMEOUT, async () => {
+    const moved = await movedAfterTheRound(
+      "export function admit(count: number): boolean {\n  return count > 0;\n}\n",
+      "export function admit(count: number): boolean {\n  return count >= 0;\n}\n",
+    );
+    const blockers = await reproveProvenNeutralMove(moved.dir, makeConfig(),
+      { reviewedCandidates: [{ ...moved.reviewedCandidate, provenNeutral: true }] }, moved.recordCandidate);
+    expect(codesOf(blockers)).toEqual(["review_residual_not_neutral"]);
+    expect(blockers[0]?.details).toContain(SOURCE);
+  });
+
+  it("admits a comment-only edit, which is the case the delivery opened", TIMEOUT, async () => {
+    const moved = await movedAfterTheRound(
+      "export function admit(count: number): boolean {\n  return count > 0;\n}\n",
+      "// Admits a positive count.\nexport function admit(count: number): boolean {\n  return count > 0;\n}\n",
+    );
+    const blockers = await reproveProvenNeutralMove(moved.dir, makeConfig(),
+      { reviewedCandidates: [{ ...moved.reviewedCandidate, provenNeutral: true }] }, moved.recordCandidate);
+    expect(blockers).toEqual([]);
+  });
+
+  /**
+   * The ordinary CI shape, not an exotic one: `actions/checkout` fetches the
+   * pull request head, and the tree a round closed on is usually not in that
+   * clone at all. "Nobody could check" must not read as "it checked out".
+   */
+  it("refuses when this checkout cannot see the reviewed tree", TIMEOUT, async () => {
+    const moved = await movedAfterTheRound(
+      "export function admit(count: number): boolean {\n  return count > 0;\n}\n",
+      "// Admits a positive count.\nexport function admit(count: number): boolean {\n  return count > 0;\n}\n",
+    );
+    const absent = "0".repeat(39) + "1";
+    const blockers = await reproveProvenNeutralMove(moved.dir, makeConfig(),
+      { reviewedCandidates: [{ treeSha: absent, mergeBaseSha: moved.reviewedCandidate.mergeBaseSha, provenNeutral: true }] },
+      moved.recordCandidate);
+    expect(codesOf(blockers)).toEqual(["review_residual_not_neutral"]);
+    expect(blockers[0]?.details).toContain(absent);
+  });
+
+  /**
+   * The leniency that predates the ticket, kept exactly where it was.
+   *
+   * A clone may simply have pruned an old tree object, and refusing every
+   * record whose reviewed tree will not resolve would fail records that are
+   * correct. It is only a record claiming "the identity moved and the move was
+   * proven neutral" whose unreadable tree means the claim is checked nowhere at
+   * all. Without this row the fix could be "refuse everything" and still look
+   * green.
+   */
+  it("stays lenient on an unreadable tree for a record that claims no proven-neutral move", TIMEOUT, async () => {
+    const dir = await initRepo();
+    const absent = "0".repeat(39) + "2";
+    const blockers = await reproveProvenNeutralMove(dir, makeConfig(),
+      { reviewedCandidates: [{ treeSha: absent, mergeBaseSha: absent }] },
+      { treeSha: await git(dir, "rev-parse", "--verify", "HEAD^{tree}"), mergeBaseSha: absent });
+    expect(blockers).toEqual([]);
+  });
+
+  /**
+   * The refusal that is NOT gated on the claim.
+   *
+   * A reviewed coordinate reaches the record straight from an evidence entry's
+   * own binding, with no projection artifact and so no `provenNeutral`. For an
+   * ordinary provider the binding rules force that entry's deliverable digest
+   * to equal the record's, which makes every differing path one the identity
+   * function already excludes — nothing for a re-read to overturn. Under a
+   * provider whose `check.scope` narrows the binding comparison, they need not
+   * be equal, and then the residual can carry a real logic change with nothing
+   * anywhere claiming it was neutral. `harness verify` refuses that; so must
+   * the gate, or the surface that decides is the lenient one.
+   */
+  it("refuses a non-neutral residual even when nothing claimed the move was neutral", TIMEOUT, async () => {
+    const moved = await movedAfterTheRound(
+      "export function admit(count: number): boolean {\n  return count > 0;\n}\n",
+      "export function admit(count: number): boolean {\n  return count >= 0;\n}\n",
+    );
+    const blockers = await reproveProvenNeutralMove(moved.dir, makeConfig(),
+      { reviewedCandidates: [moved.reviewedCandidate] }, moved.recordCandidate);
+    expect(codesOf(blockers)).toEqual(["review_residual_not_neutral"]);
+    expect(blockers[0]?.details).toContain(SOURCE);
+  });
+
+  it("is wired into the verdict the Action returns", TIMEOUT, async () => {
+    const source = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "main.ts"), "utf8");
+    expect(source).toContain("blockers.push(...(await reproveProvenNeutralMove(repoRoot, config, check,");
   });
 });

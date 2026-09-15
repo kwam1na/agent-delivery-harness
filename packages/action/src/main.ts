@@ -76,6 +76,8 @@ import {
   collectLiveProviderResults,
   isObligationActive,
   invokedDirectly,
+  reproveResidual,
+  nonNeutralHunks,
   type CapturedCandidate,
   type Blocker,
   type BlockerSource,
@@ -88,6 +90,7 @@ import {
   type HarnessConfig,
   type NonEmptyTuple,
   type Remediation,
+  type ReviewedCandidateCoordinate,
 } from "@agent-delivery-harness/kernel";
 
 // ── Exit codes ───────────────────────────────────────────────────────────────
@@ -1007,6 +1010,8 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
     check = verifyDeliveryRecord(config, selected.record, identity, base, { candidateTreePaths: discovered.allPaths, ...inputs, ...(runtime.observedAt === undefined ? {} : { observedAt: runtime.observedAt }), liveResults:live.liveResults,
       executionContext: classifyExecutionContext({ config, env: runtime.env, stdinIsTTY: false, stdoutIsTTY: false }) });
     if (!check.ok) blockers.push(...live.blockers, ...check.blockers);
+    blockers.push(...(await reproveProvenNeutralMove(repoRoot, config, check,
+      { treeSha: selected.record.candidateBinding.treeSha, mergeBaseSha: selected.record.candidateBinding.mergeBaseSha })));
     return await settle();
   } catch (error) {
     blockers.push(
@@ -1018,6 +1023,69 @@ export async function runAction(runtime: ActionRuntime): Promise<ActionResult> {
     );
     return await settle();
   }
+}
+
+/**
+ * Re-prove, here in CI, any claim that a closed round survived a move of the
+ * deliverable identity.
+ *
+ * WHY THE GATE CANNOT TAKE THE PROJECTION'S WORD FOR IT. Portable verification
+ * admits a `review-context-projection` on the
+ * `proven-neutral-post-round-residual` basis by recomputing the artifact from
+ * the manifest and comparing digests. That proves the artifact is internally
+ * consistent; it proves nothing about the two trees, because off the repository
+ * there is nothing but the archive to read. The classification itself — is this
+ * difference a comment restamp, a neutral path, a rebase, or a logic change —
+ * is a statement about bytes in git, and the only workspace that ever ran it is
+ * the one asking to merge. A gate that accepted that would be admitting a
+ * candidate whose identity no round was bound to, on the submitting side's own
+ * say-so, which is precisely the guarantee the record exists to carry.
+ *
+ * The decision is `reproveResidual`'s, in the kernel, so that this surface, the
+ * `verify` command and the managed-delivery facade cannot drift apart; what is
+ * local here is only the blocker vocabulary and the remediation, which are
+ * about a CI checkout and belong to CI.
+ *
+ * A record that did not move after its round reads no git at all: the reviewed
+ * coordinates are the record's own tree and the projection short-circuits
+ * before the first `git rev-parse`.
+ */
+export async function reproveProvenNeutralMove(
+  repoRoot: string,
+  config: HarnessConfig,
+  // Narrowed to what the re-proof reads, so a test can state the two
+  // coordinates the decision turns on without fabricating a whole record or
+  // casting past the type: the claim under scrutiny is `reviewedCandidates`,
+  // and the tree it is judged against is the record's candidate binding.
+  check: { readonly reviewedCandidates: readonly ReviewedCandidateCoordinate[] },
+  recordCandidate: ReviewedCandidateCoordinate,
+): Promise<readonly Blocker[]> {
+  const decision = await reproveResidual({ rootDir: repoRoot, config, reviewedCandidates: check.reviewedCandidates, recordCandidate });
+  if (decision.kind === "unprovable") {
+    return [actionBlocker({
+      code: "review_residual_not_neutral",
+      summary: "The record claims a moved deliverable identity was review-neutral, and this checkout cannot re-prove that claim.",
+      details: `the residual could not be computed: ${decision.detail}`,
+      remediations: [{
+        id: "deepen-the-checkout",
+        kind: "manual_action",
+        summary: "Give the check a checkout that holds the reviewed candidate's objects (fetch its tree, or check out with sufficient depth), or open a review round bound to the recorded candidate.",
+      }],
+    })];
+  }
+  if (decision.kind === "not-neutral") {
+    return [actionBlocker({
+      code: "review_residual_not_neutral",
+      summary: "The recorded candidate differs from the reviewed one by changes the owner's policy does not call review-neutral.",
+      details: `reviewed ${decision.projection.reviewedTreeSha} \u2192 recorded ${decision.projection.recordTreeSha}; not neutral: ${nonNeutralHunks(decision.projection).join("; ")}`,
+      remediations: [{
+        id: "open-a-new-round",
+        kind: "manual_action",
+        summary: "Open a review round bound to the recorded candidate, or reduce the post-round change to what postRoundNeutral admits.",
+      }],
+    })];
+  }
+  return [];
 }
 
 /**

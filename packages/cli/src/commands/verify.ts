@@ -39,12 +39,15 @@ import {
   verifyDeliveryRecord,
   capturePortableVerificationInputs,
   collectLiveProviderResults,
+  nonNeutralHunks,
+  projectionSummaryRows,
   type CandidateTreeEntry,
   type RunJournalRow,
 } from "@agent-delivery-harness/kernel";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { RUN_JOURNAL_ADMISSION_ROW, oneLine, resolveRunJournalRow, runJournalRows } from "../run-surface.ts";
+import { projectPostRoundResidual, residualRows, decideResidual } from "../review-neutral-residual.ts";
 
 const USAGE = "Usage: delivery-harness verify [--require-run-journal] [--mandated-lens <id>]...";
 
@@ -262,6 +265,95 @@ export const verifyCommand: CommandDescriptor = {
       return { kind: "blocked", blockers: [...live.blockers, ...verified.blockers] };
     }
 
+    // THE POST-ROUND RESIDUAL. The record names the raw tree its reviewers read
+    // and the raw tree it is about; when those differ, every difference between
+    // them has to be review-neutral under the owner's `postRoundNeutral` policy
+    // or the round does not govern this candidate and a new one is owed. This
+    // refuses on a non-neutral difference and names the hunk.
+    //
+    // An UNRESOLVABLE residual is reported rather than refused — but only for a
+    // record whose deliverable digest never moved.
+    //
+    // The lenient half is `record`'s opposite, deliberately. `record` authors a
+    // claim and must not write one it cannot prove; `verify` reads a record
+    // whose portable verification has already passed, in a clone that may
+    // simply no longer hold the reviewed tree's objects, and turning a pruned
+    // object into a refusal would fail a record that is correct.
+    //
+    // WHY THAT REASONING STOPS AT A PROVEN-NEUTRAL PROJECTION. It rested on
+    // portable verification having already refused every move of the
+    // deliverable digest. It no longer does: a projection on the
+    // `proven-neutral-post-round-residual` basis is admitted off-repository on
+    // bytes derived entirely from the manifest, because off-repository there is
+    // nothing else to read. The repository proof for that case exists only
+    // where a real clone is — the `emit-review-evidence` that authored it, this
+    // command, and the Action's `reproveProvenNeutralMove` at the merge gate —
+    // so a clone that cannot recompute it is a clone in which the claim that a
+    // moved identity was neutral is checked nowhere at all. That is a refusal,
+    // and it names the tree it could not read. (The gate was added late, in
+    // this delivery's third round: the reading half of the proof lived in
+    // this package, so CI, which wraps the kernel and not the CLI, could not
+    // reach it and admitted the claim unread. Hence the module is the
+    // kernel's.)
+    //
+    // A projection on the cheap basis keeps today's leniency: it moved only
+    // paths the deliverable digest never covered, so a re-read has nothing to
+    // overturn.
+    const residual = await projectPostRoundResidual({
+      rootDir: context.rootDir,
+      config: context.config,
+      reviewedCandidates: verified.reviewedCandidates,
+      recordCandidate: {
+        treeSha: parsed.record.candidateBinding.treeSha,
+        mergeBaseSha: parsed.record.candidateBinding.mergeBaseSha,
+      },
+    });
+    // The two refusals are the kernel's, so this command, the pull-request
+    // Action and the managed-delivery facade cannot answer differently; the
+    // outcome is passed in rather than recomputed, because the rows below print
+    // it.
+    const decision = decideResidual(residual, verified.reviewedCandidates);
+    if (decision.kind === "unprovable") {
+      return {
+        kind: "blocked",
+        blockers: [
+          commandBlocker({
+            code: "review_residual_not_neutral",
+            sourceId: "delivery-harness.cli.verify",
+            summary: "The record claims a moved deliverable identity was review-neutral, and that claim could not be re-proved in this repository.",
+            details: `the residual could not be computed: ${decision.detail}`,
+            remediations: [
+              {
+                id: "fetch-the-reviewed-tree",
+                kind: "manual_action",
+                summary: "Fetch the reviewed candidate's objects into this clone and verify again, or verify from a clone that holds them.",
+              },
+            ],
+          }),
+        ],
+      };
+    }
+    if (decision.kind === "not-neutral") {
+      return {
+        kind: "blocked",
+        blockers: [
+          commandBlocker({
+            code: "review_residual_not_neutral",
+            sourceId: "delivery-harness.cli.verify",
+            summary: "The recorded candidate differs from the reviewed one by changes the owner's policy does not call review-neutral.",
+            details: `reviewed ${decision.projection.reviewedTreeSha} → recorded ${decision.projection.recordTreeSha}; not neutral: ${nonNeutralHunks(decision.projection).join("; ")}`,
+            remediations: [
+              {
+                id: "open-a-new-round",
+                kind: "manual_action",
+                summary: "Open a review round bound to the recorded candidate, or reduce the post-round change to what postRoundNeutral admits.",
+              },
+            ],
+          }),
+        ],
+      };
+    }
+
     // The record tree remains the primary coordinate. A product-validated
     // review-neutral projection may additionally name the earlier raw tree the
     // reviewers actually read; the journal stays observational either way.
@@ -294,6 +386,7 @@ export const verifyCommand: CommandDescriptor = {
         `recorded base: ${oneLine(parsed.record.candidateBinding.baseRef, 256)} at ${parsed.record.candidateBinding.baseTipSha}`,
         `observed base: ${oneLine(base.ref, 256)} at ${base.tipSha}`,
         ...hostedCheckRow,
+        ...residualRows(residual, projectionSummaryRows),
         ...runJournalRows(runJournal),
       ].join("\n"),
     };

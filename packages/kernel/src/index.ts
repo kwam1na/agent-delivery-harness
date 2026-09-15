@@ -330,6 +330,7 @@ export {
   type DeliveryRecord,
   type DeliveryRecordAttestation,
   type DeliveryRecordCheck,
+  type ReviewedCandidateCoordinate,
   type DeliveryRecordClaim,
   type DeliveryRecordDriftClass,
   type DeliveryRecordFile,
@@ -1198,8 +1199,40 @@ export { selectScopedCheckAttempt } from "./evaluator.ts";
 export { retainedCheckOutput } from "./validator/checks-passed.ts";
 export { readCompiledRepositoryPolicy, resolveReviewCharters, readWorkflowRelease, ReviewInputError, type ResolvedCharter, type ReviewInputReader } from "./review-inputs.ts";
 
-export { validateReviewedContext, parseReviewOutcome, deriveTelemetry, reviewerLists, REVIEWER_RESULTS } from "./review-outcome.ts";
-export type { ReviewOutcome, ReviewerOutcome, ReviewerResult } from "./review-outcome.ts";
+export { validateReviewedContext, parseReviewOutcome, deriveTelemetry, reviewerLists, REVIEWER_RESULTS, projectionBasis, PROJECTION_BASIS_UNCHANGED, PROJECTION_BASIS_PROVEN_NEUTRAL } from "./review-outcome.ts";
+export type { ReviewOutcome, ReviewerOutcome, ReviewerResult, ReviewedContextTolerance } from "./review-outcome.ts";
+// The post-round residual: which differences between a closed round's reviewed
+// candidate and the recorded one are review-neutral, and the refusal that names
+// the hunk when one is not.
+//
+// THE CLASSIFIER AND ITS REPOSITORY HALF BOTH LIVE HERE, AND THAT IS THE POINT.
+// `classifyPostRoundResidual` is pure; `projectPostRoundResidual` beside it
+// reads the four blobs out of git. The reading half began in the CLI, which put
+// the only re-proof of a proven-neutral move behind the operator commands and
+// left the merge gate admitting the claim on the submitting workspace's own
+// bytes — the local gate stricter than the gate that decides, which is the
+// asymmetry `packages/action/src/main.ts` exists to refuse. It is in the kernel
+// so that `record`, `verify` and the Action all re-prove the same move the same
+// way. The CLI re-exports it; nothing else should import it from there.
+export {
+  classifyPostRoundResidual,
+  projectionSummaryRows,
+  nonNeutralHunks,
+  stripComments,
+  canonicalProgram,
+  RESIDUAL_CLASSES,
+  REVIEW_NEUTRAL_PROJECTION_SPEC,
+  COMMENT_ERASABLE_EXTENSIONS,
+} from "./review-neutral-projection.ts";
+export type {
+  ResidualClass,
+  ResidualEntry,
+  ResidualPathInput,
+  ClassifyResidualInput,
+  ReviewNeutralProjection,
+} from "./review-neutral-projection.ts";
+export { projectPostRoundResidual, residualRows, decideResidual, reproveResidual } from "./review-neutral-residual.ts";
+export type { ResidualOutcome, ResidualRequest, ResidualDecision } from "./review-neutral-residual.ts";
 export { capturePortableEvidenceContext, repositoryEvidenceReader, verifyPortableEvidence, portableArtifactContents, MAX_PORTABLE_RECORD_BYTES } from "./portable-evidence.ts";
 export type { PortableEvidence, PortableEvidenceContext } from "./records.types.ts";
 

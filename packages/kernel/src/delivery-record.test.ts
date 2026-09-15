@@ -25,6 +25,7 @@ import {
   CLAUDE_SKILL_EXPOSURE_PREFIX,
   parseCandidateTreeListing,
   needsCommittedSymlinkTarget,
+  mergeReviewedClaim,
   RECEIPTED_SKILLS_ROOT,
   verifyDeliveryRecord as verifyRecord,
   type DeliveryRecord,
@@ -921,6 +922,64 @@ describe("verifyDeliveryRecord", () => {
     const check = verifyDeliveryRecord(makeConfig(), record, RECOMPUTED, FRESH_BASE);
     expect(check.ok, JSON.stringify(check.blockers)).toBe(true);
     expect(check.reviewedCandidateTreeShas).toEqual([record.candidateBinding.treeSha]);
+  });
+
+  /**
+   * Two readings of one reviewed tree, and the claim that survives.
+   *
+   * WHY THE ORDER MATTERS AND THE VERDICT DOES NOT. A record may carry more
+   * than one `review-context-projection` naming the same reviewed tree, and
+   * they need not agree about basis. Merged first-wins, a cheap-basis reading
+   * arriving before a proven-neutral one would discharge an obligation it knows
+   * nothing about: the record still verifies, `check.ok` is still true, and the
+   * only thing that changed is that `verify`, the Action and the facade all go
+   * lenient on a moved deliverable identity nobody re-proved. The difference
+   * this guard makes is invisible in the verdict, which is exactly why it needs
+   * a row of its own.
+   *
+   * Both orders are asserted, because a disjunction that only works one way
+   * round is the bug wearing the fix's clothes.
+   */
+  it("keeps the strictest proven-neutral claim whichever reading came first", () => {
+    const base = { mergeBaseSha: "1".repeat(40), provenNeutral: false };
+    const proven = { mergeBaseSha: "2".repeat(40), provenNeutral: true };
+
+    expect(mergeReviewedClaim(undefined, proven), "the first reading is taken whole").toEqual(proven);
+    expect(mergeReviewedClaim(base, proven)).toEqual({ mergeBaseSha: base.mergeBaseSha, provenNeutral: true });
+    expect(mergeReviewedClaim(proven, base)).toEqual({ mergeBaseSha: proven.mergeBaseSha, provenNeutral: true });
+    expect(mergeReviewedClaim(base, base), "two cheap readings owe no proof").toEqual(base);
+  });
+
+  /**
+   * The merge base a reviewed coordinate is paired with.
+   *
+   * WHY THERE IS NO ROW ASSERTING THE PAIRING ITSELF, and why that is not a
+   * gap. Reading the evidence entry's own base rather than the record's looks
+   * like a choice with two outcomes, and it is not: `portable_claim_binding`
+   * compares every binding field except `treeSha` between the entry and the
+   * record, so a record that verifies has exactly one merge base across all of
+   * them. "Pair with the record's own base instead" is therefore
+   * behaviour-preserving, and no fixture can distinguish it — a fixture that
+   * made the two bases differ is a record the verifier refuses, which is the
+   * row below.
+   *
+   * That row is where the weight sits. If the binding rule is ever relaxed so
+   * the two bases can differ, it goes red first, and the pairing stops being a
+   * distinction without a difference at the same moment.
+   */
+  it("refuses a record whose evidence entry claims a different merge base", () => {
+    // The rule the row above depends on. Relax it and the two bases can differ,
+    // at which point which one a reviewed coordinate is paired with stops being
+    // a distinction without a difference.
+    const record = structuredClone(buildFreshRecord());
+    const evidence = record.claims[0]!.evidence!;
+    (evidence as Mutable<typeof evidence>).candidateBinding = {
+      ...evidence.candidateBinding,
+      mergeBaseSha: "7".repeat(40),
+    };
+    const check = verifyDeliveryRecord(makeConfig(), record, RECOMPUTED, FRESH_BASE);
+    expect(check.ok).toBe(false);
+    expect(check.blockers.map((blocker) => blocker.code)).toContain("portable_claim_binding");
   });
 
   it("never lets a run-journal row change the verdict it is attached to", () => {

@@ -543,6 +543,28 @@ export interface VerificationBase {
   readonly mergeBaseSha: string;
 }
 
+/** One reviewed raw tree, with the merge base it was computed over. */
+export interface ReviewedCandidateCoordinate {
+  readonly treeSha: string;
+  readonly mergeBaseSha: string;
+  /**
+   * True when this coordinate reached the record through a projection whose
+   * `basis` is `proven-neutral-post-round-residual` — that is, the deliverable
+   * digest itself moved after the round and the move was admitted only because
+   * the residual classifier read the repository and found every differing path
+   * neutral.
+   *
+   * It is the difference between a claim that needed a repository proof and one
+   * that did not, and it is what lets `verify` decide whether an unrecomputable
+   * residual is tolerable. A projection on the cheap basis moved paths the
+   * deliverable digest never covered, so there is nothing a re-read could
+   * overturn; a projection on this one is the only evidence that a moved
+   * identity was ever neutral, and a clone that cannot re-read it is a clone
+   * that cannot check the claim at all. Absent on the record's own coordinate.
+   */
+  readonly provenNeutral?: boolean;
+}
+
 export interface DeliveryRecordCheck {
   readonly ok: boolean;
   readonly blockers: readonly Blocker[];
@@ -563,6 +585,14 @@ export interface DeliveryRecordCheck {
    * retained review-neutral projection has passed portable verification.
    */
   readonly reviewedCandidateTreeShas: readonly string[];
+  /**
+   * The same trees with the merge base each was computed over, which is what a
+   * post-round residual comparison needs and a bare tree sha cannot supply: the
+   * `rebase` class is precisely "the base under this path moved", and that is
+   * unanswerable without both bases. Derived from the same verified coordinates
+   * as {@link reviewedCandidateTreeShas} and empty on the same condition.
+   */
+  readonly reviewedCandidates: readonly ReviewedCandidateCoordinate[];
   /**
    * The caller's self-attested run-journal row, echoed verbatim and absent when
    * the caller supplied none — which is every caller but the local `verify`.
@@ -924,6 +954,9 @@ export function verifyDeliveryRecord(
     }
   }
 
+  // Computed once: the two members below are one answer projected two ways,
+  // and computing it twice invites them to drift apart.
+  const reviewedCandidates = blockers.length === 0 ? projectedReviewCandidates(record) : [reviewedCoordinateOf(record)];
   return {
     ok: blockers.length === 0,
     blockers,
@@ -933,9 +966,38 @@ export function verifyDeliveryRecord(
     attestationLabel: ATTESTATION_LABEL,
     claims: record.claims,
     hostedChecks,
-    reviewedCandidateTreeShas: blockers.length === 0 ? projectedReviewTreeShas(record) : [binding.treeSha],
+    reviewedCandidateTreeShas: reviewedCandidates.map((entry) => entry.treeSha),
+    reviewedCandidates,
     ...(options.runJournal === undefined ? {} : { runJournal: options.runJournal }),
   };
+}
+
+/**
+ * Fold one projection's reading of a reviewed tree into what is already known.
+ *
+ * FIRST WINS FOR THE BASE, STRICTEST WINS FOR THE CLAIM. The base is a
+ * coordinate and the first reading of it is as good as any. The flag is not a
+ * coordinate: it says a round's authority was carried across a move of the
+ * deliverable identity, and that a repository re-proof is owed before the
+ * record is admitted anywhere that decides. Taking the first reading of *that*
+ * would let a second projection naming the same reviewed tree on the cheap
+ * basis discharge an obligation it knows nothing about — silently, because both
+ * artifacts are well-formed and the record still verifies. The two members are
+ * not symmetric, so they are not merged the same way.
+ *
+ * Exported for its own row. It is one `if` inside a loop inside a function the
+ * module deliberately keeps private, and reaching it from outside needs a
+ * record carrying two projections over one tree — a fixture that must first
+ * satisfy retained-review verification in full. That cost is why the arm went
+ * unguarded when it was written inline, and lifting it out is what makes the
+ * invariant falsifiable at all.
+ */
+export function mergeReviewedClaim(
+  seen: { readonly mergeBaseSha: string; readonly provenNeutral: boolean } | undefined,
+  read: { readonly mergeBaseSha: string; readonly provenNeutral: boolean },
+): { readonly mergeBaseSha: string; readonly provenNeutral: boolean } {
+  if (seen === undefined) return read;
+  return { mergeBaseSha: seen.mergeBaseSha, provenNeutral: seen.provenNeutral || read.provenNeutral };
 }
 
 /**
@@ -943,8 +1005,9 @@ export function verifyDeliveryRecord(
  * retained portable bytes. This function is deliberately private: an
  * unverified record cannot ask the journal reader to bless another tree.
  */
-function projectedReviewTreeShas(record: DeliveryRecord): readonly string[] {
-  const trees = new Set<string>([record.candidateBinding.treeSha]);
+function projectedReviewCandidates(record: DeliveryRecord): readonly ReviewedCandidateCoordinate[] {
+  const trees = new Map<string, { mergeBaseSha: string; provenNeutral: boolean }>(
+    [[record.candidateBinding.treeSha, { mergeBaseSha: record.candidateBinding.mergeBaseSha, provenNeutral: false }]]);
   const evidence = record.claims.flatMap((claim) => [
     ...(claim.evidence === undefined ? [] : [claim.evidence]),
     ...(claim.supportingEvidence ?? []),
@@ -959,7 +1022,9 @@ function projectedReviewTreeShas(record: DeliveryRecord): readonly string[] {
           (claim["payloadSpec"] === "review.green/1" || claim["payloadSpec"] === "review.green/2"))) continue;
     // A verified review can precede record-neutral telemetry staging even when
     // its initial acquisition needed no explicit review-context projection.
-    trees.add(entry.candidateBinding.treeSha);
+    if (!trees.has(entry.candidateBinding.treeSha)) {
+      trees.set(entry.candidateBinding.treeSha, { mergeBaseSha: entry.candidateBinding.mergeBaseSha, provenNeutral: false });
+    }
     const contents = portableArtifactContents(portable.artifacts).artifacts;
     for (const declared of manifest["artifacts"]) {
       if (!isRecord(declared) || declared["role"] !== "review-context-projection" || typeof declared["path"] !== "string") continue;
@@ -969,14 +1034,37 @@ function projectedReviewTreeShas(record: DeliveryRecord): readonly string[] {
             !isRecord(projection["preparedCandidate"]) || projection["reviewRoundAdded"] !== false ||
             projection["preparedCandidate"]["treeSha"] !== entry.candidateBinding.treeSha) continue;
         const reviewedTreeSha = projection["reviewedCandidate"]["treeSha"];
-        if (typeof reviewedTreeSha === "string" && /^[a-f0-9]{40}$/.test(reviewedTreeSha)) trees.add(reviewedTreeSha);
+        const provenNeutral = projection["basis"] === "proven-neutral-post-round-residual";
+        // The projection witnesses a review-neutral move at the evidence
+        // entry's own base, so that base is the reviewed tree's base too, and
+        // the entry is where it is read from.
+        //
+        // WHICH IS NOT THE SAME AS THE RECORD'S BASE, UNDER A SCOPED PROVIDER.
+        // `portable_claim_binding` compares every binding field but `treeSha`
+        // — so for an ordinary provider this base IS the record's own, and
+        // `delivery-record.test.ts` pins that rule. For a provider carrying a
+        // matching `check.scope`, the comparison narrows to `workspaceId` and
+        // `identityToken` (see the `scoped` filter in `verifyRecordEvidence`),
+        // and the two bases may then legitimately differ. Reading the base from
+        // the entry is correct in both cases and only in this one: it is the
+        // base the projected tree was actually computed over, which is exactly
+        // what the `rebase` class needs. Taking the record's base instead would
+        // be right by coincidence in the ordinary case and wrong in the scoped
+        // one.
+        if (typeof reviewedTreeSha !== "string" || !/^[a-f0-9]{40}$/.test(reviewedTreeSha)) continue;
+        trees.set(reviewedTreeSha, mergeReviewedClaim(trees.get(reviewedTreeSha),
+          { mergeBaseSha: entry.candidateBinding.mergeBaseSha, provenNeutral }));
       } catch {
         // Portable verification would already have rejected malformed bytes;
         // a defensive parse failure contributes no observational coordinate.
       }
     }
   }
-  return [...trees];
+  return [...trees].map(([treeSha, entry]) => ({ treeSha, mergeBaseSha: entry.mergeBaseSha, provenNeutral: entry.provenNeutral }));
+}
+
+function reviewedCoordinateOf(record: DeliveryRecord): ReviewedCandidateCoordinate {
+  return { treeSha: record.candidateBinding.treeSha, mergeBaseSha: record.candidateBinding.mergeBaseSha };
 }
 
 /** Reconstruct admission from retained evidence using the existing evaluator. */

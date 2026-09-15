@@ -513,6 +513,124 @@ first `review.round.opened`; a round closes only after it opened; the governing
 SHA; the `record` completion after that gate; `pr.opened` after the *first* gate
 completion; `run.ended` last.
 
+### Compounding: landing the solution note inside the delivery
+
+A delivery that learned something writes a `docs/solutions/` note, and the note
+cannot exist before the delivery does — which used to mean a second reviewed
+pull request, or a ninth round for a file no lens had asked about. It does not
+any more. `harness.config.ts` declares `postRoundNeutral`, and five surfaces
+prove a moved candidate against it — `emit-review-evidence` when it is asked to
+carry a closed round onto a candidate whose deliverable digest has moved,
+`record` when it authors the claim, `verify` when it re-reads it, the GitHub
+Action at the merge gate when the pull request opens, and the managed-delivery
+facade when it stands a delivery up as `ready` and again when it turns the
+finish line into an authorized merge.
+
+**Every surface that decides re-proves; none of them reads the claim.** The projection artifact in
+the record is verified off-repository by recomputing it from the manifest, which
+establishes that the artifact is internally consistent and nothing more: the
+classification is a statement about bytes in git, and the only workspace that
+ever ran it is the one asking to merge. So every surface that decides re-runs the
+same comparison through one kernel function, `decideResidual`, and refuses on
+the same two outcomes:
+
+- **not neutral** — refused unconditionally, whatever the record claims about
+  itself. A round that did not read what is about to merge is not a round.
+- **unprovable** — refused when, and only when, a reviewed coordinate carries
+  the proven-neutral claim. A clone may simply have pruned an old tree object,
+  and refusing every record whose reviewed tree will not resolve would fail
+  records that are correct; it is the claim "the identity moved and the move was
+  proven neutral" whose unreadable tree means nobody checked it anywhere.
+  "Nobody could check" is a refusal, not a pass.
+
+A record that did not move after its round reads no git at all, so the cost
+falls only on the deliveries that use the mechanism.
+
+| class | what it admits |
+| --- | --- |
+| `identity-neutral` | a path already outside the deliverable digest (`reviewNeutral`), which no round ever reviewed |
+| `neutral-path` | a path the policy names — here `docs/solutions/` and `docs/delivery-runbook.md` |
+| `comment-only` | a source file whose comment-erased program is byte-identical |
+| `rebase` | a path the candidate delivers nothing on, when the base moved under it |
+
+Anything else is `non-neutral`: `emit-review-evidence` refuses to emit,
+`record` writes nothing, and `verify`, the Action and the facade block — the
+last four with `review_residual_not_neutral`, all of them naming the hunk as
+`<path>:<line> <text>`. So a one-line logic change after the round reads
+
+```
+the candidate changed after the review round by changes postRoundNeutral does
+not admit: src/admit.ts:3 return count >= 0;; acquire review for the current
+context
+```
+
+rather than a sentence about the tool. The hunk named is the first difference
+that survives the comment erasure — not the comment beside it. The classes are proved from the two trees' bytes, not from diff text,
+so a comment-shaped line inside a string or a template literal is a refusal.
+Reindentation is a refusal too — it is not on the list. So is any `/` that does
+not open a comment: division and a regular expression are the same character to
+a scanner without the grammar, and a regex is allowed to contain `//`, so a file
+that divides or matches is one the erasure declines to certify at all. A comment
+restamp in such a file asks for a round.
+
+An adopter who declares no `postRoundNeutral` at all is judged under
+`DEFAULT_POST_ROUND_NEUTRAL` (`packages/kernel/src/config.ts`): `docs/solutions/`,
+comment-only hunks, and the rebase. Declaring the block **replaces** that
+default rather than extending it, so a declaration meaning to keep the solution
+note repeats the path — this file's config does. Opting out entirely is
+`{ paths: [], commentOnlyHunks: false, rebase: false }`, written on purpose.
+
+**The sequence, after the last round closes and before the tail's `prepare`:**
+
+```sh
+# 1. Write the note. Under docs/solutions/ — which is also `reviewNeutral`, so
+#    the deliverable digest does not move and the evidence you already have
+#    still binds this candidate.
+$EDITOR docs/solutions/<slug>-$(date +%F).md
+git add docs/solutions && git commit -m "solution note for V26-0000"
+
+# 2. Run the tail as usual. `record` prints the projection it proved. The class
+#    is `identity-neutral` here because this repository also excludes
+#    docs/solutions/ from the digest; an adopter who does not gets the same
+#    admission as `neutral-path`, from the policy block instead.
+npm run --silent harness -- record
+#   recorded delivery/records/record--<digest>.json
+#   review-neutral projection: reviewed 7c7d67d… → recorded 9af21b0…; identity-neutral 1
+#     neutral identity-neutral: docs/solutions/<slug>-2026-09-15.md
+
+# 3. `verify` recomputes the same projection and prints the same row.
+npm run --silent harness -- verify
+```
+
+Two things this does **not** do. It does not widen the deliverable identity:
+`reviewNeutral` is the identity function's own narration set and revising it
+retires every record ever computed under the token, so `docs/delivery-runbook.md`
+stays inside the digest and is neutral only to this later predicate. And it does
+not admit a residual it cannot recompute — in `record`, a reviewed tree this
+clone no longer holds is a refusal, because a record is a claim being authored.
+`verify` reports that same case as `not computed` and does not block — unless
+the record's projection is on the `proven-neutral-post-round-residual` basis
+below, in which case it blocks. The lenient half is for a record whose
+deliverable digest never moved: `verify` is reading a record whose portable
+verification already passed, in a clone that may simply have pruned the object,
+and nothing a re-read could find would overturn it. The strict half is for a
+record whose digest did move: the only repository proof that the move was
+neutral lives in the command that wrote it and in `verify`, so a clone that
+cannot recompute it is a clone in which nothing checks the claim.
+
+**What the retained evidence says it proved.** The review-context projection
+artifact carries a derived `basis`. `unchanged-deliverable-and-review-inputs` is
+the easy claim — only paths outside the digest moved, so there was nothing to
+prove. `proven-neutral-post-round-residual` is the claim that the digest itself
+moved and the move was classified against the repository, path by path. Neither
+is asserted by the emitter: both it and the portable verifier derive the basis
+from the two candidates the artifact already carries, so a manifest cannot claim
+the cheaper one for the harder case.
+
+**Record the outcome either way.** `compounding.recorded {"outcome"[,
+"reference"]}` takes the note's path as its `reference`; with nothing durable to
+say, the outcome is that and the delivery says so rather than inventing a note.
+
 ## 6. When `origin/main` moves
 
 `deliveryRecordVerification: { baseMovement: "stale" }` in `harness.config.ts`

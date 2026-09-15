@@ -26,6 +26,7 @@ import { BlockedError, GATE_STRUCTURAL_FINDING_CODES, renderBlockers, type Block
 import {
   CONFIG_FINDING_CODES,
   DEFAULT_BASE_REF,
+  DEFAULT_POST_ROUND_NEUTRAL,
   DEFAULT_STORAGE_NAMESPACE,
   DELIVERABLE_TREE_V1,
   DELIVERABLE_TREE_V1_NARRATION_SET,
@@ -125,6 +126,7 @@ const validInput = () => ({
   ],
   deliveryRecordPath: "docs/reports/delivery-record.json",
   deliveryRecordVerification: { baseMovement: "stale" },
+  postRoundNeutral: { paths: [{ prefix: "docs/solutions/" }], commentOnlyHunks: true, rebase: true },
 });
 
 type MutableInput = ReturnType<typeof validInput>;
@@ -236,15 +238,63 @@ describe("a sound config", () => {
     );
   });
 
-  it("defaults the three members that carry defaults, and nothing else", () => {
+  it("defaults the four members that carry defaults, and nothing else", () => {
     const input = structuredClone(validInput()) as Partial<MutableInput>;
     delete input.baseRef;
     delete input.storageNamespace;
     delete input.deliveryRecordVerification;
+    delete input.postRoundNeutral;
     const config = define(input);
     expect(config.baseRef).toBe(DEFAULT_BASE_REF);
     expect(config.storageNamespace).toBe(DEFAULT_STORAGE_NAMESPACE);
     expect(config.deliveryRecordVerification).toEqual({ baseMovement: "stale" });
+    // Amendment A: an adopter who declares no post-round policy is still judged
+    // under one, and it is the product's answer rather than the strict one.
+    expect(config.postRoundNeutral).toEqual(DEFAULT_POST_ROUND_NEUTRAL);
+  });
+
+  describe("the post-round neutral block's own validation", () => {
+    /**
+     * The block decides when a closed review round still governs a moved
+     * candidate, and the reader's stated policy is that a member an author left
+     * off is not read as a grant they did not write. Replacing the reader's
+     * whole body with `return DEFAULT_POST_ROUND_NEUTRAL;` satisfies every
+     * other row in this file — a half-written block would then silently become
+     * the full default grant, which is the opposite of that policy. These rows
+     * are the planted failures behind the sentence.
+     */
+    const withPolicy = (policy: unknown) => ({ ...validInput(), postRoundNeutral: policy });
+
+    it("refuses a member the author left off rather than granting it", () => {
+      // An absent switch is refused as an invalid one — the reader asks for a
+      // boolean and gets nothing. What matters for the policy the block states
+      // is that it is REFUSED rather than defaulted into a grant.
+      expectOnly(withPolicy({ paths: [{ prefix: "docs/solutions/" }], rebase: true }), "config_invalid_member");
+      expectOnly(withPolicy({ paths: [{ prefix: "docs/solutions/" }], commentOnlyHunks: true }), "config_invalid_member");
+      expectOnly(withPolicy({ commentOnlyHunks: true, rebase: true }), "config_invalid_member");
+    });
+
+    it("refuses a member the grammar does not declare", () => {
+      expectOnly(
+        withPolicy({ paths: [], commentOnlyHunks: true, rebase: true, commentOnlyHunk: true }),
+        "config_unknown_member",
+      );
+    });
+
+    it("refuses a block that is not an object", () => {
+      expectOnly(withPolicy("yes"), "config_invalid_member");
+      expectOnly(withPolicy([{ prefix: "docs/solutions/" }]), "config_invalid_member");
+    });
+
+    it("refuses a non-boolean switch and a malformed matcher", () => {
+      expectOnly(withPolicy({ paths: [], commentOnlyHunks: "true", rebase: true }), "config_invalid_member");
+      expectOnly(withPolicy({ paths: [{ prefix: 7 }], commentOnlyHunks: true, rebase: true }), "config_invalid_member");
+    });
+
+    it("accepts the empty opt-out, which is how an adopter refuses the default", () => {
+      const config = define(withPolicy({ paths: [], commentOnlyHunks: false, rebase: false }));
+      expect(config.postRoundNeutral).toEqual({ paths: [], commentOnlyHunks: false, rebase: false });
+    });
   });
 
   it("reports every other absent member rather than inventing one", () => {

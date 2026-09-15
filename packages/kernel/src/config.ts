@@ -340,6 +340,58 @@ export interface DeliveryRecordVerification {
   readonly baseMovement: BaseMovementPolicy;
 }
 
+/**
+ * Which differences between a closed round's reviewed candidate and the
+ * candidate a record is written for are review-neutral.
+ *
+ * DISTINCT FROM `reviewNeutral`, DELIBERATELY. `reviewNeutral` defines the
+ * deliverable identity, so widening it invalidates every record ever computed
+ * under the identity token. This block defines a *later* predicate, over two
+ * already-computed candidates, read only by `record` and `verify`. A path may
+ * therefore be post-round neutral while remaining inside the deliverable digest
+ * — which is exactly what a tracked document like the delivery runbook needs.
+ *
+ * Absent, the block resolves to {@link DEFAULT_POST_ROUND_NEUTRAL} rather than
+ * to the empty policy — an adopter who has not written one has not decided that
+ * a solution note should cost a further round, they have not thought about it
+ * yet. Refusing everything is available, and it is written out:
+ * `{ paths: [], commentOnlyHunks: false, rebase: false }`. A declared block
+ * REPLACES the default rather than extending it.
+ */
+export interface PostRoundNeutralPolicy {
+  /** Paths whose post-round movement needs no new round. */
+  readonly paths: readonly NeutralMatcher[];
+  /** Admit a source file whose comment-erased program is unchanged. */
+  readonly commentOnlyHunks: boolean;
+  /** Admit a path the candidate delivers nothing on, when the base moved under it. */
+  readonly rebase: boolean;
+}
+
+/**
+ * The post-round neutral policy an author who declares none is judged under.
+ *
+ * WHY A DEFAULT AND NOT A REFUSAL. The three residuals this predicate exists
+ * for are not this repository's peculiarities; they are what delivering
+ * anything through a bounded review looks like. The note a delivery writes
+ * about what it just learned cannot exist before the delivery does, a comment a
+ * finding asked for changes no program, and a serialized tail rebases every
+ * holder but the first. An adopter who has written no policy is not asking for
+ * those to cost a further round — they have not thought about it yet, and the
+ * behaviour they should get is the one that is right. So absence is this grant.
+ *
+ * `docs/delivery-runbook.md` is deliberately NOT here. It is one repository's
+ * own file name; the default may only carry what is true of any repository.
+ * An adopter widens it by declaring `postRoundNeutral` — which REPLACES this
+ * default rather than extending it, so a declaration that means to keep the
+ * solution-note path says so. Opting out entirely is
+ * `{ paths: [], commentOnlyHunks: false, rebase: false }`, written on purpose.
+ */
+export const DEFAULT_POST_ROUND_NEUTRAL: PostRoundNeutralPolicy = Object.freeze({
+  paths: Object.freeze([Object.freeze({ prefix: "docs/solutions/" })]),
+  commentOnlyHunks: true,
+  rebase: true,
+});
+
 /** Repository-selected review policy, added to the installed default charters. */
 export interface AdditionalReviewLens {
   readonly lensId: string;
@@ -372,6 +424,12 @@ export interface HarnessConfig {
   readonly preparationWiringPaths: readonly string[];
   readonly preparationCommands?: readonly PreparationCommand[];
   readonly scopedExecution?: ScopedExecutionDefinition;
+  /**
+   * Always present: an author who declares nothing gets
+   * {@link DEFAULT_POST_ROUND_NEUTRAL}. See that constant for why the default
+   * is a grant rather than a refusal.
+   */
+  readonly postRoundNeutral: PostRoundNeutralPolicy;
   readonly additionalReviewLenses?: readonly AdditionalReviewLens[];
   readonly obligations: readonly ObligationPolicy[];
   readonly deliveryRecordPath: string;
@@ -379,8 +437,8 @@ export interface HarnessConfig {
 }
 
 /** The three members that carry defaults are optional at the authoring site. */
-export type HarnessConfigInput = Omit<HarnessConfig, "baseRef" | "storageNamespace" | "deliveryRecordVerification"> &
-  Partial<Pick<HarnessConfig, "baseRef" | "storageNamespace" | "deliveryRecordVerification">>;
+export type HarnessConfigInput = Omit<HarnessConfig, "baseRef" | "storageNamespace" | "deliveryRecordVerification" | "postRoundNeutral"> &
+  Partial<Pick<HarnessConfig, "baseRef" | "storageNamespace" | "deliveryRecordVerification" | "postRoundNeutral">>;
 
 export type HarnessConfigValidation =
   | { readonly ok: true; readonly config: HarnessConfig }
@@ -881,6 +939,7 @@ const CONFIG_MEMBERS = [
   "preparationWiringPaths",
   "preparationCommands",
   "additionalReviewLenses",
+  "postRoundNeutral",
   "scopedExecution",
   "obligations",
   "deliveryRecordPath",
@@ -888,7 +947,27 @@ const CONFIG_MEMBERS = [
 ] as const;
 
 /** Members the author may omit. Optional extensions stay absent when unused. */
-const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification", "preparationCommands", "additionalReviewLenses", "scopedExecution"] as const;
+const DEFAULTED_MEMBERS = ["baseRef", "storageNamespace", "deliveryRecordVerification", "preparationCommands", "additionalReviewLenses", "postRoundNeutral", "scopedExecution"] as const;
+
+/**
+ * Read the post-round neutral policy, or refuse it. Both booleans are required
+ * rather than defaulted: this block decides when a closed review round still
+ * governs a moved candidate, and a member an author left off must not be read
+ * as a grant they did not write.
+ */
+function readPostRoundNeutral(findings: FindingList, value: unknown): PostRoundNeutralPolicy | undefined {
+  if (!isRecord(value)) {
+    findings.add("config_invalid_member", "postRoundNeutral", "must be an object naming neutral paths and the comment-only and rebase switches");
+    return undefined;
+  }
+  checkClosed(findings, "postRoundNeutral", value, ["paths", "commentOnlyHunks", "rebase"]);
+  const paths = readNeutralMatchers(findings, "postRoundNeutral.paths", value["paths"]);
+  const commentOnlyHunks = readBoolean(findings, "postRoundNeutral.commentOnlyHunks", value["commentOnlyHunks"]);
+  const rebase = readBoolean(findings, "postRoundNeutral.rebase", value["rebase"]);
+  if (paths === undefined || commentOnlyHunks === undefined || rebase === undefined) return undefined;
+  return { paths, commentOnlyHunks, rebase };
+}
+
 
 function readAdditionalReviewLenses(findings: FindingList, value: unknown): readonly AdditionalReviewLens[] | undefined {
   const entries = readArray(findings, "additionalReviewLenses", value);
@@ -1099,6 +1178,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
       : readStringArray(findings, "preparationWiringPaths", input["preparationWiringPaths"], { path: true, describe: "a repo-relative path" });
   if (preparationWiringPaths !== undefined) checkDuplicateIds(findings, "preparationWiringPaths", preparationWiringPaths);
   const additionalReviewLenses = input["additionalReviewLenses"] === undefined ? undefined : readAdditionalReviewLenses(findings, input["additionalReviewLenses"]);
+  const postRoundNeutral = input["postRoundNeutral"] === undefined ? DEFAULT_POST_ROUND_NEUTRAL : readPostRoundNeutral(findings, input["postRoundNeutral"]);
 
   const scopedExecution = input["scopedExecution"];
   if (scopedExecution !== undefined && !isScopedExecution(scopedExecution)) findings.add("config_invalid_member", "scopedExecution", "requires the supported scoped-execution/1 profiles");
@@ -1192,6 +1272,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     ciPolicies === undefined ||
     ciPolicyEnvKey === undefined ||
     preparationWiringPaths === undefined ||
+    postRoundNeutral === undefined ||
     obligations === undefined ||
     deliveryRecordPath === undefined ||
     deliveryRecordVerification === undefined
@@ -1218,6 +1299,7 @@ function readShape(findings: FindingList, input: unknown): HarnessConfig | undef
     preparationWiringPaths: additionalReviewLenses === undefined ? preparationWiringPaths :
       [...new Set([...preparationWiringPaths, ...additionalReviewLenses.map((lens) => lens.charterPath)])],
     ...(additionalReviewLenses === undefined ? {} : { additionalReviewLenses }),
+    postRoundNeutral,
     ...(preparationCommands === undefined ? {} : { preparationCommands }),
     ...(isScopedExecution(scopedExecution) ? { scopedExecution } : {}),
     obligations,

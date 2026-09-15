@@ -13,7 +13,7 @@
  * opt-in fails on one, and that flag reaches neither CI nor the gate.
  */
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -442,6 +442,210 @@ function rowOf(out: string): string {
 }
 
 // ── Scenarios ────────────────────────────────────────────────────────────────
+
+/**
+ * THE POST-ROUND RESIDUAL, AT THE COMMANDS AND NOT AT THE MODULE.
+ *
+ * The classifier has its own unit rows. These rows exist because a classifier
+ * nobody reaches is a classifier that decides nothing: they drive the shipped
+ * CLI from `run.started` to `verify`, edit the working tree after the round has
+ * closed, and assert on what the operator is actually told.
+ *
+ * The fixture config declares no `postRoundNeutral` block at all, so every row
+ * here is also the Amendment A acceptance criterion: an adopter who has written
+ * no policy is judged under DEFAULT_POST_ROUND_NEUTRAL.
+ */
+describe("a candidate that moved after its review round", () => {
+  const REVIEWED_SOURCE = [
+    "export function admit(count: number): boolean {",
+    "  // the round read this line",
+    "  return count > 0;",
+    "}",
+    "",
+  ].join("\n");
+
+  interface ClosedRound {
+    readonly harness: Harness;
+    readonly runId: string;
+    readonly reviewedTreeSha: string;
+    readonly contextPath: string;
+    readonly outcome: unknown;
+  }
+
+  /** A run carried to a closed round over a source file the identity covers. */
+  async function closedRoundOverSource(overrides: Partial<HarnessConfigInput> = {}): Promise<ClosedRound> {
+    const harness = await makeHarness(overrides, true);
+    const runId = await startRun(harness);
+    await emitAll(harness, prerequisites());
+    await writeFile(path.join(harness.dir, "admit.ts"), REVIEWED_SOURCE);
+    await git(harness.dir, "add", "admit.ts");
+    await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", "the source the round reads");
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+
+    const reviewed = await harness.cli(["review-context", "--json"]);
+    expect(reviewed.code, reviewed.err).toBe(EXIT_OK);
+    const reviewedDocument = JSON.parse(reviewed.out) as { digest: string; binding: { candidate: { treeSha: string } } };
+    const reviewedTreeSha = reviewedDocument.binding.candidate.treeSha;
+    await emitAll(harness, [roundOpened(reviewedTreeSha), roundClosed(reviewedTreeSha)]);
+
+    const contextDir = await mkdtemp(path.join(os.tmpdir(), "dh-residual-context-"));
+    cleanups.push(contextDir);
+    const contextPath = path.join(contextDir, "review-context.json");
+    await writeFile(contextPath, reviewed.out);
+    return {
+      harness,
+      runId,
+      reviewedTreeSha,
+      contextPath,
+      outcome: {
+        spec: "review-outcome/1",
+        contextDigest: reviewedDocument.digest,
+        verdict: "green",
+        reviewers: [{ id: "correctness", result: "approved" }],
+        findings: [],
+      },
+    };
+  }
+
+  async function submitReview(round: ClosedRound): Promise<Invocation> {
+    return round.harness.cli(["emit-review-evidence", "--context", round.contextPath], {
+      readStdin: async () => `${JSON.stringify(round.outcome)}\n`,
+    });
+  }
+
+  async function commitAndPrepare(harness: Harness, message: string): Promise<void> {
+    await git(harness.dir, "add", "-A");
+    await git(harness.dir, "commit", "--quiet", "--no-gpg-sign", "-m", message);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+  }
+
+  it("refuses a one-line logic change, and names the hunk rather than the tool", { timeout: 120000 }, async () => {
+    const round = await closedRoundOverSource();
+    await writeFile(path.join(round.harness.dir, "admit.ts"), REVIEWED_SOURCE.replace("count > 0", "count >= 0"));
+    await commitAndPrepare(round.harness, "a one-line logic change after the round");
+
+    const refused = await submitReview(round);
+    expect(refused.code).not.toBe(EXIT_OK);
+    // The operator's own edit, by path, line and text. Before V26-2079 this
+    // said only "acquire review for the current context".
+    expect(refused.err).toContain("postRoundNeutral does not admit");
+    expect(refused.err).toContain("admit.ts:3");
+    expect(refused.err).toContain("count >= 0");
+  });
+
+  it("carries the round through a comment-only edit under the default policy", { timeout: 120000 }, async () => {
+    const round = await closedRoundOverSource();
+    const { harness } = round;
+    await writeFile(path.join(harness.dir, "admit.ts"),
+      REVIEWED_SOURCE.replace("// the round read this line", "// the round read the line below, and this note was corrected after it"));
+    await commitAndPrepare(harness, "a comment-only edit after the round");
+    const movedTreeSha = await captureTreeSha(harness.dir, harness.config);
+    expect(movedTreeSha).not.toBe(round.reviewedTreeSha);
+
+    const emitted = await submitReview(round);
+    expect(emitted.code, emitted.err).toBe(EXIT_OK);
+    expect((await harness.cli(["submit-evidence", "--manifest", emitted.out.trim()])).code).toBe(EXIT_OK);
+    expect((await harness.cli(["gate"])).code).toBe(EXIT_OK);
+    const recorded = await harness.cli(["record"]);
+    expect(recorded.code, recorded.err).toBe(EXIT_OK);
+    // `record` journals the projection it just proved, by class.
+    expect(recorded.out).toContain("comment-only");
+    expect(await recordedTreeSha(harness.dir)).toBe(movedTreeSha);
+
+    await emitAll(harness, [["pr.opened", { url: "https://example.invalid/pr/residual", candidateTreeSha: movedTreeSha }]]);
+    await commitRecord(harness.dir);
+    await emitAll(harness, [ended()]);
+    const verified = await harness.cli(["verify", "--require-run-journal"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    const row = rowOf(verified.out);
+    expect(row).toContain(round.runId);
+    expect(row).toContain("verified review-neutral projection");
+    // `verify` re-proves the residual against git before it says that.
+    expect(verified.out).toContain("comment-only");
+
+    // The claim the retained evidence makes is the harder one, and it says so.
+    const recordDir = path.join(harness.dir, "telemetry/delivery-runs");
+    const recordName = (await readdir(recordDir)).find((name) => name.startsWith("record--"));
+    if (recordName === undefined) throw new Error("record missing");
+    const record = JSON.parse(await readFile(path.join(recordDir, recordName), "utf8"));
+    const portable = record.claims[0].evidence.resolution.portable;
+    const entry = portable.manifest.artifacts.find((artifact: { role: string }) => artifact.role === "review-context-projection");
+    const projection = JSON.parse(Buffer.from(portable.artifacts[entry.path], "base64").toString("utf8"));
+    expect(projection.basis).toBe("proven-neutral-post-round-residual");
+    expect(projection.reviewedCandidate.treeSha).toBe(round.reviewedTreeSha);
+    expect(projection.reviewRoundAdded).toBe(false);
+
+    // ROUND 2, N2. `verify` is lenient about a residual it cannot recompute,
+    // and that leniency rested on portable verification having already refused
+    // every move of the deliverable digest. This record is the case where that
+    // is no longer true: off-repository the projection is checked against bytes
+    // derived from the manifest, so this command is the only place left that
+    // re-proves the move against real trees. Take the reviewed tree away — the
+    // pruned-object case the leniency was written for — and the record must be
+    // refused rather than reported, because nothing else checks the claim.
+    await rm(path.join(harness.dir, ".git/objects", round.reviewedTreeSha.slice(0, 2), round.reviewedTreeSha.slice(2)),
+      { force: true });
+    const unprovable = await harness.cli(["verify", "--require-run-journal"]);
+    expect(unprovable.code).toBe(EXIT_POLICY);
+    expect(unprovable.err).toContain("review_residual_not_neutral");
+    expect(unprovable.err).toContain(round.reviewedTreeSha);
+  });
+
+  it("lands a solutions note in the same PR without adding a round", { timeout: 120000 }, async () => {
+    // `docs/solutions/` is the compounding path, and the default policy admits
+    // it with no configuration at all. In this fixture it is also outside the
+    // deliverable identity, so the class is `identity-neutral`: the note never
+    // moved the digest the round was bound to in the first place.
+    const round = await closedRoundOverSource();
+    const { harness } = round;
+    await mkdir(path.join(harness.dir, "docs/solutions"), { recursive: true });
+    await writeFile(path.join(harness.dir, "docs/solutions/what-the-round-taught-us.md"), "# What the round taught us\n");
+    await commitAndPrepare(harness, "land the solutions note beside the delivery");
+
+    const emitted = await submitReview(round);
+    expect(emitted.code, emitted.err).toBe(EXIT_OK);
+    expect((await harness.cli(["submit-evidence", "--manifest", emitted.out.trim()])).code).toBe(EXIT_OK);
+    expect((await harness.cli(["gate"])).code).toBe(EXIT_OK);
+    const recorded = await harness.cli(["record"]);
+    expect(recorded.code, recorded.err).toBe(EXIT_OK);
+    expect(recorded.out).toContain("identity-neutral");
+  });
+
+  it("admits a declared neutral path the identity function does cover", { timeout: 120000 }, async () => {
+    // A path inside the deliverable digest and inside the owner's declared
+    // policy: the `neutral-path` class, and the one that needs a decision the
+    // default does not make for you.
+    const round = await closedRoundOverSource({
+      postRoundNeutral: { paths: [{ prefix: "docs/delivery-runbook.md" }], commentOnlyHunks: false, rebase: true },
+    });
+    const { harness } = round;
+    await mkdir(path.join(harness.dir, "docs"), { recursive: true });
+    await writeFile(path.join(harness.dir, "docs/delivery-runbook.md"), "# Runbook\n\nThe compounding step.\n");
+    await commitAndPrepare(harness, "extend the runbook after the round");
+
+    const emitted = await submitReview(round);
+    expect(emitted.code, emitted.err).toBe(EXIT_OK);
+    expect((await harness.cli(["submit-evidence", "--manifest", emitted.out.trim()])).code).toBe(EXIT_OK);
+    expect((await harness.cli(["gate"])).code).toBe(EXIT_OK);
+    const recorded = await harness.cli(["record"]);
+    expect(recorded.code, recorded.err).toBe(EXIT_OK);
+    expect(recorded.out).toContain("neutral-path");
+  });
+
+  it("refuses a comment-only edit when the owner has opted out of that grant", { timeout: 120000 }, async () => {
+    const round = await closedRoundOverSource({
+      postRoundNeutral: { paths: [], commentOnlyHunks: false, rebase: false },
+    });
+    await writeFile(path.join(round.harness.dir, "admit.ts"),
+      REVIEWED_SOURCE.replace("// the round read this line", "// corrected after the round"));
+    await commitAndPrepare(round.harness, "a comment-only edit under an empty policy");
+
+    const refused = await submitReview(round);
+    expect(refused.code).not.toBe(EXIT_OK);
+    expect(refused.err).toContain("postRoundNeutral does not admit");
+    expect(refused.err).toContain("admit.ts:");
+  });
+});
 
 describe("the composite admit command", () => {
   it("transcribes a concluded outcome against the exact current context and records the admitted candidate", { timeout: 120000 }, async () => {

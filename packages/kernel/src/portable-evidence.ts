@@ -5,7 +5,7 @@ import type { HarnessConfig } from "./config.ts";
 import type { ArtifactObservation, ArtifactsPort } from "./artifacts.types.ts";
 import type { PortableEvidence, PortableEvidenceContext, RecordCandidateBinding, CheckBinding } from "./records.types.ts";
 import { readWorkflowRelease, resolveReviewCharters, type ReviewInputReader } from "./review-inputs.ts";
-import { validateReviewedContext, parseReviewOutcome, reviewerLists, deriveTelemetry, type ReviewContextDocument } from "./review-outcome.ts";
+import { validateReviewedContext, parseReviewOutcome, reviewerLists, deriveTelemetry, projectionBasis, type ReviewContextDocument } from "./review-outcome.ts";
 import { REVIEW_GREEN_1, REVIEW_GREEN_2 } from "./validator/codes.ts";
 import { declaredArtifacts, judgeArtifact } from "./validator/artifacts.ts";
 import { isSafeRelativePath, validateManifest, type DeliveryEvidenceManifest } from "./validator/envelope.ts";
@@ -138,7 +138,19 @@ function verifyOriginalReview(manifest: DeliveryEvidenceManifest, claim: Deliver
       preparationFingerprint: expected.preparationFingerprint, configurationDigest: expected.configurationDigest,
       policyDigest: expected.policyDigest, release: expected.release, workflowGraphSha256: expected.workflowGraphSha256,
       charters: expected.reviewerCharters };
-    validateReviewedContext(original, { spec: "review-context/1", digest: digestCanonical(binding), binding } as ReviewContextDocument, rawOutcome);
+    // THE PORTABLE READING OF A PROJECTED CANDIDATE. A manifest that carries a
+    // review-context projection is claiming its prepared candidate is not the
+    // tree the reviewers read. Off-repository there is no way to re-read the
+    // bytes, so this check does the one thing it can do without git: it pins
+    // the projection artifact exactly, including its derived `basis`, which
+    // names whether the deliverable digest moved at all. The repository proof
+    // of a moved digest is `record`'s and `verify`'s — both classify the
+    // residual against real trees and both refuse a non-neutral one — and this
+    // layer's job is that the manifest agrees with the original review it
+    // retains. A manifest with no projection artifact gets no tolerance at all.
+    const projections = manifest.artifacts.filter(entry => entry.role === "review-context-projection");
+    validateReviewedContext(original, { spec: "review-context/1", digest: digestCanonical(binding), binding } as ReviewContextDocument, rawOutcome,
+      { admitDeliverableDigestShift: projections.length > 0 });
     const reviewed = original as ReviewContextDocument;
     const ids = expected.reviewerCharters.map(charter => charter.reviewerId).sort();
     const outcome = parseReviewOutcome(rawOutcome, ids);
@@ -158,9 +170,8 @@ function verifyOriginalReview(manifest: DeliveryEvidenceManifest, claim: Deliver
       findings: outcome.findings, telemetry: { ...deriveTelemetry(outcome.findings, runHistory.length), ...(outcome.cost === undefined ? {} : { cost: outcome.cost }) } };
     if (digestCanonical(expectedPayload) !== digestCanonical(claim.payload) || digestCanonical(runHistory) !== digestCanonical(manifest.runHistory)) throw new Error("manifest differs from original host outcomes or history");
     const projected = digestCanonical(reviewed.binding.candidate) !== digestCanonical(manifest.candidate);
-    const projections = manifest.artifacts.filter(entry => entry.role === "review-context-projection");
     if (projected) {
-      const expectedProjection = { spec: "review-context-projection/1", basis: "unchanged-deliverable-and-review-inputs", originalContextDigest: reviewed.digest,
+      const expectedProjection = { spec: "review-context-projection/1", basis: projectionBasis(reviewed.binding.candidate, manifest.candidate), originalContextDigest: reviewed.digest,
         reviewedCandidate: reviewed.binding.candidate, preparedCandidate: manifest.candidate, originalRunHistory, reviewRoundAdded: false };
       if (digestCanonical(artifact("review-context-projection")) !== digestCanonical(expectedProjection)) throw new Error("neutral projection differs from original review history");
     } else if (projections.length > 0) throw new Error("unexpected neutral projection");

@@ -17,6 +17,8 @@ import {
   computePreparationFingerprint, capturePortableEvidenceContext, repositoryEvidenceReader, capturePortableVerificationInputs, verifyDeliveryRecord,
   deliveryRecordBytes,
   deliveryRecordPathFor,
+  nonNeutralHunks,
+  projectionSummaryRows,
   discoverRecords,
   type EvidenceRecord,
   readCompiledRepositoryPolicy,
@@ -26,6 +28,7 @@ import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { oneLine } from "../run-surface.ts";
 import { applyDeliveryRecordRetention } from "../record-retention.ts";
+import { projectPostRoundResidual, residualRows } from "../review-neutral-residual.ts";
 import { runProviderBackedAdmission } from "./gate.ts";
 
 interface RetentionOptions {
@@ -138,12 +141,51 @@ export const recordCommand: CommandDescriptor = {
       { deliverableDigest: recheck.candidate.deliverable.digest, identityToken: recheck.candidate.deliverable.identity }, recheck.candidate.base,
       { ...verificationInputs, observedAt, liveResults: admission.observedLiveResults ?? [], executionContext: context.classifyContext() });
     if (!checked.ok) return { kind: "blocked", blockers: [...checked.blockers] };
+
+    // THE POST-ROUND RESIDUAL, JUDGED BEFORE ANYTHING IS WRITTEN. The record is
+    // about to assert that a closed review round governs this candidate. When
+    // the candidate's raw tree is not the one the round was bound to, that
+    // assertion is only honest if every difference is review-neutral under the
+    // owner's `postRoundNeutral` policy. `record` is the authoring surface, so
+    // a residual it cannot classify is a refusal here rather than a caveat: the
+    // operator can re-prepare, and a record written on an unprovable claim
+    // cannot be withdrawn from the tree it lands in.
+    const residual = await projectPostRoundResidual({
+      rootDir: context.rootDir,
+      config: context.config,
+      reviewedCandidates: checked.reviewedCandidates,
+      recordCandidate: { treeSha: recheck.candidate.treeSha, mergeBaseSha: recheck.candidate.base.mergeBaseSha },
+    });
+    if (residual.kind === "unresolvable" || (residual.kind === "projected" && !residual.projection.admitted)) {
+      const hunks = residual.kind === "projected" ? nonNeutralHunks(residual.projection) : [];
+      return {
+        kind: "blocked",
+        blockers: [
+          commandBlocker({
+            code: "review_residual_not_neutral",
+            sourceId: "delivery-harness.cli.record",
+            summary: "The candidate moved after its review round by changes the owner's policy does not call review-neutral; nothing was recorded.",
+            details: residual.kind === "unresolvable"
+              ? `the residual could not be computed: ${residual.detail}`
+              : `reviewed ${residual.projection.reviewedTreeSha} → recorded ${residual.projection.recordTreeSha}; not neutral: ${hunks.join("; ")}`,
+            remediations: [
+              {
+                id: "open-a-new-round",
+                kind: "manual_action",
+                summary: "Open a review round bound to this candidate, or reduce the post-round change to what postRoundNeutral admits.",
+              },
+            ],
+          }),
+        ],
+      };
+    }
+    const projectionRows = residualRows(residual, projectionSummaryRows);
     const relativePath = deliveryRecordPathFor(context.config, decision.candidate.deliverable.digest);
     const absolutePath = path.join(context.rootDir, relativePath);
     const bytes = deliveryRecordBytes(built.record);
     if (retention === undefined) {
       await context.artifacts.writeTextFile(absolutePath, bytes);
-      return { kind: "ok", summary: `recorded ${relativePath}` };
+      return { kind: "ok", summary: [`recorded ${relativePath}`, ...projectionRows].join("\n") };
     }
 
     const retained = await applyDeliveryRecordRetention({
@@ -182,7 +224,10 @@ export const recordCommand: CommandDescriptor = {
 
     return {
       kind: "ok",
-      summary: `recorded ${relativePath}${retained.pruned.length === 0 ? "" : `; pruned Git-preserved ${retained.pruned.join(", ")}`}`,
+      summary: [
+        `recorded ${relativePath}${retained.pruned.length === 0 ? "" : `; pruned Git-preserved ${retained.pruned.join(", ")}`}`,
+        ...projectionRows,
+      ].join("\n"),
     };
   },
 };
