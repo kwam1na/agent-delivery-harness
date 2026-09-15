@@ -1039,6 +1039,21 @@ async function resealRecord(dir: string, edit: (record: Record<string, unknown>)
   await commitRecord(dir);
 }
 
+/**
+ * Rewrites every instant of one journal, keeping every other byte `emit` wrote.
+ *
+ * A test that needs two runs to be an hour apart cannot wait an hour, and two
+ * runs journaled in the same second would make the rank that separates them
+ * arbitrary. Only the clock moves.
+ */
+async function restampRun(dir: string, runId: string, at: string): Promise<void> {
+  const { runsDir } = await storeOf(dir);
+  const journal = path.join(runsDir, `${runId}.jsonl`);
+  const lines = (await readFile(journal, "utf8")).split("\n").filter((line) => line.length > 0);
+  const restamped = lines.map((line) => JSON.stringify({ ...(JSON.parse(line) as object), at }));
+  await writeFile(journal, `${restamped.join("\n")}\n`, "utf8");
+}
+
 describe("the delivery record's run span", () => {
   it("carries the span of the run that delivered it, and verifies against that journal", { timeout: 120000 }, async () => {
     const harness = await makeHarness();
@@ -1152,15 +1167,34 @@ describe("the delivery record's run span", () => {
     const laterRun = await startRun(harness);
     expect(laterRun).not.toBe(recordingRun);
     await emitAll(harness, [roundOpened(harness.treeSha), roundClosed(harness.treeSha)]);
+    // Stamped a year on, so the later run provably outranks the recording one
+    // (`findByCandidateTreeSha` returns the most recently started first) and
+    // its start provably differs from the record's. Without this the two runs
+    // can share a second and the row would assert nothing.
+    await restampRun(harness.dir, laterRun, "2027-01-01T00:00:00Z");
     const { store } = await storeOf(harness.dir);
     const both = await store.findByCandidateTreeSha(harness.treeSha);
-    expect(both?.alsoMatching.length, "both runs bind this candidate").toBe(1);
-    // The later run is journaled seconds after the first, so an implementation
-    // that refused on the newest matching run would refuse here. The record is
-    // honest, so `verify` passes and names a run it agrees with.
+    expect(both?.runId, "the later run outranks the one that recorded").toBe(laterRun);
+    expect(both?.alsoMatching, "both runs bind this candidate").toEqual([recordingRun]);
+
+    // The record is honest, so `verify` passes — and names the run that
+    // actually agrees with it, not the one that merely sorted first.
     const verified = await harness.cli(["verify"]);
     expect(verified.code, verified.err).toBe(EXIT_OK);
-    expect(verified.out).toContain("checked against run ");
+    expect(verified.out).toContain(`checked against run ${recordingRun}`);
+
+    // And where NO matching run starts where the record says, the refusal is
+    // the top-ranked run's, which is the one the rank promises: a fallback that
+    // kept overwriting itself would name the other run here.
+    await resealRecord(harness.dir, (record) => {
+      const span = record["runSpan"] as { startedAt: string; endedAt: string };
+      record["runSpan"] = { startedAt: "2020-01-01T00:00:00Z", endedAt: span.endedAt };
+    });
+    const refused = await harness.cli(["verify"]);
+    expect(refused.code).toBe(EXIT_POLICY);
+    expect(refused.err).toContain("record_run_span_mismatch");
+    expect(refused.err).toContain(laterRun);
+    expect(refused.err).not.toContain(recordingRun);
   });
 
   it("records no span at all when the delivery ran under no journal", { timeout: 120000 }, async () => {
