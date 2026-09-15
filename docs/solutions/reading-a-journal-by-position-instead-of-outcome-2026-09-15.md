@@ -1,9 +1,11 @@
 # Reading a journal by position instead of by outcome
 
-Written out of V26-2075, where the run-journal completeness evaluator reported
-an ordering defect on two deliveries that had none, and reported none on a
-delivery whose "governing" gate had refused. Both mistakes have the same shape,
-and it is general enough to be worth stating once.
+Written out of V26-2075, where the run-journal completeness evaluator would
+report an ordering defect on a delivery that had none, and reported none on a
+delivery whose "governing" gate had refused. The second mistake was live on a
+real journal; the first needed one more step of the same journal's shape to fire,
+and fired readily on the version-1 form. Both have the same cause, and it is
+general enough to be worth stating once.
 
 ## The shape
 
@@ -33,7 +35,16 @@ select, so the journal reports "this gate stood on no closed round" for an
 ordering that was correct — and, because the same fact feeds two rules, it
 reports it twice, under two identifiers, for one non-mistake. That pair of
 warnings sat in this repository's runbook for two weeks as a known-cosmetic
-defect nobody could clear.
+defect nobody could clear, described there against the version-1 form it fires
+on most readily. It is worth being exact about how close the version-2 case came
+rather than claiming it had already landed: `run-752c1ec0d1804258` carries a
+same-id reopen at seq 84, and read clean only because a later new-id replay
+superseded it and became the round the journal is read from. Had the delivery
+merged one round earlier, the same journal would have drawn the pair. **An
+evaluator that is right by accident of which event came last is not right**, and
+the committed vectors now pin that both journals read clean before and after, so
+the fix is recorded as the regression guard it is rather than as a repair of a
+failure nobody can reproduce.
 
 ## The rule
 

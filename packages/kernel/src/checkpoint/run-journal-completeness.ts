@@ -51,9 +51,17 @@
  *     count the bound is spent against. Reopening under the ORIGINAL id — all a
  *     version-1 journal can do, and what `run-752c1ec0d1804258` did at seq 84 —
  *     leaves two openings under one key. That is now paired from the LATEST
- *     opening and reported as `round-reopened-under-same-id` with the fix in
- *     the message, in place of the false `gate-before-closed-round` and
- *     `round-not-bound-to-record` pair it used to draw.
+ *     opening and reported as `round-reopened-under-same-id`, with the fix in
+ *     the message, OF THE GOVERNING ROUND ONLY: a same-id reopen a later round
+ *     has since superseded is retained as history and draws nothing, which is
+ *     why `run-752c1ec0d1804258` — whose governing round is the new-id
+ *     `round-6-replay` at seq 103 — still reads clean. Where the same-id reopen
+ *     IS the governing round, the old first-opening pairing produced a pair no
+ *     later rule could select and the journal drew a false
+ *     `gate-before-closed-round` and `round-not-bound-to-record` together; the
+ *     committed vectors pin that both real journals read clean before and after
+ *     this change, so for them this is a regression guard and the live error was
+ *     the completion selection below.
  *   - The governing CLI completion is the ADMITTING one. See `admitting`.
  */
 
@@ -327,7 +335,12 @@ interface Paired {
   readonly closedAt: number;
   readonly opened: RunEvent;
   readonly closed: RunEvent;
-  /** The opening this pair reads from follows a close of its own round key. */
+  /**
+   * This round key was announced more than once, or its latest opening names
+   * itself in `reopensRoundId`. Either way one key carries two announcements
+   * that no reader of the journal can tell apart — whether or not a close sits
+   * between them, which is why the second opening alone is enough.
+   */
   readonly reopenedUnderSameId: boolean;
 }
 
@@ -356,9 +369,11 @@ function roundKey(event: RunEvent): unknown {
  * latest opening and latest close; the key then contributed no governing round
  * at all and the journal drew `gate-before-closed-round` and
  * `round-not-bound-to-record` for an ordering that was correct.
- * `run-752c1ec0d1804258` reopens `round-6` under `round-6` at seq 84, and the
- * runbook carried the resulting pair of warnings as a known-cosmetic defect of
- * `verify --require-run-journal`. A key whose latest opening has no later close
+ * `run-752c1ec0d1804258` reopens `round-6` under `round-6` at seq 84; that
+ * reopen is not its governing round, so the journal read clean under the old
+ * pairing too, and the pair of warnings the runbook carried as a known-cosmetic
+ * defect of `verify --require-run-journal` belonged to the version-1 shape,
+ * where the same-id reopen IS the round being read. A key whose latest opening has no later close
  * still contributes nothing: an unfinished reopen may not borrow the earlier
  * pass's completed review, which is the rule `governingRound` already stated.
  */
@@ -388,7 +403,7 @@ function pairRounds(events: readonly RunEvent[]): Pairing {
       closedAt: closing.at,
       opened: opening.event,
       closed: closing.event,
-      reopenedUnderSameId: closes.some((entry) => entry.at < opening.at) || selfReopening(opening.event),
+      reopenedUnderSameId: openings.length > 1 || closes.some((entry) => entry.at < opening.at) || selfReopening(opening.event),
     });
   }
   return { paired, inverted };
@@ -787,13 +802,21 @@ function analyze(
     const earlier = last(indexBy(events, "review.round.closed").filter(
       (entry) => roundKey(entry.event) === currentRound.round && entry.at < currentRound.openedAt,
     ));
+    const earlierOpening = last(indexBy(events, "review.round.opened").filter(
+      (entry) => roundKey(entry.event) === currentRound.round && entry.at < currentRound.openedAt,
+    ));
+    // Three arms, because three journal shapes reach here and a reader acts on
+    // which one it was: a key closed and reopened, a key announced twice with
+    // no close between, and a version-2 opening that names ITSELF.
+    const continues =
+      earlier !== undefined
+        ? `already closed at seq ${seqOf(earlier.event)} under the same round key`
+        : earlierOpening !== undefined
+          ? `was already announced at seq ${seqOf(earlierOpening.event)} under the same round key`
+          : "it names as itself in reopensRoundId";
     raise(
       VIOLATION.roundReopenedUnderSameId,
-      `the governing review.round.opened at seq ${seqOf(currentRound.opened)} continues a round that ${
-        earlier === undefined
-          ? "it names as itself in reopensRoundId"
-          : `already closed at seq ${seqOf(earlier.event)} under the same round key`
-      }, so the two openings are one key to every reader of this journal; reopen it under a new roundId whose reopensRoundId names the round it continues, which is a version-2 journal's own form for saying so`,
+      `the governing review.round.opened at seq ${seqOf(currentRound.opened)} continues a round that ${continues}, so the two openings are one key to every reader of this journal; reopen it under a new roundId whose reopensRoundId names the round it continues, which is a version-2 journal's own form for saying so`,
     );
   }
 

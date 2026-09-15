@@ -767,8 +767,14 @@ missing tracker is recorded and the loop proceeds.
 - **`verify --require-run-journal` on a round reopened under its ORIGINAL
   `roundId`** reports `round-reopened-under-same-id`, and names the fix: reopen
   under a fresh `roundId` whose `reopensRoundId` points at the round it
-  continues. Until V26-2075 the same journal reported `gate-before-closed-round`
-  and `round-not-bound-to-record` instead, for an ordering that was correct, and
+  continues. It is raised **of the governing round only** — the round the
+  journal is being read from. An earlier same-id reopen that a later round has
+  since superseded is history the journal retains and draws nothing, so a clean
+  reading is not evidence that a run carries no same-id reopen anywhere; grep
+  the journal for repeated `roundId`s if that is the question. Before V26-2075 a
+  governing same-id reopen drew `gate-before-closed-round` and
+  `round-not-bound-to-record` instead — two identifiers for an ordering that was
+  correct, which is what the version-1 bullet here used to describe and what
   neither could be cleared. A version-1 run can only draw the new warning: its
   frozen grammar refuses `reopensRoundId`, so clearing it means starting the run
   at version 2. `verify` itself and `gate.yml` read the record, not the journal,
