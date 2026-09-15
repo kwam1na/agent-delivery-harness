@@ -923,9 +923,11 @@ describe("the deterministic simulator", () => {
     // `unknown`, by the `unsupported_spec` row above.
     //
     // The table's keys are asserted to BE the declared surface, and that
-    // surface is the interface itself (`SIMULATED_MESSAGE_OPTION_NAMES` is
-    // typed over `Required<SimulatedMessageOptions>`, so it cannot fall behind
-    // it without a compile error). A member added to the kit therefore turns
+    // surface answers to the WIRE: `SIMULATED_MESSAGE_OPTION_NAMES` is
+    // `OPTION_PRESENCE`'s keys, and that record is typed over the options
+    // interface intersected with the message's own bendable members, so a
+    // member added to either without being declared is a compile error at its
+    // declaration. A member added to the kit therefore turns
     // this row red until someone says where it lands on the wire.
     const BENT: Readonly<Record<string, { readonly value: unknown; readonly read: (minted: CoordinationMessage) => unknown }>> = {
       messageId: { value: "bent-message-id", read: (minted) => minted.messageId },

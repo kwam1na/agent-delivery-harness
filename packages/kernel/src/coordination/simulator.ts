@@ -74,21 +74,38 @@ type BendableWireMember =
   | keyof CoordinationAuthentication;
 
 /**
- * Every declared override, as a value rather than only as a type — and the one
- * declaration that ties the kit's override surface to the wire in BOTH
- * directions.
+ * Every declared override, as a value rather than only as a type — and, with
+ * the row that reads it, what ties the kit's override surface to the wire in
+ * both directions.
  *
  * The record is typed over `Required<SimulatedMessageOptions>` intersected with
- * `BendableWireMember`, and it is an object literal, so all four drifts are
- * compile errors: a member added to or removed from the options interface, a
- * member added to the WIRE and not declared here, and a key here that is
- * neither. Round 9 found six of the ten declared overrides honoured by nothing
- * any row could tell apart from a hardcoded default; round 10 found that the
- * remaining claim — that the kit declares every member of the message — was
- * circular, since "every member" meant "every member we remembered to declare",
- * and a new wire member hardcoded in `mint` left the whole suite green. This
- * type is what makes that claim answer to the message type instead of to
- * itself.
+ * `BendableWireMember`, and it is an object literal, so two drifts are compile
+ * errors AT THIS DECLARATION: a member added to the WIRE and not declared here,
+ * and a key here that is neither a wire member nor an option.
+ *
+ * Stated precisely, because round 11 found the first spelling of this comment
+ * claiming a third: a member REMOVED from the options interface is not caught
+ * here, and the intersection is why. The required key set is the UNION of the
+ * two mapped types, and every option name is also a wire member, so the wire
+ * half keeps supplying the key. That edit is caught one step away — at `mint`'s
+ * `overrides.<name>`, or, if the author hardcodes the default there too, by the
+ * row "honours every override it declares, and declares every member of the
+ * message", which goes red on the ignored override. The guarantee holds; the
+ * claim that this record alone holds it did not, and a comment that overstates
+ * where a guard lives sends the next reader to the wrong place.
+ *
+ * One more case the type cannot see, found the same round: a new TOP-LEVEL wire
+ * member colliding with a name the authentication block already contributes
+ * (`keyId`) is not excess here. The runtime half of the row catches it, because
+ * it counts the flattened key list off a message the kit actually minted.
+ *
+ * Why any of this exists: round 9 found six of the ten declared overrides
+ * honoured by nothing any row could tell apart from a hardcoded default; round
+ * 10 found that the remaining claim — that the kit declares every member of the
+ * message — was circular, since "every member" meant "every member we
+ * remembered to declare", and a new wire member hardcoded in `mint` left the
+ * whole suite green. This type plus that row is what makes the claim answer to
+ * the message type instead of to itself.
  */
 const OPTION_PRESENCE: { readonly [K in keyof Required<SimulatedMessageOptions>]: true } & {
   readonly [K in BendableWireMember]: true;
