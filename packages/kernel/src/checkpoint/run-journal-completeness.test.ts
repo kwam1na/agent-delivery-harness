@@ -564,6 +564,22 @@ describe("reopened rounds and the admitting completion", () => {
     expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("was already announced at seq 6");
   });
 
+  it("names the LATEST earlier close of the governing key, not the oldest", () => {
+    // The prior-close arm's twin of the row above. Every other journal that
+    // reaches this arm carries ONE earlier close, where the oldest and the
+    // latest coincide; a key reopened twice separates them, and naming the
+    // stale one points an operator two announcements back.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("already closed at seq 8");
+  });
+
   it("still reports a self-naming governing round as self-naming when other rounds precede it", () => {
     // The guard on the row above. Without the round-key filter an unrelated
     // earlier opening would be read as this round's own announcement and the
