@@ -11,6 +11,9 @@
  * in the plan — and the per-entry coverage below is what makes an entry no
  * journal can provoke in isolation fail rather than quietly rot.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   RUN_JOURNAL_REQUIRED_ENTRIES,
@@ -20,7 +23,14 @@ import {
   type RunJournalRequiredEntry,
   type RunJournalViolation,
 } from "./run-journal-completeness.ts";
-import { runPrimaryTicket, validateRunEvent, type RunEvent, type RunEventKind } from "./run-event.ts";
+import {
+  RUN_COMMAND_OUTCOMES,
+  RUN_GATE_REPORTED_OUTCOMES,
+  runPrimaryTicket,
+  validateRunEvent,
+  type RunEvent,
+  type RunEventKind,
+} from "./run-event.ts";
 
 const TREE = "a".repeat(40);
 const OTHER_TREE = "b".repeat(40);
@@ -216,6 +226,433 @@ describe("retry and base-move replay completeness", () => {
   });
 });
 
+/**
+ * The two real journals, as committed vectors. The file is derived from the run
+ * store rather than hand-authored; its own `purpose` states the reduction and
+ * the drift repair.
+ */
+interface JournalVector {
+  readonly ticket: string;
+  readonly runId: string;
+  readonly recordTreeSha: string;
+  readonly reviewedTreeShas: readonly string[];
+  readonly mandatedLensIds: readonly string[];
+  readonly expect: Readonly<Record<string, unknown>>;
+  readonly events: readonly unknown[];
+}
+
+const RUN_JOURNAL_VECTORS = JSON.parse(
+  readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "vectors", "run-journals.json"), "utf8"),
+) as { readonly journals: readonly JournalVector[] };
+
+/**
+ * V26-2075. Written RED against the two defects two REAL deliveries in this
+ * repository's own run store exhibited, and the shapes below are theirs rather
+ * than invented: `run-752c1ec0d1804258` (V26-1504) reopened `round-6` under its
+ * own id and then re-gated to a refusal after it had already been admitted, and
+ * `run-d6dd99f9034d9012` (V26-1485) reopened four rounds under fresh ids. The
+ * journals themselves are pinned as vectors further down; these rows isolate
+ * one rule each so a failure names the rule rather than the journal.
+ */
+describe("reopened rounds and the admitting completion", () => {
+  const refused = (command: string): Step => ({
+    kind: "command.completed",
+    payload: { command, outcome: "policy", durationMs: 10 },
+    cli: true,
+  });
+  const gateFailed: Step = { kind: "gate.reported", payload: { command: "npm run check", outcome: "fail", durationMs: 10 } };
+
+  it("accepts a reopen carried under a new roundId and folds the chain into one logical round", () => {
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1, OTHER_TREE), "round-1"), v2Round(closed(1, OTHER_TREE), "round-1"),
+      v2Round(opened(1), "round-1-replay", "round-1"), v2Round(closed(1), "round-1-replay"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    for (const entry of events.map((e, i) => ({ ...e, eventId: `reopen-${i}` }))) {
+      expect(validateRunEvent(entry)).toEqual({ ok: true });
+    }
+    expect(evaluateRunJournal(events, TREE, MANDATED)).toEqual({
+      status: "complete", missing: [], violations: [], boundToRecord: true,
+    });
+    // Two openings, one logical round: the bound counts what was reviewed, not
+    // how many times a replayed candidate was re-announced.
+    expect(events.filter((event) => event.kind === "review.round.opened")).toHaveLength(2);
+    expect(explainRunJournal(events, TREE, MANDATED).logicalRounds).toBe(1);
+  });
+
+  it("counts an unreopened later round as its own logical round", () => {
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1, OTHER_TREE), "round-1"), v2Round(closed(1, OTHER_TREE), "round-1"),
+      v2Round(opened(2), "round-2"), v2Round(closed(2), "round-2"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(explainRunJournal(events, TREE, MANDATED).logicalRounds).toBe(2);
+  });
+
+  it("reports a same-id reopen as one named violation rather than two misleading ones", () => {
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1, OTHER_TREE), "round-1"), v2Round(closed(1, OTHER_TREE), "round-1"),
+      v2Round(opened(1), "round-1", "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    const result = evaluateRunJournal(events, TREE, MANDATED);
+    // The whole point: the pairing resolves, so the two consequences the wave
+    // saw — a gate with no closed round, and a round bound to no record — are
+    // gone, and what is left is the one thing that is actually wrong.
+    expect(result.violations).toEqual(["round-reopened-under-same-id"]);
+    expect(result.status).toBe("incomplete");
+    const explanation = explainRunJournal(events, TREE, MANDATED).explanations[0];
+    // The message names the fix, not merely the fault.
+    expect(explanation?.because).toContain("reopen it under a new roundId");
+    expect(explanation?.because).toContain("reopensRoundId");
+    expect(explainRunJournal(events, TREE, MANDATED).logicalRounds).toBe(1);
+  });
+
+  it("reports a version-1 reopen, which cannot carry reopensRoundId, as the same one violation", () => {
+    // `verify --require-run-journal` on such a run reported `gate-before-closed-round`
+    // and `round-not-bound-to-record` and could never be cleared; now it reports
+    // the reopen itself, and clearing it means moving the run to version 2.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      opened(1, OTHER_TREE), closed(1, OTHER_TREE), opened(1), closed(1),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+  });
+
+  it("does not let a refused gate after an admitting one become the governing gate", () => {
+    const steps: readonly Step[] = [
+      started, ticketRead, posture, lenses(), opened(1), closed(1),
+      completed("gate"), completed("record"), prOpened, refused("gate"), ended,
+    ];
+    const events = journal(steps);
+    // Before this delivery the LAST completion governed whatever it decided, so
+    // the record written at index 7 preceded a "governing" gate at index 9 and
+    // the journal reported `record-before-gate` for a delivery that had gated,
+    // recorded and only then re-run a gate that refused.
+    expect(evaluateRunJournal(events, TREE, MANDATED)).toEqual({
+      status: "complete", missing: [], violations: [], boundToRecord: true,
+    });
+    const diagnostics = explainRunJournal(events, TREE, MANDATED);
+    expect(diagnostics.supersededGates).toEqual([10]);
+  });
+
+  it("takes the admitting gate that follows a refused one, and reports nothing superseded", () => {
+    const events = journal([
+      started, ticketRead, posture, lenses(), opened(1), closed(1),
+      refused("gate"), completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual([]);
+    expect(explainRunJournal(events, TREE, MANDATED).supersededGates).toBeUndefined();
+  });
+
+  it("keeps the last refused gate governing when no gate ever admitted", () => {
+    // Nothing admitted, so there is no admitting completion to prefer and the
+    // last one still governs: the ordering rules must not go quiet on a
+    // delivery that never got past its gate.
+    const events = journal([
+      started, ticketRead, posture, lenses(), opened(1), refused("gate"), closed(1),
+      completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toContain("gate-before-closed-round");
+  });
+
+  it("prefers the last passing gate.reported in an executor-only journal", () => {
+    const events = journal([
+      started, ticketRead, posture, lenses(), opened(1), closed(1),
+      gateReported, prOpened, gateFailed, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).status).toBe("complete-executor-only");
+    const lateClose = journal([
+      started, ticketRead, posture, lenses(), opened(1), gateReported, closed(1), gateFailed, prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(lateClose, TREE, MANDATED).violations).toEqual(["gate-reported-before-closed-round"]);
+  });
+
+  it("lets an earlier close of the SAME chain support the gate a replayed round followed", () => {
+    // The V26-1504 shape exactly: the candidate is gated and recorded, the
+    // round is then replayed on the same tree after the base moved, and the
+    // replay closes after the governing gate. One logical round was reviewed
+    // before that gate, so nothing is out of order.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"),
+      v2Round(opened(1), "round-1-replay", "round-1"), v2Round(closed(1), "round-1-replay"),
+      prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual([]);
+  });
+
+  it("still refuses a FRESH round closed after the governing gate", () => {
+    // The guard on the row above: only a reopen of the chain the gate stood on
+    // may close after it. A new round is new review, and a gate that precedes
+    // it did not stand on it.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"),
+      v2Round(opened(2), "round-2"), v2Round(closed(2), "round-2"),
+      prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["gate-before-closed-round"]);
+  });
+
+  // ── The refusal outcomes, driven off the closed vocabularies ─────────────
+  //
+  // `admitting` selects on ONE member of each vocabulary, so a row that names
+  // only `policy` (or only `fail`) proves the rule for a quarter of the set and
+  // leaves a narrowing — admit everything except `policy` — green. These two
+  // blocks are generated from the exported constants, so a new outcome member
+  // forces a case here rather than inheriting a proof it never got.
+
+  const completedWith = (command: string, outcome: string): Step => ({
+    kind: "command.completed",
+    payload: { command, outcome, durationMs: 10 },
+    cli: true,
+  });
+  const reportedWith = (outcome: string): Step => ({
+    kind: "gate.reported",
+    payload: { command: "npm run check", outcome, durationMs: 10 },
+  });
+  const REFUSED_COMMAND_OUTCOMES = RUN_COMMAND_OUTCOMES.filter((outcome) => outcome !== "ok");
+  const REFUSED_REPORTED_OUTCOMES = RUN_GATE_REPORTED_OUTCOMES.filter((outcome) => outcome !== "pass");
+
+  it.each(REFUSED_COMMAND_OUTCOMES)("does not let a %s gate after an admitting one govern", (outcome) => {
+    const events = journal([
+      started, ticketRead, posture, lenses(), opened(1), closed(1),
+      completed("gate"), completed("record"), prOpened, completedWith("gate", outcome), ended,
+    ]);
+    // A gate run that was refused, that ran out of budget, or that DIED is an
+    // attempt in all three cases. Reading any of them as the gate the delivery
+    // stood on reinstates `record-before-gate` against a delivery that gated,
+    // recorded, and only then re-ran.
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual([]);
+    expect(explainRunJournal(events, TREE, MANDATED).supersededGates).toEqual([10]);
+  });
+
+  it.each(REFUSED_COMMAND_OUTCOMES)("does not let a %s record after an admitting one govern", (outcome) => {
+    // The record half of the same rule, which the real journals cannot
+    // discriminate: in `run-752c1ec0d1804258` the refused record falls after
+    // the governing gate under either reading. Here it is the only thing that
+    // decides whether a genuine `record-before-gate` is reported or silenced.
+    const events = journal([
+      started, ticketRead, posture, lenses(), opened(1), closed(1),
+      completed("record"), completed("gate"), prOpened, completedWith("record", outcome), ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["record-before-gate"]);
+  });
+
+  it.each(REFUSED_REPORTED_OUTCOMES)("does not let a %s gate.reported after a passing one govern", (outcome) => {
+    const events = journal([
+      started, ticketRead, posture, lenses(), opened(1), gateReported, closed(1), reportedWith(outcome), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["gate-reported-before-closed-round"]);
+  });
+
+  it("names a v2 opening that reopens ITSELF, with no earlier close of that key", () => {
+    // The arm `selfReopening` exists for, and the only same-id shape a
+    // well-formed version-2 journal produces on its own: one opening, one
+    // close, and a `reopensRoundId` pointing at the opening's own `roundId`.
+    // Every other same-id row reaches the violation through an earlier
+    // announcement instead, so without this row the disjunct is deletable.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1", "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    const explanation = explainRunJournal(events, TREE, MANDATED).explanations[0];
+    expect(explanation?.because).toContain("it names as itself in reopensRoundId");
+    expect(explanation?.because).toContain("reopen it under a new roundId");
+  });
+
+  it("names a round key announced twice with no close between the announcements", () => {
+    // The boundary the prior-close arm leaves open. Two openings under one key
+    // are indistinguishable to every reader whether or not a close sits between
+    // them, so this is the same fault and says which announcement it means.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("was already announced at seq 5");
+  });
+
+  it("pairs the latest opening with the FIRST close that follows it, not the last", () => {
+    // Two closes after one opening — one announcement, two claims to have
+    // finished it. The pair is built from the FIRST close, so the second is an
+    // unmatched later close and, by the rule `governingRound` already states,
+    // contributes no governing round: the journal is incomplete rather than
+    // silently read from whichever close came last. Pairing from the last close
+    // instead would read this as a finished round and hide the second claim
+    // entirely.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      opened(1), closed(1), closed(1),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    const result = evaluateRunJournal(events, TREE, MANDATED);
+    expect(result.missing).toContain("review.round.closed");
+    expect(result.violations).toContain("gate-before-closed-round");
+    expect(result.status).toBe("incomplete");
+  });
+
+  it("counts logical rounds over OPENINGS, so a round still open is still a round", () => {
+    // The count a bound is read against is how many rounds were entered, not
+    // how many finished: counting closes instead would let an unfinished round
+    // spend nothing and the reading differs exactly here.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, v2Round(opened(2), "round-2"), ended,
+    ]);
+    expect(explainRunJournal(events, TREE, MANDATED).logicalRounds).toBe(2);
+  });
+
+  it("gives a round whose reopensRoundId names no opening in this journal its own chain", () => {
+    // Reachable on a linked retry, whose predecessor round lives in the
+    // previous run's journal. Joining such rounds to a phantom root would merge
+    // two unrelated rounds and undercount the bound.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1", "round-elsewhere"), v2Round(closed(1), "round-1"),
+      v2Round(opened(2), "round-2", "round-elsewhere"), v2Round(closed(2), "round-2"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(explainRunJournal(events, TREE, MANDATED).logicalRounds).toBe(2);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual([]);
+  });
+
+  it("lets an earlier close of the same chain support a REPORTED gate, and still refuses a fresh round", () => {
+    // The executor-only twin of the two rows above. The relaxation was added to
+    // both arms in one hunk; only the CLI arm had rows.
+    const chain = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"), gateReported,
+      v2Round(opened(1), "round-1-replay", "round-1"), v2Round(closed(1), "round-1-replay"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(chain, TREE, MANDATED).violations).toEqual([]);
+    expect(evaluateRunJournal(chain, TREE, MANDATED).status).toBe("complete-executor-only");
+    const fresh = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"), gateReported,
+      v2Round(opened(2), "round-2"), v2Round(closed(2), "round-2"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(fresh, TREE, MANDATED).violations).toEqual(["gate-reported-before-closed-round"]);
+  });
+
+  it("names the LATEST earlier announcement of the governing key, and only that key's", () => {
+    // Every other row that reaches the prior-opening arm carries one round key
+    // and one earlier announcement, so the arm's two selections — same key,
+    // latest — are unproven for any journal with more than one round in it,
+    // which is every real journal this evaluator reads.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(opened(1), "round-1"),
+      v2Round(opened(2), "round-2"), v2Round(closed(2), "round-2"),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    // seq 6 is the governing key's own second announcement: not seq 7, which is
+    // a DIFFERENT key's opening, and not seq 5, which is stale.
+    expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("was already announced at seq 6");
+  });
+
+  it("names the LATEST earlier close of the governing key, not the oldest", () => {
+    // The prior-close arm's twin of the row above. Every other journal that
+    // reaches this arm carries ONE earlier close, where the oldest and the
+    // latest coincide; a key reopened twice separates them, and naming the
+    // stale one points an operator two announcements back.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("already closed at seq 8");
+  });
+
+  it("still reports a self-naming governing round as self-naming when other rounds precede it", () => {
+    // The guard on the row above. Without the round-key filter an unrelated
+    // earlier opening would be read as this round's own announcement and the
+    // message would take the wrong arm entirely.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+      v2Round(opened(2), "round-2", "round-2"), v2Round(closed(2), "round-2"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["round-reopened-under-same-id"]);
+    expect(explainRunJournal(events, TREE, MANDATED).explanations[0]?.because).toContain("it names as itself in reopensRoundId");
+  });
+
+  it("does not join two round numbers that share a roundId through a self-naming reopen", () => {
+    // `reopenChains` skips a self-naming opening because `byRoundId` resolves
+    // it to the FIRST opening under that id, which is a different round key
+    // whenever one roundId was reused across two round numbers. Without the
+    // skip the two rounds merge into one chain and the bound is undercounted.
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1), "round-x"), v2Round(closed(1), "round-x"),
+      v2Round(opened(2), "round-x", "round-x"), v2Round(closed(2), "round-x"),
+      completed("gate"), completed("record"), prOpened, ended,
+    ]);
+    expect(explainRunJournal(events, TREE, MANDATED).logicalRounds).toBe(2);
+  });
+
+  it("does not let a chain close bound to an unaccepted tree support the gate", () => {
+    const events = journal([
+      started, ticketRead, posture, lenses(),
+      v2Round(opened(1, OTHER_TREE), "round-1"), v2Round(closed(1, OTHER_TREE), "round-1"),
+      completed("gate"), completed("record"),
+      v2Round(opened(1), "round-1-replay", "round-1"), v2Round(closed(1), "round-1-replay"),
+      prOpened, ended,
+    ]);
+    expect(evaluateRunJournal(events, TREE, MANDATED).violations).toEqual(["gate-before-closed-round"]);
+  });
+});
+
+describe("the two real journals V26-2075 was taken from", () => {
+  // Regression guard, not a repair: both journals already read clean under the
+  // evaluator this delivery replaces, and the rules it changes are exactly the
+  // rules that could stop them reading clean. A hand-written fixture cannot
+  // hold that line, because the shapes here are ones nobody thought to write.
+  for (const vector of RUN_JOURNAL_VECTORS.journals) {
+    it(`reads ${vector.ticket} (${vector.runId}) exactly as the vector records`, () => {
+      const events = vector.events as readonly RunEvent[];
+      const evaluation = evaluateRunJournal(events, vector.recordTreeSha, vector.mandatedLensIds, vector.reviewedTreeShas);
+      const diagnostics = explainRunJournal(events, vector.recordTreeSha, vector.mandatedLensIds, vector.reviewedTreeShas);
+      expect({
+        status: evaluation.status,
+        missing: evaluation.missing,
+        violations: evaluation.violations,
+        boundToRecord: evaluation.boundToRecord,
+        roundBinding: diagnostics.roundBinding,
+        logicalRounds: diagnostics.logicalRounds,
+        supersededGateSeqs: diagnostics.supersededGates,
+      }).toEqual(vector.expect);
+    });
+  }
+
+  it("keeps both journals free of the two warnings a regression here would draw", () => {
+    for (const vector of RUN_JOURNAL_VECTORS.journals) {
+      const { violations } = evaluateRunJournal(
+        vector.events as readonly RunEvent[], vector.recordTreeSha, vector.mandatedLensIds, vector.reviewedTreeShas,
+      );
+      expect(violations).not.toContain("gate-before-closed-round");
+      expect(violations).not.toContain("round-not-bound-to-record");
+    }
+  });
+});
+
 describe("the closed identifier sets", () => {
   it("names exactly the ordering constraints the completeness rule states, in a fixed order", () => {
     expect(RUN_JOURNAL_VIOLATIONS).toEqual([
@@ -230,6 +667,7 @@ describe("the closed identifier sets", () => {
       "pr-before-gate-reported",
       "mandated-pair-mismatch",
       "round-not-bound-to-record",
+      "round-reopened-under-same-id",
     ]);
   });
 
@@ -619,6 +1057,14 @@ describe("one reject vector per violation identifier", () => {
     // sha can violate is the bound-round one.
     "round-not-bound-to-record": () =>
       evaluateRunJournal(journal([started, ticketRead, posture, lenses(), opened(1), closed(1), prOpened, ended]), OTHER_TREE),
+    // The governing round's own key was opened twice. Nothing else is out of
+    // order, which is the whole claim: the pairing resolves and this is the one
+    // identifier left.
+    "round-reopened-under-same-id": () =>
+      evaluateRunJournal(journal([started, ticketRead, posture, lenses(),
+        v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+        v2Round(opened(1), "round-1", "round-1"), v2Round(closed(1), "round-1"),
+        completed("gate"), completed("record"), prOpened, ended])),
   };
 
   for (const identifier of RUN_JOURNAL_VIOLATIONS) {
@@ -1069,6 +1515,7 @@ describe("explaining a journal's warnings", () => {
     "pr-before-gate-reported": "before it had reported a gate at all",
     "mandated-pair-mismatch": "lens.selected at seq",
     "round-not-bound-to-record": "are the only candidates a round may bind here",
+    "round-reopened-under-same-id": "reopen it under a new roundId",
   };
 
   it("reproduces all three of the reported warnings when nothing accepts the reviewed tree", () => {
@@ -1195,6 +1642,16 @@ describe("explaining a journal's warnings", () => {
     const gateReportedH: Step = { kind: "gate.reported", payload: { command: hostile, outcome: hostile, durationMs: 10 } };
     const prOpenedH: Step = { kind: "pr.opened", payload: { url: hostile, candidateTreeSha: hostile } };
     const endedH: Step = { kind: "run.ended", payload: { result: hostile, cost: { ...COST, reportedBy: hostile } } };
+    // A version-2 pair under one attacker-chosen roundId, the opening naming
+    // that same id as the round it continues.
+    const openedSelfH: Step = {
+      ...openedH(1), version: "run-event/2",
+      payload: { ...openedH(1).payload, roundId: hostile, reopensRoundId: hostile },
+    };
+    const closedSelfH: Step = {
+      ...closedH(1), version: "run-event/2",
+      payload: { ...closedH(1).payload, roundId: hostile },
+    };
 
     const poisoned: readonly (readonly [readonly Step[], string | undefined])[] = [
       // The reproduction's own shape, every payload hostile.
@@ -1219,6 +1676,14 @@ describe("explaining a journal's warnings", () => {
       // gate precedes it. Without this vector the sentence that interpolates
       // that round's position is never built from hostile input.
       [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), completedH("gate"), closedH(1), completedH("record"), prOpenedH, endedH], undefined],
+      // A governing round reopened under its own id, every payload hostile.
+      // The remediation sentence names a form, never a journal string, and it
+      // has THREE arms, each interpolating a different journal position: a key
+      // closed and reopened, a key announced twice with no close between, and a
+      // version-2 opening that names itself.
+      [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), closedH(1), openedH(1), closedH(1), completedH("gate"), completedH("record"), prOpenedH, endedH], TREE],
+      [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedH(1), openedH(1), closedH(1), completedH("gate"), completedH("record"), prOpenedH, endedH], TREE],
+      [[startedH, ticketReadH, postureH, lensesH(MANDATED), openedSelfH, closedSelfH, completedH("gate"), completedH("record"), prOpenedH, endedH], TREE],
     ];
 
     const covered = new Set<string>();
@@ -1233,6 +1698,13 @@ describe("explaining a journal's warnings", () => {
         covered.add(explanation.violation);
         // Which BRANCH of the two-armed explanations this vector entered, so
         // the closing assertion is about arms rather than identifiers.
+        if (explanation.violation === "round-reopened-under-same-id") {
+          arms.add(`round-reopened-under-same-id|${
+            explanation.because.includes("already closed at seq") ? "prior close"
+              : explanation.because.includes("was already announced at seq") ? "prior opening"
+              : "self-naming"
+          }`);
+        }
         if (explanation.violation === "gate-before-closed-round" || explanation.violation === "gate-reported-before-closed-round") {
           arms.add(`${explanation.violation}|${
             !explanation.because.includes("has no closed round this row accepts") ? "ordered"
@@ -1254,6 +1726,9 @@ describe("explaining a journal's warnings", () => {
       "gate-reported-before-closed-round|no round",
       "gate-reported-before-closed-round|ordered",
       "gate-reported-before-closed-round|other tree",
+      "round-reopened-under-same-id|prior close",
+      "round-reopened-under-same-id|prior opening",
+      "round-reopened-under-same-id|self-naming",
     ]);
   });
 
@@ -1338,6 +1813,9 @@ describe("explaining a journal's warnings", () => {
       [[started, ticketRead, posture, lenses(), opened(1), closed(1), prOpened, ended], OTHER_TREE, []],
       [ATHENA, RECORDED, []],
       [ATHENA, RECORDED, [REVIEWED]],
+      [[started, ticketRead, posture, lenses(), v2Round(opened(1), "round-1"), v2Round(closed(1), "round-1"),
+        v2Round(opened(1), "round-1", "round-1"), v2Round(closed(1), "round-1"),
+        completed("gate"), completed("record"), prOpened, ended], TREE, []],
     ];
     const covered = new Set<string>();
     for (const [steps, treeSha, reviewed] of vectors) {
