@@ -45,6 +45,7 @@ import {
   isSpineRecord,
 } from "../spine/grammar.ts";
 import { CONTROL_PLANE_CLAIM_KINDS } from "../spine/journal.ts";
+import { firstSecretIn } from "../checkpoint/redaction.ts";
 
 export const COORDINATION_MESSAGE_SPEC = "coordination-message/1";
 
@@ -129,8 +130,45 @@ export interface CoordinationMessage {
   readonly summary: string;
 }
 
+/**
+ * A peer-authored identity: a spine id that is a REFERENCE and not credential
+ * material. This is header rule 2 made mechanical — "`validateCoordinationMessage`
+ * rejects a member that looks like a key rather than a reference".
+ *
+ * It matters here rather than only at the durable append. `SPINE_ID` admits
+ * `_`, `-` and `.`, so six of the nine corpus patterns are expressible as a
+ * valid spine id, and `messageId` and `nonce` are authored entirely by the
+ * peer. The durable path's secret discipline REJECTS a secret in a structural
+ * member — correctly — which means a peer that shapes its own message id like
+ * a token can make the mirror record unappendable at will. Round 5 found what
+ * that buys the peer: the reconciliation still owes an advancing
+ * `blocker.recorded`, that append carries no peer-authored member and lands,
+ * and the mirror record that carries the coalescing window and the replay
+ * ledger's nonce does not — so the window never closes, every further
+ * contradiction costs another advancing blocker, and the nonce is never
+ * consumed. Refusing the message here, before anything is owed, is the only
+ * point at which nothing has yet been done on the strength of it.
+ *
+ * The same rule is applied to every reference member the peer authors, not
+ * just the two that reach the durable payload: a reference member is never
+ * legitimately credential-shaped, and a rule that held for two of five would
+ * be a rule a reader could not state.
+ */
+const reference: MemberRule["check"] = (value, at, collector) => {
+  spineId(value, at, collector);
+  if (typeof value !== "string") return;
+  const secret = firstSecretIn(value);
+  if (secret !== undefined) {
+    collector.emit(
+      "malformed_member",
+      at,
+      `this member is a reference, never key material; the value carries a ${secret} shape`,
+    );
+  }
+};
+
 const AUTHENTICATION_RULES: readonly MemberRule[] = [
-  { name: "keyId", check: spineId },
+  { name: "keyId", check: reference },
   { name: "channelDigest", check: sha256 },
 ];
 
@@ -142,11 +180,11 @@ const MESSAGE_RULES: readonly MemberRule[] = [
   // product does not implement, because refusing it by name is the whole
   // point of `protocol_unsupported`.
   { name: "protocolVersion", check: text },
-  { name: "messageId", check: spineId },
-  { name: "nonce", check: spineId },
+  { name: "messageId", check: reference },
+  { name: "nonce", check: reference },
   { name: "sequence", check: nonNegativeInt },
-  { name: "repositoryId", check: spineId },
-  { name: "deliveryId", check: spineId },
+  { name: "repositoryId", check: reference },
+  { name: "deliveryId", check: reference },
   { name: "kind", check: oneOf(COORDINATION_MESSAGE_KINDS) },
   { name: "claim", check: oneOf(CONTROL_PLANE_CLAIMS) },
   { name: "authentication", check: closed(AUTHENTICATION_RULES) },

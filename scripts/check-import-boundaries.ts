@@ -296,7 +296,17 @@ export const PROTECTED_CLASSES: readonly ProtectedClass[] = [
     // decision module by riding an import edge. d1 also keeps it away from
     // the fs/process/os family: a transport belongs to the adapter that binds
     // the port, never to the unit that decides what a message is worth.
-    d1Allowlist: ["spine/grammar.ts", "spine/journal.ts"],
+    //
+    // The third entry is the durable path's SECRET CORPUS, and it is here for
+    // the same reason the claim vocabulary is: so the wire cannot admit what
+    // the journal will refuse. `messageId` and `nonce` are authored by the
+    // peer and reach the durable mirror payload, a spine id can be shaped like
+    // a credential, and a structural member carrying one is rejected at the
+    // append — by which point the reconciliation already owes an advancing
+    // blocker. The corpus is a frozen list of patterns with no I/O and no
+    // authority of its own; importing it restates nothing and lets this unit
+    // refuse the message before anything is owed.
+    d1Allowlist: ["spine/grammar.ts", "spine/journal.ts", "checkpoint/redaction.ts"],
     d1SiblingAllowance: true,
   },
   {

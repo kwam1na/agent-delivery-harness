@@ -122,13 +122,20 @@ const CLEAN_TREE: Readonly<Record<string, string>> = {
   // registered with no fixture entry at all, which silently downgraded it to
   // `pending` — the clean-fixture row went red, and with it the suite's only
   // proof that the sensor reports NO findings on a legal tree.
+  // All three allowlisted edges are exercised here, the redaction corpus
+  // included: an allowlist entry no clean-tree file uses is an entry whose
+  // removal nothing notices.
   "packages/kernel/src/coordination/message.ts":
     `import { SPINE_INSTANT } from "../spine/grammar.ts";\n` +
     `import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";\n` +
-    `export const messageOk = (v: string): boolean => SPINE_INSTANT.test(v) && JOURNAL_ENTRY_SPEC.length > 0;\n`,
+    `import { SECRET_PATTERNS } from "../checkpoint/redaction.ts";\n` +
+    `export const messageOk = (v: string): boolean =>\n` +
+    `  SPINE_INSTANT.test(v) && JOURNAL_ENTRY_SPEC.length > 0 && SECRET_PATTERNS.length > 0;\n`,
   "packages/kernel/src/coordination/reconcile.ts":
     `import { messageOk } from "./message.ts";\n` +
     `export const reconcile = (v: string): boolean => messageOk(v);\n`,
+  "packages/kernel/src/checkpoint/redaction.ts":
+    `export const SECRET_PATTERNS = Object.freeze([{ id: "github-token", source: "ghp_" }] as const);\n`,
   "packages/kernel/src/checkpoint/journal-store.ts":
     `import { appendFile } from "node:fs/promises";\nexport const append = (p: string, line: string): Promise<void> => appendFile(p, line);\n`,
   "packages/kernel/src/host/claude-code.ts":

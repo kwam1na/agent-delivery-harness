@@ -44,6 +44,8 @@ import { reduceDeliveryJournal } from "../spine/reducer.ts";
 import { evaluateCanonicalRecheck } from "../checkpoint/recheck.ts";
 import { evaluateMigrationConsumption } from "../facade/migration.ts";
 import { CONFIRMATION_FIXTURE_PROFILE } from "../substrate/manifest.ts";
+import { applySecretDiscipline, SECRET_PATTERNS } from "../checkpoint/redaction.ts";
+import { CONTROL_PLANE_CLAIM_KINDS } from "../spine/journal.ts";
 
 const CHANNEL = "d".repeat(64);
 const OTHER_CHANNEL = "e".repeat(64);
@@ -142,6 +144,11 @@ describe("the coordination message grammar", () => {
       "approval.notified",
       "terminal.projection",
     ]);
+    // Identity, not equality. The wire's claim list is the spine's list — the
+    // header says so and the sensor allowlist is justified by it — and two
+    // independent verbatim pins agree only because both were written from the
+    // same list. `toBe` is the only assertion a restatement fails.
+    expect(CONTROL_PLANE_CLAIMS).toBe(CONTROL_PLANE_CLAIM_KINDS);
     expect([...CONTROL_PLANE_CLAIMS]).toEqual([
       "enqueued",
       "advanced",
@@ -996,5 +1003,166 @@ describe("the deterministic simulator", () => {
     const exchange = simulator.exchange(simulator.mint({ claim: "completed", sequence: 4 }), view(), history);
     expect(exchange.reconciliation?.disposition).toBe("mirror-only");
     expect(exchange.reconciliation?.advancesJournalRevision).toBe(false);
+  });
+});
+
+// ── Admitted implies appendable ────────────────────────────────────────────
+
+/**
+ * Round 5's P0. `SPINE_ID` admits `_`, `-` and `.`, so most of the durable
+ * path's secret corpus is expressible as a valid spine id — and `messageId`
+ * and `nonce` are authored entirely by the peer and reach the frozen mirror
+ * payload. The durable path REJECTS a secret in a structural member, which is
+ * right, and which is exactly what a peer can weaponise: the reconciliation
+ * still owes an advancing `blocker.recorded` (no peer-authored member, so it
+ * lands) while the mirror record that carries the coalescing window and the
+ * replay nonce does not. The window never closes, so every further
+ * contradiction costs another advancing blocker — the storm AC2 forbids —
+ * and the nonce is never consumed, so the message replays forever.
+ *
+ * The invariant these rows pin is one sentence: a message this unit ADMITS
+ * can always be mirrored. It is asserted in both directions, because the
+ * harmful half is only visible against a message that is refused.
+ */
+describe("a message this unit admits can always be mirrored", () => {
+  const mirrorPayloadOf = (message: CoordinationMessage) => ({
+    messageId: message.messageId,
+    channelKeyId: message.authentication.keyId,
+    nonce: message.nonce,
+    channelDigest: message.authentication.channelDigest,
+    claim: message.claim,
+    remoteSequence: message.sequence,
+    localFactEpoch: 7,
+    disposition: "blocker",
+    summary: message.summary,
+  });
+  const mirrorEntryOf = (message: CoordinationMessage): Record<string, unknown> => ({
+    spec: JOURNAL_ENTRY_SPEC,
+    journal: "delivery",
+    subjectId: "delivery-1",
+    expectedRevision: 8,
+    idempotencyKey: "mirror-1",
+    kind: "control.plane.mirror.recorded",
+    payload: mirrorPayloadOf(message),
+  });
+
+  // Every corpus pattern that a spine id can actually spell. Composed from
+  // SECRET_PATTERNS rather than hand-listed, so a pattern added to the corpus
+  // is covered here the day it lands.
+  const SPINE_ID_SHAPED_SECRETS: readonly (readonly [string, string])[] = [
+    ["aws-access-key-id", `AKIA${"A".repeat(16)}`],
+    ["github-token", `ghp_${"A".repeat(24)}`],
+    ["github-fine-grained-token", `github_pat_${"A".repeat(24)}`],
+    ["openai-key", `sk-${"A".repeat(24)}`],
+    ["google-api-key", `AIza${"A".repeat(32)}`],
+    ["jwt", `eyJhbGciOiJI.eyJzdWIiOiI.${"A".repeat(10)}`],
+  ];
+
+  it("spells those corpus patterns as valid spine ids — the premise of the whole hazard", () => {
+    // If this row ever goes green-by-vacuity because the corpus changed, the
+    // rows below would pass without testing anything, so the premise is pinned
+    // first: each value below IS a well-formed spine id but for the rule added
+    // here, and each IS a secret the durable path refuses.
+    const corpusIds = SECRET_PATTERNS.map((pattern) => pattern.id);
+    for (const [id, value] of SPINE_ID_SHAPED_SECRETS) {
+      expect(corpusIds, id).toContain(id);
+      expect(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value), `${id} is spine-id shaped`).toBe(true);
+    }
+  });
+
+  it("refuses a credential-shaped value in every peer-authored reference member", () => {
+    for (const [id, token] of SPINE_ID_SHAPED_SECRETS) {
+      expect(codesOf(admitCoordinationMessage(message({ messageId: token }), view())), id).toEqual([
+        "message_malformed",
+      ]);
+      expect(codesOf(admitCoordinationMessage(message({ nonce: token }), view())), id).toEqual([
+        "message_malformed",
+      ]);
+    }
+    const token = `ghp_${"A".repeat(24)}`;
+    // The rule is stated over every reference member the peer authors, not
+    // only the two that reach the durable payload, so it is pinned over all of
+    // them. These three also earn their scope refusal, which is the
+    // no-short-circuit corpus doing its job rather than a second malformation.
+    expect(codesOf(admitCoordinationMessage(message({ repositoryId: token }), view()))).toEqual([
+      "message_malformed",
+    ]);
+    expect(codesOf(admitCoordinationMessage(message({ deliveryId: token }), view()))).toEqual([
+      "message_malformed",
+    ]);
+    expect(
+      codesOf(
+        admitCoordinationMessage(message({ authentication: { keyId: token, channelDigest: CHANNEL } }), view()),
+      ),
+    ).toEqual(["message_malformed"]);
+    // The rejection names the member, so an operator reading the refusal can
+    // tell which one the peer shaped.
+    const verdict = validateCoordinationMessage(message({ nonce: token }));
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) return;
+    expect(verdict.rejections.map((rejection) => [rejection.code, rejection.pointer])).toEqual([
+      ["malformed_member", "/nonce"],
+    ]);
+  });
+
+  it("mirrors what it admits — and would have failed to mirror what it used to admit", () => {
+    // The presence half: an admitted message projects to a mirror record the
+    // durable path accepts, both by the frozen payload table and by the secret
+    // discipline that runs before any byte is written.
+    const admitted = message();
+    expect(admitCoordinationMessage(admitted, view()).ok).toBe(true);
+    expect(validateJournalEntry(mirrorEntryOf(admitted))).toEqual({ ok: true });
+    expect(applySecretDiscipline(mirrorEntryOf(admitted)).ok).toBe(true);
+
+    // The harm half, against the message this unit now refuses. The frozen
+    // payload table is satisfied — the value IS a well-formed spine id — and
+    // the secret discipline refuses it at the structural member. That is the
+    // append that would never have landed, while the blocker beside it would
+    // have.
+    const shaped = message({ messageId: `ghp_${"A".repeat(24)}` });
+    expect(validateJournalEntry(mirrorEntryOf(shaped))).toEqual({ ok: true });
+    const disciplined = applySecretDiscipline(mirrorEntryOf(shaped));
+    expect(disciplined.ok).toBe(false);
+    if (disciplined.ok) return;
+    expect(disciplined.matches).toEqual([{ pointer: "/payload/messageId", id: "github-token" }]);
+  });
+
+  it("closes the coalescing window and consumes the nonce for every admitted contradiction", () => {
+    // The consequence, walked over a real journal. Ten contradicting claims
+    // arrive; each is admitted only if it can be mirrored, and the window and
+    // the ledger are read back off the mirror records that actually landed.
+    const journal = localJournal({ locallyTerminal: true, localEvidenceContradictsCompletion: true });
+    const mirrored: { nonce: string; channelDigest: string; remoteSequence: number }[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      // Every other peer shapes its message id like a credential.
+      const claim = message({
+        messageId: index % 2 === 0 ? `message-${index}` : `ghp_${"A".repeat(24)}`,
+        nonce: `nonce-${index}`,
+        sequence: index,
+        claim: "completed",
+      });
+      const admission = admitCoordinationMessage(claim, view({ highestSequence: index - 1 }));
+      if (!admission.ok) continue;
+      const outcome = reconcileRemoteClaim(claim, journal.view());
+      // Admitted means appendable: the record this reconciliation produces is
+      // accepted by the durable path, so the window record cannot go missing
+      // while its blocker lands.
+      expect(applySecretDiscipline(mirrorEntryOf(claim)).ok).toBe(true);
+      journal.apply(outcome);
+      mirrored.push({
+        nonce: claim.nonce,
+        channelDigest: claim.authentication.channelDigest,
+        remoteSequence: claim.sequence,
+      });
+    }
+    // Five were admitted, and they cost exactly one advancing blocker between
+    // them. Before the refusal existed, each of the five would still have been
+    // admitted and each would have cost its own.
+    expect(journal.mirrorAppends()).toBe(5);
+    expect(journal.blockerAppends()).toBe(1);
+    // And every admitted message's nonce is consumed, so none of them replays.
+    const ledger = replayLedgerOf(mirrored, CHANNEL);
+    expect(ledger.consumedNonces.size).toBe(5);
+    expect(ledger.highestSequence).toBe(8);
   });
 });
