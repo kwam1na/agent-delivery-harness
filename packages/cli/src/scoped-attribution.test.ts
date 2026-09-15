@@ -80,7 +80,7 @@ it("keeps a residual candidate when the base run fails without naming any file",
     rerunBase: async () => ({ code: 1, log: "the base image could not be built" }),
   });
   expect(attribution.outcome).toBe("candidate");
-  expect(attribution.rows[0]!.class).toBe("candidate");
+  expect(attribution.rows[0]).toEqual({ file: "a.test.ts", class: "candidate", evidence: "the failure reproduces alone (timeout) and the red base run never named it" });
 });
 
 it("reads a FAIL block with no recognizable marker as an unknown signal, and still calls it the candidate's", async () => {
@@ -104,7 +104,7 @@ it("calls a residual the base tree does not name candidate, even when the base r
   });
   expect(attribution.outcome).toBe("candidate");
   expect(attribution.rows).toEqual([
-    { file: "a.test.ts", class: "candidate", evidence: "the failure reproduces alone (assertion) and the base tree passes it" },
+    { file: "a.test.ts", class: "candidate", evidence: "the failure reproduces alone (assertion) and the red base run never named it" },
     { file: "b.test.ts", class: "pre-existing", evidence: "the base tree fails the same file" },
   ]);
 });

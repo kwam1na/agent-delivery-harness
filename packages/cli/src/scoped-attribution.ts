@@ -184,9 +184,17 @@ export async function attributeCheckFailure(request: AttributionRequest): Promis
     // deadlock or unawaited promise this ladder is most likely to meet. A row
     // whose reruns say "fails on the candidate, passes on the base" has been
     // examined, and the examination says candidate.
-    rows.push(base.code !== 0 && baseFailed.has(failure.file)
-      ? { file: failure.file, class: "pre-existing", evidence: "the base tree fails the same file" }
-      : { file: failure.file, class: "candidate", evidence: `the failure reproduces alone (${failure.signal}) and the base tree passes it` });
+    if (base.code !== 0 && baseFailed.has(failure.file)) {
+      rows.push({ file: failure.file, class: "pre-existing", evidence: "the base tree fails the same file" });
+      continue;
+    }
+    // The verdict is the same either way — this failure is the candidate's —
+    // but the operator reads the evidence, not the class, and "the base tree
+    // passes it" sends them hunting a regression when what actually happened is
+    // that the base run fell over before it could answer.
+    rows.push({ file: failure.file, class: "candidate", evidence: base.code === 0
+      ? `the failure reproduces alone (${failure.signal}) and the base tree passes it`
+      : `the failure reproduces alone (${failure.signal}) and the red base run never named it` });
   }
   return finish(rows.some(row => row.class === "candidate") ? "candidate" : "attributed", rows);
 }

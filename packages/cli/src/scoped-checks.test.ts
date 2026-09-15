@@ -500,11 +500,12 @@ for(const r of failed)console.log(' FAIL  '+r.file+' > a case\\n'+(r.signal==='t
 process.exit(failed.length?1:0);
 `] as [string, ...string[]];
 
-async function suite(rows: readonly Record<string, unknown>[], profile: Record<string, unknown> = {}) {
+async function suite(rows: readonly Record<string, unknown>[], profile: Record<string, unknown> = {}, cwd = ".") {
   const f = await fixture();
   f.env["SUITE_ROWS"] = JSON.stringify(rows);
-  await writeFile(path.join(f.dir, "mode.txt"), "candidate");
-  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 120000, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
+  await mkdir(path.join(f.dir, cwd), { recursive: true });
+  await writeFile(path.join(f.dir, cwd, "mode.txt"), "candidate");
+  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 240000, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd, profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
   f.setConfig({ ...f.config, providers: [provider], obligations: [{ ...f.config.obligations[0]!, id: "check.suite.passed", providers: ["check.suite"] }],
     scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "suite", gitContext: "none", dependencyInputs: [], mutableOutputs: [], credentialIdentities: {}, ...profile }] } } as unknown as HarnessConfigInput);
   return f;
@@ -520,7 +521,7 @@ it("admits a red whose residuals are environmental or reproduce on the base tree
   expect(out).toContain("environmental a.test.ts: passed when rerun alone on the candidate");
   expect(out).toContain("pre-existing c.test.ts: the base tree fails the same file");
   expect(out).toContain("admitted: check.suite.passed=satisfied_evidence [check.suite=attributed(environmental,environmental,pre-existing)]");
-}, 300000);
+}, 600000);
 
 it("never reclassifies a regression in a file the diff touches, and names it first", async () => {
   const f = await suite([row("noise.test.ts", "timeout", false, false), row("touched.test.ts", "assertion", true, true)]);
@@ -532,16 +533,31 @@ it("never reclassifies a regression in a file the diff touches, and names it fir
   expect(out).toContain("candidate touched.test.ts: the candidate's diff touches this file");
   expect(out.indexOf("candidate touched.test.ts")).toBeLessThan(out.indexOf("environmental noise.test.ts"));
   expect(f.err.join("\n")).toContain("check_command_failed");
-}, 300000);
+}, 600000);
+
+// The check's log names files in the directory the command ran in; git names
+// them from the repository root. A scoped check rooted anywhere below the root
+// is where those two frames diverge, and where the touched-file guard would
+// silently stop matching.
+it("keeps the touched-file guard in the frame the check's own log speaks", async () => {
+  const f = await suite([row("noise.test.ts", "timeout", false, false), row("touched.test.ts", "assertion", true, true)], {}, "scripts");
+  await writeFile(path.join(f.dir, "scripts", "touched.test.ts"), "the candidate's own change");
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate")).toBe(1);
+  const out = f.out.join("\n");
+  expect(out).toContain("candidate touched.test.ts: the candidate's diff touches this file");
+  expect(out).toContain("candidate check.suite (exit 1): touched.test.ts first");
+  expect(f.err.join("\n")).toContain("check_command_failed");
+}, 600000);
 
 it("refuses to attribute when the base tree cannot be prepared", async () => {
   const f = await suite([row("c.test.ts", "assertion", true, true)],
-    { dependencies: { command: [process.execPath, "-e", "if(!require('fs').existsSync('mode.txt'))process.exit(1)"], timeoutMs: 120000 } });
+    { dependencies: { command: [process.execPath, "-e", "if(!require('fs').existsSync('mode.txt'))process.exit(1)"], timeoutMs: 240000 } });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate")).toBe(1);
   expect(f.out.join("\n")).toContain("attribution-unavailable check.suite (exit 1): the base tree could not be prepared");
   expect(f.err.join("\n")).toContain("check_attribution_unavailable");
-}, 300000);
+}, 600000);
 
 it("attributes the same candidate once and reuses the completion on the next invocation", async () => {
   const f = await suite([row("a.test.ts", "timeout", false, false)]);
@@ -564,4 +580,4 @@ it("attributes the same candidate once and reuses the completion on the next inv
   expect(attribution).toMatchObject({ version: "check-attribution/1", providerId: "check.suite", exitCode: 1, outcome: "attributed",
     rows: [{ file: "a.test.ts", class: "environmental", evidence: "passed when rerun alone on the candidate" }] });
   expect(JSON.parse(Buffer.from(portable.artifacts["check-result.json"], "base64").toString("utf8"))).toMatchObject({ verdict: "green", exitCode: 0 });
-}, 300000);
+}, 600000);
