@@ -270,7 +270,10 @@ This repository mandates `lens.outcome-correctness` and
 `obtain-review` has the host realize one by convention: one subagent per lens,
 no shared context, the filled round brief from
 `$DELIVERY_SKILLS/obtain-review/references/round-brief-template.md`
-in its prompt.
+in its prompt. Realize the round's two lenses in parallel — they share no
+context, so serializing them buys nothing and doubles the round's wall clock —
+unless the machine is already thrashing under sibling deliveries, in which case
+run them one after the other and say so in the round's notes.
 
 | lens id | persona id | charter, verbatim into the brief |
 |---|---|---|
@@ -307,16 +310,49 @@ make the product wrong.
 
 [The agent guide](agent-guide.md) states the rule: a lens that plants mutations
 gets its own worktree, reset to the revision the round is bound to, beside the
-delivery worktree and never nested under it. The command form matters, because
-every other command in the loop runs from inside the delivery worktree and a
-relative destination is resolved against the *current directory*, not against
-`-C`. Both the `-C` and an absolute destination are required:
+delivery worktree and never nested under it.
+
+**One lens worktree per lens per delivery, not one per round.** A bound of four
+realized the per-round way is eight worktrees and eight `npm install`s of a tree
+whose dependencies did not move; across the 2026-09-13 wave that setup, not lens
+reasoning, was most of what a round cost. Create the pair once, on the round-1
+candidate, and re-point each of them at the next round's candidate. Name them
+for the lens — `-oc` and `-at` — and never for the round, because a directory
+called `-r1-at` is what makes creating `-r2-at` look obligatory.
+
+The command form matters, because every other command in the loop runs from
+inside the delivery worktree and a relative destination is resolved against the
+*current directory*, not against `-C`. Both the `-C` and an absolute destination
+are required:
 
 ```sh
-git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-r1-at" <candidate-commit-sha>
-git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-r1-oc" <candidate-commit-sha>
-cd "$REPO/.worktrees/v26-0000-r1-at" && npm install
+# once per delivery
+git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-at" <candidate-commit-sha>
+git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-oc" <candidate-commit-sha>
+cd "$REPO/.worktrees/v26-0000-at" && npm install
+
+# every round after the first, in each lens worktree
+git -C "$REPO/.worktrees/v26-0000-at" checkout --detach <candidate-commit-sha>
 ```
+
+`node_modules` is untracked, so it survives the re-point and the reinstall
+becomes conditional rather than routine: run `npm install` in a lens worktree
+again only when the candidate's `package-lock.json` differs from the one the
+lens worktree was installed against.
+
+```sh
+git -C "$REPO" diff --name-only <previous candidate>..<candidate> -- package-lock.json
+```
+
+Skipping a reinstall that was needed fails the way §1 describes — `TS2307:
+Cannot find module`, which reads as a candidate defect rather than as a stale
+checkout — so decide it from that diff rather than from memory of whether the
+rebase looked dependency-free.
+
+Re-point before the lens reads the tree, not after it starts: the brief's
+observation binding has the lens compare its checkout's tree SHA against the
+prepared candidate, and a lens left on the previous round's candidate either
+fails that check or spends the round re-filing findings the executor closed.
 
 Get this wrong and nothing complains until the next harness command reports
 `candidate_unprepared` naming `.worktrees/…` as untracked. Check for it before
@@ -335,13 +371,67 @@ every sibling delivery's lenses beside yours with nothing distinguishing them.
 What is unambiguous is the worktree you created for that lens:
 
 ```sh
-git -C "$REPO/.worktrees/v26-0000-r1-at" status --porcelain
+git -C "$REPO/.worktrees/v26-0000-at" status --porcelain
 ```
 
 A modified tracked file there is a planted mutation, which is the testing lens
 alive and mid-probe; a worktree that has been clean for a long time is either a
 lens between probes or one that stopped. Do not read a sibling delivery's
 worktree as your own.
+
+### The checks a lens runs
+
+A lens runs, inside its own lens worktree, exactly the scoped set §3 defines for
+the executor: `npm run typecheck && npm run sensor && npm run sensor:cli` — plus
+`npm run sensor:policy` when the candidate touches `harness.config.ts` — and
+`npx vitest run` over every test file the candidate's diff touches together with
+every test file that imports a module the diff changed. It does not run
+`npm run check`. The full suite runs once per delivery, in the serialized tail,
+and a lens running it is the same hour of shared machine spent twice over.
+
+**A lens that wants evidence beyond that set names the extra files.** The
+escalation is a list of paths, each with what that file is evidence *for*;
+widening to a directory — `npx vitest run packages/kernel` — is how a scoped
+round quietly becomes a full one. A round-3 lens in the 2026-09-13 wave ran a
+near-full suite for 23 minutes under a rule that was already in force, because
+the rule lived in the wave's instructions and not in the brief the lens was
+handed. So the rule belongs in the brief, and a brief composed without it is the
+defect, not the lens.
+
+**The round-brief template cannot carry it, so this page does.**
+`$DELIVERY_SKILLS/obtain-review/references/round-brief-template.md` resolves
+through a symlink into `.agent-skills/generations/<digest>/`, whose
+`release-manifest.json` pins every file's `sha256` and whose own
+`contentSha256` covers the set; editing the template in this checkout changes
+bytes the installed generation is receipted against, and the provider
+qualification is what notices. The template's own copy of this rule belongs to
+the agent-skills repository and is tracked there. Until it ships, the executor
+appends the block below to the filled brief, verbatim, for **both** lenses of
+**every** round — it is written as brief text, addressed to the lens, and takes
+only the two fills at its end:
+
+```text
+## Checks this lens runs
+
+Run a scoped check set in your own checkout. Do not run the repository's full
+suite: `npm run check` belongs to the delivery's tail, once, outside this round.
+
+- `npm run typecheck && npm run sensor && npm run sensor:cli`, adding
+  `npm run sensor:policy` when the candidate changes `harness.config.ts`.
+- `npx vitest run <file>` for every test file the candidate's diff touches and
+  every test file that imports a module the diff changed.
+
+Needing evidence beyond that set is ordinary; widening the run is not. Name the
+additional test files, one path at a time, each with what it is evidence for.
+Never widen to a directory.
+
+This checkout is yours for the whole delivery and is re-pointed at each round's
+candidate, so its dependencies are already installed. Reinstall only if the
+candidate's `package-lock.json` differs from the one it was installed against.
+
+- scoped sensor commands for this round: <commands>
+- test files in scope for this round: <paths>
+```
 
 ### The round events
 
@@ -367,6 +457,20 @@ npm run --silent harness -- emit review.round.closed --event-id r1-close \
 the host reports no cost, say so — `{"coverage":"unreported","reportedBy":
 "<actual-host-id>"}` — rather than writing a zero. Substitute the actual host
 identity selected above; the angle-bracket text is explanatory.
+
+**The closed round's `cost` is the host's subagent accounting, and it
+under-reports by construction.** `unit` is `subagent-tokens`: the tokens the
+named host attributes to the lens subagents it realized for that round, read off
+the host's own usage report. Nothing in this repository computes it — the
+journal sees only what the executor emits — so three things are outside every
+figure it carries: the executor's own context, spent composing the briefs and
+closing the findings; a lens the host metered but did not break out; and any
+round realized by a host that meters nothing. `coverage` is where that shows.
+State `complete` only when the figure covers every subagent of the round,
+`partial` when it covers some, and use the `unreported` shape, which carries no
+`total` at all, when the host gave you nothing. Read a round's total as a floor
+on what the round cost rather than as the cost, and do not add totals across
+rounds that different hosts reported.
 
 A deferral's follow-up belongs in Linear project `agent delivery harness`, team
 `yaegars`, related to the delivering item and naming the deferral and the lens
