@@ -481,3 +481,79 @@ it.each(["candidate", "base", "head", "guard", "merge-base"])("a mandatory snaps
   expect(await f.run("gate")).toBe(1);
   expect(await f.run("record")).toBe(1);
 }, 60000);
+
+// ── Attribution of a red declared check (V26-2073) ─────────────────────────
+//
+// The suite command below is a stand-in for a repository's real check: it reads
+// the rows it should report from a declared flag, honours the focus list the
+// attribution ladder injects, and answers differently on the base tree (where
+// `mode.txt`, an untracked candidate file, is absent). That is enough to drive
+// every rung of the ladder through the real CLI.
+const SUITE = [process.execPath, "-e", `
+const fs=require('fs');
+const focus=(process.env.DELIVERY_CHECK_ATTRIBUTION_FILES||'').split('\\n').filter(Boolean);
+const base=!fs.existsSync('mode.txt');
+const rows=JSON.parse(process.env.SUITE_ROWS);
+const selected=focus.length?rows.filter(r=>focus.includes(r.file)):rows;
+const failed=selected.filter(r=>focus.length===0?true:(base?r.failsOnBase:r.failsAlone));
+for(const r of failed)console.log(' FAIL  '+r.file+' > a case\\n'+(r.signal==='timeout'?'Error: Test timed out in 5000ms.':'AssertionError: expected 1 to be 2'));
+process.exit(failed.length?1:0);
+`] as [string, ...string[]];
+
+async function suite(rows: readonly Record<string, unknown>[], profile: Record<string, unknown> = {}) {
+  const f = await fixture();
+  f.env["SUITE_ROWS"] = JSON.stringify(rows);
+  await writeFile(path.join(f.dir, "mode.txt"), "candidate");
+  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 20000, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
+  f.setConfig({ ...f.config, providers: [provider], obligations: [{ ...f.config.obligations[0]!, id: "check.suite.passed", providers: ["check.suite"] }],
+    scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "suite", gitContext: "none", dependencyInputs: [], mutableOutputs: [], credentialIdentities: {}, ...profile }] } } as unknown as HarnessConfigInput);
+  return f;
+}
+const row = (file: string, signal: string, failsAlone: boolean, failsOnBase: boolean) => ({ file, signal, failsAlone, failsOnBase });
+
+it("admits a red whose residuals are environmental or reproduce on the base tree", async () => {
+  const f = await suite([row("a.test.ts", "timeout", false, false), row("b.test.ts", "timeout", false, false), row("c.test.ts", "assertion", true, true)]);
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+  const out = f.out.join("\n");
+  expect(out).toContain("attributed check.suite (exit 1): 2 environmental, 1 pre-existing, 0 candidate; 4 reruns of 6");
+  expect(out).toContain("environmental a.test.ts: passed when rerun alone on the candidate");
+  expect(out).toContain("pre-existing c.test.ts: the base tree fails the same file");
+  expect(out).toContain("admitted: check.suite.passed=satisfied_evidence [check.suite=attributed(environmental,environmental,pre-existing)]");
+}, 120000);
+
+it("never reclassifies a regression in a file the diff touches, and names it first", async () => {
+  const f = await suite([row("noise.test.ts", "timeout", false, false), row("touched.test.ts", "assertion", true, true)]);
+  await writeFile(path.join(f.dir, "touched.test.ts"), "the candidate's own change");
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate")).toBe(1);
+  const out = f.out.join("\n");
+  expect(out).toContain("candidate check.suite (exit 1): touched.test.ts first");
+  expect(out).toContain("candidate touched.test.ts: the candidate's diff touches this file");
+  expect(out.indexOf("candidate touched.test.ts")).toBeLessThan(out.indexOf("environmental noise.test.ts"));
+  expect(f.err.join("\n")).toContain("check_command_failed");
+}, 120000);
+
+it("refuses to attribute when the base tree cannot be prepared", async () => {
+  const f = await suite([row("c.test.ts", "assertion", true, true)],
+    { dependencies: { command: [process.execPath, "-e", "if(!require('fs').existsSync('mode.txt'))process.exit(1)"], timeoutMs: 20000 } });
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate")).toBe(1);
+  expect(f.out.join("\n")).toContain("attribution-unavailable check.suite (exit 1): the base tree could not be prepared");
+  expect(f.err.join("\n")).toContain("check_attribution_unavailable");
+}, 120000);
+
+it("attributes the same candidate once and reuses the completion on the next invocation", async () => {
+  const f = await suite([row("a.test.ts", "timeout", false, false)]);
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+  expect(f.out.filter(line => line.startsWith("attributed check.suite"))).toHaveLength(1);
+  expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+  expect(f.out.join("\n")).toContain("reusing check.suite");
+  expect(f.out.join("\n")).not.toContain("attributed check.suite");
+  expect(await f.run("record"), f.err.join("\n")).toBe(0);
+  const { readdir } = await import("node:fs/promises");
+  const recordRoot = path.join(f.dir, path.dirname(f.config.deliveryRecordPath));
+  const record = await readFile(path.join(recordRoot, (await readdir(recordRoot))[0]!), "utf8");
+  expect(record).toContain("check-attribution.json");
+}, 120000);

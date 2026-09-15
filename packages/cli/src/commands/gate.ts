@@ -1,4 +1,5 @@
 import { ScopedChecks } from "../scoped-checks.ts";
+import type { CheckAttribution } from "../scoped-attribution.ts";
 import { CheckSnapshotError } from "../check-snapshot.ts";
 import { commandBlocker } from "../boundary.ts";
 import { runDeclaredCheck } from "../declared-checks.ts";
@@ -134,14 +135,15 @@ async function providerAdmission(
     : { ...final, observedLiveResults: liveResults, blockers: [...attemptBlockers, ...final.blockers] };
 }
 
-export async function runProviderBackedAdmission(context: CommandContext, options: { readonly allowPrompt: boolean; readonly includeInjectedLiveResults: boolean }): Promise<AdmissionResult & { readonly observedLiveResults?: readonly LiveProviderResult[] }> {
+export async function runProviderBackedAdmission(context: CommandContext, options: { readonly allowPrompt: boolean; readonly includeInjectedLiveResults: boolean }): Promise<AdmissionResult & { readonly observedLiveResults?: readonly LiveProviderResult[]; readonly attributions?: readonly CheckAttribution[] }> {
   let session: ScopedChecks | undefined;
   try {
     if (context.config.providers.some(p => p.check?.scope)) {
       const capture = await (await context.wire()).captureCandidate();
       if (capture.ok) session = await ScopedChecks.create(context, capture.candidate);
     }
-    return await providerAdmission(context, options, session);
+    const result = await providerAdmission(context, options, session);
+    return session === undefined || session.attributions.length === 0 ? result : { ...result, attributions: [...session.attributions] };
   } finally { await session?.cleanup(); }
 }
 
@@ -174,7 +176,12 @@ export const gateCommand: CommandDescriptor = {
             config: { ...context.config, computingIdentityVersion: "validation-tree/v1", reviewNeutral: context.config.recordNeutral } });
         } catch { /* Best-effort observability, like the completion append. */ }
       }
-      return { kind: "ok", summary: `admitted${waiverNote}: ${kinds.join(", ")}`, ...(digest === undefined ? {} : { digest }) };
+      // An attributed admission says so in the same line that says it admitted:
+      // a red the gate attributed away from the candidate is a fact about this
+      // delivery, not a detail of one provider's execution.
+      const attributed = (result.attributions ?? []).map(attribution => `${attribution.providerId}=attributed(${attribution.rows.map(row => row.class).join(",")})`);
+      const attributionNote = attributed.length === 0 ? "" : ` [${attributed.join("; ")}]`;
+      return { kind: "ok", summary: `admitted${waiverNote}: ${kinds.join(", ")}${attributionNote}`, ...(digest === undefined ? {} : { digest }) };
     }
     return { kind: "blocked", blockers: [...result.blockers] };
   },

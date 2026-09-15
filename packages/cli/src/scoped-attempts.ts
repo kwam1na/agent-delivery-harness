@@ -4,11 +4,14 @@ import { link, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promi
 import path from "node:path";
 import { digestCanonical, type ScopedCheckAttempt } from "@agent-delivery-harness/kernel";
 import { CheckSnapshotError } from "./check-snapshot.ts";
+import type { CheckAttribution } from "./scoped-attribution.ts";
 export interface AttemptPayload {
   readonly outputs: readonly { readonly path: string; readonly base64: string; readonly sha256: string }[];
   readonly durationMs?: number;
   readonly dependencyDigest?: string;
   readonly log?: string;
+  /** Present when a non-zero command was attributed away from the candidate. */
+  readonly attribution?: CheckAttribution;
 }
 export interface StoredAttempt { readonly attempt: ScopedCheckAttempt; readonly payload?: AttemptPayload }
 const corrupt = () => new CheckSnapshotError("check_attempt_corrupt", "Scoped check attempt history is missing, corrupt or inconsistent.");

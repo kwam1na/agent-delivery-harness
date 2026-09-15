@@ -180,8 +180,34 @@ against a hard 5000 ms per-test default. Under load they cross it. The worker
 cap helps with starvation and does nothing for a per-test bound, so **one capped
 rerun is not enough to believe a red**. This is the other reason the full suite
 belongs in the tail only: a tail gate runs alone, so a red there is worth
-attributing, while a red under six concurrent gates is mostly noise. Work down
-this ladder and stop at the first step that clears:
+attributing, while a red under six concurrent gates is mostly noise.
+
+**The gate now walks this ladder itself.** Where a repository declares its suite
+as a scoped check, `gate` answers a non-zero check command by rerunning each
+failing file alone on the candidate snapshot, rerunning whatever still fails on a
+snapshot built at the recorded base, and classifying every row:
+
+- `candidate` — the candidate's own diff touches the file (never reclassified,
+  whatever the reruns say), or the failure reproduces alone while the base passes
+  it with a real assertion. Any such row keeps the gate red.
+- `pre-existing` — the base tree fails the same file.
+- `environmental` — the file passes when rerun alone, or its failure carries no
+  assertion (a bare timeout or a spawn stall) and the diff does not touch it.
+
+A red whose every row is `pre-existing` or `environmental` is admitted, and the
+gate prints `attributed <provider> (exit N): …` with one line per row. The real
+exit code and every row travel with the evidence as `check-attribution.json`, so
+the delivery record carries why a red was admitted. Three things keep this from
+turning a genuine failure green: a base tree that cannot be prepared exits 1 with
+`check_attribution_unavailable`, a log that names no failing test file is
+`candidate`, and the rerun budget (6) leaves anything it did not examine
+`candidate`. A check command that reads the newline-separated
+`DELIVERY_CHECK_ATTRIBUTION_FILES` reruns only those files; one that ignores it
+reruns everything and reaches the same verdict more slowly.
+
+This repository's own gate declares no scoped check, so the tail's
+`npm run check` is still attributed by hand. Work down this ladder and stop at
+the first step that clears — it is the same ladder, performed by the operator:
 
 1. Grep the log. `Error: Test timed out in 5000ms` with no `AssertionError`
    anywhere is the load signature; an assertion failure never is.

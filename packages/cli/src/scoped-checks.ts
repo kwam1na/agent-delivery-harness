@@ -6,6 +6,7 @@ import { captureCheckBindings, captureCheckOutputSnapshots, candidateTreeEvidenc
   type CandidateBinding, type CapturedCandidate, type ProviderRegistration, type ScopedCheckPlan, type ScopedRuntimeObservation, type RecordCandidateBinding } from "@agent-delivery-harness/kernel";
 import type { CommandContext } from "./boundary.ts";
 import { AttemptStore, type AttemptPayload, type StoredAttempt } from "./scoped-attempts.ts";
+import { attributeCheckFailure, type CheckAttribution } from "./scoped-attribution.ts";
 import { CheckSnapshotError, createCheckSnapshot, executionPath, type CheckSnapshot } from "./check-snapshot.ts";
 export function scopedCandidate(candidate: CandidateBinding): RecordCandidateBinding {
   return { treeSha: candidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId };
@@ -35,6 +36,8 @@ export class ScopedChecks {
   private readonly observations = new Map<string, ScopedRuntimeObservation>();
   private readonly runId = randomUUID();
   private readonly submissions: (() => Promise<void>)[] = [];
+  /** Completions this invocation admitted by attribution rather than by a green command. */
+  readonly attributions: CheckAttribution[] = [];
   readonly context: CommandContext;
   readonly candidate: CapturedCandidate;
   private constructor(context: CommandContext, candidate: CapturedCandidate) { this.context = context; this.candidate = candidate; }
@@ -112,6 +115,55 @@ export class ScopedChecks {
     }
   }
   async submitMechanical(): Promise<void> { for (const submit of this.submissions) await submit(); this.submissions.length = 0; }
+  /**
+   * Repository-relative paths the candidate's diff touches. A failure in one of
+   * these is the candidate's by construction, so an unreadable diff yields no
+   * paths only when the comparison itself is impossible — and then every residual
+   * stays `candidate` because nothing below can prove otherwise.
+   */
+  private async touched(): Promise<readonly string[]> {
+    const diff = await runGitCommand(["git", "diff", "--name-only", this.candidate.base.mergeBaseSha, this.candidate.treeSha], { cwd: this.context.rootDir });
+    return diff.exitCode === 0 ? diff.stdout.split("\n").map(line => line.trim()).filter(Boolean) : [];
+  }
+  /**
+   * Walk the attribution ladder for one failed declared check. Reruns carry the
+   * files under examination in `DELIVERY_CHECK_ATTRIBUTION_FILES`, newline
+   * separated: a check command that honours it reruns only those files, and one
+   * that ignores it reruns everything and still answers the same question, more
+   * slowly. The comparison tree is built at the recorded base through the same
+   * private snapshot machinery, and is removed again before this returns.
+   */
+  private async attribute(provider: ProviderRegistration, snapshot: CheckSnapshot, injected: Readonly<Record<string, string>>, exitCode: number, log: string): Promise<CheckAttribution> {
+    const check = provider.check!, profile = this.context.config.scopedExecution!.profiles.find(p => p.id === check.scope!.profile)!;
+    const run = async (root: string, environment: Readonly<Record<string, string>>, files: readonly string[]) => {
+      for (const output of check.outputs ?? []) await rm(path.join(root, output), { recursive: true, force: true });
+      const outcome = await createExecPort().run({ command: check.command[0], args: check.command.slice(1), cwd: path.join(root, check.scope!.cwd),
+        env: { ...environment, DELIVERY_CHECK_ATTRIBUTION_FILES: files.join("\n") }, timeoutMs: check.timeoutMs, maxBuffer: 1024 * 1024,
+        ...(this.context.signal ? { signal: this.context.signal } : {}) });
+      return { code: outcome.code, log: `${outcome.stdout}\n${outcome.stderr}` };
+    };
+    let base: CheckSnapshot | undefined;
+    try {
+      return await attributeCheckFailure({
+        providerId: provider.id, exitCode, log, touched: await this.touched(),
+        rerunCandidate: files => run(snapshot.rootDir, { ...snapshot.environment, ...injected }, files),
+        rerunBase: async files => {
+          if (base === undefined) {
+            const tree = await runGitCommand(["git", "rev-parse", `${this.candidate.base.tipSha}^{tree}`], { cwd: this.context.rootDir });
+            if (tree.exitCode !== 0) return "unavailable";
+            try {
+              base = await createCheckSnapshot({ rootDir: this.context.rootDir,
+                candidate: { treeSha: tree.stdout.trim(), headSha: this.candidate.base.tipSha, base: this.candidate.base },
+                outputs: profile.mutableOutputs, gitContext: profile.gitContext ?? "full",
+                environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" },
+                ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}) });
+            } catch { return "unavailable"; }
+          }
+          return run(base.rootDir, { ...base.environment, ...injected }, files);
+        },
+      });
+    } finally { await base?.cleanup().catch(() => undefined); }
+  }
   async execute(provider: ProviderRegistration, obligationIds: readonly string[], deferSubmission = false): Promise<void> {
     const started = Date.now(), check = provider.check!, profile = this.context.config.scopedExecution!.profiles.find(p => p.id === check.scope!.profile)!;
     const attempt = this.owned.get(provider.id) ?? await this.allocate(provider.id);
@@ -135,7 +187,20 @@ export class ScopedChecks {
       const secrets = check.scope!.environment.filter(e => e.kind === "credential").map(e => this.context.env[e.name]).filter((v): v is string => !!v);
       const redact = (s: string) => secrets.reduce((text, secret) => text.split(secret).join("[REDACTED]"), s);
       payload = { outputs: [], durationMs: Date.now() - started, log: redact(`${result.stdout}\n${result.stderr}`).slice(-4000), dependencyDigest: snapshot.dependencyDigest };
-      if (result.code !== 0 || this.context.signal?.aborted) throw new CheckSnapshotError("check_command_failed", `Declared scoped check ${provider.id} did not complete successfully (exit ${result.code}).`);
+      // A cancelled invocation is never attributed: an interruption is the
+      // operator's, and the ladder below would spend the reruns it asked to stop.
+      if (this.context.signal?.aborted) throw new CheckSnapshotError("check_command_failed", `Declared scoped check ${provider.id} did not complete successfully (exit ${result.code}).`);
+      let attribution: CheckAttribution | undefined;
+      if (result.code !== 0) {
+        attribution = await this.attribute(provider, snapshot, { ...injected, HOME: commandHome, TMPDIR: commandTemp }, result.code, redact(`${result.stdout}\n${result.stderr}`));
+        payload = { ...payload, attribution };
+        this.context.write(attribution.summary);
+        for (const row of attribution.rows) this.context.write(`  ${row.class} ${row.file}: ${row.evidence}`);
+        if (attribution.outcome !== "attributed") {
+          throw new CheckSnapshotError(attribution.outcome === "attribution-unavailable" ? "check_attribution_unavailable" : "check_command_failed",
+            `Declared scoped check ${provider.id} did not complete successfully (exit ${result.code}); ${attribution.summary}.`);
+        }
+      }
       await snapshot.verify();
       const outputs = await captureCheckOutputSnapshots(snapshot.rootDir, check.outputs ?? []);
       if (!outputs || outputs.some(o => secrets.some(secret => Buffer.from(o.base64, "base64").includes(Buffer.from(secret))))) throw new CheckSnapshotError("check_output_missing", "A retained output is absent, corrupt, escaped or contains credential bytes.");
@@ -151,8 +216,12 @@ export class ScopedChecks {
       const artifacts: { path: string; sha256: string; role: string }[] = [];
       const write = async (name: string, value: unknown, role: string) => { const text = JSON.stringify(value); await this.context.artifacts.writeTextFile(path.join(allocation.runRoot.path, name), text); artifacts.push({ path: name, sha256: sha256Hex(text), role }); };
       for (const [index, output] of outputs.entries()) await write(`check-output-${index}.json`, { path: output.path, base64: output.base64 }, "check-output");
+      // `exitCode: 0` is the harness's verdict about the candidate, not a copy of
+      // the command's status line: an attributed completion keeps the real exit
+      // code, and every row that earned it, in `check-attribution.json` beside it.
       const claim = { verdict: "green", exitCode: 0, binding };
       await write("check-result.json", { providerId: provider.id, runId, finalPassId, ...claim }, "check-result");
+      if (attribution !== undefined) { await write("check-attribution.json", attribution, "check-attribution"); this.attributions.push(attribution); }
       await write("scoped-inputs.json", { observation: this.observations.get(provider.id), attempt: { ...attempt, status: "passed" }, durationMs: payload.durationMs, dependencyDigest: payload.dependencyDigest }, "scoped-inputs");
       const c = this.candidate;
       const manifest = { spec: "delivery-evidence/1", provider: { id: provider.id, runId, finalPassId }, candidate: { vcs: "git", treeSha: c.treeSha, headSha: c.headSha, deliverable: c.deliverable, base: c.base, workspaceId: c.workspaceId }, runHistory: [{ preparedTreeSha: c.treeSha, evaluatedInPassId: finalPassId }], artifacts, attestation: { level: "self", signatures: [] }, recordedAt: new Date().toISOString(), claims: obligationIds.map(obligation => ({ obligation, payloadSpec: "checks.passed/1", payload: claim })) };
