@@ -227,6 +227,174 @@ export function roundRows(events: readonly RunEvent[]): readonly string[] {
   });
 }
 
+// ── Cycle time ───────────────────────────────────────────────────────────────
+
+/**
+ * A span of seconds as one short label, for a column an operator scans.
+ *
+ * WHY A LABEL AND NOT THE NUMBER. `runs list` prints one row per run and the
+ * question it answers is "which of these took a working day"; 47_112 answers
+ * that only after arithmetic. The machine-readable surfaces carry the seconds
+ * themselves, so nothing is lost: `durationSeconds` is beside this everywhere
+ * the label is serialized.
+ *
+ * The smaller unit is zero-padded so the column aligns under a proportional-
+ * enough terminal font, and the largest unit is never dropped: a run of 104
+ * hours reads `104h 03m` rather than being folded into days, because a journal
+ * spans hours and a day boundary is not a thing this file knows about.
+ */
+export function durationLabel(seconds: number): string {
+  const whole = Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : 0;
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const rest = whole % 60;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  if (minutes > 0) return `${minutes}m ${String(rest).padStart(2, "0")}s`;
+  return `${rest}s`;
+}
+
+/**
+ * The gate time a journal can actually account for.
+ *
+ * `counted` is how many gate completions were journaled and `totalMs` their
+ * sum; `unseen` says the journal carries none at all. That last one is the
+ * honest answer to the thing this ticket was written for: a delivery whose gate
+ * ran outside the CLI wrapper and emitted no `gate.reported` has a tail that
+ * looks free, and a zero printed with no label is indistinguishable from a gate
+ * that took no time. `unreadable` counts a gate completion whose `durationMs`
+ * could not be read as a number, so a partial sum is never passed off as whole.
+ *
+ * EVERY journaled gate is summed, including one superseded by a re-run. The
+ * headline outcome takes the last completion (a re-run supersedes its verdict),
+ * but the time is time: a delivery that gated twice spent both.
+ */
+export interface RunGateTime {
+  readonly totalMs: number;
+  readonly counted: number;
+  readonly unreadable: number;
+  readonly unseen: boolean;
+}
+
+/**
+ * The run's three phases, in seconds, plus what they were spent on.
+ *
+ * The boundaries are the journal's own events, so the three spans tile the
+ * run's whole span and sum back to `durationSeconds` within per-phase rounding:
+ *
+ * - implementation: the first event to the first round event;
+ * - review: that first round event to the last `review.round.closed`, which
+ *   deliberately INCLUDES the fix time between rounds — an operator asking what
+ *   review cost is asking what the loop cost, not what the reviewers were busy;
+ * - tail: the last closed round to the last event, which is `run.ended` on an
+ *   ended run and whatever the run has reached on an open one.
+ *
+ * A run with no round event has no review and no tail: implementation is the
+ * whole span, which is what a delivery that never opened a round actually did.
+ */
+export interface RunPhases {
+  readonly implementationSeconds: number;
+  readonly reviewSeconds: number;
+  readonly tailSeconds: number;
+  /** Logical rounds the journal mentions, opened or closed. */
+  readonly rounds: number;
+  readonly gate: RunGateTime;
+}
+
+/** The two kinds that bound the review phase. */
+const ROUND_KINDS: ReadonlySet<string> = new Set(["review.round.opened", "review.round.closed"]);
+
+/**
+ * An instant held inside `[low, high]`, so the phases tile the span.
+ *
+ * The journal is append-only and its instants are written by whoever holds the
+ * clock, which is not one clock: an executor on a laptop and a CLI inside a
+ * container can disagree by seconds. Without this, one skewed `at` gives a
+ * negative span — reported as zero by `spanSeconds` — and the three phases
+ * silently stop summing to the total. Clamping keeps the arithmetic true and
+ * loses only the skew, which was never measurable anyway. An unparseable
+ * instant is treated as `high`, the same way a missing one is.
+ */
+function heldWithin(value: string | undefined, low: string, high: string): string {
+  const at = value === undefined ? Number.NaN : Date.parse(value);
+  if (!Number.isFinite(at)) return high;
+  const lowAt = Date.parse(low);
+  const highAt = Date.parse(high);
+  if (!Number.isFinite(lowAt) || !Number.isFinite(highAt)) return high;
+  if (at < lowAt) return low;
+  if (at > highAt) return high;
+  return value as string;
+}
+
+/** A gate completion's duration, or nothing when it cannot be read as one. */
+const gateDurationOf = (event: RunEvent): number | undefined => {
+  const value = payloadOf(event)["durationMs"];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+};
+
+/**
+ * The gate completions a journal carries: the CLI's own for the `gate` command,
+ * and the executor's `gate.reported` for a repository gate that is not a
+ * product command. Both are counted because they are different gates, not two
+ * writers' accounts of one — an adopter whose `npm run check` is not a product
+ * command journals only the second.
+ */
+export function projectGateTime(events: readonly RunEvent[]): RunGateTime {
+  const gates = events.filter(
+    (event) =>
+      event.kind === "gate.reported" ||
+      (event.kind === "command.completed" && event.actor.role === "cli" && payloadOf(event)["command"] === "gate"),
+  );
+  let totalMs = 0;
+  let unreadable = 0;
+  for (const gate of gates) {
+    const duration = gateDurationOf(gate);
+    if (duration === undefined) unreadable += 1;
+    else totalMs += duration;
+  }
+  return { totalMs, counted: gates.length, unreadable, unseen: gates.length === 0 };
+}
+
+/** The run's phase breakdown, derived from the journal and nothing else. */
+export function projectRunPhases(events: readonly RunEvent[]): RunPhases {
+  const startedAt = events[0]?.at ?? "";
+  const lastAt = events[events.length - 1]?.at ?? "";
+  const reviewStart = heldWithin(events.find((event) => ROUND_KINDS.has(event.kind))?.at, startedAt, lastAt);
+  const reviewEnd = heldWithin(events.findLast((event) => event.kind === "review.round.closed")?.at, reviewStart, lastAt);
+  return {
+    implementationSeconds: spanSeconds(startedAt, reviewStart),
+    reviewSeconds: spanSeconds(reviewStart, reviewEnd),
+    tailSeconds: spanSeconds(reviewEnd, lastAt),
+    rounds: roundEntries(events).length,
+    gate: projectGateTime(events),
+  };
+}
+
+/**
+ * The phase breakdown as text rows, shared by every surface that prints it.
+ *
+ * The total row repeats `durationSeconds` rather than re-deriving it, so a
+ * reader can check the three phases against the one figure `runs list` printed
+ * for the same run; `(open)` is on the total because an open run's last event
+ * is not an ending and the tail is still accruing.
+ */
+export function phaseRows(events: readonly RunEvent[]): readonly string[] {
+  const summary = summarize(events);
+  const phases = summary.phases;
+  const gate = phases.gate;
+  const gateRow = gate.unseen
+    ? "unseen — no gate completion is journaled, so any gate this delivery ran is missing from the tail above"
+    : `${durationLabel(gate.totalMs / 1000)} summed over ${gate.counted} journaled gate completion(s)` +
+      (gate.unreadable === 0 ? "" : `; ${gate.unreadable} journaled no readable duration, so the sum under-reports`);
+  return [
+    "  phases:",
+    `    implementation  ${durationLabel(phases.implementationSeconds)}  (first event to the first round)`,
+    `    review          ${durationLabel(phases.reviewSeconds)}  over ${phases.rounds} round(s), fix time between rounds included`,
+    `    tail            ${durationLabel(phases.tailSeconds)}  (last closed round to the last event)`,
+    `    gate time       ${gateRow}`,
+    `    total           ${durationLabel(summary.durationSeconds)}${summary.open ? "  (open; the tail is still accruing)" : ""}`,
+  ];
+}
+
 // ── The readout ──────────────────────────────────────────────────────────────
 
 export interface Readout {
@@ -330,6 +498,13 @@ export interface RunSummary {
    * is too.
    */
   readonly durationSeconds: number;
+  /**
+   * The same span, divided into the three phases a delivery is actually made
+   * of. Derived from the events beside it, never carried by a journal: an
+   * archive written before this member existed is projected with it, and one
+   * carrying invented phases is re-derived over its own events.
+   */
+  readonly phases: RunPhases;
   readonly roundsOpened: number;
   readonly roundsClosed: number;
   readonly findings: { readonly P0: number; readonly P1: number; readonly P2: number; readonly P3: number };
@@ -398,6 +573,7 @@ export function summarize(events: readonly RunEvent[]): RunSummary {
     startedAt,
     lastAt,
     durationSeconds: spanSeconds(startedAt, lastAt),
+    phases: projectRunPhases(events),
     roundsOpened: events.filter((event) => event.kind === "review.round.opened").length,
     roundsClosed: closed.length,
     findings: {

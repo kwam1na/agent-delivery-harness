@@ -38,8 +38,11 @@ import {
 import {
   READOUT_LABELS,
   detailOf,
+  durationLabel,
+  phaseRows,
   readoutRows,
   roundRows,
+  summarize,
 } from "../run-projection.ts";
 import { buildRunExport } from "../run-export.ts";
 import { startRunServer, type RunServerHandle } from "../run-server.ts";
@@ -352,12 +355,23 @@ async function sizeOf(runsDir: string, runId: string): Promise<number> {
   }
 }
 
-/** One run as both surfaces see it: the same five facts, rendered or serialized. */
+/** One run as both surfaces see it: the same six facts, rendered or serialized. */
 interface InventoryRow {
   readonly runId: string;
   readonly status: string;
   readonly open: boolean;
   readonly current: boolean;
+  /**
+   * The journal's own span in whole seconds, and `null` where there is no
+   * journal to take a span from.
+   *
+   * NULL, NEVER ZERO. An unreadable journal has no duration; a run that began
+   * and ended inside one second has a duration of zero. Spelling both `0` would
+   * make the listing's one cycle-time figure unreadable exactly where the
+   * status column already says something is wrong — and an agent summing the
+   * column would count the unreadable ones as instantaneous.
+   */
+  readonly durationSeconds: number | null;
   readonly bytes: number;
 }
 
@@ -389,11 +403,12 @@ async function inventoryOf(
             status: evaluateRunJournal(read.events).status,
             open: !read.events.some((event) => event.kind === "run.ended"),
             current: runId === currentRunId,
+            durationSeconds: summarize(read.events).durationSeconds,
             bytes,
           }
         : // Nothing was read, so no lifecycle or completeness state is claimed.
           // The worktree pointer and on-disk size are independent readable facts.
-          { runId, status: RUN_LIST_UNREADABLE, open: false, current: runId === currentRunId, bytes },
+          { runId, status: RUN_LIST_UNREADABLE, open: false, current: runId === currentRunId, durationSeconds: null, bytes },
     );
   }
   return { rows, currentRunId };
@@ -448,11 +463,16 @@ async function listRuns(surface: RunSurface, context: ConfigFreeCommandContext, 
   // for first, before it knows which id to show; an unlabeled `complete` here
   // is the misreading the labels exist to prevent.
   const lines: string[] = [`runs in ${oneLine(surface.runsDir, 400)}`, `  (${READOUT_LABELS})`];
+  // The duration goes AHEAD of the size, which is the demotion this column was
+  // added for: an operator scanning this listing is asking which delivery took
+  // a day, and the journal's size on disk answers a question nobody has except
+  // when something is wrong with the file. The size stays, because it is the
+  // only readable fact about an unreadable journal.
   for (const row of shown) {
     lines.push(
-      row.status === RUN_LIST_UNREADABLE
+      row.status === RUN_LIST_UNREADABLE || row.durationSeconds === null
         ? `  ${row.runId}  ${RUN_LIST_UNREADABLE}  ${row.bytes} bytes`
-        : `  ${row.runId}  ${row.status}  ${row.open ? "open" : "ended"}${row.current ? " current" : ""}  ${row.bytes} bytes`,
+        : `  ${row.runId}  ${row.status}  ${row.open ? "open" : "ended"}${row.current ? " current" : ""}  ${durationLabel(row.durationSeconds)}  ${row.bytes} bytes`,
     );
   }
   lines.push(`total ${totalBytes} bytes across ${selected.length} run(s)`);
@@ -502,6 +522,10 @@ async function showRun(surface: RunSurface, context: ConfigFreeCommandContext, r
   for (const event of events) {
     context.write(`    ${event.seq}  ${event.at}  ${event.kind.padEnd(20)}  ${event.actor.role.padEnd(8)}  ${detailOf(event)}`);
   }
+
+  // The phase breakdown sits directly under the timeline, before the rounds it
+  // divides the run by, because it is the summary those rows are the detail of.
+  for (const row of phaseRows(events)) context.write(row);
 
   const rounds = roundRows(events);
   if (rounds.length > 0) {

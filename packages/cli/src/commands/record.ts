@@ -24,7 +24,7 @@ import {
 import path from "node:path";
 import { commandBlocker } from "../boundary.ts";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
-import { oneLine } from "../run-surface.ts";
+import { oneLine, resolveRunSpan } from "../run-surface.ts";
 import { applyDeliveryRecordRetention } from "../record-retention.ts";
 import { runProviderBackedAdmission } from "./gate.ts";
 
@@ -127,7 +127,16 @@ export const recordCommand: CommandDescriptor = {
       await computePreparationFingerprint(context.rootDir, context.config));
     const compiledPolicy = context.policyBinding?.compiledPolicy ??
       await readCompiledRepositoryPolicy(await candidateTreeEvidenceReader(context.rootDir, recheck.candidate.treeSha));
+    // The delivery's own span, read off the run journal rather than off a
+    // clock: `startedAt` is the journal's first instant and `endedAt` the last
+    // it had reached by this write, which is the time this delivery had spent
+    // when it recorded. A delivery with no journal records exactly as it always
+    // did — the member is simply absent — because the record is evidence about
+    // a candidate and this is a cycle-time reading beside it, never a condition
+    // on writing one.
+    const runSpan = await resolveRunSpan({ cwd: context.rootDir, treeSha: recheck.candidate.treeSha, allowCurrentRun: true });
     const built = buildDeliveryRecord({ config: context.config, decision, evidenceRecords, context: evidenceContext,
+      ...(runSpan === undefined ? {} : { runSpan: { startedAt: runSpan.startedAt, endedAt: runSpan.endedAt } }),
       ...(compiledPolicy === null ? {} : { compiledPolicy, observedAt }) });
     if (!built.ok) {
       return { kind: "blocked", blockers: [...built.blockers] };

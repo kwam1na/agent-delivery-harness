@@ -207,7 +207,43 @@ export interface DeliveryRecord {
   readonly attestation: DeliveryRecordAttestation;
   readonly context?: PortableEvidenceContext;
   readonly hostedChecks?: DeliveryRecordHostedChecks;
+  readonly runSpan?: DeliveryRecordRunSpan;
   readonly integrityDigest?: string;
+}
+
+/**
+ * How long the delivery had taken when it recorded, as its run journal says.
+ *
+ * WHY IT IS ONE MEMBER AND NOT TWO. The pair is only ever meaningful together:
+ * an `endedAt` with no start measures nothing, and a record carrying one of
+ * them would have to be given a meaning by every reader separately. Nesting
+ * them makes both-or-neither a property of the shape rather than a rule each
+ * consumer re-implements, and leaves the obvious room for a second span — a
+ * tracker's own — beside this one.
+ *
+ * THIS IS NOT A CLOCK READING (sensor rule e). Nothing here or in the build
+ * below reads a clock: the two instants are the journal's own first and last
+ * `at`, supplied by the boundary that read the journal, exactly as `observedAt`
+ * is supplied rather than taken. The record's identity remains the candidate it
+ * attests, and no freshness or admission decision reads this member — it is a
+ * cycle-time figure that travels with the record so that "how long did this
+ * take" survives the workspace the run happened in.
+ */
+export interface DeliveryRecordRunSpan {
+  readonly startedAt: string;
+  readonly endedAt: string;
+}
+
+/** Both instants well formed, in order, and nothing else in the member. */
+export function isDeliveryRecordRunSpan(value: unknown): value is DeliveryRecordRunSpan {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== "endedAt" || keys[1] !== "startedAt") return false;
+  if (!isHostedCheckInstant(value["startedAt"]) || !isHostedCheckInstant(value["endedAt"])) return false;
+  // Lexicographic order is chronological order for this fixed-width UTC shape,
+  // which is why the shape is fixed: a record claiming it ended before it
+  // started is malformed on its own face, with no clock and no parsing.
+  return (value["startedAt"] as string) <= (value["endedAt"] as string);
 }
 
 // ── Build (produce-only) ─────────────────────────────────────────────────────
@@ -221,6 +257,12 @@ export interface BuildDeliveryRecordInput {
   /** Current compiled owner policy plus a boundary-supplied observation time. */
   readonly compiledPolicy?: CompiledPolicy;
   readonly observedAt?: string;
+  /**
+   * The delivery's span as the boundary read it off the run journal. Omitted
+   * where no journal describes this delivery, so a record written outside a run
+   * is the record it always was rather than one carrying invented time.
+   */
+  readonly runSpan?: DeliveryRecordRunSpan;
 }
 
 export type BuildDeliveryRecordResult =
@@ -357,6 +399,10 @@ export function buildDeliveryRecord(input: BuildDeliveryRecordInput): BuildDeliv
     attestation: { level: V1_ATTESTATION_LEVEL },
     context,
     ...(hostedChecks === undefined ? {} : { hostedChecks }),
+    // Taken only when it is well formed. A malformed span is dropped rather
+    // than refused: the span is a cycle-time reading no decision rests on, and
+    // an unreadable journal must not stop a delivery from recording.
+    ...(isDeliveryRecordRunSpan(input.runSpan) ? { runSpan: input.runSpan } : {}),
   };
   const sealed = { ...record, integrityDigest: digestCanonical(record) };
   if (Buffer.byteLength(JSON.stringify(sealed)) > MAX_PORTABLE_RECORD_BYTES) return { ok: false, blockers: [portableBlocker("portable_record_oversized", "The portable record exceeds its size limit.")] };
@@ -499,6 +545,15 @@ export function parseDeliveryRecord(text: string): ParseDeliveryRecordResult {
 
   if (parsed["hostedChecks"] !== undefined && !isDeliveryRecordHostedChecks(parsed["hostedChecks"])) {
     return malformed("hostedChecks must keep checks required and carry only a complete attributed exemption");
+  }
+
+  // A committed record is editable, so the span is checked on its own face here
+  // — both instants, well formed, in order — exactly as a claim's outcome is.
+  // Whether those instants agree with a journal is a different question, asked
+  // by the boundary that can see one; this only refuses a span that could not
+  // have been read off any journal at all.
+  if (parsed["runSpan"] !== undefined && !isDeliveryRecordRunSpan(parsed["runSpan"])) {
+    return malformed("runSpan must carry exactly a startedAt and an endedAt UTC instant, in order");
   }
 
   return { ok: true, record: parsed as unknown as DeliveryRecord };

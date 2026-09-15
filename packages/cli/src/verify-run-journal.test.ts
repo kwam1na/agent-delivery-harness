@@ -13,7 +13,7 @@
  * opt-in fails on one, and that flag reaches neither CI nor the gate.
  */
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -999,6 +999,133 @@ describe("verify's run-journal completeness row", () => {
     expect(result.out).toContain(`recorded base: origin/main at ${recordedBase}`);
     expect(result.out).toContain(`observed base: origin/main at ${observedBase}`);
     expect(result.out).toContain("base movement relaxed by policy");
+  });
+});
+
+// ── The delivery's own span ──────────────────────────────────────────────────
+
+/** The one tracked record this delivery wrote, and its path. */
+async function recordFileOf(dir: string): Promise<string> {
+  const recordDir = path.join(dir, "telemetry/delivery-runs");
+  const names = (await readdir(recordDir)).filter((name) => name.startsWith("record--") && name.endsWith(".json"));
+  expect(names).toHaveLength(1);
+  return path.join(recordDir, names[0]!);
+}
+
+async function recordOf(dir: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(await recordFileOf(dir), "utf8")) as Record<string, unknown>;
+}
+
+/**
+ * Rewrites a record and RE-SEALS it, so the forgery is the one worth testing.
+ *
+ * A record edited in place fails on its integrity digest, which proves only
+ * that the digest works. The interesting adversary recomputes the seal — every
+ * byte of the record then agrees with itself, and the only thing left that can
+ * contradict the span is the journal it claims to have been read from.
+ */
+async function resealRecord(dir: string, edit: (record: Record<string, unknown>) => void): Promise<void> {
+  const file = await recordFileOf(dir);
+  const record = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+  edit(record);
+  delete record["integrityDigest"];
+  const sealed = { ...record, integrityDigest: digestCanonical(record) };
+  await writeFile(file, `${JSON.stringify(sealed)}\n`, "utf8");
+  // The forged record is COMMITTED, exactly as the honest one was: an
+  // uncommitted edit would stop `verify` at `candidate_unprepared` long before
+  // the span is read, which would prove nothing about the span check. The
+  // record lives under a record-neutral prefix, so committing it leaves the
+  // candidate this record binds unchanged.
+  await commitRecord(dir);
+}
+
+describe("the delivery record's run span", () => {
+  it("carries the span of the run that delivered it, and verifies against that journal", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    const runId = await journaledDelivery(harness);
+    const { store } = await storeOf(harness.dir);
+    const read = await store.read(runId);
+    expect(read.ok).toBe(true);
+    if (!read.ok) throw new Error("the journal is unreadable");
+
+    const span = (await recordOf(harness.dir))["runSpan"] as { startedAt: string; endedAt: string };
+    // The start is the journal's own first instant, exactly.
+    expect(span.startedAt).toBe(read.events[0]!.at);
+    // The end is an instant the journal had REACHED when the record was
+    // written, not its last: `pr.opened` and `run.ended` were journaled after.
+    expect(span.endedAt <= read.events[read.events.length - 1]!.at).toBe(true);
+
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    expect(verified.out).toContain(`recorded run span: ${span.startedAt} to ${span.endedAt}`);
+    expect(verified.out).toContain(`checked against run ${runId}`);
+  });
+
+  it("refuses a re-sealed record whose span the journal contradicts", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    const runId = await journaledDelivery(harness);
+    await resealRecord(harness.dir, (record) => {
+      const span = record["runSpan"] as { startedAt: string; endedAt: string };
+      record["runSpan"] = { startedAt: span.startedAt, endedAt: "2099-01-01T00:00:00Z" };
+    });
+
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code).toBe(EXIT_POLICY);
+    expect(verified.err).toContain("record_run_span_mismatch");
+    expect(verified.err).toContain("2099-01-01T00:00:00Z");
+    expect(verified.err).toContain(runId);
+  });
+
+  it("refuses a re-sealed record that claims some other run's start", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    await journaledDelivery(harness);
+    await resealRecord(harness.dir, (record) => {
+      const span = record["runSpan"] as { startedAt: string; endedAt: string };
+      record["runSpan"] = { startedAt: "2020-01-01T00:00:00Z", endedAt: span.endedAt };
+    });
+
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code).toBe(EXIT_POLICY);
+    expect(verified.err).toContain("record_run_span_mismatch");
+    expect(verified.err).toContain("2020-01-01T00:00:00Z");
+  });
+
+  it("refuses a re-sealed record whose span is not a span at all", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    await journaledDelivery(harness);
+    await resealRecord(harness.dir, (record) => {
+      record["runSpan"] = { startedAt: "2026-09-02T00:00:00Z", endedAt: "2026-09-01T00:00:00Z" };
+    });
+
+    // Malformed on its own face — no journal is consulted to know that a
+    // delivery cannot end before it starts.
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code).toBe(EXIT_POLICY);
+    expect(verified.err).toContain("runSpan must carry exactly a startedAt and an endedAt UTC instant, in order");
+  });
+
+  it("reports the span unchecked where no journal binds the candidate", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    const runId = await journaledDelivery(harness);
+    const { runsDir } = await storeOf(harness.dir);
+    // The journal is gone, as it is in the CI checkout that verifies this
+    // record. The record is unchanged and still verifies.
+    await rm(path.join(runsDir, `${runId}.jsonl`));
+
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    expect(verified.out).toContain("unchecked: no run journal in this repository binds this candidate");
+  });
+
+  it("records no span at all when the delivery ran under no journal", { timeout: 120000 }, async () => {
+    const harness = await makeHarness();
+    await deliverRecord(harness);
+    await commitRecord(harness.dir);
+
+    expect(await recordOf(harness.dir)).not.toHaveProperty("runSpan");
+    const verified = await harness.cli(["verify"]);
+    expect(verified.code, verified.err).toBe(EXIT_OK);
+    expect(verified.out).not.toContain("run span");
   });
 });
 

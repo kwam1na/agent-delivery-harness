@@ -44,9 +44,14 @@ See [capture](run-artifacts.md), [portable archives](run-archives.md), and
 
 `delivery-harness runs list` prints the store's path, one row per run, and the
 store's total. Each row carries the run's completeness status, whether it is
-still open, whether it is the invoking worktree's current run, and the
-journal's size on disk. The status column is a self-attested completeness
-verdict and carries the same labels the rest of this surface does.
+still open, whether it is the invoking worktree's current run, how long the run
+took, and the journal's size on disk. The status column is a self-attested
+completeness verdict and carries the same labels the rest of this surface does.
+
+The duration is the span between the journal's first and last event, rendered
+as `45s`, `12m 03s`, or `5h 07m`. An open run's duration is what it has taken
+so far. A journal the listing could not read carries no duration at all rather
+than a zero one, because an unreadable journal's span is unknown, not empty.
 
 Add `--json` for the `run-inventory/1` structure, which carries the same facts
 as the human rows and the same `labels` member `runs show --json` uses:
@@ -57,12 +62,24 @@ as the human rows and the same `labels` member `runs show --json` uses:
   "labels": "self-attested; observability, not evidence; unbound to a record",
   "runsDir": "/path/to/.git/managed-delivery/runs",
   "current": "run-0123456789abcdef",
-  "runs": [{ "runId": "run-0123456789abcdef", "status": "incomplete", "open": true, "current": true, "bytes": 355 }],
+  "runs": [
+    {
+      "runId": "run-0123456789abcdef",
+      "status": "incomplete",
+      "open": true,
+      "current": true,
+      "durationSeconds": 2145,
+      "bytes": 355
+    }
+  ],
   "total": { "count": 1, "bytes": 355 },
   "returned": 1,
   "truncated": false
 }
 ```
+
+`durationSeconds` is the same span the human row renders, in whole seconds, and
+is `null` — never `0` — for a journal that could not be read.
 
 `current` is the run the invoking worktree points at, or `null` when it points
 at none. `runs` carries the rows this invocation returned; `total` describes the
