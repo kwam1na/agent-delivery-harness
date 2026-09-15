@@ -1121,6 +1121,7 @@ export {
   type CoordinationPort,
 } from "./coordination/port.ts";
 export {
+  SIMULATED_MESSAGE_OPTION_NAMES,
   createCoordinationSimulator,
   type CoordinationSimulator,
   type CoordinationSimulatorOptions,

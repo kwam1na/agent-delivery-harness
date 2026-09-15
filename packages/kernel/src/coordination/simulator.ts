@@ -29,6 +29,23 @@ import { reconcileRemoteClaim, type LocalHistoryView, type ClaimReconciliation }
 import { UNBOUND_COORDINATION_PORT, type CoordinationDispatch, type CoordinationPort } from "./port.ts";
 
 export interface SimulatedMessageOptions {
+  /**
+   * The message id is overridable like every other member, and it was a fixed
+   * constant until round 9 found the comment on `mint` claiming otherwise: a
+   * kit whose corpus cannot bend `messageId` cannot mint the very vector this
+   * delivery's round-5 finding turns on — a peer that shapes its own message
+   * id like a credential — and a corpus that has to reach around the kit for
+   * its most important vector is not qualifying the kit.
+   *
+   * `spec` is the one member that is deliberately NOT here, and not by
+   * oversight: `CoordinationMessage["spec"]` is the literal
+   * `COORDINATION_MESSAGE_SPEC`, so a message carrying any other value is not
+   * a `CoordinationMessage` at all and `mint` could not return one. A foreign
+   * envelope is minted by spreading a minted message, and it is refused by the
+   * grammar, which takes `unknown` precisely so that vector can be expressed;
+   * `unsupported_spec` is pinned there.
+   */
+  readonly messageId?: string;
   readonly kind?: CoordinationMessageKind;
   readonly claim?: ControlPlaneClaim;
   readonly sequence?: number;
@@ -40,6 +57,35 @@ export interface SimulatedMessageOptions {
   readonly protocolVersion?: string;
   readonly summary?: string;
 }
+
+/**
+ * Every declared override, as a value rather than only as a type.
+ *
+ * The record below is typed over `Required<SimulatedMessageOptions>`, so a
+ * member added to the interface without being added here is a compile error,
+ * and a member removed from the interface is one too. That is what lets a
+ * caller — the conformance corpus in particular — enumerate the kit's override
+ * surface and check that `mint` honours all of it, rather than trusting a
+ * sentence in a doc comment. Round 9 found six of the ten declared overrides
+ * honoured by nothing any row could tell apart from a hardcoded default.
+ */
+const OPTION_PRESENCE: { readonly [K in keyof Required<SimulatedMessageOptions>]: true } = {
+  messageId: true,
+  kind: true,
+  claim: true,
+  sequence: true,
+  nonce: true,
+  repositoryId: true,
+  deliveryId: true,
+  keyId: true,
+  channelDigest: true,
+  protocolVersion: true,
+  summary: true,
+};
+
+export const SIMULATED_MESSAGE_OPTION_NAMES: readonly (keyof SimulatedMessageOptions)[] = Object.freeze(
+  Object.keys(OPTION_PRESENCE) as (keyof SimulatedMessageOptions)[],
+);
 
 export interface CoordinationSimulatorOptions {
   readonly repositoryId: string;
@@ -58,7 +104,13 @@ export interface SimulatedExchange {
 }
 
 export interface CoordinationSimulator extends CoordinationPort {
-  /** Mints a well-formed message; every field is overridable so a corpus can bend exactly one. */
+  /**
+   * Mints a well-formed message; every member is overridable so a corpus can
+   * bend exactly one. "Every" is `SIMULATED_MESSAGE_OPTION_NAMES`, which is
+   * the interface itself rather than a restatement of it, and every entry of
+   * that list is pinned as actually honoured by "honours every override it
+   * declares, and declares every member of the message".
+   */
   mint(options?: SimulatedMessageOptions): CoordinationMessage;
   /** Runs one message through the real admission and, if admitted, the real reconciliation. */
   exchange(message: unknown, view: CoordinationAdmissionView, local: LocalHistoryView): SimulatedExchange;
@@ -80,7 +132,7 @@ export function createCoordinationSimulator(options: CoordinationSimulatorOption
     return {
       spec: COORDINATION_MESSAGE_SPEC,
       protocolVersion: overrides.protocolVersion ?? COORDINATION_PROTOCOL_VERSION,
-      messageId: `sim-message-${minted}`,
+      messageId: overrides.messageId ?? `sim-message-${minted}`,
       nonce: overrides.nonce ?? `sim-nonce-${minted}`,
       sequence: overrides.sequence ?? minted,
       repositoryId: overrides.repositoryId ?? options.repositoryId,

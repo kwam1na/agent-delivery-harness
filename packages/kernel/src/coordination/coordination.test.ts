@@ -37,7 +37,7 @@ import {
   type MirrorRecordView,
 } from "./reconcile.ts";
 import { COORDINATION_PORT_UNBOUND_CODE, UNBOUND_COORDINATION_PORT } from "./port.ts";
-import { createCoordinationSimulator } from "./simulator.ts";
+import { SIMULATED_MESSAGE_OPTION_NAMES, createCoordinationSimulator } from "./simulator.ts";
 import { OBSERVATION_ONLY_KINDS } from "../spine/vocabulary.ts";
 import { JOURNAL_ENTRY_SPEC, validateJournalEntry } from "../spine/journal.ts";
 import { reduceDeliveryJournal } from "../spine/reducer.ts";
@@ -907,6 +907,58 @@ describe("the deterministic simulator", () => {
     expect([a.mint(), a.mint(), a.mint()]).toEqual([b.mint(), b.mint(), b.mint()]);
   });
 
+  it("honours every override it declares, and declares every member of the message", () => {
+    // The kit's own API claim, pinned rather than narrated. `mint`'s comment
+    // says a corpus can bend exactly one member; round 9 found that six of the
+    // ten overrides then declared were honoured by nothing any row could tell
+    // apart from a hardcoded default — `mint` could have ignored `kind`,
+    // `keyId`, `deliveryId`, `protocolVersion`, `summary` or `repositoryId`
+    // and the whole suite stayed green — and that two message members,
+    // `spec` and `messageId`, could not be bent at all. `messageId` is the
+    // member round 5's P0 turns on, so the kit could not mint the vector its
+    // own delivery found; it is now an override. `spec` stays fixed, because
+    // the message type admits exactly one value for it — the kit's doc comment
+    // now says that rather than claiming a bend it cannot perform, and the
+    // foreign-envelope vector is pinned against the grammar, which takes
+    // `unknown`, by the `unsupported_spec` row above.
+    //
+    // The table's keys are asserted to BE the declared surface, and that
+    // surface is the interface itself (`SIMULATED_MESSAGE_OPTION_NAMES` is
+    // typed over `Required<SimulatedMessageOptions>`, so it cannot fall behind
+    // it without a compile error). A member added to the kit therefore turns
+    // this row red until someone says where it lands on the wire.
+    const BENT: Readonly<Record<string, { readonly value: unknown; readonly read: (minted: CoordinationMessage) => unknown }>> = {
+      messageId: { value: "bent-message-id", read: (minted) => minted.messageId },
+      kind: { value: "terminal.projection", read: (minted) => minted.kind },
+      claim: { value: "cancelled", read: (minted) => minted.claim },
+      sequence: { value: 41, read: (minted) => minted.sequence },
+      nonce: { value: "bent-nonce", read: (minted) => minted.nonce },
+      repositoryId: { value: "repo-bent", read: (minted) => minted.repositoryId },
+      deliveryId: { value: "delivery-bent", read: (minted) => minted.deliveryId },
+      keyId: { value: "key-bent", read: (minted) => minted.authentication.keyId },
+      channelDigest: { value: "channel-bent", read: (minted) => minted.authentication.channelDigest },
+      protocolVersion: { value: "control-plane-coordination.9", read: (minted) => minted.protocolVersion },
+      summary: { value: "a bent summary", read: (minted) => minted.summary },
+    };
+    expect(Object.keys(BENT).sort()).toEqual([...SIMULATED_MESSAGE_OPTION_NAMES].sort());
+
+    const simulator = createCoordinationSimulator(options);
+    for (const name of SIMULATED_MESSAGE_OPTION_NAMES) {
+      const bent = BENT[name];
+      expect(bent, `${name} is declared but this row says nothing about it`).toBeDefined();
+      if (bent === undefined) continue;
+      const minted = simulator.mint({ [name]: bent.value } as never);
+      expect(bent.read(minted), `mint ignored the ${name} override`).toEqual(bent.value);
+    }
+
+    // And the bend the kit exists for: the round-5 vector, minted THROUGH the
+    // kit rather than hand-rolled, refused by the real admission. A corpus
+    // that has to reach around `mint` to express its most important vector is
+    // not the kit this module claims to be.
+    const shaped = simulator.mint({ messageId: `ghp_${"A".repeat(24)}` });
+    expect(codesOf(admitCoordinationMessage(shaped, view()))).toEqual(["message_malformed"]);
+  });
+
   it("routes every decision through the real modules rather than re-deciding", () => {
     const simulator = createCoordinationSimulator(options);
     const minted = simulator.mint({ claim: "completed", sequence: 9 });
@@ -920,8 +972,14 @@ describe("the deterministic simulator", () => {
 
   it("never reconciles a refused message — a refusal is not a claim", () => {
     const simulator = createCoordinationSimulator(options);
-    const exchange = simulator.exchange(simulator.mint({ repositoryId: "repo-9" }), view(), local());
+    // The sequence is deliberately ahead of the view's high-water mark, so the
+    // ONE thing refusing this message is the repository scope. Round 9 found
+    // the earlier spelling minting at `sequence: 1` against a view whose mark
+    // is 3, which earns `sequence_regressed` on its own — so the row was false
+    // whether or not the `repositoryId` override was honoured at all.
+    const exchange = simulator.exchange(simulator.mint({ repositoryId: "repo-9", sequence: 9 }), view(), local());
     expect(exchange.admission.ok).toBe(false);
+    expect(codesOf(exchange.admission)).toEqual(["repository_scope_mismatch"]);
     expect(exchange.reconciliation).toBeUndefined();
   });
 
