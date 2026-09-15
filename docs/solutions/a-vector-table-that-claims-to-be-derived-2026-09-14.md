@@ -65,3 +65,51 @@ the same test row, because the first three fixes treated the symptom (add the
 missing vector) rather than the shape (make the table incapable of falling
 behind the list). The lesson is to reach for the derivation the first time the
 symptom appears.
+
+## The same shape again, three floors down (rounds 8-13)
+
+The loop above ended at round 8, and then ran five more rounds on the same
+defect wearing different clothes. Recorded here because the repetition is the
+finding.
+
+- **Round 8 (P3).** A comment claimed that skipping any single corpus pattern
+  turns a row red. True for the seven spine-id spellable patterns; false for
+  the two that require whitespace, because the only row exercising the wire
+  rule against the corpus iterated the spellable seven. Closed by asserting
+  the universal over `SECRET_PATTERNS` itself, with a whitespace-bearing value
+  for the two.
+- **Round 9 (P2).** The shipped simulator's `mint` claimed "every field is
+  overridable so a corpus can bend exactly one". Six of ten declared overrides
+  were honoured by nothing a row could tell apart from a hardcoded default,
+  and `messageId` — the member the round-5 P0 turns on — could not be bent at
+  all, so the conformance kit could not mint this delivery's own most
+  important vector. Closed by making the declared surface a value
+  (`SIMULATED_MESSAGE_OPTION_NAMES`) and bending every name on it.
+- **Round 10 (P3).** That fix's remaining claim — the kit "declares every
+  member of the message" — was circular: "every member" meant "every member we
+  remembered to declare". A member added to the wire and hardcoded in `mint`
+  typechecked clean and left the suite green. Closed by typing the record over
+  the message's own members as well as the options interface.
+- **Rounds 11 and 12 (P3 each).** The comment describing that type claimed
+  four compile-time guards where three hold, then, corrected, claimed two.
+  Each correction cost a full round because a comment in a source file is not
+  review-neutral: the tree moves, and a closed round must bind the tree the
+  record carries.
+
+Four of those five findings are the same sentence pattern: **a universal
+stated in prose over a set, pinned over the subset the author enumerated.**
+The delivery's own remedy idiom — assert that the table's keys ARE the list —
+existed in the candidate from round 6 onward and was simply not reached for
+the next three times the shape appeared, in a doc comment, in an API claim,
+and in a type.
+
+Two rules worth carrying:
+
+- **A claim about an API is an API surface.** "Every field is overridable" is
+  as much a contract as the signature above it, and it owes a row for the same
+  reason. The kit here was a shipped conformance kit, so its override surface
+  was product, not scaffolding.
+- **Prose corrections are not free.** Under a review protocol that binds a
+  closed round to a tree SHA, correcting a comment costs a whole round. Write
+  the comment at the precision you can defend the first time, or say less. The
+  delivery paid two rounds — roughly 530,000 lens tokens — for two sentences.
