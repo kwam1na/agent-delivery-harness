@@ -336,17 +336,32 @@ function registerBudget(row: BudgetedRow): RowBudget {
  * `beforeAll` can consume no fixtures and vitest exposes no hook timeout, so
  * the hook passes `undefined` and only the first check runs for it. That
  * residue is real, and is stated rather than papered over.
+ *
+ * What was checked is recorded, because a check nothing records is a check that
+ * can be deleted from the one path that calls it while the row proving the
+ * check works keeps passing on its own.
  */
+const checkedDeclarations: string[] = [];
+
 function assertRunsOnItsDeclaration(declared: RowBudget, enforcedCeilingMs: number | undefined): void {
   expect(declaredBoundedRows, `${declared.row}: runs on the budget it registered`).toContain(declared);
   if (enforcedCeilingMs !== undefined) {
     expect(enforcedCeilingMs, `${declared.row}: vitest ceiling is the registered ceiling`).toBe(declared.ceilingMs);
   }
+  checkedDeclarations.push(`${declared.row}:${enforcedCeilingMs ?? "hook"}`);
 }
 
-/** The bounded, sampled, attributed work every budgeted row runs. */
-function boundedBody(declared: RowBudget, work: () => Promise<void>): () => Promise<void> {
-  return async () => {
+/**
+ * The bounded, sampled, attributed work every budgeted row runs.
+ *
+ * The declaration check lives HERE, on the one path every budgeted row and the
+ * hook take, rather than being called separately by each of them: two call
+ * sites are two places to delete it from, and deleting it from either was
+ * invisible.
+ */
+function boundedBody(declared: RowBudget, work: () => Promise<void>): (enforcedCeilingMs: number | undefined) => Promise<void> {
+  return async (enforcedCeilingMs) => {
+    assertRunsOnItsDeclaration(declared, enforcedCeilingMs);
     await runRowWithStallAttribution({ budget: declared, sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS), work });
   };
 }
@@ -365,19 +380,13 @@ function boundedBody(declared: RowBudget, work: () => Promise<void>): () => Prom
 function itBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
   const declared = registerBudget(row);
   const body = boundedBody(declared, work);
-  it(row, async ({ task }) => {
-    assertRunsOnItsDeclaration(declared, task.timeout);
-    await body();
-  }, declared.ceilingMs);
+  it(row, async ({ task }) => { await body(task.timeout); }, declared.ceilingMs);
 }
 
 function beforeAllBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
   const declared = registerBudget(row);
   const body = boundedBody(declared, work);
-  beforeAll(async () => {
-    assertRunsOnItsDeclaration(declared, undefined);
-    await body();
-  }, declared.ceilingMs);
+  beforeAll(async () => { await body(undefined); }, declared.ceilingMs);
 }
 
 /**
@@ -392,6 +401,8 @@ let shared: string;
 let sharedRuntime: string;
 
 beforeAllBoundedRow("the shared runtime build", async () => {
+  // Same evidence for the hook, which is the half that gets no ceiling.
+  expect(checkedDeclarations).toContain("the shared runtime build:hook");
   shared = await mkdtemp(path.join(os.tmpdir(), "product-runtime-shared-"));
   const manifest = path.join(shared, "workflow.json");
   await writeFile(manifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: "a".repeat(64) }));
@@ -682,7 +693,13 @@ const scopedRow = async (): Promise<void> => {
   } finally { await rm(temporary, { recursive: true, force: true }); }
 };
 
-itBoundedRow("declares a row on the two numbers it registered", async () => {});
+itBoundedRow("declares a row on the two numbers it registered", async () => {
+  // The work of this row is to be the evidence that the check above it ran, on
+  // the ceiling the runner is actually enforcing. Without this, the check could
+  // be lifted off the path every budgeted row takes and the row below would go
+  // on passing, because it calls the check directly.
+  expect(checkedDeclarations).toContain("declares a row on the two numbers it registered:300000");
+});
 
 it("refuses a budgeted row that is not running on what it declared", () => {
   const declared = declaredBoundedRows[0]!;
