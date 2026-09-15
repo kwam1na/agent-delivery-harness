@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, writeFile, readFile, readdir, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -27,20 +27,38 @@ import { buildProductRuntime } from "./build-product-runtime.ts";
  * qualification alongside a delivery wave came to 206.9 s, but
  * `docs/solutions/a-test-timeout-that-is-the-checkout-not-the-diff-2026-09-14.md`
  * is explicit that a duration measured under concurrent load is not a
- * measurement, and it is not used as one. Each budget below is a CEILING set
- * well clear of any cost observed either way: no row asserts how long it took,
- * and a row that exceeds its ceiling is reporting something that stopped rather
- * than a busy machine.
+ * measurement, and it is not used as one. Every budget below is a CEILING set
+ * well clear of any cost observed either way, and no row asserts how long it
+ * took.
+ *
+ * A ceiling alone is not enough, and the first version of this file learned it
+ * the expensive way. A row that crosses vitest's own ceiling is aborted from
+ * outside: its `catch` never runs, and it refuses with a bare `Test timed out
+ * in Nms` that says nothing about whether the product stopped or the host did.
+ * That is precisely the symptom this ticket was filed for, so a ceiling that
+ * merely moves it to another row moves the ticket with it. Every row that
+ * drives subprocesses therefore carries TWO numbers: an inner `_BOUND_MS` it
+ * enforces itself through `runRowWithStallAttribution`, and an outer
+ * `_TIMEOUT_MS` ceiling well above it that vitest never reaches in practice. A
+ * refusal here names the host or the candidate; it is not left as a bare
+ * timeout for the next reader to guess at.
  */
 
-/** One esbuild pass over four entry points plus two rollup declaration passes. */
-const RUNTIME_BUILD_TIMEOUT_MS = 120_000;
+/**
+ * One esbuild pass over four entry points plus two rollup declaration passes.
+ * The build measured 1 425 ms cold and 1 061 ms warm; the bound is three orders
+ * above that so it is reached only by something that stopped.
+ */
+const RUNTIME_BUILD_BOUND_MS = 120_000;
+const RUNTIME_BUILD_TIMEOUT_MS = 240_000;
 
-/** Four bundled executions plus a `tsc --noEmit` over the shipped declarations. */
-const CONSUMER_ROW_TIMEOUT_MS = 180_000;
+/** Three bundled executions plus a `tsc --noEmit` over the shipped declarations. */
+const CONSUMER_ROW_BOUND_MS = 180_000;
+const CONSUMER_ROW_TIMEOUT_MS = 360_000;
 
-/** Eight bundled executions plus the git plumbing of a disposable consumer. */
-const ADMISSION_ROW_TIMEOUT_MS = 240_000;
+/** Three bundled executions plus the eight git invocations of a disposable consumer. */
+const ADMISSION_ROW_BOUND_MS = 240_000;
+const ADMISSION_ROW_TIMEOUT_MS = 480_000;
 
 /**
  * The executions `runScopedRuntimeQualification` made when this budget was
@@ -56,7 +74,15 @@ const BUDGETED_BUNDLED_COMMANDS = 45;
  * at four workers. Fifteen minutes is far above anything this row has cost and
  * still short enough to fail a genuine hang inside one delivery.
  */
-const SCOPED_ROW_TIMEOUT_MS = 900_000;
+const SCOPED_ROW_BOUND_MS = 900_000;
+
+/**
+ * The one row here whose whole subject is a single bare start, so it cannot
+ * bound that start without bounding what it measures. The slowest start
+ * observed on this host during the storm that produced this file was 445 s.
+ */
+const BARE_START_ROW_TIMEOUT_MS = 900_000;
+const SCOPED_ROW_TIMEOUT_MS = 1_020_000;
 
 /** A bare `node -e 0` on a quiet host here is 40-150 ms. */
 const NOMINAL_EXEC_MS = 250;
@@ -68,7 +94,7 @@ const DEGRADED_EXEC_FACTOR = 10;
 const EXEC_SAMPLE_INTERVAL_MS = 10_000;
 
 /**
- * Attribute a scoped-qualification failure to the host or to the candidate.
+ * Attribute a row's failure to the host or to the candidate.
  *
  * The qualification refuses with the command it expected — `gate expected exit
  * 0`, or `runtime command timed out: gate` — and both read as a product defect
@@ -80,14 +106,15 @@ const EXEC_SAMPLE_INTERVAL_MS = 10_000;
  * way out of the catch and reported `candidate` for a failure that a 70-second
  * exec stall had caused, because by then the host had recovered and the median
  * was 67 ms. A stall is transient and it is the outlier that records it, so the
- * sampler runs alongside the qualification and the verdict reads its maximum.
+ * sampler runs alongside the row and the verdict reads its maximum.
  *
  * An unattributable failure stays with the candidate. A product that genuinely
  * hangs on a healthy host reports `candidate`, which is correct: this names the
  * environment only when the environment was measurably stalled, and never
  * launders a real defect.
  */
-export function attributeScopedQualificationFailure(observation: {
+export function attributeRowFailure(observation: {
+  readonly row: string;
   readonly failure: string;
   readonly execSampleMs: readonly number[];
 }): { readonly attribution: "environment" | "candidate"; readonly message: string } {
@@ -95,36 +122,132 @@ export function attributeScopedQualificationFailure(observation: {
   if (slowest !== undefined && slowest > NOMINAL_EXEC_MS * DEGRADED_EXEC_FACTOR) {
     return {
       attribution: "environment",
-      message: `environment: while this row's ${BUDGETED_BUNDLED_COMMANDS} executions ran, a bare start on this host took ${slowest} ms against a nominal ${NOMINAL_EXEC_MS} ms; the qualification reported: ${observation.failure}`,
+      message: `environment: while "${observation.row}" ran, a bare start on this host took ${slowest} ms against a nominal ${NOMINAL_EXEC_MS} ms; the row reported: ${observation.failure}`,
     };
   }
   const observed = slowest === undefined ? "unsampled" : `${slowest} ms`;
   return {
     attribution: "candidate",
-    message: `candidate: the slowest start sampled while this row ran was ${observed} against a nominal ${NOMINAL_EXEC_MS} ms, so the host did not stall it; the qualification reported: ${observation.failure}`,
+    message: `candidate: the slowest start sampled while "${observation.row}" ran was ${observed} against a nominal ${NOMINAL_EXEC_MS} ms, so the host did not stall it; the row reported: ${observation.failure}`,
   };
 }
 
 /**
- * Times bare node starts until stopped.
+ * One bare node start, awaited.
+ *
+ * This is what the sampler times when it is given no other probe, and it must
+ * actually start a process: a probe that returns without one makes every sample
+ * approximately zero, and a sampler whose samples are all approximately zero
+ * attributes every stall to the candidate — the defect this file exists to fix,
+ * reintroduced one level down.
+ *
+ * It is awaited rather than synchronous for a reason the first version of this
+ * file got wrong. `execFileSync` blocks the worker's event loop for the whole
+ * duration of the start, and `scripts/qualify-product.ts` guards every bundled
+ * command with a 30 000 ms `setTimeout` on that same loop. A synchronous sample
+ * that the host stalls for longer than that guard fires the guard on unblock —
+ * ahead of the child's already-queued `close` — so the instrument written to
+ * explain a timeout became sufficient to cause one. An awaited start times the
+ * same quantity and competes for nothing.
+ */
+export const bareNodeStart = async (): Promise<void> => {
+  try {
+    await promisify(execFile)(process.execPath, ["-e", "0"]);
+  } catch {
+    /* a host that refuses to start a process is itself the observation */
+  }
+};
+
+export interface ExecSampler {
+  /** The probe this sampler times. Exposed so a row can pin which one it is. */
+  readonly probe: () => Promise<void>;
+  /**
+   * Stop sampling and return every sample, INCLUDING the one still in flight.
+   * Idempotent.
+   */
+  readonly stop: () => number[];
+}
+
+/**
+ * Times starts until stopped.
  *
  * A start is the cost every bundled execution pays before it runs a line, so
- * this measures the same scarce resource the row spends without competing for
- * it: one start per interval against the row's own forty-five.
+ * this measures the same scarce resource the row spends: one start per interval
+ * against the row's own forty-five.
+ *
+ * A completed sample is not the only observation available, and on the host
+ * this file was written for it is the rarer one. When a row refuses because the
+ * machine stalled, the sampler's own start is usually stalled too and has not
+ * returned — so a sampler that reported only completed samples reported NONE at
+ * exactly the moment it mattered, and `attributeRowFailure` read that as
+ * `unsampled` and blamed the candidate. That is the v1 defect wearing a
+ * different hat. A start that has been outstanding for `n` ms is evidence the
+ * host took at least `n` ms to start a process, so `stop` returns the in-flight
+ * elapsed alongside the completed samples.
  */
-function startExecSampler(intervalMs: number): { stop: () => number[] } {
+export function startExecSampler(intervalMs: number, probe: () => Promise<void> = bareNodeStart): ExecSampler {
   const samples: number[] = [];
+  let outstandingSince: number | undefined;
   let sampling = true;
   void (async () => {
     while (sampling) {
-      const started = Date.now();
-      try { execFileSync(process.execPath, ["-e", "0"], { stdio: ["ignore", "ignore", "ignore"] }); }
-      catch { /* a host that refuses to start a process is itself the observation */ }
-      samples.push(Date.now() - started);
+      outstandingSince = Date.now();
+      await probe();
+      samples.push(Date.now() - outstandingSince);
+      outstandingSince = undefined;
+      if (!sampling) break;
       await new Promise((resolve) => { setTimeout(resolve, intervalMs).unref(); });
     }
   })();
-  return { stop: () => { sampling = false; return samples; } };
+  return {
+    probe,
+    stop: () => {
+      sampling = false;
+      return outstandingSince === undefined ? [...samples] : [...samples, Date.now() - outstandingSince];
+    },
+  };
+}
+
+/**
+ * Run one row's work under its own bound, with its refusal attributed.
+ *
+ * Two things the row cannot do for itself. The bound is enforced HERE rather
+ * than by vitest's row ceiling, because a row vitest aborts never reaches its
+ * own `catch` and refuses as a bare `Test timed out in Nms`. And the sampler is
+ * a parameter rather than a local, because the value it returns is what decides
+ * the attribution: injecting one is how a row can prove that this wrapper reads
+ * it at all.
+ */
+export async function runRowWithStallAttribution<T>(options: {
+  readonly row: string;
+  readonly boundMs: number;
+  readonly sampler: ExecSampler;
+  readonly work: () => Promise<T>;
+}): Promise<T> {
+  let bound: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const working = options.work();
+    // The bound may win the race; a later rejection from the losing side is
+    // then nobody's, and an unhandled rejection would fail a sibling row.
+    working.catch(() => {});
+    return await Promise.race([
+      working,
+      new Promise<never>((_, reject) => {
+        bound = setTimeout(() => { reject(new Error(`exceeded its ${options.boundMs} ms bound`)); }, options.boundMs);
+      }),
+    ]);
+  } catch (error) {
+    // A bare `gate expected exit 0` is what sent this row to three separate
+    // deliveries as a suspected product defect. Say which it is.
+    throw new Error(attributeRowFailure({
+      row: options.row,
+      failure: error instanceof Error ? error.message : String(error),
+      execSampleMs: options.sampler.stop(),
+    }).message, { cause: error });
+  } finally {
+    if (bound !== undefined) clearTimeout(bound);
+    options.sampler.stop();
+  }
 }
 
 /**
@@ -139,11 +262,18 @@ let shared: string;
 let sharedRuntime: string;
 
 beforeAll(async () => {
-  shared = await mkdtemp(path.join(os.tmpdir(), "product-runtime-shared-"));
-  const manifest = path.join(shared, "workflow.json");
-  await writeFile(manifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: "a".repeat(64) }));
-  sharedRuntime = path.join(shared, "runtime");
-  await buildProductRuntime(process.cwd(), manifest, sharedRuntime);
+  await runRowWithStallAttribution({
+    row: "the shared runtime build",
+    boundMs: RUNTIME_BUILD_BOUND_MS,
+    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
+    work: async () => {
+      shared = await mkdtemp(path.join(os.tmpdir(), "product-runtime-shared-"));
+      const manifest = path.join(shared, "workflow.json");
+      await writeFile(manifest, JSON.stringify({ schemaVersion: "agent-skills-release/1", contentSha256: "a".repeat(64) }));
+      sharedRuntime = path.join(shared, "runtime");
+      await buildProductRuntime(process.cwd(), manifest, sharedRuntime);
+    },
+  });
 }, RUNTIME_BUILD_TIMEOUT_MS);
 
 afterAll(async () => { await rm(shared, { recursive: true, force: true }); });
@@ -154,7 +284,7 @@ const installRuntime = async (destination: string): Promise<string> => {
   return destination;
 };
 
-it("runs bundled CLI and a typed consumer config without installed packages", async () => {
+const consumerRow = async (): Promise<void> => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "product-runtime-"));
   try {
     const runtime = await installRuntime(path.join(temporary, "runtime"));
@@ -184,9 +314,18 @@ it("runs bundled CLI and a typed consumer config without installed packages", as
     const parsed = await run(process.execPath, ["--input-type=module", "-e", 'import { buildRunExport, parseRunExport } from "./runtime/cli-api.mjs"; const value = buildRunExport({ runId: "run-1234567890abcdef", events: [] }); if (!parseRunExport(JSON.stringify(value)).ok || parseRunExport("{}").ok) process.exit(1);'], { cwd: temporary, env: { ...process.env, NODE_PATH: "" } });
     expect(parsed.stderr).toBe("");
   } finally { await rm(temporary, { recursive: true, force: true }); }
+};
+
+it("runs bundled CLI and a typed consumer config without installed packages", async () => {
+  await runRowWithStallAttribution({
+    row: "runs bundled CLI and a typed consumer config without installed packages",
+    boundMs: CONSUMER_ROW_BOUND_MS,
+    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
+    work: consumerRow,
+  });
 }, CONSUMER_ROW_TIMEOUT_MS);
 
-it("runs composite admission from bundled runtime bytes in a disposable consumer", async () => {
+const admissionRow = async (): Promise<void> => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "product-runtime-admit-"));
   try {
     const runtime = await installRuntime(path.join(temporary, "installed-runtime"));
@@ -270,57 +409,153 @@ it("runs composite admission from bundled runtime bytes in a disposable consumer
     const records = (await readdir(path.join(consumer, "telemetry/delivery-runs"))).filter((name) => name.startsWith("record--"));
     expect(records).toHaveLength(1);
   } finally { await rm(temporary, { recursive: true, force: true }); }
+};
+
+it("runs composite admission from bundled runtime bytes in a disposable consumer", async () => {
+  await runRowWithStallAttribution({
+    row: "runs composite admission from bundled runtime bytes in a disposable consumer",
+    boundMs: ADMISSION_ROW_BOUND_MS,
+    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
+    work: admissionRow,
+  });
 }, ADMISSION_ROW_TIMEOUT_MS);
 
-it("names the environment when a start stalled while the scoped qualification ran", () => {
+it("names the environment when a start stalled while the row ran", () => {
+  const row = "qualifies scoped execution through the actual bundled runtime";
   const failure = "gate expected exit 0";
 
   // One stalled start among healthy ones is the whole signal: the row that
   // produced this note failed after a single 70-second stall, on a host whose
   // median was 67 ms by the time anything asked.
-  const stalled = attributeScopedQualificationFailure({ failure, execSampleMs: [40, 55, 60, 120, 9000] });
+  const stalled = attributeRowFailure({ row, failure, execSampleMs: [40, 55, 60, 120, 9000] });
   expect(stalled.attribution).toBe("environment");
   expect(stalled.message).toContain("9000 ms");
   expect(stalled.message).toContain(failure);
+  expect(stalled.message).toContain(row);
 
   // The deny side: a host that never stalled leaves the failure with the
   // candidate, however slow the row itself was.
-  const healthy = attributeScopedQualificationFailure({ failure: "runtime command timed out: gate", execSampleMs: [40, 55, 60, 120, 2500] });
+  const healthy = attributeRowFailure({ row, failure: "runtime command timed out: gate", execSampleMs: [40, 55, 60, 120, 2500] });
   expect(healthy.attribution).toBe("candidate");
   expect(healthy.message).toContain("2500 ms");
   expect(healthy.message).toContain("runtime command timed out: gate");
 
   // An absent sample cannot attribute a failure away from the candidate.
-  const unsampled = attributeScopedQualificationFailure({ failure, execSampleMs: [] });
+  const unsampled = attributeRowFailure({ row, failure, execSampleMs: [] });
   expect(unsampled.attribution).toBe("candidate");
   expect(unsampled.message).toContain("unsampled");
   expect(unsampled.message).toContain(failure);
 });
 
-it("qualifies scoped execution through the actual bundled runtime", async () => {
+it("samples repeatedly, and reports the duration it measured rather than one it chose", async () => {
+  // The attribution above is only as good as the numbers reaching it. A sampler
+  // that returns nothing, that samples once and stops, or that reports a figure
+  // it did not measure produces a confident verdict from no observation at all
+  // — and the first two of those are the v1 defect exactly.
+  const PROBE_MS = 60;
+  const sampler = startExecSampler(5, async () => { await new Promise((resolve) => { setTimeout(resolve, PROBE_MS); }); });
+  await new Promise((resolve) => { setTimeout(resolve, 400); });
+  const samples = sampler.stop();
+
+  expect(samples.length).toBeGreaterThanOrEqual(2);
+  for (const sample of samples) {
+    expect(sample).toBeGreaterThanOrEqual(PROBE_MS - 5);
+    expect(sample).toBeLessThan(PROBE_MS * 20);
+  }
+  // Stopping is what ends it, and it stays stopped.
+  expect(sampler.stop().length).toBe(samples.length);
+});
+
+it("counts a start that has not come back yet, which is when a stall is worth naming", async () => {
+  // The host stalls the sampler's own start at the same moment it stalls the
+  // row's, so the completed-sample list is empty exactly when the verdict
+  // matters. `unsampled` reads as `candidate`, which is the v1 defect: a real
+  // stall reported as a product failure. An outstanding start IS the reading.
+  const sampler = startExecSampler(5, () => new Promise<void>(() => {}));
+  await new Promise((resolve) => { setTimeout(resolve, 80); });
+  const samples = sampler.stop();
+
+  expect(samples.length).toBe(1);
+  expect(samples[0]).toBeGreaterThanOrEqual(70);
+  // And it is that number the attribution reads, where an empty list would have
+  // said `unsampled` and sent the failure to the candidate.
+  const failure = "gate expected exit 0";
+  expect(attributeRowFailure({ row: "any row", failure, execSampleMs: samples }).message).toContain(`${samples[0]} ms`);
+  expect(attributeRowFailure({ row: "any row", failure, execSampleMs: [] }).message).toContain("unsampled");
+  // A start outstanding past the degraded threshold names the host, which is
+  // the case the completed-sample list could never reach.
+  expect(attributeRowFailure({ row: "any row", failure, execSampleMs: [NOMINAL_EXEC_MS * DEGRADED_EXEC_FACTOR + 1] }).attribution).toBe("environment");
+  // Stopping is still what ends it: no further start is begun.
+  expect(sampler.stop().length).toBe(1);
+});
+
+it("times an actual process start when it is given no probe", async () => {
+  const started = Date.now();
+  await bareNodeStart();
+  // A node start is tens of milliseconds at best on this host and has been
+  // measured at 445 s at worst. A probe that starts nothing returns in under a
+  // millisecond, and every sample it feeds the attribution would read healthy.
+  expect(Date.now() - started).toBeGreaterThanOrEqual(10);
+
+  const sampler = startExecSampler(EXEC_SAMPLE_INTERVAL_MS);
+  expect(sampler.probe).toBe(bareNodeStart);
+  sampler.stop();
+}, BARE_START_ROW_TIMEOUT_MS);
+
+it("refuses through the attribution on its own bound, and carries the cause", async () => {
+  const row = "runs bundled CLI and a typed consumer config without installed packages";
+  const stalled: ExecSampler = { probe: bareNodeStart, stop: () => [40, 9000] };
+  const quiet: ExecSampler = { probe: bareNodeStart, stop: () => [40, 60] };
+  const cause = new Error("gate expected exit 0");
+
+  // The wrapper reads the sampler it was given: the same failure attributes to
+  // the host or to the candidate on those samples alone.
+  const attributed = await runRowWithStallAttribution({ row, boundMs: 60_000, sampler: stalled, work: async () => { throw cause; } })
+    .then(() => undefined, (error: unknown) => error as Error);
+  expect(attributed?.message).toContain("environment:");
+  expect(attributed?.message).toContain("9000 ms");
+  expect(attributed?.message).toContain("gate expected exit 0");
+  // The original refusal is not replaced, only named.
+  expect(attributed?.cause).toBe(cause);
+
+  await expect(runRowWithStallAttribution({ row, boundMs: 60_000, sampler: quiet, work: async () => { throw cause; } }))
+    .rejects.toThrow("candidate:");
+
+  // Its own bound is what refuses, not vitest's ceiling: a row aborted from
+  // outside never reaches this catch, and `Test timed out in Nms` is the exact
+  // message V26-2084 was filed for.
+  await expect(runRowWithStallAttribution({ row, boundMs: 20, sampler: stalled, work: () => new Promise<never>(() => {}) }))
+    .rejects.toThrow("exceeded its 20 ms bound");
+
+  // And a row that finishes returns its value rather than being wrapped.
+  await expect(runRowWithStallAttribution({ row, boundMs: 60_000, sampler: quiet, work: async () => "qualified" }))
+    .resolves.toBe("qualified");
+});
+
+const scopedRow = async (): Promise<void> => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "product-runtime-scoped-"));
   try {
     const runtime = await installRuntime(path.join(temporary, "runtime"));
     const { runScopedRuntimeQualification, SCOPED_RUNTIME_PROBES } = await import("./qualify-product.ts");
-    const sampler = startExecSampler(EXEC_SAMPLE_INTERVAL_MS);
-    let result;
-    try {
-      result = await runScopedRuntimeQualification(runtime);
-    } catch (error) {
-      // A bare `gate expected exit 0` is what sent this row to three separate
-      // deliveries as a suspected product defect. Say which it is.
-      throw new Error(attributeScopedQualificationFailure({
-        failure: error instanceof Error ? error.message : String(error),
-        execSampleMs: sampler.stop(),
-      }).message, { cause: error });
-    } finally { sampler.stop(); }
+    const result = await runScopedRuntimeQualification(runtime);
     expect(result.probes).toEqual(SCOPED_RUNTIME_PROBES);
     expect(result.runtimeSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(result.repositories).toBe(3);
-    // The budget above is 45 executions wide. A probe that adds more has to
-    // restate it rather than spend it.
-    expect(result.commands.length).toBeLessThanOrEqual(BUDGETED_BUNDLED_COMMANDS);
+    // The budget above is 45 executions wide, and the qualification spends
+    // exactly that today. Equality rather than a ceiling, so a probe that adds
+    // an execution and a probe that quietly drops one both have to restate the
+    // number rather than spend someone else's tail gate.
+    expect(result.commands.length).toBe(BUDGETED_BUNDLED_COMMANDS);
     await writeFile(path.join(runtime, "cli.mjs"), "throw Error(\"must not execute corrupt runtime\");\n");
     await expect(runScopedRuntimeQualification(runtime)).rejects.toThrow("runtime checksum mismatch: cli.mjs");
   } finally { await rm(temporary, { recursive: true, force: true }); }
+};
+
+it("qualifies scoped execution through the actual bundled runtime", async () => {
+  await runRowWithStallAttribution({
+    row: "qualifies scoped execution through the actual bundled runtime",
+    boundMs: SCOPED_ROW_BOUND_MS,
+    sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS),
+    work: scopedRow,
+  });
 }, SCOPED_ROW_TIMEOUT_MS);

@@ -79,27 +79,67 @@ row has cost either way and still short enough that a genuine hang fails inside
 one delivery. No row here asserts how long it took.
 
 **The probe count is pinned to the budget.** The row now asserts
-`result.commands.length <= 45`, the count observed when the ceiling was written.
+`result.commands.length === 45`, the count observed when the ceiling was written
+and the count the qualification spends today — equality rather than a ceiling,
+so a probe quietly removed has to restate the number too.
 A probe added to `qualify-product.ts` trips a named assertion in the file that
 has to pay for it, instead of silently spending someone else's tail gate. This
 is the regression row: it fails for the exact reason the original bound went
 stale.
 
-**A refusal says which side failed.** `attributeScopedQualificationFailure`
-reports `environment` when a bare `node -e 0` start was stalled while the row
-ran, `candidate` otherwise, and `candidate` when nothing was sampled: it names
-the environment only when the environment measurably stalled, and never
-launders a real defect. Its three rows pin the allow side, the deny side, and
-the unsampled case.
+**A refusal says which side failed.** `attributeRowFailure` reports
+`environment` when a bare `node -e 0` start was stalled while the row ran,
+`candidate` otherwise, and `candidate` when nothing was sampled: it names the
+environment only when the environment measurably stalled, and never launders a
+real defect. Its three rows pin the allow side, the deny side, and the
+unsampled case, and two more rows pin the sampler that feeds it — that it takes
+more than one sample, and that the number it reports is one it measured rather
+than one it chose.
 
-The first version of that function got this wrong in a way worth keeping. It
-sampled on the way *out* of the catch, and on its first real failure — a check
-crossing the qualification's own 30 000 ms command timeout under the storm — it
-reported `candidate`, because by the time it asked, the host had recovered and
-the median start was 67 ms. A stall is transient and it is the outlier that
-records it. So the sampler now runs *alongside* the qualification and the
-verdict reads its maximum, not a median taken afterwards. An attribution
-measured after the thing it attributes is not a measurement of it.
+**And every row that spends subprocesses carries its own bound.** A row that
+crosses vitest's ceiling is aborted from outside: its `catch` never runs, and it
+refuses as a bare `Test timed out in Nms`, which is the ticket's own symptom. An
+attribution wired into one row of four therefore just moves the ticket to the
+other three — and it did: under the storm, the consumer row exhausted 180 000 ms
+on host stall alone and said nothing about whose fault it was. So
+`runRowWithStallAttribution` enforces an inner `_BOUND_MS` per row and the
+vitest `_TIMEOUT_MS` sits well above it as a backstop nothing reaches. The
+sampler is a parameter of that wrapper rather than a local, which is what lets a
+row prove the wrapper reads it.
+
+### Two self-corrections worth keeping
+
+The first version of the attribution sampled on the way *out* of the catch, and
+on its first real failure — a check crossing the qualification's own 30 000 ms
+command timeout under the storm — it reported `candidate`, because by the time
+it asked, the host had recovered and the median start was 67 ms. A stall is
+transient and it is the outlier that records it. So the sampler runs *alongside*
+the row and the verdict reads its maximum. An attribution measured after the
+thing it attributes is not a measurement of it.
+
+The second is sharper. That sampler used `execFileSync`, which blocks the
+worker's event loop for the whole duration of a start — and
+`scripts/qualify-product.ts` guards every bundled command with a 30 000 ms
+`setTimeout` on that same loop. A synchronous sample the host stalled for longer
+than the guard fired the guard on unblock, ahead of the child's already-queued
+`close`. The instrument written to explain a timeout had become sufficient to
+cause one: a run failed with `a bare start on this host took 33376 ms` against a
+30 000 ms guard, which is a refusal by arithmetic. The probe is now awaited
+`execFile`, which times the same quantity and competes for nothing.
+
+The third arrived from the first run of the second fix. Under the storm the
+sampler's own start had not come back either, so the completed-sample list was
+empty at exactly the moment the verdict mattered, `attributeRowFailure` read
+`unsampled`, and two rows blamed the candidate for a host that had stalled them
+— the v1 defect wearing a different hat. A start outstanding for `n` ms is
+already evidence the host took at least `n` ms, so `stop` now returns the
+in-flight elapsed alongside the completed samples. The first real run after that
+read `a bare start on this host took 101490 ms` and named the environment.
+
+**An instrument that shares a resource with the thing it measures is part of the
+measurement.** All three corrections are that one sentence: the first took its
+reading at the wrong time, the second took it out of the subject's own budget,
+and the third went silent under the very condition it existed to detect.
 
 The build is also hoisted to one `beforeAll` with a copy per row, which is the
 cheap half of the ticket and worth about three seconds — recorded here mostly so
