@@ -380,6 +380,13 @@ function boundedBody(declared: RowBudget, work: () => Promise<void>): (enforcedC
 function itBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
   const declared = registerBudget(row);
   const body = boundedBody(declared, work);
+  // `task.timeout` is the ceiling vitest will enforce; `declared.ceilingMs` is
+  // the one it was asked to. Reading the first and comparing it to the second is
+  // the whole of the check, and it is why these two lines sit together. A body
+  // rewritten to hand the check `declared.ceilingMs` instead would pass — no
+  // assertion inside the process can tell a number read from the runner from an
+  // equal number that was not. That residue is where this stops: every version
+  // of the guarantee has one, and moving it one call deeper only renames it.
   it(row, async ({ task }) => { await body(task.timeout); }, declared.ceilingMs);
 }
 
