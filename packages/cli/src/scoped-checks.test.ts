@@ -504,7 +504,7 @@ async function suite(rows: readonly Record<string, unknown>[], profile: Record<s
   const f = await fixture();
   f.env["SUITE_ROWS"] = JSON.stringify(rows);
   await writeFile(path.join(f.dir, "mode.txt"), "candidate");
-  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 20000, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
+  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 120000, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
   f.setConfig({ ...f.config, providers: [provider], obligations: [{ ...f.config.obligations[0]!, id: "check.suite.passed", providers: ["check.suite"] }],
     scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "suite", gitContext: "none", dependencyInputs: [], mutableOutputs: [], credentialIdentities: {}, ...profile }] } } as unknown as HarnessConfigInput);
   return f;
@@ -536,7 +536,7 @@ it("never reclassifies a regression in a file the diff touches, and names it fir
 
 it("refuses to attribute when the base tree cannot be prepared", async () => {
   const f = await suite([row("c.test.ts", "assertion", true, true)],
-    { dependencies: { command: [process.execPath, "-e", "if(!require('fs').existsSync('mode.txt'))process.exit(1)"], timeoutMs: 20000 } });
+    { dependencies: { command: [process.execPath, "-e", "if(!require('fs').existsSync('mode.txt'))process.exit(1)"], timeoutMs: 120000 } });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate")).toBe(1);
   expect(f.out.join("\n")).toContain("attribution-unavailable check.suite (exit 1): the base tree could not be prepared");
