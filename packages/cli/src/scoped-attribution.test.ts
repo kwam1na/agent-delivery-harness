@@ -109,6 +109,18 @@ it("calls a residual the base tree does not name candidate, even when the base r
   ]);
 });
 
+// A runner that retries internally prints FAIL for a file it then recovers and
+// still exits 0. The base tree is green in that case, whatever its log says.
+it("refuses to call a residual pre-existing when the base run exits zero, whatever its log named", async () => {
+  const attribution = await ladder({
+    log: assertion("a.test.ts"),
+    rerunCandidate: async () => ({ code: 1, log: assertion("a.test.ts") }),
+    rerunBase: async () => ({ code: 0, log: `${assertion("a.test.ts")}retried and passed\n` }),
+  });
+  expect(attribution.outcome).toBe("candidate");
+  expect(attribution.rows).toEqual([{ file: "a.test.ts", class: "candidate", evidence: "the failure reproduces alone (assertion) and the base tree passes it" }]);
+});
+
 it("never spends a rerun on the base comparison once the budget is gone", async () => {
   const files = Array.from({ length: ATTRIBUTION_RERUN_LIMIT }, (_unused, index) => `f${index}.test.ts`);
   let baseRuns = 0;

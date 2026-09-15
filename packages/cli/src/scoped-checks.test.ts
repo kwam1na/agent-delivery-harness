@@ -497,6 +497,7 @@ const rows=JSON.parse(process.env.SUITE_ROWS);
 const selected=focus.length?rows.filter(r=>focus.includes(r.file)):rows;
 const failed=selected.filter(r=>focus.length===0?true:(base?r.failsOnBase:r.failsAlone));
 for(const r of failed)console.log(' FAIL  '+r.file+' > a case\\n'+(r.signal==='timeout'?'Error: Test timed out in 5000ms.':'AssertionError: expected 1 to be 2'));
+fs.writeFileSync('suite-run.json',JSON.stringify({focus}));
 process.exit(failed.length?1:0);
 `] as [string, ...string[]];
 
@@ -505,9 +506,13 @@ async function suite(rows: readonly Record<string, unknown>[], profile: Record<s
   f.env["SUITE_ROWS"] = JSON.stringify(rows);
   await mkdir(path.join(f.dir, cwd), { recursive: true });
   await writeFile(path.join(f.dir, cwd, "mode.txt"), "candidate");
-  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 240000, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd, profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
+  // A declared output makes the retained evidence observable: the command writes
+  // the focus list it was given, so an output captured after the ladder's reruns
+  // would name one file where the declared run named none.
+  const outputs = cwd === "." ? ["suite-run.json"] : [];
+  const provider = { id: "check.suite", findingCodes: [], check: { command: SUITE, timeoutMs: 240000, outputs, scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd, profile: "suite", environment: [{ name: "SUITE_ROWS", kind: "flag" }] } } };
   f.setConfig({ ...f.config, providers: [provider], obligations: [{ ...f.config.obligations[0]!, id: "check.suite.passed", providers: ["check.suite"] }],
-    scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "suite", gitContext: "none", dependencyInputs: [], mutableOutputs: [], credentialIdentities: {}, ...profile }] } } as unknown as HarnessConfigInput);
+    scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [{ id: "suite", gitContext: "none", dependencyInputs: [], mutableOutputs: outputs, credentialIdentities: {}, ...profile }] } } as unknown as HarnessConfigInput);
   return f;
 }
 const row = (file: string, signal: string, failsAlone: boolean, failsOnBase: boolean) => ({ file, signal, failsAlone, failsOnBase });
@@ -580,4 +585,9 @@ it("attributes the same candidate once and reuses the completion on the next inv
   expect(attribution).toMatchObject({ version: "check-attribution/1", providerId: "check.suite", exitCode: 1, outcome: "attributed",
     rows: [{ file: "a.test.ts", class: "environmental", evidence: "passed when rerun alone on the candidate" }] });
   expect(JSON.parse(Buffer.from(portable.artifacts["check-result.json"], "base64").toString("utf8"))).toMatchObject({ verdict: "green", exitCode: 0 });
+  // The retained output belongs to the declared command, which ran with no focus
+  // list — not to the one-file rerun the ladder spent afterwards.
+  const output = JSON.parse(Buffer.from(portable.artifacts["check-output-0.json"], "base64").toString("utf8"));
+  expect(output.path).toBe("suite-run.json");
+  expect(JSON.parse(Buffer.from(output.base64, "base64").toString("utf8"))).toEqual({ focus: [] });
 }, 600000);

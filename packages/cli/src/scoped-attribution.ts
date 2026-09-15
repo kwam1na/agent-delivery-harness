@@ -184,6 +184,10 @@ export async function attributeCheckFailure(request: AttributionRequest): Promis
     // deadlock or unawaited promise this ladder is most likely to meet. A row
     // whose reruns say "fails on the candidate, passes on the base" has been
     // examined, and the examination says candidate.
+    // The base exit code is the authority, not its log: a runner that retries
+    // internally prints FAIL for a file it then recovers and still exits 0, and
+    // reading that log alone would hand the candidate's own regression to the
+    // base tree.
     if (base.code !== 0 && baseFailed.has(failure.file)) {
       rows.push({ file: failure.file, class: "pre-existing", evidence: "the base tree fails the same file" });
       continue;
