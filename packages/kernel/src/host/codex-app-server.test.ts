@@ -186,9 +186,21 @@ describe("the per-fence permission profile", () => {
 
   it("denies ambient temp under BOTH spellings, so the deny names the path the kernel checks", async () => {
     const { composed } = await compose("temp");
-    for (const spelling of ["/tmp", "/private/tmp"]) {
-      expect(composed.profile.denyWriteRoots.some((root) => root === spelling)).toBe(true);
+    // How MANY spellings `/tmp` has is a property of the host: on macOS it is a
+    // symlink and there are two (`/tmp` and `/private/tmp`), on Linux and under
+    // bun's Linux images it is a real directory and there is one. Hardcoding the
+    // macOS pair asserted the host rather than the kernel, and failed on every
+    // other host for a reason that had nothing to do with the deny. The claim
+    // that survives both is: whatever spellings this host has, the deny carries
+    // ALL of them — derived by this file's own walk, not the product's helper,
+    // so a collapse to a single `path.resolve` is still observed here.
+    const slashTmpSpellings = authoritySpellings("/tmp");
+    for (const spelling of slashTmpSpellings) {
+      expect(composed.profile.denyWriteRoots, `/tmp ${spelling}`).toContain(spelling);
     }
+    // And the literal `/tmp` is denied on every host, symlink or not: that is
+    // the spelling an ambient tool writes.
+    expect(composed.profile.denyWriteRoots).toContain("/tmp");
     // Ambient `$TMPDIR` is a SECOND contributor, and on macOS it is a per-user
     // path under `/var/folders` rather than `/tmp` — so the `/tmp` rows above
     // say nothing about it and it could be deleted outright unobserved.
