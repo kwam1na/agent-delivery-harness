@@ -79,6 +79,13 @@ const ROW_BUDGET = {
   "runs bundled CLI and a typed consumer config without installed packages": { bound: 180_000, ceiling: 360_000 },
   "runs composite admission from bundled runtime bytes in a disposable consumer": { bound: 240_000, ceiling: 480_000 },
   "qualifies scoped execution through the actual bundled runtime": { bound: 900_000, ceiling: 1_020_000 },
+  // A row with no work, declared through the same door as the four above, so
+  // the door itself is exercised by something cheap. Its numbers are distinct
+  // from every other pair here on purpose: the ceiling it is given is read back
+  // from vitest inside the row, so a helper that hands `it` the bound instead
+  // of the ceiling fails HERE, in seconds, rather than only in the rows that
+  // cost minutes and only once the host is already stalling them.
+  "declares a row on the two numbers it registered": { bound: 150_000, ceiling: 300_000 },
 } as const satisfies Readonly<Record<string, { readonly bound: number; readonly ceiling: number }>>;
 
 type BudgetedRow = keyof typeof ROW_BUDGET;
@@ -310,7 +317,34 @@ function registerBudget(row: BudgetedRow): RowBudget {
   return declared;
 }
 
-/** The bounded, sampled, attributed body every budgeted row runs as. */
+/**
+ * Refuse a row that is not running on what it declared.
+ *
+ * Two things were asserted by construction and neither by evidence:
+ *
+ * - The budget the row runs under is the one in the registry, BY REFERENCE. A
+ *   `registerBudget` that registered an honest pair and handed back a different
+ *   one would satisfy the guard row while every row ran on the wrong number.
+ * - The ceiling vitest is ACTUALLY enforcing is the registered ceiling. The
+ *   guard row orders two fields of one object; it cannot see the third argument
+ *   `it` was given, and a ceiling lowered to the row's own bound puts vitest's
+ *   abort at the same instant as the inner bound — vitest wins the race, the
+ *   catch never runs, and the bare `Test timed out in Nms` is back with every
+ *   assertion green. `task.timeout` is what vitest will enforce, so that is
+ *   what is read.
+ *
+ * `beforeAll` can consume no fixtures and vitest exposes no hook timeout, so
+ * the hook passes `undefined` and only the first check runs for it. That
+ * residue is real, and is stated rather than papered over.
+ */
+function assertRunsOnItsDeclaration(declared: RowBudget, enforcedCeilingMs: number | undefined): void {
+  expect(declaredBoundedRows, `${declared.row}: runs on the budget it registered`).toContain(declared);
+  if (enforcedCeilingMs !== undefined) {
+    expect(enforcedCeilingMs, `${declared.row}: vitest ceiling is the registered ceiling`).toBe(declared.ceilingMs);
+  }
+}
+
+/** The bounded, sampled, attributed work every budgeted row runs. */
 function boundedBody(declared: RowBudget, work: () => Promise<void>): () => Promise<void> {
   return async () => {
     await runRowWithStallAttribution({ budget: declared, sampler: startExecSampler(EXEC_SAMPLE_INTERVAL_MS), work });
@@ -330,12 +364,20 @@ function boundedBody(declared: RowBudget, work: () => Promise<void>): () => Prom
  */
 function itBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
   const declared = registerBudget(row);
-  it(row, boundedBody(declared, work), declared.ceilingMs);
+  const body = boundedBody(declared, work);
+  it(row, async ({ task }) => {
+    assertRunsOnItsDeclaration(declared, task.timeout);
+    await body();
+  }, declared.ceilingMs);
 }
 
 function beforeAllBoundedRow(row: BudgetedRow, work: () => Promise<void>): void {
   const declared = registerBudget(row);
-  beforeAll(boundedBody(declared, work), declared.ceilingMs);
+  const body = boundedBody(declared, work);
+  beforeAll(async () => {
+    assertRunsOnItsDeclaration(declared, undefined);
+    await body();
+  }, declared.ceilingMs);
 }
 
 /**
@@ -639,6 +681,25 @@ const scopedRow = async (): Promise<void> => {
     await expect(runScopedRuntimeQualification(runtime)).rejects.toThrow("runtime checksum mismatch: cli.mjs");
   } finally { await rm(temporary, { recursive: true, force: true }); }
 };
+
+itBoundedRow("declares a row on the two numbers it registered", async () => {});
+
+it("refuses a budgeted row that is not running on what it declared", () => {
+  const declared = declaredBoundedRows[0]!;
+  // A ceiling lowered to the row's own bound is the edit that puts vitest's
+  // abort on top of the inner bound and brings the bare timeout back.
+  expect(() => { assertRunsOnItsDeclaration(declared, declared.boundMs); }).toThrow("vitest ceiling is the registered ceiling");
+  expect(() => { assertRunsOnItsDeclaration(declared, declared.ceilingMs); }).not.toThrow();
+  // A hook consumes no fixtures, so `undefined` is all it can be given — and
+  // the identity check still runs for it.
+  expect(() => { assertRunsOnItsDeclaration(declared, undefined); }).not.toThrow();
+  // An unregistered budget is what a `registerBudget` handing back a copy of
+  // what it pushed would produce: the registry holds an honest pair while the
+  // row runs on another one. `toContain` compares by reference, which is the
+  // whole of the claim.
+  const unregistered: RowBudget = { row: "never declared", boundMs: 1, ceilingMs: 2 };
+  expect(() => { assertRunsOnItsDeclaration(unregistered, 2); }).toThrow("runs on the budget it registered");
+});
 
 it("keeps every inner bound under its own ceiling, and every bounded row on the budget", () => {
   // Two numbers ordered by prose until now — "an outer `_TIMEOUT_MS` ceiling

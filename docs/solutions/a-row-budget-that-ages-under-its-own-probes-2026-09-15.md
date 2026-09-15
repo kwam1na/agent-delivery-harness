@@ -155,7 +155,27 @@ which is the sentence above, rewritten one level down. So `registerBudget` is
 now the only expression in the file that turns a name into two numbers, it
 registers exactly what it hands out, every declaration passes what it returned,
 and the guard row orders the registered numbers. There is nowhere left to write
-a bound and nowhere to pass one that is not the one asserted.
+a bound.
+
+And then a third pass, because "nowhere to pass one that is not the one
+asserted" was still a sentence about the code rather than a thing the code
+checked. The guard row ordered two fields of one object; nothing read back the
+third argument `it` had been handed, so lowering a row's vitest ceiling onto its
+own inner bound put the abort and the bound at the same instant — vitest wins,
+the catch never runs, the bare timeout is back — with every assertion green. The
+row body now reads `task.timeout`, which is what vitest will actually enforce,
+and compares it to the ceiling its budget registered; it also checks by
+reference that the budget it is running on is the one in the registry. A row
+with no work is declared through the same door purely so that both checks are
+exercised in seconds rather than only in the rows that cost minutes. A
+`beforeAll` hook can consume no fixtures and vitest exposes no hook timeout, so
+the hook's ceiling stays unread; that residue is written down rather than
+papered over.
+
+**Three times, the repair asserted one level above the thing that could go
+wrong.** The record instead of the wiring, the names instead of the numbers, the
+numbers instead of what the runner enforces. Each time the giveaway was the
+same: the assertion could be satisfied without the mechanism existing.
 
 The same reading applies to the instrument's own test. It drove the sampler at a
 5 ms interval against a 60 ms probe, so a sampler that timed the whole cycle —
