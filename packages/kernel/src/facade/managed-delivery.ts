@@ -239,12 +239,20 @@ async function residualDecisionFor(
   config: HarnessConfig,
   check: { readonly reviewedCandidates: readonly ReviewedCandidateCoordinate[] },
   recordBinding: { readonly treeSha: string; readonly mergeBaseSha: string },
+  run: CandidateCommandRunner,
 ): Promise<ResidualDecision> {
+  // The runner is required and not defaulted here ON PURPOSE. This module's
+  // one-seam invariant is enforced by a negative assertion over the launches
+  // the exec port observed, so a bypass does not fail a sensor — it empties
+  // one. A defaulted parameter would make the bypass the quiet option at the
+  // only surface where it matters; an explicit one makes every future call
+  // site state which runner it is launching git through.
   return reproveResidual({
     rootDir,
     config,
     reviewedCandidates: check.reviewedCandidates,
     recordCandidate: { treeSha: recordBinding.treeSha, mergeBaseSha: recordBinding.mergeBaseSha },
+    run,
   });
 }
 
@@ -4672,7 +4680,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           executionContext: { kind: "agent", signal: "managed-delivery" } },
       );
       if (!check.ok) return refuseWith(check.blockers);
-      const residualRefusal = refuseResidual(await residualDecisionFor(rootDir, config, check, parsed.record.candidateBinding));
+      const residualRefusal = refuseResidual(await residualDecisionFor(rootDir, config, check, parsed.record.candidateBinding, candidateRunner));
       if (residualRefusal !== undefined) return residualRefusal;
 
       const treeSha = (await git(rootDir, "rev-parse", "HEAD^{tree}")).out;
@@ -4767,7 +4775,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
           // literal, and the two things the finish line must never confuse are
           // "the proof ran and held" and "the proof was not run".
           externalVerification = check.ok
-            && refuseResidual(await residualDecisionFor(rootDir, config, check, parsed.record.candidateBinding)) === undefined
+            && refuseResidual(await residualDecisionFor(rootDir, config, check, parsed.record.candidateBinding, candidateRunner)) === undefined
             ? "passed" : "failed";
         }
       }

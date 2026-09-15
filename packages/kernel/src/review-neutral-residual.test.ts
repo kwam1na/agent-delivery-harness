@@ -568,6 +568,58 @@ describe("the default policy, read through a config that declares none", () => {
  * `decideResidual` is a surface that has started deciding for itself, and that
  * is the defect, whatever it decides.
  */
+/**
+ * The seam, not the answer.
+ *
+ * The managed-delivery facade routes every external command through one exec
+ * port so the walking-skeleton scenario can assert the launch inventory it
+ * observes is complete. That assertion is negative — it checks that nothing
+ * unexpected was launched — so a module spawning git directly does not fail it,
+ * it empties it. The only thing that can catch a bypass here is a row that
+ * makes the supplied runner the ONLY way to reach the repository, which is what
+ * this one does: the rootDir handed to the projection holds no repository at
+ * all, and the runner is what knows where the objects live.
+ */
+describe("the runner the caller supplies", () => {
+  it("is the one every git read goes through", async () => {
+    const root = await repository();
+    await put(root, "docs/solutions/note.md", "# before\n");
+    const base = commit(root, "base");
+    await put(root, "docs/solutions/note.md", "# after\n");
+    const moved = commit(root, "a note after the round");
+
+    const elsewhere = await mkdtemp(path.join(os.tmpdir(), "no-repo-"));
+    roots.push(elsewhere);
+
+    const launched: string[][] = [];
+    const run = async (command: readonly string[], options: { readonly cwd: string }) => {
+      launched.push([...command]);
+      expect(options.cwd, "the projection asks for the root it was given").toBe(elsewhere);
+      try {
+        // The runner, and only the runner, knows where the objects are.
+        return { exitCode: 0, stdout: execFileSync(command[0] as string, command.slice(1), { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+      } catch {
+        return { exitCode: 1, stdout: "", stderr: "" };
+      }
+    };
+
+    const outcome = await projectPostRoundResidual({
+      rootDir: elsewhere,
+      config: config(),
+      reviewedCandidates: [{ treeSha: base.tree, mergeBaseSha: base.commit, provenNeutral: true }],
+      recordCandidate: { treeSha: moved.tree, mergeBaseSha: base.commit },
+      run,
+    });
+
+    // Had the projection spawned git itself, `elsewhere` is not a repository
+    // and every tree-ish would have failed to resolve.
+    expect(outcome.kind).toBe("projected");
+    expect(outcome.kind === "projected" ? outcome.projection.admitted : false).toBe(true);
+    expect(launched.length).toBeGreaterThan(0);
+    expect(launched.every((command) => command[0] === "git")).toBe(true);
+  });
+});
+
 describe("the residual decision the deciding surfaces share", () => {
   const reviewed = { treeSha: "a".repeat(40), mergeBaseSha: "b".repeat(40) };
   const projection = (admitted: boolean): ReviewNeutralProjection => ({
@@ -614,21 +666,52 @@ describe("the residual decision the deciding surfaces share", () => {
   /**
    * Wiring, asserted by reading the sources.
    *
-   * These are the two things the rule cannot defend by itself. A caller that
-   * stops consulting it does not fail any behavioural row — it simply decides
-   * on its own again, which is how this delivery shipped the gap twice.
+   * These are the things the rule cannot defend by itself. A caller that stops
+   * consulting it does not fail any behavioural row — it simply decides on its
+   * own again, which is how this delivery shipped the gap twice.
+   *
+   * WHY EACH SURFACE PINS ITS CALL SITE AND NOT MERELY THE NAME. A surface may
+   * put the shared rule behind a private helper, and the facade does: both of
+   * its deciding paths go through `refuseResidual(await residualDecisionFor(`.
+   * A row that only looks for `reproveResidual(` therefore reads the *helper's*
+   * body and passes with every caller of it deleted — which is precisely the
+   * round-4 defect this row was written to prevent recurring, one level in. So
+   * the pattern pinned per surface is the spelling at the point of decision,
+   * and the facade additionally pins the count, because "one of two call sites
+   * guarded" is the exact shape that shipped. The facade's pattern also names
+   * the runner it passes: reaching git any other way there is the bypass the
+   * module's one exec seam exists to prevent, and no scenario row can report
+   * a launch the port never saw.
    */
-  it("is what every surface that decides actually calls", async () => {
+  it("is what every surface that decides actually calls, at each site that decides", async () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const root = path.join(here, "..", "..", "..");
-    const sources = {
-      "the verify command": path.join(root, "packages/cli/src/commands/verify.ts"),
-      "the pull-request Action": path.join(root, "packages/action/src/main.ts"),
-      "the managed-delivery facade": path.join(here, "facade", "managed-delivery.ts"),
-    };
-    for (const [surface, file] of Object.entries(sources)) {
+    const sources = [
+      { surface: "the verify command", file: path.join(root, "packages/cli/src/commands/verify.ts"), call: /decideResidual\(residual, verified\.reviewedCandidates\)/g, sites: 1 },
+      { surface: "the pull-request Action", file: path.join(root, "packages/action/src/main.ts"), call: /reproveResidual\(\{/g, sites: 1 },
+      { surface: "the managed-delivery facade", file: path.join(here, "facade", "managed-delivery.ts"), call: /refuseResidual\(await residualDecisionFor\(rootDir, config, check, parsed\.record\.candidateBinding, candidateRunner\)\)/g, sites: 2 },
+    ];
+    for (const { surface, file, call, sites } of sources) {
       const text = await readFile(file, "utf8");
-      expect(/\b(decideResidual|reproveResidual)\s*\(/.test(text), `${surface} decides the residual for itself`).toBe(true);
+      expect(text.match(call)?.length ?? 0, `${surface} decides the residual at every site that decides`).toBe(sites);
     }
+  });
+
+  /**
+   * The same pinning, one module over: the strictest-wins merge is applied
+   * where the record's reviewed coordinates are projected.
+   *
+   * `mergeReviewedClaim` has its own four-assertion row in
+   * `delivery-record.test.ts`, and that row stays green with the call site
+   * reverted to the first-wins `if (!trees.has(sha))` it replaced — an
+   * extracted helper proves the rule and says nothing about its application.
+   * The retained-review fixture that would falsify the application
+   * behaviourally costs a full review-context artifact set; this is the cheap
+   * half of it, and it closes the revert.
+   */
+  it("applies the strictest-wins claim where the reviewed coordinates are projected", async () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const text = await readFile(path.join(here, "delivery-record.ts"), "utf8");
+    expect(text).toContain("mergeReviewedClaim(trees.get(");
   });
 });

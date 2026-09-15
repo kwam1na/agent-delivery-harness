@@ -526,7 +526,7 @@ Action at the merge gate when the pull request opens, and the managed-delivery
 facade when it stands a delivery up as `ready` and again when it turns the
 finish line into an authorized merge.
 
-**Every surface that decides re-proves; none of them reads the claim.** The projection artifact in
+**Every surface that decides re-proves; the claim is read only to decide whether an unprovable residual is fatal.** The projection artifact in
 the record is verified off-repository by recomputing it from the manifest, which
 establishes that the artifact is internally consistent and nothing more: the
 classification is a statement about bytes in git, and the only workspace that

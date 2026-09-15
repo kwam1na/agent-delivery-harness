@@ -17,7 +17,7 @@
  * `rebase`. So the tree-ish is resolved once, up front, and a tree that will
  * not resolve stops the whole comparison rather than colouring one path.
  */
-import { runGitCommand } from "./candidate.ts";
+import { runGitCommand, type CandidateCommandRunner } from "./candidate.ts";
 import type { HarnessConfig } from "./config.ts";
 import type { ReviewedCandidateCoordinate } from "./delivery-record.ts";
 import {
@@ -38,16 +38,34 @@ export interface ResidualRequest {
   readonly reviewedCandidates: readonly ReviewedCandidateCoordinate[];
   /** The candidate the record is about. */
   readonly recordCandidate: ReviewedCandidateCoordinate;
+  /**
+   * The runner every git read here goes through, defaulted to this package's
+   * own `runGitCommand`.
+   *
+   * WHY THIS IS AN OPTION AND NOT A CONSTANT. The managed-delivery facade
+   * exists in part to hold one exec seam: every external command it runs goes
+   * through `input.exec`, and the walking-skeleton scenario asserts the launch
+   * inventory that seam observes is complete. That assertion is a negative one
+   * over an observed set, so a module that spawns git behind the facade's back
+   * does not fail it — it silently empties it. Reading four blobs per residual
+   * path is exactly such a spawn, and on the widest population this ticket has
+   * ever judged. So the request carries the runner the caller wants used, in
+   * the shape `captureGitCandidate` and `computeCandidateDiff` already use
+   * (`options.run ?? runGitCommand`), and the facade passes the same
+   * `candidateRunner` it already hands the evidence kernel one line above.
+   * `verify` and the Action pass nothing and are unchanged.
+   */
+  readonly run?: CandidateCommandRunner;
 }
 
-async function objectExists(rootDir: string, treeish: string): Promise<boolean> {
-  const probe = await runGitCommand(["git", "rev-parse", "--quiet", "--verify", `${treeish}^{tree}`], { cwd: rootDir });
+async function objectExists(run: CandidateCommandRunner, rootDir: string, treeish: string): Promise<boolean> {
+  const probe = await run(["git", "rev-parse", "--quiet", "--verify", `${treeish}^{tree}`], { cwd: rootDir });
   return probe.exitCode === 0;
 }
 
 /** The path's bytes in one tree-ish, or null when that tree does not carry it. */
-async function blobAt(rootDir: string, treeish: string, repoPath: string): Promise<string | null> {
-  const read = await runGitCommand(["git", "cat-file", "blob", `${treeish}:${repoPath}`], { cwd: rootDir });
+async function blobAt(run: CandidateCommandRunner, rootDir: string, treeish: string, repoPath: string): Promise<string | null> {
+  const read = await run(["git", "cat-file", "blob", `${treeish}:${repoPath}`], { cwd: rootDir });
   return read.exitCode === 0 ? read.stdout : null;
 }
 
@@ -64,8 +82,8 @@ async function blobAt(rootDir: string, treeish: string, repoPath: string): Promi
  * `verify` is the only enforcer left. So the failure is returned as a failure
  * and both callers refuse or report it as `unresolvable`.
  */
-async function changedPaths(rootDir: string, from: string, to: string): Promise<readonly string[] | null> {
-  const listed = await runGitCommand(["git", "diff", "--name-only", "-z", from, to], { cwd: rootDir });
+async function changedPaths(run: CandidateCommandRunner, rootDir: string, from: string, to: string): Promise<readonly string[] | null> {
+  const listed = await run(["git", "diff", "--name-only", "-z", from, to], { cwd: rootDir });
   if (listed.exitCode !== 0) return null;
   return listed.stdout.split("\0").filter((entry) => entry !== "");
 }
@@ -123,13 +141,14 @@ async function projectOne(request: ResidualRequest, reviewed: ReviewedCandidateC
     ["the recorded candidate tree", request.recordCandidate.treeSha],
     ["the recorded candidate's merge base", request.recordCandidate.mergeBaseSha],
   ];
+  const run = request.run ?? runGitCommand;
   for (const [role, treeish] of trees) {
-    if (!(await objectExists(request.rootDir, treeish))) {
+    if (!(await objectExists(run, request.rootDir, treeish))) {
       return { kind: "unresolvable", detail: `${role} ${treeish} is not an object in this repository` };
     }
   }
 
-  const paths = await changedPaths(request.rootDir, reviewed.treeSha, request.recordCandidate.treeSha);
+  const paths = await changedPaths(run, request.rootDir, reviewed.treeSha, request.recordCandidate.treeSha);
   if (paths === null) {
     return {
       kind: "unresolvable",
@@ -140,10 +159,10 @@ async function projectOne(request: ResidualRequest, reviewed: ReviewedCandidateC
   for (const repoPath of paths) {
     inputs.push({
       path: repoPath,
-      reviewedContent: await blobAt(request.rootDir, reviewed.treeSha, repoPath),
-      reviewedBaseContent: await blobAt(request.rootDir, reviewed.mergeBaseSha, repoPath),
-      recordContent: await blobAt(request.rootDir, request.recordCandidate.treeSha, repoPath),
-      recordBaseContent: await blobAt(request.rootDir, request.recordCandidate.mergeBaseSha, repoPath),
+      reviewedContent: await blobAt(run, request.rootDir, reviewed.treeSha, repoPath),
+      reviewedBaseContent: await blobAt(run, request.rootDir, reviewed.mergeBaseSha, repoPath),
+      recordContent: await blobAt(run, request.rootDir, request.recordCandidate.treeSha, repoPath),
+      recordBaseContent: await blobAt(run, request.rootDir, request.recordCandidate.mergeBaseSha, repoPath),
     });
   }
   return {

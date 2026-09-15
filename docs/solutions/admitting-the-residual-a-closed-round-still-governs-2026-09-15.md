@@ -277,6 +277,46 @@ use can tell a verdict produced by a full check from one produced by a narrower
 one. A vocabulary that cannot express *which* proofs stood behind a pass is a
 vocabulary in which this class of gap is invisible by construction.
 
+## The fifth thing: a test that proves the rule and says nothing about its use
+
+The two gaps above were shipped because the counter-check lived where the caller
+was. The third round of that story is subtler and worth writing down, because
+the fix for the first two is what caused it.
+
+Once the rule moved into one kernel function, the obvious guard was a row that
+reads each deciding surface's source and asserts it mentions the function. It
+does not hold. A surface may put the shared rule behind a private helper — the
+managed-delivery facade does, because two of its paths need the same decision
+rendered differently — and then the helper's own body satisfies the assertion
+with every caller of it deleted. That is the original defect exactly, one level
+in: one of two call sites guarded is indistinguishable from none.
+
+The same shape appeared a second time in the same delta. The strictest-wins
+merge over a record's reviewed coordinates was extracted into a small exported
+function and given a four-assertion row. Reverting the *call site* to the
+first-wins spelling it replaced left the suite green, with a passing row above
+it that a future reader would take for coverage. An extracted, tested helper is
+stronger evidence than the comment it replaced, and it guards one line further
+away than the reader assumes.
+
+**The generalisable form.** A sensor over a shared rule has to pin the *point of
+decision*, not the rule's name — the spelling at the call site, and its count
+where more than one site decides. And when a rule is lifted out to be made
+falsifiable, ask separately what falsifies its application; the extraction moves
+the risk, it does not remove it.
+
+There is a third instance of the same family in this delivery, which is why it
+is its own section rather than a footnote. The facade holds one exec seam so a
+scenario can assert the complete inventory of what it launched. That assertion
+is *negative*: it checks that nothing unexpected appears in the observed set. A
+module that spawns git directly does not fail it — it removes entries from the
+set the assertion runs over. The re-proof this ticket added did exactly that
+until the runner was threaded through the request, and the row that now catches
+it is the only kind that can: one that makes the supplied runner the only route
+to the repository, by handing the projection a directory that holds no
+repository at all. A negative sensor cannot report the absence it was written to
+guarantee; something has to make the bypass fail loudly instead.
+
 ## What this note is evidence of
 
 It landed in the pull request that built the mechanism, through the mechanism,
