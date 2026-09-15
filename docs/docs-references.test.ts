@@ -1315,13 +1315,29 @@ describe("the rules the documentation states in prose", () => {
     const costParagraph = /\*\*The closed round's `cost`[\s\S]*?\n\n/.exec(raw)?.[0];
     expect(costParagraph, "docs/delivery-runbook.md no longer carries the round-cost paragraph").toBeDefined();
     const shapeMembers = ["cost", "unit", "total", "reportedBy", "coverage", "subagent-tokens"];
-    const named = [...costParagraph!.matchAll(/`([A-Za-z][A-Za-z-]*)`/g)]
+    const named = [...costParagraph!.matchAll(/`([A-Za-z][A-Za-z0-9_-]*)`/g)]
       .map((match) => match[1]!)
       .filter((token) => !shapeMembers.includes(token));
     expect(
       [...new Set(named)].sort(),
       "docs/delivery-runbook.md's cost paragraph names a coverage the frozen grammar does not accept",
     ).toEqual(coverageAccepted.slice().sort());
+    // The paragraph agreement above is scoped to one paragraph, and the harm —
+    // an agent copying a coverage off this page into a live emit — is available
+    // anywhere on it: a sentence one paragraph away reads just as
+    // authoritative. So the refusal is page-wide as well. The list is of
+    // plausible spellings rather than of the vocabulary, and each name is
+    // checked against the derived vocabulary first, so the guard cannot go on
+    // forbidding something the grammar has since started accepting.
+    for (const refused of ["estimated", "sampled", "approximate", "best_effort", "best-effort", "unmetered"]) {
+      expect(coverageAccepted, `the cost grammar now accepts \`${refused}\`, so this guard is stale`).not.toContain(
+        refused,
+      );
+      expect(
+        runbook,
+        `docs/delivery-runbook.md names \`${refused}\`, which the cost grammar refuses as a coverage`,
+      ).not.toContain(`\`${refused}\``);
+    }
 
     // The two shapes the paragraph describes, each checked against the arm it
     // describes. The unreported arm carrying a zero total, and the measured arm
@@ -1344,9 +1360,15 @@ describe("the rules the documentation states in prose", () => {
     expect(runbook, "docs/delivery-runbook.md no longer says a round's total is a floor rather than the cost").toContain(
       "floor on what the round cost",
     );
-    // `reportedBy` is required in both arms; the grammar check above proves the
-    // requirement, this proves the page still carries it. Without it the page
-    // can grant an exemption the grammar refuses mid-round.
+    // `reportedBy` is required in BOTH arms, so both arms are probed: the
+    // measured one above, and the unreported one here. The page states the
+    // requirement absolutely, and an arm nobody probes can drop it while the
+    // page goes on promising it.
+    expect(
+      validateRunEventInput(closedPayload({ cost: { coverage: "unreported" } })).ok,
+      "the unreported cost arm no longer requires `reportedBy`",
+    ).toBe(false);
+    // The page's own statement of the same rule.
     expect(runbook, "docs/delivery-runbook.md no longer says `reportedBy` is required in both arms").toContain(
       "`reportedBy` is required in both arms and is never omitted",
     );
@@ -1578,6 +1600,7 @@ describe("the corrections the delivery runbook carries", () => {
     // pin below gives: the brief block names the same chain, so a bare
     // `toContain` of the chain is satisfied by the fence while the prose drops
     // a sensor.
+    statesInProse("A lens runs, inside its own lens worktree, the scoped set");
     statesInProse("executor: `npm run typecheck && npm run sensor && npm run sensor:cli`, and");
     statesInProse("`npm run sensor:policy` when the candidate touches policy");
     statesInProse("`npm run sensor:standalone` and `npm run qualify:provider` when it touches packaging or the provider");
@@ -1597,6 +1620,8 @@ describe("the corrections the delivery runbook carries", () => {
    * on what the brief says and never sees this page.
    */
   it("carries every instruction in the block the executor pastes into each brief", () => {
+    // The isolation rule reaches a lens here and nowhere else in the brief.
+    statesInBrief("Run a scoped check set in your own checkout.");
     statesInBrief("Do not run the repository's full suite");
     statesInBrief("`npm run check` belongs to the delivery's tail, once, outside this round");
     statesInBrief("`npm run typecheck && npm run sensor && npm run sensor:cli`");
@@ -1611,6 +1636,33 @@ describe("the corrections the delivery runbook carries", () => {
     // specific in it and the lens scopes the run by guesswork.
     statesInBrief("scoped sensor commands for this round: <commands>");
     statesInBrief("test files in scope for this round: <paths>");
+
+    // Contradiction, not only deletion. The negation sweep at the end of this
+    // file matches on a subject noun, and this block is written as imperatives
+    // addressed to the lens — a voice no such pattern sees — so a sentence
+    // added INSIDE the fence can order the full suite, or license widening,
+    // while every presence pin above still passes and the prose above still
+    // says the opposite. The block's mentions of each are therefore enumerated:
+    // any other sentence about the full suite or about widening is one nobody
+    // wrote a pin for.
+    const briefSentencesAbout = (subject: RegExp): readonly string[] =>
+      briefBlock()
+        .split(/(?<=\.)\s+/)
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => subject.test(sentence));
+    expect(
+      briefSentencesAbout(/`npm run check`|full suite/i),
+      "the verbatim lens-brief block says something about the full suite that no assertion here pins",
+    ).toEqual([
+      "Do not run the repository's full suite: `npm run check` belongs to the delivery's tail, once, outside this round.",
+    ]);
+    expect(
+      briefSentencesAbout(/widen/i),
+      "the verbatim lens-brief block says something about widening that no assertion here pins",
+    ).toEqual([
+      "Needing evidence beyond that set is ordinary; widening the run is not.",
+      "Never widen to a directory.",
+    ]);
   });
 
   /**
