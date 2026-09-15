@@ -102,12 +102,12 @@ refuses as a bare `Test timed out in Nms`, which is the ticket's own symptom. An
 attribution wired into one row of four therefore just moves the ticket to the
 other three — and it did: under the storm, the consumer row exhausted 180 000 ms
 on host stall alone and said nothing about whose fault it was. So
-`runRowWithStallAttribution` enforces an inner `_BOUND_MS` per row and the
-vitest `_TIMEOUT_MS` sits well above it as a backstop nothing reaches. The
+`runRowWithStallAttribution` enforces an inner `bound` per row and the vitest
+`ceiling` sits well above it as a backstop nothing reaches. The
 sampler is a parameter of that wrapper rather than a local, which is what lets a
 row prove the wrapper reads it.
 
-### Three self-corrections worth keeping
+### Four self-corrections worth keeping
 
 The first version of the attribution sampled on the way *out* of the catch, and
 on its first real failure — a check crossing the qualification's own 30 000 ms
@@ -134,6 +134,32 @@ empty at exactly the moment the verdict mattered, `attributeRowFailure` read
 — the v1 defect wearing a different hat. A start outstanding for `n` ms is
 already evidence the host took at least `n` ms, so `stop` now returns the
 in-flight elapsed alongside the completed samples.
+
+The fourth is about the guard, not the instrument. Those two numbers per row
+were eight loose constants, and the row that was supposed to keep them ordered
+compared the constants to each other. That is not the quantity that matters: a
+row is free to pass its own ceiling as its inner bound, vitest then aborts it
+from outside, and the bare `Test timed out in Nms` is back with the guard row
+still green. The row asserted the table it read, not the wiring it described —
+and `expect(bounded.length).toBe(4)` counted entries in that same table, so it
+could only fail by editing itself. A budget is now one record keyed by the row's
+own name, and a row names itself and nothing else: `itBoundedRow` takes the
+bound, the ceiling and the sampler from that one key, and the guard row asserts
+that the rows carrying a budget are exactly the rows the record names. There is
+nowhere left to write a bound.
+
+The same reading applies to the instrument's own test. It drove the sampler at a
+5 ms interval against a 60 ms probe, so a sampler that timed the whole cycle —
+the start plus the sleep after it — reported 65 ms and sat inside a band that
+tolerated 180. At the production 10 000 ms interval that mutation reads every
+sample as ten seconds, which is forty times the degraded threshold, and every
+failure for the life of the file attributes to the environment: the v1 defect
+inverted, a real product defect blamed on the host forever. The interval in that
+row is now five times the probe, which is the smallest change that lets the band
+tell the two quantities apart.
+
+**A guard that asserts the constants rather than the wiring is a guard for the
+table, not for the behaviour.** It reads as coverage, which is worse than none.
 
 The provenance of the evidence matters here, in a note whose thesis is that a
 reading taken after the thing it reads is not a measurement of it. The run that
