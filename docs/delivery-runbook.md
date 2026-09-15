@@ -608,6 +608,11 @@ retires every record ever computed under the token, so `docs/delivery-runbook.md
 stays inside the digest and is neutral only to this later predicate. And it does
 not admit a residual it cannot recompute — in `record`, a reviewed tree this
 clone no longer holds is a refusal, because a record is a claim being authored.
+"Cannot recompute" covers the blobs as well as the trees: `git cat-file` exits
+`128` for a path a tree does not carry, and *that* exit is an absence, while any
+other non-zero exit is a read this checkout could not perform and refuses as
+`not computed`. Reading them alike would let four failed reads compare equal as
+four deletions and admit an uninspectable residual as `rebase`.
 `verify` reports that same case as `not computed` and does not block — unless
 the record's projection is on the `proven-neutral-post-round-residual` basis
 below, in which case it blocks. The lenient half is for a record whose

@@ -63,10 +63,40 @@ async function objectExists(run: CandidateCommandRunner, rootDir: string, treeis
   return probe.exitCode === 0;
 }
 
-/** The path's bytes in one tree-ish, or null when that tree does not carry it. */
-async function blobAt(run: CandidateCommandRunner, rootDir: string, treeish: string, repoPath: string): Promise<string | null> {
+/** `git cat-file`'s answer for "no such path in that tree". */
+const GIT_FATAL = 128;
+
+/**
+ * The path's bytes in one tree-ish, the absence of the path, or a read this
+ * clone could not perform.
+ *
+ * WHY THIS IS THREE ANSWERS AND NOT TWO. The module header says a missing
+ * object is a refusal and not an absence, and pre-resolving the tree-ish
+ * enforced that for the tree. It did not enforce it for the blob: every
+ * non-zero exit was read as "that tree does not carry this path", and a
+ * deletion compares equal to a deletion, so four failed reads classify as
+ * `rebase` and a residual nobody could inspect is admitted.
+ *
+ * Until the runner became injectable that conflation was unreachable — with
+ * the tree resolved, the only non-zero `cat-file` could return was git's own
+ * 128. It is reachable now: the managed-delivery facade runs these reads
+ * through its exec port, which caps stdout, and a capped read fails with a
+ * code that is not 128. So 128 is the one exit that means absence, and every
+ * other non-zero exit is returned as a failure and refused as `unresolvable`,
+ * which is what the other three reads in this module already do.
+ */
+type BlobRead =
+  | { readonly kind: "read"; readonly content: string | null }
+  | { readonly kind: "failed"; readonly detail: string };
+
+async function blobAt(run: CandidateCommandRunner, rootDir: string, treeish: string, repoPath: string): Promise<BlobRead> {
   const read = await run(["git", "cat-file", "blob", `${treeish}:${repoPath}`], { cwd: rootDir });
-  return read.exitCode === 0 ? read.stdout : null;
+  if (read.exitCode === 0) return { kind: "read", content: read.stdout };
+  if (read.exitCode === GIT_FATAL) return { kind: "read", content: null };
+  return {
+    kind: "failed",
+    detail: `reading ${repoPath} at ${treeish} exited ${read.exitCode}${read.stderr === "" ? "" : `: ${read.stderr.trim()}`}`,
+  };
 }
 
 /**
@@ -157,13 +187,25 @@ async function projectOne(request: ResidualRequest, reviewed: ReviewedCandidateC
   }
   const inputs: ResidualPathInput[] = [];
   for (const repoPath of paths) {
-    inputs.push({
-      path: repoPath,
-      reviewedContent: await blobAt(run, request.rootDir, reviewed.treeSha, repoPath),
-      reviewedBaseContent: await blobAt(run, request.rootDir, reviewed.mergeBaseSha, repoPath),
-      recordContent: await blobAt(run, request.rootDir, request.recordCandidate.treeSha, repoPath),
-      recordBaseContent: await blobAt(run, request.rootDir, request.recordCandidate.mergeBaseSha, repoPath),
-    });
+    const reads = [
+      await blobAt(run, request.rootDir, reviewed.treeSha, repoPath),
+      await blobAt(run, request.rootDir, reviewed.mergeBaseSha, repoPath),
+      await blobAt(run, request.rootDir, request.recordCandidate.treeSha, repoPath),
+      await blobAt(run, request.rootDir, request.recordCandidate.mergeBaseSha, repoPath),
+    ] as const;
+    // One unreadable blob stops the whole comparison, for the same reason an
+    // unresolvable tree-ish does: the classes this projection admits are all
+    // "these bytes are equal", and bytes nobody could read are equal to
+    // nothing. Refusing here is what keeps a capped or otherwise failing read
+    // from being reported as a deletion.
+    const failed = reads.find((read) => read.kind === "failed");
+    if (failed !== undefined && failed.kind === "failed") {
+      return { kind: "unresolvable", detail: failed.detail };
+    }
+    const [reviewedContent, reviewedBaseContent, recordContent, recordBaseContent] = reads.map((read) =>
+      read.kind === "read" ? read.content : null,
+    ) as [string | null, string | null, string | null, string | null];
+    inputs.push({ path: repoPath, reviewedContent, reviewedBaseContent, recordContent, recordBaseContent });
   }
   return {
     kind: "projected",

@@ -317,6 +317,41 @@ to the repository, by handing the projection a directory that holds no
 repository at all. A negative sensor cannot report the absence it was written to
 guarantee; something has to make the bypass fail loudly instead.
 
+## The sixth thing: the fix for the seam broke what came back through it
+
+Threading the runner through the request closed the bypass. It also replaced the
+runner, and the two are not the same runner.
+
+`runGitCommand` accumulates a child's stdout with no ceiling. The facade's exec
+port is an awaited `execFile`, and `execFile` caps stdout — 16 MiB by default —
+killing the child and reporting a failure whose code is not git's. The residual
+projection reads four blobs per residual path, and it read *every* non-zero exit
+as "that tree does not carry this path". So on a repository holding a file over
+the cap, four capped reads become four deletions, a deletion compares equal to a
+deletion, and the path classifies as `rebase` — which the default policy grants.
+The surface that turns a finish line into an authorized merge admitted a change
+nobody could inspect, while `verify` and the Action refused the same record. The
+module's own header had been describing this exact failure since the first
+implementation, as the reason the *tree-ish* is resolved up front; the blob read
+had no equivalent guard because, until the runner became injectable, it could
+not fail for any reason but git's own.
+
+Both halves are fixed, and deliberately both: the port is asked for the ceiling
+the runner it stands in for has, and the projection now separates git's `128`
+("no such path in that tree") from every other non-zero exit, which becomes
+`unresolvable` like the three reads beside it already did.
+
+**The generalisable form, and it is the sharpest one in this delivery.** Routing
+a call through a seam is not a refactor — a seam is a *different implementation*
+of the thing it stands in front of, and an injection point is only as safe as
+the equivalence between what it replaced and what it supplies. The equivalence
+the facade had checked and written down was the environment; the axis nobody
+checked was output size. Two runners that observe the same launches need not
+return the same bytes. And the review row that proved the injection was honoured
+could not have caught it: it proved the supplied runner is *used*, and said
+nothing about a supplied runner that *fails*. **For every injected dependency,
+write the row where the injected thing returns the failure the real one cannot.**
+
 ## What this note is evidence of
 
 It landed in the pull request that built the mechanism, through the mechanism,

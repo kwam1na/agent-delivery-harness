@@ -234,6 +234,13 @@ const refuseWith = (blockers: readonly Blocker[]): FacadeFailure => ({ ok: false
  * the Action answer identically by construction. A record that did not move
  * after its round reads no git at all.
  */
+/**
+ * The stdout ceiling `candidateRunner` asks the port for: none, which is what
+ * `runGitCommand` gives its callers. Named rather than inlined so the parity
+ * it restores is greppable from the row that pins it.
+ */
+const UNCAPPED_STDOUT = Number.MAX_SAFE_INTEGER;
+
 async function residualDecisionFor(
   rootDir: string,
   config: HarnessConfig,
@@ -1300,6 +1307,17 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
    * port. The kernel's scrubbed-environment semantics are preserved: the
    * whole GIT_ namespace is dropped and prompts/optional locks are disabled,
    * exactly as the kernel's own default runner does.
+   *
+   * AND SO ARE ITS OUTPUT SEMANTICS. Routing a read through the port must
+   * change where the launch is observed and nothing about what comes back.
+   * The port caps stdout at 16 MiB by default; `runGitCommand` accumulates
+   * without a cap. On a blob over that cap the two runners return different
+   * exit codes for the same command, and a residual read that fails where the
+   * default runner succeeds is a difference this facade cannot afford: it is
+   * the surface that turns a finish line into an authorized merge. So the cap
+   * is lifted here to match the runner this one stands in for. (The residual
+   * projection also no longer reads a failed blob as an absent path, so the
+   * two halves fail closed independently.)
    */
   const candidateRunner: CandidateCommandRunner = async (command, options) => {
     const [executable, ...args] = command;
@@ -1314,6 +1332,7 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
       args,
       cwd: options.cwd,
       env: { ...environment, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+      maxBuffer: UNCAPPED_STDOUT,
     });
     return { exitCode: outcome.code, stdout: outcome.stdout, stderr: outcome.stderr };
   };

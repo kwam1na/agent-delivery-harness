@@ -598,8 +598,10 @@ describe("the runner the caller supplies", () => {
       try {
         // The runner, and only the runner, knows where the objects are.
         return { exitCode: 0, stdout: execFileSync(command[0] as string, command.slice(1), { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
-      } catch {
-        return { exitCode: 1, stdout: "", stderr: "" };
+      } catch (error) {
+        // git's own exit code, not a stand-in: 128 is "no such path in that
+        // tree" and is the one code the projection may read as an absence.
+        return { exitCode: (error as { status?: number }).status ?? 1, stdout: "", stderr: "" };
       }
     };
 
@@ -617,6 +619,103 @@ describe("the runner the caller supplies", () => {
     expect(outcome.kind === "projected" ? outcome.projection.admitted : false).toBe(true);
     expect(launched.length).toBeGreaterThan(0);
     expect(launched.every((command) => command[0] === "git")).toBe(true);
+  });
+
+  /**
+   * A supplied runner that FAILS a read, which the row above does not reach.
+   *
+   * The row above proves the runner is used. This one proves the projection is
+   * still right when the runner cannot answer — the case the facade created by
+   * supplying one: its exec port caps stdout, and a capped `cat-file` exits
+   * non-zero on a blob the default runner reads fine. Read as an absence, four
+   * failed reads are four deletions, a deletion equals a deletion, and the path
+   * classifies as `rebase` — so a change nobody could inspect would be admitted
+   * by the one surface that authorizes merges, while `verify` and the Action
+   * refuse the same record. The failure must reach the operator as
+   * `unresolvable`, which is the vocabulary this module already has for a read
+   * it could not perform.
+   *
+   * The runner below fails ONLY `cat-file`, and with exit 1 — the code
+   * `createExecPort` reports for a stdout-cap kill, and deliberately not git's
+   * own 128 — so the row separates "this clone cannot read the blob" from "that
+   * tree does not carry the path".
+   */
+  it("cannot turn a read it could not perform into a path that was deleted", async () => {
+    const root = await repository();
+    await put(root, "src/logic.ts", "export const admit = true;\n");
+    const base = commit(root, "base");
+    await put(root, "src/logic.ts", "export const admit = false;\n");
+    const moved = commit(root, "a logic change after the round");
+
+    const failing = async (command: readonly string[], options: { readonly cwd: string }) => {
+      if (command[1] === "cat-file") return { exitCode: 1, stdout: "", stderr: "stdout maxBuffer length exceeded" };
+      try {
+        return { exitCode: 0, stdout: execFileSync(command[0] as string, command.slice(1), { cwd: options.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+      } catch (error) {
+        return { exitCode: (error as { status?: number }).status ?? 1, stdout: "", stderr: "" };
+      }
+    };
+
+    const request = {
+      rootDir: root,
+      config: config(),
+      reviewedCandidates: [{ treeSha: base.tree, mergeBaseSha: base.commit, provenNeutral: true }],
+      recordCandidate: { treeSha: moved.tree, mergeBaseSha: base.commit },
+    };
+
+    const failed = await projectPostRoundResidual({ ...request, run: failing });
+    expect(failed.kind, "an unreadable blob is not an absent path").toBe("unresolvable");
+    expect(failed.kind === "unresolvable" ? failed.detail : "").toContain("src/logic.ts");
+    // And the decision the three surfaces share refuses it for a record that
+    // claims the move was proven neutral.
+    expect(decideResidual(failed, request.reviewedCandidates).kind).toBe("unprovable");
+
+    // The same objects, read by a runner that can answer, still classify: the
+    // refusal above is about the failed read and not about over-refusing.
+    const read = await projectPostRoundResidual(request);
+    expect(read.kind).toBe("projected");
+    expect(read.kind === "projected" ? read.projection.admitted : true).toBe(false);
+  });
+
+  /**
+   * The other half of the same discrimination: git's own 128 still means the
+   * tree does not carry the path, so a genuine deletion carried by a moved base
+   * still classifies rather than refusing. Without this row the fix above could
+   * be "refuse every non-zero exit", which would turn every ordinary rebase
+   * residual into `unresolvable`.
+   */
+  it("still reads git's own 128 as the tree not carrying the path", async () => {
+    const root = await repository();
+    await put(root, "docs/solutions/note.md", "# note\n");
+    const base = commit(root, "base");
+    await rm(path.join(root, "docs/solutions/note.md"));
+    const moved = commit(root, "the note is gone");
+
+    const codes: number[] = [];
+    const run = async (command: readonly string[], options: { readonly cwd: string }) => {
+      try {
+        const stdout = execFileSync(command[0] as string, command.slice(1), { cwd: options.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        if (command[1] === "cat-file") codes.push(0);
+        return { exitCode: 0, stdout, stderr: "" };
+      } catch (error) {
+        const status = (error as { status?: number }).status ?? 1;
+        if (command[1] === "cat-file") codes.push(status);
+        return { exitCode: status, stdout: "", stderr: "" };
+      }
+    };
+
+    const outcome = await projectPostRoundResidual({
+      rootDir: root,
+      config: config(),
+      reviewedCandidates: [{ treeSha: base.tree, mergeBaseSha: base.commit, provenNeutral: true }],
+      recordCandidate: { treeSha: moved.tree, mergeBaseSha: base.commit },
+      run,
+    });
+
+    // The absent read really happened, and it really was 128.
+    expect(codes).toContain(128);
+    expect(outcome.kind, "an absent path is not an unreadable one").toBe("projected");
+    expect(outcome.kind === "projected" ? outcome.projection.admitted : false).toBe(true);
   });
 });
 
@@ -682,6 +781,15 @@ describe("the residual decision the deciding surfaces share", () => {
    * the runner it passes: reaching git any other way there is the bypass the
    * module's one exec seam exists to prevent, and no scenario row can report
    * a launch the port never saw.
+   *
+   * WHY THE FACADE PINS WHAT IT DOES WITH THE ANSWER AND NOT ONLY THAT IT ASKS.
+   * A pin that stops at the call proves the decision is computed, not that the
+   * surface acts on it: keep the call and delete the line beneath it, or
+   * change `=== undefined` to `!== null`, and the surface pays for every git
+   * launch and discards the answer — round 4's defect restored two characters
+   * at a time, under a row that reads as proof. So each facade site pins the
+   * whole decide-and-act expression, and a third such expression appearing is
+   * caught by the separate count of `await residualDecisionFor(`.
    */
   it("is what every surface that decides actually calls, at each site that decides", async () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
@@ -689,7 +797,30 @@ describe("the residual decision the deciding surfaces share", () => {
     const sources = [
       { surface: "the verify command", file: path.join(root, "packages/cli/src/commands/verify.ts"), call: /decideResidual\(residual, verified\.reviewedCandidates\)/g, sites: 1 },
       { surface: "the pull-request Action", file: path.join(root, "packages/action/src/main.ts"), call: /reproveResidual\(\{/g, sites: 1 },
-      { surface: "the managed-delivery facade", file: path.join(here, "facade", "managed-delivery.ts"), call: /refuseResidual\(await residualDecisionFor\(rootDir, config, check, parsed\.record\.candidateBinding, candidateRunner\)\)/g, sites: 2 },
+      {
+        surface: "the managed-delivery facade, committing a record",
+        file: path.join(here, "facade", "managed-delivery.ts"),
+        call: /const residualRefusal = refuseResidual\(await residualDecisionFor\(rootDir, config, check, parsed\.record\.candidateBinding, candidateRunner\)\);\n\s*if \(residualRefusal !== undefined\) return residualRefusal;/g,
+        sites: 1,
+      },
+      {
+        surface: "the managed-delivery facade, completing a finish line",
+        file: path.join(here, "facade", "managed-delivery.ts"),
+        call: /&& refuseResidual\(await residualDecisionFor\(rootDir, config, check, parsed\.record\.candidateBinding, candidateRunner\)\) === undefined\n\s*\? "passed" : "failed";/g,
+        sites: 1,
+      },
+      {
+        surface: "the managed-delivery facade, in total",
+        file: path.join(here, "facade", "managed-delivery.ts"),
+        call: /await residualDecisionFor\(/g,
+        sites: 2,
+      },
+      {
+        surface: "the managed-delivery facade's runner",
+        file: path.join(here, "facade", "managed-delivery.ts"),
+        call: /maxBuffer: UNCAPPED_STDOUT,/g,
+        sites: 1,
+      },
     ];
     for (const { surface, file, call, sites } of sources) {
       const text = await readFile(file, "utf8");
