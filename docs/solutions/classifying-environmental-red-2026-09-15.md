@@ -41,7 +41,9 @@ Because every direction the ladder can fail in leaves the row `candidate`:
 - a bounded rerun budget marks everything it did not examine candidate,
   including the base comparison it cannot afford;
 - a candidate diff it cannot read disables the touched-file rung, so it
-  reclassifies nothing at all.
+  reclassifies nothing at all;
+- a base run that goes red without naming the file has answered nothing, so the
+  row stays candidate and its evidence says the base run never named it.
 
 The asymmetry is the whole design. An attribution that is wrong in the
 conservative direction costs one manual rerun; wrong in the other direction it
