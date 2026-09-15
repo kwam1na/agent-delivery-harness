@@ -142,6 +142,12 @@ deny-until-attested boundary that does not start is not one. CI matrix: Node
 22, Node 24, Bun. All process control uses `node:child_process`; Bun-only APIs
 are banned by static sensor.
 
+Bun support covers the sensors, the CLI and conformance generation — not the
+managed binding path. `bindWorkspace` probes the running executable and refuses
+a runtime that is not Node or that does not accept the type-stripping flag
+(`hook_runtime_unsupported`), because the command it would otherwise emit is
+Node-shaped and an interceptor that never starts fails open.
+
 ## Working on it
 
 ```

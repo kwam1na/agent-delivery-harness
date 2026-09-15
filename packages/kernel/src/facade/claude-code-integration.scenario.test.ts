@@ -41,6 +41,7 @@ import { decideHookInvocation, type HookBindingState } from "../host/hook-main.t
 import { installComposition, packComposition } from "../substrate/installer.ts";
 import { CONFIRMATION_FIXTURE_PROFILE } from "../substrate/manifest.ts";
 import { createManagedDeliveryFacade, type ManagedDeliveryFacade } from "./managed-delivery.ts";
+import { STRIP_TYPES_FLAG, type HookRuntimeProbes } from "./hook-runtime.ts";
 import {
   DISPOSABLE_CONTRACT,
   GREET_RIGHT,
@@ -301,6 +302,46 @@ const settingsPathOf = async (deliveryId: string): Promise<string> => {
     .settingsPath;
 };
 
+/**
+ * Binds a fresh delivery on a facade built around the supplied runtime probes,
+ * and hands back either the bound delivery (to read its emitted command) or
+ * the refusal. The rest of the harness — installation, receipts, exec port —
+ * is the one every other scenario uses; only the probes differ.
+ */
+async function bindProbed(hookRuntime: HookRuntimeProbes | undefined): Promise<{ readonly deliveryId: string; readonly bound: Awaited<ReturnType<ManagedDeliveryFacade["bindWorkspace"]>> }> {
+  const probedFacade = createManagedDeliveryFacade({
+    repoDir,
+    policyBinding: disposablePolicyBinding(),
+    installation: { installationPath, receiptDir },
+    hostVersion: HOST_VERSION,
+    exec: recordingExecPort(),
+    hookRuntime,
+  });
+  sequence += 1;
+  const contract = { ...DISPOSABLE_CONTRACT, contractId: `contract-cc-${sequence}` };
+  const presented = await probedFacade.presentContract({ contract, expiry: EXPIRY });
+  must(presented, "presentContract");
+  const confirmed = await probedFacade.confirmContract({ intakeId: presented.intakeId, echo: operatorEcho(presented.channelPath) });
+  must(confirmed, "confirmContract");
+  const worktree = path.join(scratch, `wt-${sequence}`);
+  git(repoDir, "worktree", "add", "--quiet", "-b", `cc-${sequence}`, worktree, "main");
+  const bound = await probedFacade.bindWorkspace({
+    deliveryId: confirmed.deliveryId,
+    worktreeDir: worktree,
+    hostTaskId: `host-${sequence}`,
+    observedAt: NOW,
+    attestationExpiry: EXPIRY,
+    providerReviewBindingCapability: fixtureProviderBindingCapability(confirmed.deliveryId),
+  });
+  return { deliveryId: confirmed.deliveryId, bound };
+}
+
+const bindWith = async (hookRuntime: HookRuntimeProbes): Promise<string> => {
+  const { deliveryId, bound } = await bindProbed(hookRuntime);
+  must(bound, "bindWorkspace");
+  return deliveryId;
+};
+
 // ── The scenarios ───────────────────────────────────────────────────────────
 
 describe("the pre-admission binding layer", () => {
@@ -328,6 +369,148 @@ describe("the pre-admission binding layer", () => {
     }
     expect(grant.protectedPaths).toContain(PROJECTION_DIR);
   });
+
+  it("emits a hook command built from THIS runtime's probed support, and refuses a runtime that cannot run it", async () => {
+    const session = await openSession();
+    const settings = JSON.parse(readFileSync(await settingsPathOf(session.deliveryId), "utf8")) as {
+      hooks: Record<string, { hooks: { command: string }[] }[]>;
+    };
+    const command = settings.hooks["PreToolUse"]?.[0]?.hooks[0]?.command;
+    expect(command, JSON.stringify(settings.hooks)).toBeTypeOf("string");
+    // The emitted command names the running executable and the flag the probe
+    // observed it accepting — not a constant, and not a second runtime. ORDER
+    // is the whole meaning of it: `composeClaudeCodeSession` renders these
+    // parts as JSON-quoted tokens joined by spaces, so the flag BEFORE the
+    // entry is a Node flag and the flag AFTER it is an argv string Node never
+    // sees — on the 22.6 floor, an interceptor that never starts. A membership
+    // assertion is order-blind, so the executable and its flag are pinned as a
+    // prefix.
+    expect(command?.startsWith(`${JSON.stringify(process.execPath)} ${JSON.stringify(STRIP_TYPES_FLAG)} `), command).toBe(true);
+    expect(command).toContain("hook-main.ts");
+
+    // PROVENANCE: the command is composed around the executable that was
+    // PROBED, not around a second read of `process.execPath`. Validating one
+    // runtime and naming another is a seam an assertion against this process
+    // cannot see, so it is driven from probes naming a different executable.
+    const elsewhere = "/opt/node-under-test/bin/node";
+    const probedDeliveryId = await bindWith({ execPath: elsewhere, versions: { node: "22.6.0" }, acceptsFlag: () => true });
+    const probedCommand = (
+      JSON.parse(readFileSync(await settingsPathOf(probedDeliveryId), "utf8")) as {
+        hooks: Record<string, { hooks: { command: string }[] }[]>;
+      }
+    ).hooks["PreToolUse"]?.[0]?.hooks[0]?.command;
+    expect(probedCommand?.startsWith(`${JSON.stringify(elsewhere)} ${JSON.stringify(STRIP_TYPES_FLAG)} `), probedCommand).toBe(true);
+    expect(probedCommand).not.toContain(process.execPath);
+
+    // And the refusal is reachable: a facade told the runtime cannot run the
+    // command refuses to compose one, rather than emitting a Node-shaped
+    // command an interceptor would never start from.
+    const { deliveryId: refusedId, bound: refused } = await bindProbed({
+      execPath: "/usr/local/bin/bun",
+      versions: { node: "22.6.0", bun: "1.1.30" },
+      acceptsFlag: () => true,
+    });
+    expect(refused.ok, JSON.stringify(refused)).toBe(false);
+    if (refused.ok) return;
+    expect(refused.blockers.map((blocker) => blocker.code)).toEqual(["hook_runtime_unsupported"]);
+    expect(refused.blockers[0]?.summary).toContain("bun");
+    // And it lands BEFORE anything is written. The probe is a pure observation
+    // of this process, so a refusal on this ground must not arrive after the
+    // predecessor's binding states have been voided, after the `workspace.bound`
+    // append, or after the projection was materialized — none of which a
+    // refusal can unwind.
+    expect((await journalEntries(refusedId)).map((entry) => entry.kind)).not.toContain("workspace.bound");
+  });
+
+  it("reaches the REAL runtime on the default path, rather than assuming a Node-shaped one", async () => {
+    // The whole of V26-1510 rests on one expression: `input.hookRuntime ??
+    // liveHookRuntimeProbes()`. Every other row here hands the facade explicit
+    // probes, so a default that read nothing from the runtime — an always-true
+    // stub, which is precisely the pre-delivery defect — would satisfy them
+    // all. This row makes the real runtime's flag enumeration UNREADABLE and
+    // binds with no probes supplied: only a default that actually asks the
+    // process can notice.
+    const original = Object.getOwnPropertyDescriptor(process, "allowedNodeEnvironmentFlags");
+    expect(original).toBeDefined();
+    Object.defineProperty(process, "allowedNodeEnvironmentFlags", {
+      configurable: true,
+      get() {
+        throw new TypeError("unobservable");
+      },
+    });
+    let bound: Awaited<ReturnType<ManagedDeliveryFacade["bindWorkspace"]>>;
+    try {
+      ({ bound } = await bindProbed(undefined));
+    } finally {
+      Object.defineProperty(process, "allowedNodeEnvironmentFlags", original!);
+    }
+    expect(bound.ok, JSON.stringify(bound)).toBe(false);
+    if (bound.ok) return;
+    expect(bound.blockers.map((blocker) => blocker.code)).toEqual(["hook_runtime_unsupported"]);
+
+    // ...and the restore took: the next bind on the default path succeeds.
+    const { bound: again } = await bindProbed(undefined);
+    expect(again.ok, JSON.stringify(again)).toBe(true);
+  }, 120_000);
+
+  it("refuses BEFORE the predecessor's binding state is voided, which no refusal can unwind", async () => {
+    // The probe is a pure observation of this process, so WHERE it sits in
+    // `bindWorkspace` is load-bearing and invisible to a refusal assertion.
+    // The first irreversible thing the method does is void every superseded
+    // invocation's state — it rewrites the predecessor's fence-scoped file to
+    // a null attestation, which is the frozen deny-until-attested case. A
+    // probe block moved past that point still refuses, still appends no
+    // `workspace.bound`, and has already killed a session that is still
+    // running. The refusal path never puts the attestation back.
+    const session = await openSession();
+    const staleStatePath = await bindingStatePath(session.deliveryId);
+    const attestationAt = (): unknown =>
+      (JSON.parse(readFileSync(staleStatePath, "utf8")) as HookBindingState).attestation;
+    expect(attestationAt()).not.toBeNull();
+
+    // A takeover is what makes a second bind reach the void at all.
+    must(await facade.sessionEnded({ deliveryId: session.deliveryId, fence: session.fence }), "sessionEnded");
+    const presented = await facade.presentTakeover({ deliveryId: session.deliveryId, expiry: EXPIRY });
+    must(presented, "presentTakeover");
+    const authorized = await facade.confirmTakeover({
+      deliveryId: session.deliveryId,
+      echo: operatorEcho(presented.channelPath),
+    });
+    must(authorized, "confirmTakeover");
+    sequence += 1;
+    const fresh = path.join(scratch, `wt-${sequence}-runtime-takeover`);
+    git(repoDir, "worktree", "add", "--quiet", "-b", authorized.takeoverBranchRef, fresh, authorized.targetBaseCommit);
+    const rebind = {
+      deliveryId: session.deliveryId,
+      worktreeDir: fresh,
+      hostTaskId: `host-${sequence}-rebind`,
+      observedAt: LATER,
+      attestationExpiry: EXPIRY,
+      providerReviewBindingCapability: fixtureProviderBindingCapability(session.deliveryId),
+    };
+
+    const impostorFacade = createManagedDeliveryFacade({
+      repoDir,
+      policyBinding: disposablePolicyBinding(),
+      installation: { installationPath, receiptDir },
+      hostVersion: HOST_VERSION,
+      exec: recordingExecPort(),
+      hookRuntime: { execPath: "/usr/local/bin/bun", versions: { node: "22.6.0", bun: "1.1.30" }, acceptsFlag: () => true },
+    });
+    const refused = await impostorFacade.bindWorkspace(rebind);
+    expect(refused.ok, JSON.stringify(refused)).toBe(false);
+    if (refused.ok) return;
+    expect(refused.blockers.map((blocker) => blocker.code)).toEqual(["hook_runtime_unsupported"]);
+    // The still-running predecessor was NOT collateral of a refusal it has
+    // nothing to do with: its own fence-scoped state still attests.
+    expect(attestationAt(), "the refusal voided the predecessor's attestation").not.toBeNull();
+
+    // ...and the void is genuinely downstream and reachable, so the assertion
+    // above is about ORDER rather than about a void that never happens: the
+    // same rebind on a supported runtime does void it.
+    must(await facade.bindWorkspace(rebind), "rebind");
+    expect(attestationAt()).toBeNull();
+  }, 120_000);
 
   it("gives the in-session layer no way to apply, expand, or replace its own grant", async () => {
     const session = await openSession();
