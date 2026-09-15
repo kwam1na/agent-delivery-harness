@@ -1097,8 +1097,11 @@ export {
   admitCoordinationMessage,
   type CoordinationAdmission,
   type CoordinationAdmissionView,
+  replayLedgerOf,
   type CoordinationRefusal,
   type CoordinationRefusalCode,
+  type CoordinationReplayLedger,
+  type MirroredMessageView,
 } from "./coordination/admission.ts";
 export {
   CONTROL_PLANE_CONFLICT_BLOCKER_CODE,

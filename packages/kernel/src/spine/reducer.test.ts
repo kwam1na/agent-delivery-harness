@@ -257,6 +257,8 @@ describe("the delivery journal reducer", () => {
         {
           messageId: "message-1",
           channelKeyId: "connector-key-1",
+          nonce: "nonce-1",
+          channelDigest: "d".repeat(64),
           claim: "advanced",
           remoteSequence: 7,
           localFactEpoch: 6,

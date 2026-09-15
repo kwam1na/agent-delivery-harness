@@ -557,6 +557,16 @@ const PAYLOADS: Readonly<Record<string, PayloadCheck>> = Object.freeze({
   "delivery/control.plane.mirror.recorded": table([
     { name: "messageId", check: spineId },
     { name: "channelKeyId", check: spineId },
+    // The two members the replay ledger is rebuilt from. `message.ts` says of
+    // the wire nonce that "the replay ledger is the local journal", and
+    // `admission.ts` says the same of its consumed-nonce set and its
+    // per-channel high-water mark — so the journal has to be able to answer
+    // both questions after a restart, and round 3 found that it could not:
+    // the record kept no nonce at all, and identified the peer by KEY where
+    // the high-water mark is per CHANNEL. A ledger that empties on reconnect
+    // is not replay protection, and reconnect is the ticket's own scenario.
+    { name: "nonce", check: spineId },
+    { name: "channelDigest", check: sha256 },
     { name: "claim", check: oneOf(CONTROL_PLANE_CLAIM_KINDS) },
     { name: "remoteSequence", check: nonNegativeInt },
     // The local fact epoch this record was APPENDED at — not the one the claim

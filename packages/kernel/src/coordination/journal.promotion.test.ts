@@ -19,6 +19,8 @@ const MIRROR = "control.plane.mirror.recorded";
 const payload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   messageId: "message-42",
   channelKeyId: "connector-key-1",
+  nonce: "sim-nonce-42",
+  channelDigest: "d".repeat(64),
   claim: "completed",
   remoteSequence: 11,
   localFactEpoch: 6,
@@ -100,6 +102,9 @@ describe("the promoted mirror pair", () => {
       ["messageId", "message 42"],
       ["messageId", "id/with/slashes"],
       ["channelKeyId", "connector key 1"],
+      ["nonce", "nonce with spaces"],
+      ["channelDigest", "not-a-digest"],
+      ["channelDigest", "D".repeat(64)],
       ["remoteSequence", -1],
       ["remoteSequence", 2.5],
       // The member `conflictBlockerEpochOf` reads the coalescing window back

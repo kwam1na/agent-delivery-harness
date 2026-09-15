@@ -884,7 +884,9 @@
               "remoteSequence": 11,
               "localFactEpoch": 6,
               "disposition": "blocker",
-              "summary": "the control plane claims completion against local evidence that contradicts it"
+              "summary": "the control plane claims completion against local evidence that contradicts it",
+              "nonce": "sim-nonce-42",
+              "channelDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
             }
           }
         },
@@ -909,7 +911,9 @@
               "localFactEpoch": 6,
               "disposition": "mirror-only",
               "summary": "a claim that tries to carry a state",
-              "state": "completed"
+              "state": "completed",
+              "nonce": "sim-nonce-42",
+              "channelDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
             }
           }
         }

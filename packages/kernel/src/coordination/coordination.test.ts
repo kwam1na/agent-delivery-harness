@@ -12,7 +12,12 @@
  * said "nothing happened" would be green against a unit that does nothing.
  */
 import { describe, expect, it } from "vitest";
-import { admitCoordinationMessage, COORDINATION_REFUSALS, type CoordinationAdmissionView } from "./admission.ts";
+import {
+  admitCoordinationMessage,
+  COORDINATION_REFUSALS,
+  replayLedgerOf,
+  type CoordinationAdmissionView,
+} from "./admission.ts";
 import {
   COORDINATION_MESSAGE_KINDS,
   COORDINATION_MESSAGE_SPEC,
@@ -37,6 +42,8 @@ import { OBSERVATION_ONLY_KINDS } from "../spine/vocabulary.ts";
 import { JOURNAL_ENTRY_SPEC } from "../spine/journal.ts";
 import { reduceDeliveryJournal } from "../spine/reducer.ts";
 import { evaluateCanonicalRecheck } from "../checkpoint/recheck.ts";
+import { evaluateMigrationConsumption } from "../facade/migration.ts";
+import { CONFIRMATION_FIXTURE_PROFILE } from "../substrate/manifest.ts";
 
 const CHANNEL = "d".repeat(64);
 const OTHER_CHANNEL = "e".repeat(64);
@@ -379,6 +386,65 @@ describe("admission", () => {
   });
 });
 
+// ── The replay ledger across a restart ────────────────────────────────────
+
+describe("the replay ledger rebuilt from the journal", () => {
+  const simulatorOptions = { repositoryId: "repo-1", deliveryId: "delivery-1", keyId: KEY, channelDigest: CHANNEL };
+
+  // Round 3 found that the two admission-view members documented as coming
+  // from the journal ("the replay ledger is the local journal") could not be
+  // rebuilt from it: the durable mirror record carried no nonce at all, and
+  // identified the peer by KEY where the high-water mark is defined per
+  // CHANNEL. Replay protection that empties on reconnect is not replay
+  // protection, and reconnect is one of this ticket's named scenarios. The
+  // record now carries both members and this is the row that walks the loop.
+  const mirroredFrom = (message: CoordinationMessage) => ({
+    nonce: message.nonce,
+    channelDigest: message.authentication.channelDigest,
+    remoteSequence: message.sequence,
+  });
+
+  it("refuses a nonce and a sequence the journal already holds — a restart forgets nothing", () => {
+    const simulator = createCoordinationSimulator(simulatorOptions);
+    const first = simulator.mint({ sequence: 4 });
+    const admitted = admitCoordinationMessage(first, view({ consumedNonces: new Set(), highestSequence: 3 }));
+    expect(admitted.ok).toBe(true);
+
+    // The process restarts. Everything is rebuilt from the durable records.
+    const records = [mirroredFrom(first)];
+    const ledger = replayLedgerOf(records, CHANNEL);
+    expect(ledger.highestSequence).toBe(4);
+    expect(ledger.consumedNonces.has(first.nonce)).toBe(true);
+
+    const rebuilt = view({ consumedNonces: ledger.consumedNonces, highestSequence: ledger.highestSequence });
+    expect(codesOf(admitCoordinationMessage(first, rebuilt))).toEqual(["nonce_replayed", "sequence_regressed"]);
+    // A reordered message below the rebuilt mark is refused on the sequence
+    // alone, so the two checks are visibly independent.
+    expect(codesOf(admitCoordinationMessage(simulator.mint({ sequence: 2 }), rebuilt))).toEqual(["sequence_regressed"]);
+
+    // The presence half: genuinely new traffic still gets through after the
+    // restart, so the ledger is not simply refusing everything.
+    expect(admitCoordinationMessage(simulator.mint({ sequence: 5 }), rebuilt).ok).toBe(true);
+  });
+
+  it("keeps the ledger per channel — one connector key serving two channels does not conflate their marks", () => {
+    const simulator = createCoordinationSimulator(simulatorOptions);
+    const busy = simulator.mint({ sequence: 9, channelDigest: OTHER_CHANNEL });
+    const quiet = simulator.mint({ sequence: 4 });
+    const ledger = replayLedgerOf([mirroredFrom(busy), mirroredFrom(quiet)], CHANNEL);
+
+    // The other channel's high-water mark is not this channel's. Pooling them
+    // would refuse legitimate traffic here and admit a replay captured there.
+    expect(ledger.highestSequence).toBe(4);
+    expect(ledger.consumedNonces.has(busy.nonce)).toBe(false);
+    expect(ledger.consumedNonces.has(quiet.nonce)).toBe(true);
+    expect(replayLedgerOf([mirroredFrom(busy), mirroredFrom(quiet)], OTHER_CHANNEL).highestSequence).toBe(9);
+    // An empty journal yields a mark no message can regress against.
+    expect(replayLedgerOf([], CHANNEL)).toEqual({ consumedNonces: new Set(), highestSequence: -1 });
+    expect(admitCoordinationMessage(simulator.mint({ sequence: 0 }), view({ highestSequence: -1 })).ok).toBe(true);
+  });
+});
+
 // ── The conflict truth table ───────────────────────────────────────────────
 
 describe("reconciliation", () => {
@@ -599,6 +665,8 @@ describe("a reconnect flush against a pending takeover confirmation", () => {
       {
         messageId: `message-${index}`,
         channelKeyId: "connector-key-1",
+        nonce: `nonce-${index}`,
+        channelDigest: CHANNEL,
         claim: "completed",
         remoteSequence: index,
         localFactEpoch: revision,
@@ -606,6 +674,48 @@ describe("a reconnect flush against a pending takeover confirmation", () => {
         summary: `the control plane claims completion, flush entry ${index}`,
       },
       `mirror-${index}`,
+    );
+
+  const migrationConsumption = (boundRevision: number, observedRevision: number) =>
+    evaluateMigrationConsumption(
+      {
+        spec: "sensitive-approval-assertion/1",
+        assertionClass: "security-blocked-migration",
+        origin: "installer.maintenance",
+        action: "migrate-security-blocked",
+        expiry: "2026-08-31T12:00:00Z",
+        nonce: "migration-nonce-1",
+        assertionSource: "qualification-fixture",
+        productTrustRevocationEpoch: 0,
+        repositoryAuthorityRevocationEpoch: "absent-by-state",
+        deliveryId: "delivery-1",
+        candidateTreeSha: "absent-by-state",
+        policyDigest: "absent-by-state",
+        invocationFence: "absent-by-state",
+        targetInstallationId: "install-1",
+        targetGenerationDigest: DIGEST,
+        targetHighWaterMark: "absent-by-state",
+        expectedJournalRevision: boundRevision,
+      },
+      {
+        deliveryId: "delivery-1",
+        expectedJournalRevision: observedRevision,
+        currentInstallationId: "install-1",
+        currentProfile: CONFIRMATION_FIXTURE_PROFILE,
+        recordedProfile: CONFIRMATION_FIXTURE_PROFILE,
+        recordedInstallationId: "install-0",
+        trustState: {
+          spec: "product-trust-state/1" as const,
+          installationId: "install-1",
+          pinnedManifestDigest: DIGEST,
+          acceptedGenerationDigests: [DIGEST],
+          revokedGenerationDigests: [],
+          revocationEpoch: 0,
+          highWaterMark: 1,
+        },
+        consumedNonces: new Set<string>(),
+        now: "2026-08-30T12:00:00Z",
+      },
     );
 
   const takeoverRecheck = (boundRevision: number, observedRevision: number) =>
@@ -664,6 +774,42 @@ describe("a reconnect flush against a pending takeover confirmation", () => {
     if (voided.ok) return;
     expect(voided.failures.map((failure) => failure.value)).toContain("expected-journal-revision");
   });
+
+  it("leaves a pending migration assertion consumable too — the scenario names both, so both are pinned", () => {
+    // Round 3: the takeover half above was evidenced and the migration half
+    // was still argued. The ticket's scenario is verbatim "does not void a
+    // pending takeover confirmation OR MIGRATION ASSERTION", and the two are
+    // consumed by different modules, so following the reducer number from one
+    // to the other is a reader's inference, not a pinned fact.
+    const opening = openingEntries();
+    const bound = reduceDeliveryJournal(opening);
+    expect(bound.ok).toBe(true);
+    if (!bound.ok) return;
+    const boundRevision = bound.state.expectedRevision;
+
+    const flushed = reduceDeliveryJournal([
+      ...opening,
+      ...Array.from({ length: 1000 }, (_unused, index) => mirrorEntry(boundRevision, index)),
+    ]);
+    expect(flushed.ok).toBe(true);
+    if (!flushed.ok) return;
+
+    expect(migrationConsumption(boundRevision, flushed.state.expectedRevision).ok).toBe(true);
+
+    // The presence half: the same consumption refuses once a real local
+    // transition moves the revision the assertion bound.
+    const advanced = reduceDeliveryJournal([
+      ...opening,
+      ...Array.from({ length: 1000 }, (_unused, index) => mirrorEntry(boundRevision, index)),
+      deliveryEntry(boundRevision, "transition.committed", { from: "preparing", to: "planning" }),
+    ]);
+    expect(advanced.ok).toBe(true);
+    if (!advanced.ok) return;
+    const refused = migrationConsumption(boundRevision, advanced.state.expectedRevision);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.blockers.map((blocker) => blocker.code)).toContain("assertion_mismatch");
+  });
 });
 
 describe("the unbound port — core delivery depends on no connector", () => {
@@ -705,6 +851,26 @@ describe("the deterministic simulator", () => {
     const exchange = simulator.exchange(simulator.mint({ repositoryId: "repo-9" }), view(), local());
     expect(exchange.admission.ok).toBe(false);
     expect(exchange.reconciliation).toBeUndefined();
+  });
+
+  it("delivers on the online path — the contrast the outage row needs to mean anything", async () => {
+    // Round 3: `receive()` was only ever asserted on the OFFLINE simulator,
+    // where an empty outbox makes `[]` true on both sides of its own guard,
+    // and the success side of `send` was asserted nowhere. Emptying both
+    // methods left every row green. This module ships as the conformance kit
+    // a real control plane is later checked against, so its delivery path is
+    // the thing being qualified, not scaffolding.
+    const simulator = createCoordinationSimulator(options);
+    const first = simulator.mint({ sequence: 1 });
+    const second = simulator.mint({ sequence: 2 });
+    const sent = await simulator.send(first);
+    expect(sent.ok).toBe(true);
+    expect(sent.message).toContain(first.messageId);
+    expect(await simulator.receive()).toEqual([first]);
+    expect((await simulator.send(second)).ok).toBe(true);
+    expect(await simulator.receive()).toEqual([first, second]);
+    const started = await simulator.requestHostStart("delivery-1");
+    expect(started.ok).toBe(true);
   });
 
   it("models an outage: sends refuse, receive is empty, and the local delivery is unaffected", async () => {

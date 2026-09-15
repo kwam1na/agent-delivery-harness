@@ -185,3 +185,49 @@ export function admitCoordinationMessage(value: unknown, view: CoordinationAdmis
 
   return refusals.length === 0 ? { ok: true, message } : { ok: false, refusals };
 }
+
+/**
+ * A mirror record as far as the replay ledger needs to read one back.
+ * Structural on purpose: the frozen payload carries all three members, and
+ * this unit neither imports the journal store nor restates its grammar.
+ */
+export interface MirroredMessageView {
+  readonly nonce: string;
+  readonly channelDigest: string;
+  readonly remoteSequence: number;
+}
+
+/** The two replay-protection members of an admission view, rebuilt from the journal. */
+export interface CoordinationReplayLedger {
+  readonly consumedNonces: ReadonlySet<string>;
+  readonly highestSequence: number;
+}
+
+/**
+ * Rebuilds the replay ledger from the delivery journal's own mirror records.
+ *
+ * This exists because the two members it produces are the only parts of the
+ * admission view that must survive a restart, and saying so in a comment is
+ * not a mechanism. Round 3 found the durable record carrying neither a nonce
+ * nor the channel digest, which made the ledger unrebuildable: after a
+ * reconnect every replayed nonce would have been admitted again, and the
+ * high-water mark could only be rebuilt per KEY while it is defined per
+ * CHANNEL — conflating two channels that share one connector key.
+ *
+ * It is scoped to one channel deliberately. `highestSequence` is documented as
+ * "the highest sequence already mirrored on THIS channel", and a mark pooled
+ * across channels both refuses legitimate traffic on the slower one and admits
+ * a replay captured from the faster one.
+ */
+export function replayLedgerOf(
+  records: readonly MirroredMessageView[],
+  channelDigest: string,
+): CoordinationReplayLedger {
+  const onThisChannel = records.filter((record) => record.channelDigest === channelDigest);
+  return {
+    // Nonces are single-use within a channel, so the ledger is channel-scoped
+    // here too; a nonce reused across two channels is two different messages.
+    consumedNonces: new Set(onThisChannel.map((record) => record.nonce)),
+    highestSequence: onThisChannel.reduce((highest, record) => Math.max(highest, record.remoteSequence), -1),
+  };
+}
