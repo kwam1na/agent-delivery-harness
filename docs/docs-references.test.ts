@@ -1339,13 +1339,15 @@ describe("the rules the documentation states in prose", () => {
       ).not.toContain(`\`${refused}\``);
     }
 
-    // The page's inline cost literal — the shape an agent copies when its host
-    // meters nothing — is not an `emit` line, so the payload harvester never
-    // reaches it, and its coverage is quoted inside one inline-code span, so no
-    // backtick-delimited token exists for the refusal above to see. Three
-    // guards passed over it and none could. It goes through the same validator
-    // the harvested commands do.
-    const inlineCosts = [...raw.matchAll(/`(\{"coverage"[\s\S]*?\})`/g)].map((match) =>
+    // Every inline cost literal on the page — the shape an agent copies when
+    // its host meters nothing — is not an `emit` line, so the payload harvester
+    // never reaches it, and its coverage is quoted inside one inline-code span,
+    // so no backtick-delimited token exists for the refusal above to see. Three
+    // guards passed over it and none could. Each goes through the same
+    // validator the harvested commands do. The anchor matches an inline object
+    // carrying `coverage` in any key position, so a second literal cannot hide
+    // behind the first by reordering its keys.
+    const inlineCosts = [...raw.matchAll(/`(\{[^`]*?"coverage"[^`]*?\})`/g)].map((match) =>
       match[1]!.replace(/\s+/g, "").split("<actual-host-id>").join("claude-code"),
     );
     expect(inlineCosts.length, "docs/delivery-runbook.md no longer prints a cost shape inline").toBeGreaterThan(0);
