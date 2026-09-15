@@ -65,6 +65,7 @@ import {
   projectShippedPersonas,
   readArchiveEntry,
   validateRunEventInput,
+  describeRunEventPayload,
   RUN_GATE_REPORTED_OUTCOMES,
   RUN_ENDED_RESULTS,
   RUN_EVENT_KINDS,
@@ -1243,10 +1244,22 @@ describe("the rules the documentation states in prose", () => {
       `\`unit\` is \`${printedUnit}\``,
     );
 
-    // The coverage vocabulary, derived from the validator in both directions
-    // rather than retyped: a value the grammar accepts must be named, and a
-    // value it refuses must not be. Without the second half the page can grow a
-    // fourth coverage an agent then writes into a live emit.
+    // The coverage vocabulary, ASKED OF THE GRAMMAR rather than guessed at.
+    //
+    // The first version of this block filtered a hand-written candidate list
+    // through the validator, which can only ever discover a value someone
+    // already thought of: a coverage added to the `oneOf` in the kernel left
+    // the derived set unchanged, the anti-vacuity `toEqual` still passed, and
+    // the loop that "requires the page to name every accepted value" required
+    // nothing new. And its absence half forbade the literal `` `x` coverage ``,
+    // a phrasing this page does not use for any of its three — so it forbade a
+    // sentence that could not occur while the sentence that could, written in
+    // the page's own house style, passed for free.
+    //
+    // So: send the arm a coverage no vocabulary would contain and read the
+    // accepted set out of the refusal it names. A value added to either
+    // `oneOf` appears here without anyone remembering to add it, which is the
+    // whole difference between a derivation and a list.
     const measured = { unit: printedUnit!, total: 152352, reportedBy: "claude-code" };
     const closedPayload = (extra: Record<string, unknown>) => ({
       ...envelope,
@@ -1261,29 +1274,54 @@ describe("the rules the documentation states in prose", () => {
         ...extra,
       },
     });
-    const coverageAccepted = ["complete", "partial", "unreported", "unknown", "estimated"].filter((coverage) =>
-      validateRunEventInput(
-        closedPayload({
-          cost: coverage === "unreported" ? { coverage, reportedBy: "claude-code" } : { ...measured, coverage },
-        }),
-      ).ok,
+    // The vocabulary is read out of the grammar's own description of the `cost`
+    // member — the same check INSTANCES the validator runs, walked across both
+    // arms, so a coverage added to either `oneOf` appears here without anyone
+    // remembering to add it to a list in this file. The probe below keeps the
+    // description honest: a described value the validator does not enforce
+    // would make every assertion under it decorative.
+    const costGrammar = describeRunEventPayload("review.round.closed", "run-event/2")?.members.find(
+      (member) => member.name === "cost",
     );
-    // Anti-vacuity: a validator that refused everything would leave the two
-    // loops below with nothing to check and both would pass.
-    expect(coverageAccepted.sort(), "the cost grammar's coverage vocabulary stopped being the set this row derives").toEqual(
-      ["complete", "partial", "unreported"],
-    );
+    expect(costGrammar, "the frozen grammar no longer describes `review.round.closed`'s `cost`").toBeDefined();
+    const coverageAccepted = [
+      ...new Set(
+        [costGrammar!, ...(costGrammar!.variants ?? [])]
+          .flatMap((arm) => arm.members ?? [])
+          .filter((member) => member.name === "coverage")
+          .flatMap((member) => member.values ?? []),
+      ),
+    ];
+    expect(
+      validateRunEventInput(closedPayload({ cost: { ...measured, coverage: "no-such-coverage" } })).ok,
+      "the cost grammar accepted a coverage no arm describes",
+    ).toBe(false);
+    expect(coverageAccepted.slice().sort(), "the cost grammar's coverage vocabulary moved").toEqual([
+      "complete",
+      "partial",
+      "unreported",
+    ]);
+    // Every accepted value is named by the page…
     for (const coverage of coverageAccepted) {
       expect(runbook, `docs/delivery-runbook.md no longer names the \`${coverage}\` coverage the grammar accepts`).toContain(
         `\`${coverage}\``,
       );
     }
-    for (const refused of ["unknown", "estimated"]) {
-      expect(
-        runbook,
-        `docs/delivery-runbook.md names \`${refused}\` as a coverage, which the frozen grammar refuses`,
-      ).not.toContain(`\`${refused}\` coverage`);
-    }
+    // …and the page names no OTHER coverage-shaped token in that paragraph.
+    // Asserted over the paragraph's own backticked tokens rather than over a
+    // forbidden phrasing, because the phrasing a page invents a fourth coverage
+    // in is precisely the one nobody wrote down in advance. `cost`, `unit`,
+    // `total`, `reportedBy` and `coverage` are the shape's members, not values.
+    const costParagraph = /\*\*The closed round's `cost`[\s\S]*?\n\n/.exec(raw)?.[0];
+    expect(costParagraph, "docs/delivery-runbook.md no longer carries the round-cost paragraph").toBeDefined();
+    const shapeMembers = ["cost", "unit", "total", "reportedBy", "coverage", "subagent-tokens"];
+    const named = [...costParagraph!.matchAll(/`([A-Za-z][A-Za-z-]*)`/g)]
+      .map((match) => match[1]!)
+      .filter((token) => !shapeMembers.includes(token));
+    expect(
+      [...new Set(named)].sort(),
+      "docs/delivery-runbook.md's cost paragraph names a coverage the frozen grammar does not accept",
+    ).toEqual(coverageAccepted.slice().sort());
 
     // The two shapes the paragraph describes, each checked against the arm it
     // describes. The unreported arm carrying a zero total, and the measured arm
@@ -1305,6 +1343,12 @@ describe("the rules the documentation states in prose", () => {
     );
     expect(runbook, "docs/delivery-runbook.md no longer says a round's total is a floor rather than the cost").toContain(
       "floor on what the round cost",
+    );
+    // `reportedBy` is required in both arms; the grammar check above proves the
+    // requirement, this proves the page still carries it. Without it the page
+    // can grant an exemption the grammar refuses mid-round.
+    expect(runbook, "docs/delivery-runbook.md no longer says `reportedBy` is required in both arms").toContain(
+      "`reportedBy` is required in both arms and is never omitted",
     );
   });
 
@@ -1411,6 +1455,44 @@ describe("the corrections the delivery runbook carries", () => {
   };
 
   /**
+   * Scoped to the fenced block the executor pastes into every filled brief.
+   *
+   * `statesInProse` above collapses the whole page, so a clause that also
+   * appears in the reasoning around the fence satisfies it whatever the fence
+   * says. That is not a hypothetical: the block was pinned by the sentence that
+   * introduces it, and four mutations *inside* it shipped green — including one
+   * that ordered both lenses of every round to run `npm run check` before
+   * reporting while the prose above still said they do not. The block is the
+   * only surface on which any of this reaches a lens, so it is pinned on its
+   * own text.
+   */
+  const briefBlock = (): string => {
+    const fence = /```text\n## Checks this lens runs\n([\s\S]*?)```/.exec(textOf("docs/delivery-runbook.md"));
+    expect(fence, "docs/delivery-runbook.md no longer carries the verbatim lens-brief block").not.toBeNull();
+    return fence![1]!.replace(/\s+/g, " ");
+  };
+  const statesInBrief = (phrase: string): void => {
+    expect(briefBlock(), `the verbatim lens-brief block no longer states: ${phrase}`).toContain(phrase);
+  };
+
+  /**
+   * Scoped to one fenced shell recipe, by a phrase the fence contains.
+   *
+   * The commands are the operative half of `### Lens worktrees`: deleting the
+   * second `npm install`, or swapping `status --porcelain` for a form that hides
+   * untracked files, left every prose pin green while the recipe stopped doing
+   * what the prose describes.
+   */
+  const shellRecipeContaining = (marker: string): string => {
+    const recipe = [...textOf("docs/delivery-runbook.md").matchAll(/```sh\n([\s\S]*?)```/g)]
+      .map((match) => match[1]!)
+      .map((body) => body.replace(/\s+/g, " "))
+      .find((body) => body.includes(marker));
+    expect(recipe, `docs/delivery-runbook.md no longer carries an \`sh\` recipe containing: ${marker}`).toBeDefined();
+    return recipe!;
+  };
+
+  /**
    * The lens-worktree reuse rule and the scoped-check rule, clause by clause.
    *
    * These two rules are the page's answer to a measured cost: per-round lens
@@ -1476,6 +1558,81 @@ describe("the corrections the delivery runbook carries", () => {
     // was fine.
     statesInProse("`installed_generation_file_drift`");
     statesInProse("the provider qualification does not");
+    // The topic sentence the rest of that paragraph explains. Without it the
+    // paragraph reads as background about symlinks rather than as the reason
+    // the block below exists on this page at all.
+    statesInProse("**The round-brief template cannot carry it, so this page does.**");
+  });
+
+  /**
+   * The scoped rule's positive half: the commands a lens actually runs.
+   *
+   * The row above pins what a lens does *not* run. Every clause here was
+   * demonstrated to delete green while that row stayed satisfied — deleting the
+   * two packaging sensors re-narrowed the rule to exactly what round 1 found
+   * wrong, one revision later, and trimming `&& npm run sensor:cli` passed
+   * because the npm-script row only checks that each harvested script exists.
+   */
+  it("states the commands the scoped check set is made of", () => {
+    // Anchored on the prose's own sentence for the reason the `npx vitest run`
+    // pin below gives: the brief block names the same chain, so a bare
+    // `toContain` of the chain is satisfied by the fence while the prose drops
+    // a sensor.
+    statesInProse("executor: `npm run typecheck && npm run sensor && npm run sensor:cli`, and");
+    statesInProse("`npm run sensor:policy` when the candidate touches policy");
+    statesInProse("`npm run sensor:standalone` and `npm run qualify:provider` when it touches packaging or the provider");
+    // Pinned on the prose's own wording, not the shared clause: the brief block
+    // below says the same thing in its own words, and a page-wide `toContain`
+    // of the shared half is satisfied by the fence while the prose loses the
+    // rule. Deleting the prose clause shipped green for exactly that reason.
+    statesInProse("`npx vitest run` over every test file the candidate's diff touches together with");
+    statesInProse("every test file that imports a module the diff changed");
+  });
+
+  /**
+   * The verbatim block, on its own text rather than on the page around it.
+   *
+   * See `statesInBrief`. One clause per instruction the block gives, because a
+   * block trimmed to a subset of itself is the failure mode here: a lens acts
+   * on what the brief says and never sees this page.
+   */
+  it("carries every instruction in the block the executor pastes into each brief", () => {
+    statesInBrief("Do not run the repository's full suite");
+    statesInBrief("`npm run check` belongs to the delivery's tail, once, outside this round");
+    statesInBrief("`npm run typecheck && npm run sensor && npm run sensor:cli`");
+    statesInBrief("`npm run sensor:policy` when the candidate touches `.agents/policy/` or `harness.config.ts`");
+    statesInBrief("`npm run sensor:standalone` or `npm run qualify:provider` when it touches packaging or the provider");
+    statesInBrief("`npx vitest run <file>` for every test file the candidate's diff touches");
+    statesInBrief("every test file that imports a module the diff changed");
+    statesInBrief("Name the additional test files, one path at a time");
+    statesInBrief("Never widen to a directory.");
+    statesInBrief("Reinstall only if the candidate's `package-lock.json` differs");
+    // The two fills. A block that lost them is pasted with nothing round-
+    // specific in it and the lens scopes the run by guesswork.
+    statesInBrief("scoped sensor commands for this round: <commands>");
+    statesInBrief("test files in scope for this round: <paths>");
+  });
+
+  /**
+   * The lens-worktree recipes, command by command.
+   *
+   * The prose states the rules; these fences are what an executor runs. Both
+   * `npm install` lines matter for the reason the prose gives — the `-oc` lens
+   * runs the scoped checks too — and `--porcelain` matters because the
+   * precondition is about untracked and modified paths alike.
+   */
+  it("keeps the lens-worktree recipes doing what the prose around them says", () => {
+    const create = shellRecipeContaining('worktree add --detach "$REPO/.worktrees/v26-0000-at"');
+    for (const line of [
+      'git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-at"',
+      'git -C "$REPO" worktree add --detach "$REPO/.worktrees/v26-0000-oc"',
+      'cd "$REPO/.worktrees/v26-0000-at" && npm install',
+      'cd "$REPO/.worktrees/v26-0000-oc" && npm install',
+      'git -C "$REPO/.worktrees/v26-0000-at" status --porcelain',
+      'git -C "$REPO/.worktrees/v26-0000-at" checkout --detach',
+    ]) {
+      expect(create, `the lens-worktree recipe no longer runs: ${line}`).toContain(line);
+    }
   });
 
   it("says a byte-identical replay is still checked before it counts as a reopen", () => {
@@ -1864,13 +2021,13 @@ describe("visible rules cannot be contradicted by demonstrated negations", () =>
     // remove, and the presence pin above does not catch it: the page still
     // names `npm run check` in the tail, so "It also runs `npm run check`"
     // reads as ordinary prose to every other row in this file.
-    { pattern: /(?:lens|it) (?:also |may |can |should )?runs? `npm run check`|full suite (?:in|on) (?:each|every) round/i,
-      probes: ["It also runs `npm run check`.", "A lens runs `npm run check` before reporting.", "The full suite in every round is the safer default."] },
+    { pattern: /(?:lens(?:es)?|reviewers?|it) (?:also |still |may |can |should )*runs? `npm run check`|confirm it with the (?:repository's )?full suite|full suite (?:in|on) (?:each|every) round/i,
+      probes: ["It also runs `npm run check`.", "A lens runs `npm run check` before reporting.", "Lenses should still run `npm run check` whenever a finding looks cross-cutting.", "then confirm it with the repository's full suite before you report", "The full suite in every round is the safer default."] },
     // And the escalation rule's inversion. Widening to a directory is the one
     // move that turns a scoped round back into a full one, so a page that ever
     // calls it acceptable has undone this delivery in one sentence.
-    { pattern: /widening (?:the run )?to a directory[^.]*\b(?:is (?:a )?(?:fine|acceptable|reasonable|fair)|is allowed|is permitted|shortcut)/i,
-      probes: ["widening to a directory is a fine shortcut when the file list gets long", "Widening the run to a directory is allowed when the diff is large."] },
+    { pattern: /widening (?:the run )?to a directory[^.]*\b(?:is (?:an? )?(?:fine|acceptable|reasonable|fair|often the right|the right|sensible|pragmatic)|is allowed|is permitted|is worth|shortcut)/i,
+      probes: ["widening to a directory is a fine shortcut when the file list gets long", "Widening the run to a directory is allowed when the diff is large.", "widening to a directory is often the right call once the file list gets long"] },
   ];
   it("sweeps every scanned document and proves each forbidden shape still matches", () => {
     expect(inversions.length).toBe(5);

@@ -416,8 +416,8 @@ narrower one: `npm run sensor:policy` when the candidate touches policy —
 `.agents/policy/` or `harness.config.ts` — and `npm run sensor:standalone` and
 `npm run qualify:provider` when it touches packaging or the provider. Naming
 only `harness.config.ts` there reads as the whole trigger and is not: the
-policy-projection check also owns the installed-generation integrity assertion
-that a candidate editing `.agents/policy/` can move.
+policy-projection check's subject *is* the projection under `.agents/policy/`,
+which a candidate editing that directory moves directly.
 
 **A lens that wants evidence beyond that set names the extra files.** The
 escalation is a list of paths, each with what that file is evidence *for*;
@@ -504,7 +504,8 @@ closing the findings; a lens the host metered but did not break out; and any
 round realized by a host that meters nothing. `coverage` is where that shows.
 State `complete` only when the figure covers every subagent of the round,
 `partial` when it covers some, and use the `unreported` shape, which carries no
-`total` at all, when the host gave you nothing. Read a round's total as a floor
+`total` at all, when the host gave you nothing. `reportedBy` is required in both
+arms and is never omitted, whoever the host is. Read a round's total as a floor
 on what the round cost rather than as the cost, and do not add totals across
 rounds that different hosts reported.
 
