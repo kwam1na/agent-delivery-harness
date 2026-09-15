@@ -79,13 +79,15 @@ type BendableWireMember =
  * both directions.
  *
  * The record is typed over `Required<SimulatedMessageOptions>` intersected with
- * `BendableWireMember`, and it is an object literal, so two drifts are compile
- * errors AT THIS DECLARATION: a member added to the WIRE and not declared here,
+ * `BendableWireMember`, and it is an object literal, so three drifts are
+ * compile errors AT THIS DECLARATION: a member added to the WIRE and not
+ * declared here, a member added to the OPTIONS interface and not declared here,
  * and a key here that is neither a wire member nor an option.
  *
  * Stated precisely, because round 11 found the first spelling of this comment
- * claiming a third: a member REMOVED from the options interface is not caught
- * here, and the intersection is why. The required key set is the UNION of the
+ * claiming a fourth and round 12 found the correction dropping a true one: a
+ * member REMOVED from the options interface is not caught here, and the
+ * intersection is why. The required key set is the UNION of the
  * two mapped types, and every option name is also a wire member, so the wire
  * half keeps supplying the key. That edit is caught one step away — at `mint`'s
  * `overrides.<name>`, or, if the author hardcodes the default there too, by the
