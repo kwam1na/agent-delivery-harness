@@ -351,9 +351,30 @@ The `128` separation took a second round to get right as well. `cat-file blob`
 returns `128` for a path a tree does not carry *and* for a path whose object the
 repository does not hold — the blobless clone the module header names as its own
 threat model — so the exit code alone still read a missing object as a deletion.
-The projection now takes a second probe on a `128`, `git cat-file -e`, which git
-answers `128` for a name that does not resolve and `1` for a name that resolves
-to an object it does not have.
+The projection now takes a second probe on a `128`, `git cat-file -e` — and that
+probe has *three* answers, which took a further round to find: `128` for a name
+that does not resolve, `1` for a name that resolves to an object the repository
+does not have, and `0` for a name that resolves to an object it does have which
+is not a blob. The third is a directory or a submodule gitlink, and `cat-file -t`
+separates them.
+
+**The seventh thing, and it is the one worth carrying.** Each of those rounds
+made the same move: a read that used to be answered one way now had a second,
+truer answer, and the fix routed the new case to the refusal that was nearest to
+hand. But the two refusals this module has are not comparable. `unresolvable`
+means "this checkout could not read it" and `decideResidual` admits it for every
+record that does not claim `provenNeutral`; a projection that is not admitted
+means "the policy does not call this neutral" and is refused everywhere. So
+routing a case from the second into the first *weakened* it, and the round-8
+lenses measured exactly that: a submodule bumped after the round went from
+refused to admitted, and it took a backdoored source file in the same residual
+down with it, because the first unreadable path returned out of the whole
+comparison. The generalisable form: **when a guard has two refusals, adding a
+case to one of them is a change of strength, not only of label — say which
+refusal is stronger, and make the stronger one win.** Here that is three edits:
+classify the readable paths before reporting a failure, let a non-admitted
+projection outrank an unreadable path, and give the surface that authorizes
+merges the authoring surface's strictness rather than the reader's.
 
 **The generalisable form, and it is the sharpest one in this delivery.** Routing
 a call through a seam is not a refactor — a seam is a *different implementation*

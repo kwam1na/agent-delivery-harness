@@ -817,6 +817,137 @@ describe("the runner the caller supplies", () => {
     expect(codes, "the missing object must look exactly like an absent path").toContain(128);
     expect(outcome.kind, "a blob this repository does not hold is not a deletion").toBe("unresolvable");
   });
+
+  /**
+   * `cat-file -e` has a THIRD answer, and it is the ordinary one.
+   *
+   * A residual path that names a directory in one of the four tree-ishes gets
+   * 128 from `cat-file blob` and **0** from `cat-file -e`: the name resolves,
+   * to an object this repository holds, which is not a blob. Filing that under
+   * "an object this repository does not hold" is false on its face and refuses
+   * a delivery whose checkout is complete — the operator is told to fetch
+   * objects that are already here, and no fetch will change the answer. A
+   * directory carries no file content at that path, which is the absence this
+   * comparison has always meant.
+   */
+  it("reads a path that names a directory as carrying no file content there", async () => {
+    const root = await repository();
+    await put(root, "src/a.ts", "export const a = 1;\n");
+    // Inside the policy's own prefix ON PURPOSE. Everything this fixture moves
+    // must be admitted, so that the only thing that can turn the answer into
+    // `unresolvable` is the directory read itself. Put it outside the prefix
+    // and the deletion refuses on its own, and the row passes for the wrong
+    // reason against a build that files a tree under "not held".
+    await put(root, "docs/solutions/mod/inner.md", "inner\n");
+    const base = commit(root, "base with the note as a directory");
+    await rm(path.join(root, "docs/solutions/mod"), { recursive: true, force: true });
+    await put(root, "docs/solutions/mod", "the note is a file now\n");
+    const moved = commit(root, "the directory became a file after the round");
+
+    const outcome = await projectPostRoundResidual({
+      rootDir: root,
+      config: config(),
+      reviewedCandidates: [{ treeSha: base.tree, mergeBaseSha: base.commit }],
+      recordCandidate: { treeSha: moved.tree, mergeBaseSha: base.commit },
+    });
+
+    // The claim is exact: this is a comparison that CAN be made, and under this
+    // policy it is admitted. A build that reads the directory as an object the
+    // repository does not hold answers `unresolvable` and sends the operator to
+    // fetch objects that are already here.
+    expect(outcome.kind, "a directory is not an object this repository does not hold").toBe("projected");
+    expect(outcome.kind === "projected" ? outcome.projection.admitted : false).toBe(true);
+  });
+
+  /**
+   * The other side of that third answer, and the reason it cannot simply be
+   * folded into absence: a submodule gitlink whose commit object this
+   * repository DOES hold also answers `-e` 0. A gitlink is a coordinate in
+   * another repository; reading it as an absent file is how a submodule bumped
+   * after the round stops being classified at all. So the third probe asks
+   * `cat-file -t` and only `tree` is an absence.
+   */
+  it("refuses a submodule gitlink even when the commit it names is here", async () => {
+    const root = await repository();
+    await put(root, "src/a.ts", "export const a = 1;\n");
+    const base = commit(root, "base");
+    // Two commits this repository certainly holds, used as gitlink targets.
+    await put(root, "src/a.ts", "export const a = 2;\n");
+    const second = commit(root, "a second commit to point the gitlink at");
+
+    git(root, "update-index", "--add", "--cacheinfo", `160000,${base.commit},vendor/dep`);
+    git(root, "commit", "--quiet", "-m", "add the submodule");
+    const withLink = { commit: git(root, "rev-parse", "HEAD"), tree: git(root, "rev-parse", "HEAD^{tree}") };
+    git(root, "update-index", "--cacheinfo", `160000,${second.commit},vendor/dep`);
+    git(root, "commit", "--quiet", "-m", "bump the submodule after the round");
+    const bumped = { commit: git(root, "rev-parse", "HEAD"), tree: git(root, "rev-parse", "HEAD^{tree}") };
+
+    const codes: number[] = [];
+    const watched = async (command: readonly string[], options: { readonly cwd: string }) => {
+      try {
+        return { exitCode: 0, stdout: execFileSync(command[0] as string, command.slice(1), { cwd: options.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
+      } catch (error) {
+        const status = (error as { status?: number }).status ?? 1;
+        if (command[2] === "-e") codes.push(status);
+        return { exitCode: status, stdout: "", stderr: "" };
+      }
+    };
+
+    const outcome = await projectPostRoundResidual({
+      rootDir: root,
+      config: config(),
+      reviewedCandidates: [{ treeSha: withLink.tree, mergeBaseSha: withLink.commit }],
+      recordCandidate: { treeSha: bumped.tree, mergeBaseSha: withLink.commit },
+      run: watched,
+    });
+
+    // The fixture is only worth anything if `-e` answered 0 — the third answer.
+    // A non-zero from `-e` would mean the gitlink was refused by the arm the
+    // missing-object row already owns, and this row would prove nothing.
+    expect(codes, "the held gitlink must be the -e 0 case, not the -e 1 one").not.toContain(1);
+    expect(outcome.kind, "a submodule is not an absent file").toBe("unresolvable");
+  });
+
+  /**
+   * The unconditional refusal outranks the conditional one.
+   *
+   * `unresolvable` is the WEAKER answer: `decideResidual` turns it into
+   * `unprovable` only for a record claiming `provenNeutral`, while a projection
+   * that is not admitted is refused for every record at every surface. So a
+   * residual that carries both an unreadable path and a plainly non-neutral one
+   * must come back as the projection, with the hunk in it — returning on the
+   * first unreadable path threw away the classification of everything beside
+   * it and handed the record the softer answer for a source change nobody read.
+   */
+  it("reports the source change beside a path it could not read, not just the failure", async () => {
+    const root = await repository();
+    await put(root, "src/logic.ts", "export const admit = true;\n");
+    const base = commit(root, "base");
+    git(root, "update-index", "--add", "--cacheinfo", `160000,${base.commit},vendor/dep`);
+    git(root, "commit", "--quiet", "-m", "add the submodule");
+    const reviewed = { commit: git(root, "rev-parse", "HEAD"), tree: git(root, "rev-parse", "HEAD^{tree}") };
+
+    await put(root, "src/logic.ts", "export const admit = false; // BACKDOOR\n");
+    git(root, "add", "-A");
+    // `git add -A` drops the gitlink: there is no working-tree directory for it.
+    git(root, "update-index", "--add", "--cacheinfo", `160000,${reviewed.commit},vendor/dep`);
+    git(root, "commit", "--quiet", "-m", "bump the submodule and change the logic after the round");
+    const moved = { commit: git(root, "rev-parse", "HEAD"), tree: git(root, "rev-parse", "HEAD^{tree}") };
+
+    const outcome = await projectPostRoundResidual({
+      rootDir: root,
+      config: config(),
+      // The ordinary record: it claims nothing, so `unresolvable` would be
+      // ADMITTED and this residual would merge unread.
+      reviewedCandidates: [{ treeSha: reviewed.tree, mergeBaseSha: reviewed.commit }],
+      recordCandidate: { treeSha: moved.tree, mergeBaseSha: reviewed.commit },
+    });
+
+    expect(outcome.kind, "the unreadable path must not silence the readable one").toBe("projected");
+    const projection = outcome.kind === "projected" ? outcome.projection : undefined;
+    expect(projection?.admitted).toBe(false);
+    expect(decideResidual(outcome, [{ treeSha: reviewed.tree, mergeBaseSha: reviewed.commit }]).kind).toBe("not-neutral");
+  });
 });
 
 describe("the residual decision the deciding surfaces share", () => {
@@ -933,6 +1064,26 @@ describe("the residual decision the deciding surfaces share", () => {
         file: path.join(here, "facade", "managed-delivery.ts"),
         call: /const UNCAPPED_STDOUT = Number\.MAX_SAFE_INTEGER;/g,
         sites: 1,
+      },
+      // The facade decides as an AUTHOR, not as a reader. `reproveResidual` is
+      // the one-line composition of the projection and `decideResidual`, and
+      // `decideResidual` admits an `unresolvable` for every record that does
+      // not claim `provenNeutral` — the leniency `verify` wants and this
+      // surface must not have, because it is the one that turns a finish line
+      // into `externalVerification: "passed"`. Restoring the composition here
+      // is a one-word edit that no behavioural row in this package can see, so
+      // the refusal is pinned where it is spelled.
+      {
+        surface: "the managed-delivery facade, deciding as the author it is",
+        file: path.join(here, "facade", "managed-delivery.ts"),
+        call: /if \(outcome\.kind === "unresolvable"\) return \{ kind: "unprovable", detail: outcome\.detail \};/g,
+        sites: 1,
+      },
+      {
+        surface: "the managed-delivery facade, not composing the reader's rule",
+        file: path.join(here, "facade", "managed-delivery.ts"),
+        call: /reproveResidual\(/g,
+        sites: 0,
       },
     ];
     for (const { surface, file, call, sites } of sources) {

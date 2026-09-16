@@ -83,7 +83,7 @@ import { reviewFindingCoherenceCodes, reviewFindingCoherenceCodesV2 } from "../v
 import { REVIEW_GREEN_1, REVIEW_GREEN_2 } from "../validator/codes.ts";
 import { createCandidateCapture, evaluateCandidateActivation, type CandidateCommandRunner } from "../candidate.ts";
 import { isRecordNeutralPath, isReviewNeutralPath, withDeliverableIdentity } from "../identity.ts";
-import { reproveResidual, type ResidualDecision } from "../review-neutral-residual.ts";
+import { decideResidual, projectPostRoundResidual, type ResidualDecision } from "../review-neutral-residual.ts";
 import { nonNeutralHunks } from "../review-neutral-projection.ts";
 import { classifyExecutionContext, type EnvSnapshot } from "../context.ts";
 import { validateHarnessConfig, type HarnessConfig } from "../config.ts";
@@ -254,13 +254,28 @@ async function residualDecisionFor(
   // one. A defaulted parameter would make the bypass the quiet option at the
   // only surface where it matters; an explicit one makes every future call
   // site state which runner it is launching git through.
-  return reproveResidual({
+  const outcome = await projectPostRoundResidual({
     rootDir,
     config,
     reviewedCandidates: check.reviewedCandidates,
     recordCandidate: { treeSha: recordBinding.treeSha, mergeBaseSha: recordBinding.mergeBaseSha },
     run,
   });
+  // WHY THIS IS NOT `reproveResidual`, WHICH IS THE ONE-LINE COMPOSITION OF THE
+  // TWO CALLS ABOVE AND BELOW. `decideResidual` admits an `unresolvable` for a
+  // record that does not claim `provenNeutral`. That leniency is `verify`'s and
+  // it is right for `verify`: a reader in a clone that pruned an object learns
+  // nothing by refusing a record whose portable verification already passed.
+  // This surface is not a reader. It authors a record and turns a finish line
+  // into `externalVerification: "passed"`, which is what `decideFinishLine`
+  // requires before an authorized merge — the same act `commands/record.ts`
+  // performs, and that command refuses an `unresolvable` whatever the record
+  // claims. Composing the reader's rule here made the weakest reader in the
+  // system decide what merges. So the projection is taken from the kernel and
+  // the decision is the authoring one: a residual this checkout could not read
+  // is unprovable here, not admitted.
+  if (outcome.kind === "unresolvable") return { kind: "unprovable", detail: outcome.detail };
+  return decideResidual(outcome, check.reviewedCandidates);
 }
 
 /** The facade's refusal for a residual the record's own round never covered. */
@@ -1317,14 +1332,14 @@ export function createManagedDeliveryFacade(input: CreateFacadeInput): ManagedDe
    * the surface that turns a finish line into an authorized merge. So the cap
    * is lifted here to match the runner this one stands in for.
    *
-   * AND THIS HALF IS THE LOAD-BEARING ONE. The residual projection also refuses
-   * a blob it could not read rather than calling it an absent path, but that
-   * refusal is `unresolvable`, and `decideResidual` makes an `unresolvable`
-   * fatal only for a record whose reviewed coordinate claims `provenNeutral`;
-   * every other record is admitted, which is the leniency that predates this
-   * ticket. So for the ordinary record the two halves are NOT independent: a
-   * capped read would be admitted, and this ceiling is what keeps the facade
-   * reading the same bytes `verify` and the Action read.
+   * AND THIS HALF IS STILL THE CHEAP ONE. The residual projection refuses a
+   * blob it could not read rather than calling it an absent path, and
+   * `residualDecisionFor` above now makes that refusal fatal at this surface
+   * whatever the record claims — so a capped read would be caught. It would be
+   * caught as "this checkout could not read the candidate", which is true but
+   * useless: the operator is sent to fetch objects that are already here. The
+   * ceiling is what keeps the read from failing in the first place, so the
+   * refusal above is the backstop and this is the fix.
    */
   const candidateRunner: CandidateCommandRunner = async (command, options) => {
     const [executable, ...args] = command;

@@ -84,11 +84,18 @@ const GIT_FATAL = 128;
  * is a commit and not a blob at all. A run that reads 128 as absence alone is
  * the header's own threat model left open; a run that refuses every 128 turns
  * every ordinary deletion across a moved base into a refusal. So a 128 asks one
- * more question, and only a 128 does: `cat-file -e` on the same name, which
- * answers 128 when the *name* does not resolve and 1 when it resolves to an
- * object this repository does not hold. Absence is the first; everything else,
- * including a read the exec port's ceiling killed, is a failure and refuses as
- * `unresolvable`, which is what the other three reads in this module already do.
+ * more question, and only a 128 does: `cat-file -e` on the same name. IT HAS
+ * THREE ANSWERS, NOT TWO, and the third is the one a two-way ternary gets
+ * wrong: 128 when the *name* does not resolve (an absence), 1 when it resolves
+ * to an object this repository does not hold (a failure), and **0** when it
+ * resolves to an object this repository does hold which is not a blob. That
+ * last is a directory or a submodule gitlink, so a third probe separates them:
+ * `cat-file -t` reading `tree` is an absence of file content at that path,
+ * which is what this comparison means and what this module answered before the
+ * second probe existed; anything else there is a failure. Absence is the first
+ * and the tree; everything else, including a read the exec port's ceiling
+ * killed, is a failure and refuses as `unresolvable`, which is what the other
+ * three reads in this module already do.
  */
 type BlobRead =
   | { readonly kind: "read"; readonly content: string | null }
@@ -104,9 +111,18 @@ async function blobAt(run: CandidateCommandRunner, rootDir: string, treeish: str
   });
   if (read.exitCode !== GIT_FATAL) return failed(`exited ${read.exitCode}`);
   const resolves = await run(["git", "cat-file", "-e", name], { cwd: rootDir });
-  return resolves.exitCode === GIT_FATAL
+  if (resolves.exitCode === GIT_FATAL) return { kind: "read", content: null };
+  if (resolves.exitCode !== 0) return failed("named an object this repository does not hold");
+  // The third answer. `-e` 0 after a 128 from `blob` means the name resolves to
+  // an object this repository holds which is not a blob: a directory, or a
+  // submodule's commit. A directory carries no blob content at that path, which
+  // is the absence this comparison means; a gitlink is a coordinate in another
+  // repository and reading it as an absence is how a bumped submodule stops
+  // being classified at all.
+  const kind = await run(["git", "cat-file", "-t", name], { cwd: rootDir });
+  return kind.exitCode === 0 && kind.stdout.trim() === "tree"
     ? { kind: "read", content: null }
-    : failed("named an object this repository does not hold");
+    : failed(`named a ${kind.exitCode === 0 ? kind.stdout.trim() : "non-blob"} and not a file this comparison can read`);
 }
 
 /**
@@ -154,15 +170,25 @@ export async function projectPostRoundResidual(request: ResidualRequest): Promis
   if (earlier.length === 0) return { kind: "unchanged" };
 
   const projections: ReviewNeutralProjection[] = [];
+  let unresolved: ResidualOutcome | undefined;
   for (const reviewed of earlier) {
     const one = await projectOne(request, reviewed);
-    // A tree-ish this clone cannot resolve stops the whole comparison: a
+    // A tree-ish this clone cannot resolve refuses the whole comparison: a
     // partial answer over the remaining coordinates would be a claim about
-    // trees nobody read.
-    if (one.kind !== "projected") return one;
+    // trees nobody read. It is remembered rather than returned, for the same
+    // reason `projectOne` remembers an unreadable path: a later coordinate that
+    // is not admitted is the stronger refusal, and returning here would hand
+    // the record the weaker one.
+    if (one.kind !== "projected") {
+      unresolved ??= one;
+      continue;
+    }
     projections.push(one.projection);
   }
   const refused = projections.find((projection) => !projection.admitted);
+  if (refused !== undefined) return { kind: "projected", projection: refused };
+  if (unresolved !== undefined) return unresolved;
+  if (projections.length === 0) return { kind: "unchanged" };
   const widest = projections.reduce((left, right) => (right.entries.length > left.entries.length ? right : left));
   return { kind: "projected", projection: refused ?? widest };
 }
@@ -196,6 +222,7 @@ async function projectOne(request: ResidualRequest, reviewed: ReviewedCandidateC
     };
   }
   const inputs: ResidualPathInput[] = [];
+  let failure: string | undefined;
   for (const repoPath of paths) {
     const reads = [
       await blobAt(run, request.rootDir, reviewed.treeSha, repoPath),
@@ -203,36 +230,48 @@ async function projectOne(request: ResidualRequest, reviewed: ReviewedCandidateC
       await blobAt(run, request.rootDir, request.recordCandidate.treeSha, repoPath),
       await blobAt(run, request.rootDir, request.recordCandidate.mergeBaseSha, repoPath),
     ] as const;
-    // One unreadable blob stops the whole comparison, for the same reason an
+    // One unreadable blob refuses this comparison, for the same reason an
     // unresolvable tree-ish does: the classes this projection admits are all
     // "these bytes are equal", and bytes nobody could read are equal to
     // nothing. Refusing here is what keeps a capped or otherwise failing read
     // from being reported as a deletion.
-    const failed = reads.find((read) => read.kind === "failed");
-    if (failed !== undefined && failed.kind === "failed") {
-      return { kind: "unresolvable", detail: failed.detail };
+    //
+    // WHY IT DOES NOT RETURN HERE. `unresolvable` is the WEAKER refusal:
+    // `decideResidual` turns it into `unprovable` only for a record claiming
+    // `provenNeutral`, while a projection that is simply not admitted is
+    // refused for every record at every surface. Returning on the first
+    // unreadable path threw away the paths already classified beside it, so a
+    // residual carrying both a bumped submodule and a source change got the
+    // weaker answer for the source change too. Remember the first failure,
+    // keep classifying, and let the unconditional refusal win if there is one.
+    const unreadable = reads.find((read) => read.kind === "failed");
+    if (unreadable !== undefined && unreadable.kind === "failed") {
+      failure ??= unreadable.detail;
+      continue;
     }
     const [reviewedContent, reviewedBaseContent, recordContent, recordBaseContent] = reads.map((read) =>
       read.kind === "read" ? read.content : null,
     ) as [string | null, string | null, string | null, string | null];
     inputs.push({ path: repoPath, reviewedContent, reviewedBaseContent, recordContent, recordBaseContent });
   }
-  return {
-    kind: "projected",
-    projection: classifyPostRoundResidual(request.config.postRoundNeutral, {
-      reviewedTreeSha: reviewed.treeSha,
-      recordTreeSha: request.recordCandidate.treeSha,
-      reviewedMergeBaseSha: reviewed.mergeBaseSha,
-      recordMergeBaseSha: request.recordCandidate.mergeBaseSha,
-      paths: inputs,
-      // The identity function's own neutral set travels with the request. A
-      // path in it is outside the deliverable digest, so it is not part of what
-      // any round reviewed and cannot be the reason a round stops governing —
-      // the record-neutral transport that moves a record into the tree being
-      // the case that proves it.
-      deliverableNeutral: request.config.reviewNeutral ?? [],
-    }),
-  };
+  const projection = classifyPostRoundResidual(request.config.postRoundNeutral, {
+    reviewedTreeSha: reviewed.treeSha,
+    recordTreeSha: request.recordCandidate.treeSha,
+    reviewedMergeBaseSha: reviewed.mergeBaseSha,
+    recordMergeBaseSha: request.recordCandidate.mergeBaseSha,
+    paths: inputs,
+    // The identity function's own neutral set travels with the request. A
+    // path in it is outside the deliverable digest, so it is not part of what
+    // any round reviewed and cannot be the reason a round stops governing —
+    // the record-neutral transport that moves a record into the tree being
+    // the case that proves it.
+    deliverableNeutral: request.config.reviewNeutral ?? [],
+  });
+  // The unconditional refusal outranks the conditional one. An unreadable path
+  // beside a non-neutral one must not soften the answer to `unresolvable`.
+  if (!projection.admitted) return { kind: "projected", projection };
+  if (failure !== undefined) return { kind: "unresolvable", detail: failure };
+  return { kind: "projected", projection };
 }
 
 /**

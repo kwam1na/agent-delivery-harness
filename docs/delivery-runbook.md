@@ -613,16 +613,31 @@ questions rather than one. `git cat-file blob <tree>:<path>` exits `128` both fo
 a path that tree does not carry **and** for a path it does carry whose object this
 repository does not hold — a blobless or partial clone, or a submodule gitlink.
 The exit code alone therefore cannot say which happened, so on a `128` the
-projection asks a second question, `git cat-file -e <tree>:<path>`: git answers
-`128` again when the *name* does not resolve, which is the absence, and `1` when
-the name resolves to an object that is not here, which is a read this checkout
-could not perform and refuses as `not computed`. Every other non-zero exit from
-the first read — a runner's own ceiling, for instance — refuses the same way.
-Reading them alike would let four failed reads compare equal as four deletions
-and admit an uninspectable residual as `rebase`.
+projection asks a second question, `git cat-file -e <tree>:<path>`, **which has
+three answers, not two**: `128` again when the *name* does not resolve, which is
+the absence; `1` when the name resolves to an object that is not here, which is
+a read this checkout could not perform; and `0` when it resolves to an object
+that *is* here and is not a blob — a directory, or a submodule's commit. A third
+probe, `git cat-file -t`, separates those two: `tree` is a path carrying no file
+content, which is an absence, and anything else is a gitlink and refuses. Every
+other non-zero exit from the first read — a runner's own ceiling, for instance —
+refuses as well. Reading them alike would let four failed reads compare equal as
+four deletions and admit an uninspectable residual as `rebase`; reading the
+directory as a failure refuses a delivery whose checkout is already complete.
+
+A refusal this comparison could not read is the **weaker** of the two refusals,
+so it never displaces the other. `unresolvable` is reported as `not computed`
+and blocks only where the surface is strict; a projection that is simply not
+admitted is refused everywhere. A residual carrying both an unreadable path and
+a non-neutral one is therefore reported as the non-neutral projection, with its
+hunks, rather than as the failed read.
 `verify` reports that same case as `not computed` and does not block — unless
 the record's projection is on the `proven-neutral-post-round-residual` basis
-below, in which case it blocks. The lenient half is for a record whose
+below, in which case it blocks. The managed-delivery facade takes `record`'s
+rule and not `verify`'s, because it performs `record`'s act: it authors a record
+and turns a finish line into `externalVerification: "passed"`, which is what an
+authorized merge requires. A residual it could not read is unprovable there
+whatever the record claims. The lenient half is for a record whose
 deliverable digest never moved: `verify` is reading a record whose portable
 verification already passed, in a clone that may simply have pruned the object,
 and nothing a re-read could find would overturn it. The strict half is for a
