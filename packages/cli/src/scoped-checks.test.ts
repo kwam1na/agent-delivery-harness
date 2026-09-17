@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -95,6 +95,28 @@ it("hashes large source and dependency files through execution and foreign verif
     await exec("git", ["restore", "--source=HEAD", "--staged", "--worktree", file], { cwd: foreign });
   }
   expect(await runCli(["verify"], { ...f.runtime, cwd: foreign }), f.err.join("\n")).toBe(0);
+}, 60000);
+it.each(["none", "full"] as const)("materializes directory links and verifies their scoped evidence with %s Git context", async gitContext => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  await mkdir(path.join(f.dir, "target/nested"), { recursive: true });
+  await writeFile(path.join(f.dir, "target/nested/input"), "directory contents");
+  await symlink("target", path.join(f.dir, "link"));
+  await symlink("link", path.join(f.dir, "chain"));
+  f.setConfig({ ...f.config, providers: f.config.providers.map(p => ({ ...p, check: { ...p.check!,
+    command: [process.execPath, "-e", `const fs=require('fs');if(!fs.lstatSync('link').isSymbolicLink()||fs.readlinkSync('chain')!=='link')process.exit(4);fs.writeFileSync('${p.check!.outputs![0]}',JSON.stringify({value:fs.readFileSync('chain/nested/input','utf8')}))`],
+    scope: { ...p.check!.scope!, files: ["chain", "link"], memberships: ["target/"] },
+  } })), scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p, gitContext })) } });
+  await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "directory inputs");
+  for (const command of ["prepare", "gate", "record"]) expect(await f.run(command), f.err.join("\n")).toBe(0);
+  await f.git("add", "."); expect(await f.run("verify"), f.err.join("\n")).toBe(0);
+  await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "record");
+  const foreign = await mkdtemp(path.join(tmpdir(), "scoped-directory-foreign-")); dirs.push(foreign);
+  await exec("git", ["clone", "--no-local", f.dir, foreign]);
+  await exec("git", ["update-ref", "refs/remotes/origin/main", await f.git("rev-parse", "origin/main")], { cwd: foreign });
+  expect(await runCli(["verify"], { ...f.runtime, cwd: foreign }), f.err.join("\n")).toBe(0);
+  await writeFile(path.join(foreign, "target/nested/input"), "changed");
+  await exec("git", ["add", "."], { cwd: foreign });
+  expect(await runCli(["verify"], { ...f.runtime, cwd: foreign })).toBe(1);
 }, 60000);
 it("captures untracked source without changing the author index", async () => {
   const f = await fixture();
