@@ -20,3 +20,10 @@ store. Tail-byte changes must invalidate the relevant check. A source-level
 reader test alone cannot prove that the executor and foreign verifier selected
 the correct reader, and a small fixture cannot expose an evidence-size limit
 accidentally reused for source hashing.
+
+Pin the reverse boundary at the caller too: accept a small valid workflow
+release receipt, reject the same valid receipt padded beyond 2 MiB, and accept
+the restored small receipt. Invalid JSON cannot prove the size boundary, since
+parsing would reject it even through the wrong reader. Both native tests and
+the supplied-runtime qualifier need this control; a capped reader unit test
+does not catch a caller routing metadata through the unbounded source reader.

@@ -2130,7 +2130,7 @@ async function runLifecycle(input: LifecycleInput): Promise<void> {
 export const SCOPED_RUNTIME_PROBES = [
   "partial-failure", "retry-reuse", "report-reuse", "source-invalidation",
   "setup-invalidation", "foreign-portable", "tamper-refusal",
-  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations", "large-source-portability",
+  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations", "large-source-portability", "bounded-release-metadata",
 ] as const;
 
 export interface ScopedRuntimeQualification {
@@ -2324,6 +2324,16 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
       write(files, name, original); await cli(files, "prepare"); await cli(files, "gate");
     }
     proven.add("large-source-portability");
+    // Valid release metadata must use the bounded evidence reader even when
+    // source and dependency inputs in this same repository exceed that bound.
+    const release = { releaseId: "qualification-release", profile: "linear", archiveSha256: "a".repeat(64), metadataSha256: "b".repeat(64) };
+    const receipt = JSON.stringify({ release });
+    write(files, ".agent-skills/active.json", receipt); await cli(files, "prepare");
+    write(files, ".agent-skills/active.json", JSON.stringify({ release, padding: "x".repeat(2 * 1024 * 1024) }));
+    const oversizedReceipt = await cli(files, "prepare", 1);
+    requireObservation(oversizedReceipt.stderr.includes("portable_tree_unreadable"), "valid oversized release metadata must use the bounded evidence reader");
+    write(files, ".agent-skills/active.json", receipt); await cli(files, "prepare");
+    proven.add("bounded-release-metadata");
     const result = { runtimeSha256: createHash("sha256").update(descriptorBytes).digest("hex"), repositories: 3, probes: SCOPED_RUNTIME_PROBES.filter(probe => proven.has(probe)), commands };
     assertScopedRuntimeQualification(result); return result;
   } finally { rmSync(temporary, { recursive: true, force: true }); }

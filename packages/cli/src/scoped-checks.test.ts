@@ -57,6 +57,19 @@ it("retains A across B failure, retry and report replan, then records portable e
   expect(await f.run("verify")).toBe(1);
   expect(f.err.join("\n")).toContain("portable_scoped_inputs_invalid");
 }, 60000);
+it("keeps valid workflow release receipts bounded separately from scoped source inputs", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  await mkdir(path.join(f.dir, ".agent-skills"), { recursive: true });
+  const release = { releaseId: "test-release", profile: "linear", archiveSha256: "a".repeat(64), metadataSha256: "b".repeat(64) };
+  const receipt = path.join(f.dir, ".agent-skills/active.json");
+  await writeFile(receipt, JSON.stringify({ release }));
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  await writeFile(receipt, JSON.stringify({ release, padding: "x".repeat(2 * 1024 * 1024) }));
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(1);
+  expect(f.err.join("\n")).toContain("portable_tree_unreadable");
+  await writeFile(receipt, JSON.stringify({ release }));
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+}, 60000);
 it("hashes large source and dependency files through execution and foreign verification without transporting them", async () => {
   const f = await fixture(); f.env["FAIL"] = "0";
   const source = Buffer.alloc(14 * 1024 * 1024, 97);
