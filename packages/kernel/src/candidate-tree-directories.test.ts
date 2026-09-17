@@ -74,6 +74,23 @@ it("verifies tree-object bytes before caching and returns independent copies", a
   await expect(read("chain")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable" }] });
   corrupt = false;
   const [first, second] = await Promise.all([read("chain"), read("link")]);
-  expect(first).not.toBeNull(); expect(first).toEqual(second); first![0] = first![0]! ^ 255;
-  expect(await read("chain")).toEqual(second); expect(reads).toBe(2);
+  const expected = execFileSync("git", ["cat-file", "tree", `${tree}:target`], { cwd: f.root });
+  expect(first).toEqual(expected); expect(second).toEqual(expected);
+  first![0] = first![0]! ^ 255;
+  expect(second).toEqual(expected);
+  expect(await read("chain")).toEqual(expected); expect(reads).toBe(2);
+});
+
+it("does not reuse a verified blob when an inconsistent listing requests that OID as a tree", async () => {
+  const f = fixture(), tree = f.tree();
+  const blob = f.git("rev-parse", `${tree}:target/nested/file`);
+  const target = f.git("rev-parse", `${tree}:target`);
+  const run: CandidateCommandRunner = async (args, options) => {
+    const result = await runGitCommand(args, options);
+    return args[1] === "ls-tree" ? { ...result, stdout: result.stdout.replace(`040000 tree ${target}\ttarget\0`, `040000 tree ${blob}\ttarget\0`) } : result;
+  };
+  const read = await candidateTreeSourceReader(f.root, tree, run);
+  expect(await read("target/nested/file")).toEqual(Buffer.from("contents"));
+  await expect(read("chain")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable" }] });
+  expect(await read("target/nested/file")).toEqual(Buffer.from("contents"));
 });
