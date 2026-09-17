@@ -34,7 +34,8 @@ async function candidateTreeReader(rootDir: string, treeSha: string, run: Candid
   const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", treeSha], { cwd: rootDir });
   if (listing.exitCode !== 0) refusal("The target candidate tree cannot be enumerated.");
   const entries = new Map(parseCandidateTreeListing(listing.stdout).map(entry => [entry.path, entry]));
-  const readBlob = async (sha: string): Promise<Buffer> => {
+  const blobReads = new Map<string, Promise<Buffer>>();
+  const loadBlob = async (sha: string): Promise<Buffer> => {
     const size = await run(["git", "cat-file", "-s", sha], { cwd: rootDir });
     if (size.exitCode !== 0 || !/^\d+\s*$/.test(size.stdout) || (maxBytes !== undefined && Number(size.stdout) > maxBytes)) refusal("A target-tree input is missing or oversized.");
     const result = await run(["git", "cat-file", "blob", sha], { cwd: rootDir, captureBytes: true });
@@ -43,6 +44,16 @@ async function candidateTreeReader(rootDir: string, treeSha: string, run: Candid
     const actual = createHash(sha.length === 64 ? "sha256" : "sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
     if (actual !== sha) refusal("The target-tree reader did not preserve the exact blob bytes.");
     return bytes;
+  };
+  // One reader owns one pinned tree and one size policy. Only verified bytes
+  // resolve successfully; sharing in-flight reads also avoids duplicate Git I/O.
+  const readBlob = (sha: string): Promise<Buffer> => {
+    const existing = blobReads.get(sha);
+    if (existing) return existing;
+    const pending = loadBlob(sha);
+    blobReads.set(sha, pending);
+    void pending.catch(() => { if (blobReads.get(sha) === pending) blobReads.delete(sha); });
+    return pending;
   };
   const resolve = async (requested: string) => {
     if (!isSafeRelativePath(requested)) refusal("An evidence input is not a safe repository-relative path.");
@@ -73,7 +84,8 @@ async function candidateTreeReader(rootDir: string, treeSha: string, run: Candid
   };
   return Object.assign(async (requested: string) => {
     const { entry } = await resolve(requested);
-    return entry ? readBlob(entry.objectSha) : null;
+    // The cache owns its buffers; callers may mutate only their own copies.
+    return entry ? Buffer.from(await readBlob(entry.objectSha)) : null;
   }, { metadata: async (requested: string): Promise<CandidateTreeInputMetadata> => {
     const { entry, links } = await resolve(requested);
     return { mode: entry?.mode ?? null, links };
