@@ -99,3 +99,32 @@ it("returns independent symlink metadata while memoizing only verified object by
   expect(bytes.equals((await read("target"))!)).toBe(true);
   expect(commands.filter(args => args[1] === "cat-file" && args[2] === "blob")).toHaveLength(2);
 });
+
+it.each([candidateTreeSourceReader, candidateTreeEvidenceReader])("keeps regular-file authorization per path after the same OID is verified", async reader => {
+  const bytes = Buffer.from("verified bytes"), f = fixture(bytes);
+  const run: CandidateCommandRunner = async (args, options) => {
+    const result = await f.run(args, options);
+    return args[1] === "ls-tree" ? { ...result, stdout: result.stdout + result.stdout.replace("100644 blob", "160000 commit").replace("\tinput\0", "\tgitlink\0") } : result;
+  };
+  const read = await reader("/fixture", "a".repeat(40), run);
+  expect(bytes.equals((await read("input"))!)).toBe(true);
+  expect(await read.metadata("input")).toEqual({ mode: "100644", links: [] });
+  await expect(read("gitlink")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable", summary: expect.stringContaining("regular committed file") }] });
+  await expect(read.metadata("gitlink")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable", summary: expect.stringContaining("regular committed file") }] });
+  expect(bytes.equals((await read("input"))!)).toBe(true);
+});
+
+it.each([candidateTreeSourceReader, candidateTreeEvidenceReader])("checks containment and chain limits after link bytes are already verified", async reader => {
+  for (const target of ["../escape", "link"]) {
+    const bytes = Buffer.from(target), f = fixture(bytes);
+    const run: CandidateCommandRunner = async (args, options) => {
+      const result = await f.run(args, options);
+      return args[1] === "ls-tree" ? { ...result, stdout: result.stdout + result.stdout.replace("100644 blob", "120000 blob").replace("\tinput\0", "\tlink\0") } : result;
+    };
+    const read = await reader("/fixture", "a".repeat(40), run);
+    expect(bytes.equals((await read("input"))!)).toBe(true);
+    await expect(read("link")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable", summary: expect.stringContaining(target === "link" ? "cyclic" : "escapes") }] });
+    await expect(read.metadata("link")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable" }] });
+    expect(bytes.equals((await read("input"))!)).toBe(true);
+  }
+});
