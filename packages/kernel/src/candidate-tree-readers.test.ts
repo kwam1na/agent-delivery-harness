@@ -20,13 +20,13 @@ it("reads full binary source beyond the evidence limit while refusing oversized 
   const bytes = Buffer.alloc(MAX_PORTABLE_ARTIFACT_BYTES + 1, 255); bytes[bytes.length - 1] = 128;
   const source = fixture(bytes);
   const read = await candidateTreeSourceReader("/fixture", "a".repeat(40), source.run);
-  expect(await read("input")).toEqual(bytes);
+  expect(bytes.equals((await read("input"))!)).toBe(true);
   expect(await read.metadata("input")).toEqual({ mode: "100644", links: [] });
   const evidence = fixture(bytes);
   await expect((await candidateTreeEvidenceReader("/fixture", "a".repeat(40), evidence.run))("input")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable", summary: expect.stringContaining("oversized") }] });
   expect(evidence.commands.some(args => args[1] === "cat-file" && args[2] === "blob")).toBe(false);
   const boundary = Buffer.alloc(MAX_PORTABLE_ARTIFACT_BYTES, 0);
-  expect(await (await candidateTreeEvidenceReader("/fixture", "a".repeat(40), fixture(boundary).run))("input")).toEqual(boundary);
+  expect(boundary.equals((await (await candidateTreeEvidenceReader("/fixture", "a".repeat(40), fixture(boundary).run))("input"))!)).toBe(true);
 });
 
 it.each([candidateTreeSourceReader, candidateTreeEvidenceReader])("retains exact blob integrity and containment for both readers", async reader => {

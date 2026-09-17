@@ -27,3 +27,9 @@ the restored small receipt. Invalid JSON cannot prove the size boundary, since
 parsing would reject it even through the wrong reader. Both native tests and
 the supplied-runtime qualifier need this control; a capped reader unit test
 does not catch a caller routing metadata through the unbounded source reader.
+
+For multi-megabyte buffers, assert exact equality with `Buffer.equals`, rather
+than asking the test framework to recursively compare millions of indexed
+properties. The latter spent 4.24 seconds locally and exceeded the hosted
+five-second test budget; native byte comparison reduced the same three tests
+to 9 ms without changing their inputs, byte-equality claim, or timeout.
