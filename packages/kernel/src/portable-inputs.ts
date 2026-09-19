@@ -25,34 +25,36 @@ export type CandidateTreeInputReader = ReviewInputReader & { metadata(repoPath: 
 export async function candidateTreeEvidenceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<CandidateTreeInputReader> {
   return candidateTreeReader(rootDir, treeSha, run, MAX_PORTABLE_ARTIFACT_BYTES);
 }
-/** Source inputs are hashed from Git, not transported as portable artifacts. */
+/** Source inputs are hashed from Git, not transported as portable artifacts.
+ * Directory links contribute verified target-tree bytes and their link metadata. */
 export async function candidateTreeSourceReader(rootDir: string, treeSha: string, run: CandidateCommandRunner = runGitCommand): Promise<CandidateTreeInputReader> {
-  return candidateTreeReader(rootDir, treeSha, run);
+  return candidateTreeReader(rootDir, treeSha, run, undefined, true);
 }
-async function candidateTreeReader(rootDir: string, treeSha: string, run: CandidateCommandRunner, maxBytes?: number): Promise<CandidateTreeInputReader> {
+async function candidateTreeReader(rootDir: string, treeSha: string, run: CandidateCommandRunner, maxBytes?: number, directoryLinks = false): Promise<CandidateTreeInputReader> {
   const refusal = (message: string): never => { throw new BlockedError([portableBlocker("portable_tree_unreadable", message)]); };
-  const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", treeSha], { cwd: rootDir });
+  const listing = await run(["git", "ls-tree", "-r", ...(directoryLinks ? ["-t"] : []), "-z", "--full-tree", treeSha], { cwd: rootDir });
   if (listing.exitCode !== 0) refusal("The target candidate tree cannot be enumerated.");
   const entries = new Map(parseCandidateTreeListing(listing.stdout).map(entry => [entry.path, entry]));
-  const blobReads = new Map<string, Promise<Buffer>>();
-  const loadBlob = async (sha: string): Promise<Buffer> => {
+  const objectReads = new Map<string, Promise<Buffer>>();
+  const loadObject = async (sha: string, type: "blob" | "tree"): Promise<Buffer> => {
     const size = await run(["git", "cat-file", "-s", sha], { cwd: rootDir });
     if (size.exitCode !== 0 || !/^\d+\s*$/.test(size.stdout) || (maxBytes !== undefined && Number(size.stdout) > maxBytes)) refusal("A target-tree input is missing or oversized.");
-    const result = await run(["git", "cat-file", "blob", sha], { cwd: rootDir, captureBytes: true });
+    const result = await run(["git", "cat-file", type, sha], { cwd: rootDir, captureBytes: true });
     if (result.exitCode !== 0) refusal("A target-tree evidence input cannot be read.");
     const bytes = result.stdoutBase64 === undefined ? Buffer.from(result.stdout, "utf8") : Buffer.from(result.stdoutBase64, "base64");
-    const actual = createHash(sha.length === 64 ? "sha256" : "sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-    if (actual !== sha) refusal("The target-tree reader did not preserve the exact blob bytes.");
+    const actual = createHash(sha.length === 64 ? "sha256" : "sha1").update(`${type} ${bytes.length}\0`).update(bytes).digest("hex");
+    if (actual !== sha) refusal(`The target-tree reader did not preserve the exact ${type} bytes.`);
     return bytes;
   };
   // One reader owns one pinned tree and one size policy. Only verified bytes
   // resolve successfully; sharing in-flight reads also avoids duplicate Git I/O.
-  const readBlob = (sha: string): Promise<Buffer> => {
-    const existing = blobReads.get(sha);
+  const readObject = (sha: string, type: "blob" | "tree" = "blob"): Promise<Buffer> => {
+    const key = `${type}:${sha}`;
+    const existing = objectReads.get(key);
     if (existing) return existing;
-    const pending = loadBlob(sha);
-    blobReads.set(sha, pending);
-    void pending.catch(() => { if (blobReads.get(sha) === pending) blobReads.delete(sha); });
+    const pending = loadObject(sha, type);
+    objectReads.set(key, pending);
+    void pending.catch(() => { if (objectReads.get(key) === pending) objectReads.delete(key); });
     return pending;
   };
   const resolve = async (requested: string) => {
@@ -66,7 +68,7 @@ async function candidateTreeReader(rootDir: string, treeSha: string, run: Candid
         const prefix = segments.slice(0, index + 1).join("/");
         const entry = entries.get(prefix);
         if (entry?.mode !== "120000") continue;
-        const target = (await readBlob(entry.objectSha)).toString("utf8");
+        const target = (await readObject(entry.objectSha)).toString("utf8");
         links.push({ path: prefix, target });
         if (path.posix.isAbsolute(target) || target.includes("\\") || target.includes("\0")) refusal("An evidence input symlink escapes the repository.");
         current = path.posix.normalize(path.posix.join(path.posix.dirname(prefix), target, ...segments.slice(index + 1)));
@@ -77,6 +79,12 @@ async function candidateTreeReader(rootDir: string, treeSha: string, run: Candid
       if (redirected) continue;
       const entry = entries.get(current);
       if (entry === undefined) return { entry, links };
+      if (entry.mode === "040000" && directoryLinks) {
+        // Only a committed link is an inventory input. Its target tree bytes
+        // bind all descendant names, modes and objects without flattening the
+        // link or treating a physical directory as a regular evidence file.
+        return { entry: entries.get(requested)?.mode === "120000" ? entry : undefined, links };
+      }
       if (!/^100(?:644|755)$/.test(entry.mode)) refusal("An evidence input is not a regular committed file.");
       return { entry, links };
     }
@@ -85,7 +93,7 @@ async function candidateTreeReader(rootDir: string, treeSha: string, run: Candid
   return Object.assign(async (requested: string) => {
     const { entry } = await resolve(requested);
     // The cache owns its buffers; callers may mutate only their own copies.
-    return entry ? Buffer.from(await readBlob(entry.objectSha)) : null;
+    return entry ? Buffer.from(await readObject(entry.objectSha, entry.mode === "040000" ? "tree" : "blob")) : null;
   }, { metadata: async (requested: string): Promise<CandidateTreeInputMetadata> => {
     const { entry, links } = await resolve(requested);
     return { mode: entry?.mode ?? null, links };
