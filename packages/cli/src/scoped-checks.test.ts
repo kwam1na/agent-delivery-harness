@@ -26,6 +26,31 @@ async function fixture() {
   const run = async (...args: string[]) => { out.length = 0; err.length = 0; return runCli(args, runtime); };
   return { dir, git, run, out, err, env, get config() { return config; }, runtime, setConfig: (v: HarnessConfigInput) => { config = defineHarnessConfig(v); } };
 }
+it.each(["none", "full"] as const)("prepares and verifies portable evidence from a shallow source with %s Git context", async gitContext => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  await writeFile(path.join(f.dir, "source.txt"), "boundary"); await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "boundary");
+  await writeFile(path.join(f.dir, "source.txt"), "head"); await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "head");
+  const shallow = await mkdtemp(path.join(tmpdir(), "scoped-shallow-cli-")); dirs.push(shallow);
+  await exec("git", ["clone", "--no-local", "--depth", "2", f.dir, shallow]);
+  const git = async (...args: string[]) => (await exec("git", args, { cwd: shallow })).stdout.trim();
+  const boundary = await readFile(path.join(shallow, ".git/shallow"));
+  await writeFile(path.join(shallow, "source.txt"), "staged shallow"); await git("add", ".");
+  await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "source candidate");
+  const head = await git("rev-parse", "HEAD"); await git("update-ref", "refs/remotes/origin/main", head);
+  const staged = await git("write-tree");
+  f.setConfig({ ...f.config, scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a"], profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p, gitContext })) } });
+  const runtime = { ...f.runtime, cwd: shallow };
+  for (const command of ["prepare", "gate", "record"]) expect(await runCli([command], runtime), f.err.join("\n")).toBe(0);
+  await git("add", "."); expect(await runCli(["verify"], runtime), f.err.join("\n")).toBe(0);
+  expect(await readFile(path.join(shallow, ".git/shallow"))).toEqual(boundary);
+  expect(await git("rev-parse", "HEAD")).toBe(head);
+  expect(await git("rev-parse", `${staged}:source.txt`)).toBe(await git("hash-object", "source.txt"));
+  await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "record");
+  const foreign = await mkdtemp(path.join(tmpdir(), "scoped-shallow-foreign-")); dirs.push(foreign);
+  await exec("git", ["clone", "--no-local", shallow, foreign]);
+  await exec("git", ["update-ref", "refs/remotes/origin/main", head], { cwd: foreign });
+  expect(await runCli(["verify"], { ...runtime, cwd: foreign }), f.err.join("\n")).toBe(0);
+}, 60000);
 it("retains A across B failure, retry and report replan, then records portable evidence", async () => {
   const f = await fixture(); expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate"), f.err.join("\n")).toBe(1);
