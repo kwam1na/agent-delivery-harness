@@ -70,7 +70,9 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
     await git("init", "-q");
     // Fetch transfers object bytes; unlike worktrees/alternates/local clones it
     // cannot create writable links back to the author's Git metadata.
-    await git("fetch", "--no-tags", "--no-write-fetch-head", input.rootDir, input.candidate.headSha, input.candidate.base.tipSha, input.candidate.treeSha);
+    // Accept the source's shallow boundary in this private repository. Without
+    // it, fetch can reject objects or succeed while dropping required grafts.
+    await git("fetch", "--update-shallow", "--no-tags", "--no-write-fetch-head", input.rootDir, input.candidate.headSha, input.candidate.base.tipSha, input.candidate.treeSha);
     await git("update-ref", "HEAD", input.candidate.headSha);
     await git("read-tree", input.candidate.treeSha);
     await git("checkout-index", "--all", "--force");

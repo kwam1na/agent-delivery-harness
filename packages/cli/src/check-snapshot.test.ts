@@ -29,6 +29,59 @@ async function fixture() {
   const treeSha = await git("write-tree");
   return { root, git, candidate: { headSha, treeSha, base: { ref: "origin/main", tipSha: headSha, mergeBaseSha: headSha } } };
 }
+async function shallowFixture() {
+  const upstream = await fixture();
+  await upstream.git("-c", "commit.gpgsign=false", "commit", "-qm", "boundary");
+  await writeFile(path.join(upstream.root, "source.txt"), "head");
+  await upstream.git("add", "."); await upstream.git("-c", "commit.gpgsign=false", "commit", "-qm", "head");
+  const root = await mkdtemp(path.join(tmpdir(), "scoped-shallow-test-")); roots.push(root);
+  await exec("git", ["clone", "--no-local", "--depth", "2", upstream.root, root]);
+  const git = async (...args: string[]) => (await exec("git", args, { cwd: root })).stdout.trim();
+  const headSha = await git("rev-parse", "HEAD"), baseSha = await git("rev-parse", "HEAD~1");
+  await writeFile(path.join(root, "source.txt"), "prepared shallow");
+  await writeFile(path.join(root, "staged.txt"), "new shallow source"); await git("add", ".");
+  return { root, git, missingAncestor: upstream.candidate.headSha,
+    candidate: { headSha, treeSha: await git("write-tree"), base: { ref: "origin/main", tipSha: baseSha, mergeBaseSha: baseSha } } };
+}
+it.each([ ["none", "same"], ["full", "same"], ["none", "distinct"], ["full", "distinct"] ] as const)("preserves a shallow boundary and staged candidate with %s Git and %s base", async (gitContext, baseKind) => {
+  const f = await shallowFixture();
+  if (baseKind === "same") f.candidate.base = { ...f.candidate.base, tipSha: f.candidate.headSha, mergeBaseSha: f.candidate.headSha };
+  const shallow = await readFile(path.join(f.root, ".git/shallow")), index = await readFile(path.join(f.root, ".git/index"));
+  expect(await f.git("rev-parse", "--is-shallow-repository")).toBe("true");
+  await expect(f.git("cat-file", "-e", f.missingAncestor)).rejects.toMatchObject({ code: 1 });
+  const snapshot = await createCheckSnapshot({ rootDir: f.root, candidate: f.candidate, gitContext, outputs: [], environment: {} });
+  try {
+    expect(await readFile(path.join(snapshot.rootDir, "source.txt"), "utf8")).toBe("prepared shallow");
+    expect(await readFile(path.join(snapshot.rootDir, "staged.txt"), "utf8")).toBe("new shallow source");
+    const control = gitContext === "none" ? path.join(path.dirname(snapshot.commandRoot), "repository") : path.join(snapshot.rootDir, ".git");
+    const git = async (...args: string[]) => (await exec("git", [`--git-dir=${control}`, `--work-tree=${snapshot.rootDir}`, ...args])).stdout.trim();
+    expect(await git("rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(new Set((await readFile(path.join(control, "shallow"), "utf8")).trim().split("\n"))).toEqual(new Set(shallow.toString().trim().split("\n")));
+    await expect(git("cat-file", "-e", f.missingAncestor)).rejects.toMatchObject({ code: 1 });
+    expect(await git("write-tree")).toBe(f.candidate.treeSha);
+    expect(await git("rev-parse", "HEAD^{tree}")).toBe(f.candidate.treeSha);
+    expect(await git("rev-parse", "HEAD^", "refs/delivery/origin-head")).toBe(`${f.candidate.headSha}\n${f.candidate.headSha}`);
+    expect(await git("rev-parse", "refs/delivery/base", "refs/delivery/merge-base")).toBe(`${f.candidate.base.tipSha}\n${f.candidate.base.mergeBaseSha}`);
+    await expect(readFile(path.join(control, "objects/info/alternates"))).rejects.toMatchObject({ code: "ENOENT" });
+    if (gitContext === "none") {
+      await expect(readFile(path.join(snapshot.rootDir, ".git/HEAD"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(snapshot.environment["DELIVERY_CHECK_ORIGIN_HEAD"]).toBeUndefined();
+    } else expect(snapshot.environment["DELIVERY_CHECK_ORIGIN_HEAD"]).toBe(f.candidate.headSha);
+    await expect(snapshot.verify()).resolves.toBeUndefined();
+  } finally { await snapshot.cleanup(); }
+  expect(await readFile(path.join(f.root, ".git/shallow"))).toEqual(shallow);
+  expect(await readFile(path.join(f.root, ".git/index"))).toEqual(index);
+  expect(await f.git("write-tree")).toBe(f.candidate.treeSha);
+}, 30000);
+it.each(["tree", "head", "base", "merge-base"])("refuses a missing required %s object in a shallow source", async member => {
+  const f = await shallowFixture(), missing = "f".repeat(40);
+  const candidate = { ...f.candidate, base: { ...f.candidate.base } };
+  if (member === "tree") candidate.treeSha = missing;
+  else if (member === "head") candidate.headSha = missing;
+  else if (member === "base") candidate.base.tipSha = missing;
+  else candidate.base.mergeBaseSha = missing;
+  await expect(createCheckSnapshot({ rootDir: f.root, candidate, outputs: [], environment: {} })).rejects.toMatchObject({ code: "check_snapshot_unavailable" });
+}, 30000);
 it("materializes the exact staged tree with private Git and pinned diff context, surviving authoring edit-restore", async () => {
   const f = await fixture();
   const snapshot = await createCheckSnapshot({ rootDir: f.root, candidate: f.candidate, outputs: ["out/"], environment: {} });
