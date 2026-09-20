@@ -27,11 +27,18 @@ it("runs bundled CLI and a typed consumer config without installed packages", as
     await writeFile(path.join(temporary, "consumer.ts"), `
       import { parseDeliveryRecord, captureGitCandidate, digestDeliverableEntries } from "./runtime/kernel.mjs";
       import { runCli, buildRunExport, parseRunExport, type DeliveryRunExport, type RunExportParseResult, type CliRuntime } from "./runtime/cli-api.mjs";
+      import { readScopedCheckDiagnostics, type ScopedAttemptDiagnostic } from "./runtime/cli-api.mjs";
       export const inspect = (text: string) => parseDeliveryRecord(text);
       export const check = (runtime: CliRuntime) => runCli(["check"], runtime);
       export const parse = (value: DeliveryRunExport): RunExportParseResult => parseRunExport(JSON.stringify(value));
       void buildRunExport;
       void captureGitCandidate; void digestDeliverableEntries;
+      export const diagnostics = () => readScopedCheckDiagnostics({ rootDir: ".", config: { gateId: "fixture", storageNamespace: "fixture/", providers: [] }, attemptIds: [] });
+      export const unavailable: ScopedAttemptDiagnostic = { availability: "unavailable", reason: "legacy" };
+      // @ts-expect-error Explicit attempt selection is required by the bundled API.
+      readScopedCheckDiagnostics({ rootDir: ".", config: { gateId: "fixture", storageNamespace: "fixture/", providers: [] } });
+      // @ts-expect-error Arbitrary exception messages are outside the diagnostic union.
+      export const unsafe: ScopedAttemptDiagnostic = { availability: "available", phase: "command", failure: { message: "secret" }, command: { unavailable: "not-started" } };
       // @ts-expect-error The shipped parser must retain its actual typed input.
       parseDeliveryRecord(42);
     `);

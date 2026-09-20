@@ -104,3 +104,4 @@ export function runCli(argv: readonly string[], runtime: CliRuntime): Promise<nu
 }
 
 export { readScopedCheckObservations, type ScopedCheckObservations } from "./scoped-observations.ts";
+export { readScopedCheckDiagnostics, type ScopedCheckDiagnostics, type ScopedAttemptDiagnostic, type RecordedScopedAttemptDiagnostic, type ScopedDiagnosticPhase, type ScopedDiagnosticFailureCode, type ScopedDiagnosticExecutionCode, type ScopedDiagnosticCommand } from "./scoped-diagnostics.ts";

@@ -136,3 +136,35 @@ portable verification owns recorded proof. Readout consumers can therefore show
 failed gates and interrupted work honestly without parsing human command logs or
 importing the private attempt store. The bundled qualification reads this API
 through `cli-api.mjs` after actual partial failure and SIGINT cancellation.
+
+## Read bounded command diagnostics
+
+`readScopedCheckDiagnostics({ rootDir, config, attemptIds })` is an additive
+public CLI API, also exported by the installed `runtime/cli-api.mjs` bundle.
+Request up to 100 unique native attempt IDs per call, each at most 128 characters.
+The `scoped-check-diagnostics/1` response retains native attempt bindings and
+duration, orders providers by configuration and attempts by generation, and
+lists missing IDs in `unavailableAttemptIds`. Readers of larger batches must
+apply their own overall artifact limit. Neither API changes evidence or admission.
+
+New terminal attempts record a phase, a closed-vocabulary failure, and the
+command's exit code and output tail when available. Configured credential values
+are redacted before the 4000-character tail limit; `truncated` reports omitted
+output. Arbitrary exception messages and private output artifacts are excluded.
+Unknown errors are `unclassified`. Running and legacy attempts report explicit
+unavailability; legacy logs are never retroactively exposed. Failures before
+attempt allocation have no attempt diagnostic.
+
+The execution port synthesizes code 1 for some spawn, signal and cancellation
+errors. Diagnostics therefore report `exitCode: null` unless an actual numeric
+exit was observed, and retain only a recognized execution error code. With no
+captured output, those failures report `not-started` or `not-completed`. A raw
+exit 0 can still accompany a failed post-command verification: the native attempt
+status remains authoritative. Consumers must bind diagnostics to their observed
+attempt IDs and candidate coordinates, rather than treating a log as current
+proof. Reads create no storage and reject malformed selected diagnostics.
+
+An execution-port buffer overflow also reports `not-completed`, even when the
+port returns partial output. That capture can cut a fully emitted credential
+before full-value redaction runs. Suppressing it preserves the typed
+`ERR_CHILD_PROCESS_STDIO_MAXBUFFER` cause without exposing a credential fragment.

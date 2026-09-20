@@ -1,0 +1,102 @@
+import path from "node:path";
+import { digestCanonical, resolveRecordStorage, type ExecOutcome, type HarnessConfig, type ScopedCheckAttempt } from "@agent-delivery-harness/kernel";
+import { AttemptStore } from "./scoped-attempts.ts";
+import { CheckSnapshotError } from "./check-snapshot.ts";
+import { projectScopedAttempt } from "./scoped-observations.ts";
+
+const phases = ["snapshot-setup", "pre-command-verification", "command", "post-command-verification", "output-capture", "complete"] as const;
+const failureCodes = ["check_snapshot_interrupted", "check_snapshot_timeout", "check_snapshot_unavailable", "check_snapshot_escape", "check_snapshot_drift", "check_snapshot_cleanup_failed", "check_dependency_source_overlap", "check_dependency_failed", "check_command_failed", "check_output_missing", "check_attempt_superseded", "check_artifact_unavailable", "check_evidence_rejected"] as const;
+const executionCodes = ["ENOENT", "EACCES", "EPERM", "ABORT_ERR", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", "SIGKILL", "SIGTERM", "execution_failed"] as const;
+export type ScopedDiagnosticPhase = typeof phases[number];
+export type ScopedDiagnosticFailureCode = typeof failureCodes[number];
+export type ScopedDiagnosticExecutionCode = typeof executionCodes[number];
+export type ScopedDiagnosticCommand =
+  | { readonly exitCode: number | null; readonly outputTail: string; readonly truncated: boolean }
+  | { readonly unavailable: "not-started" | "not-completed" };
+export interface RecordedScopedAttemptDiagnostic {
+  readonly availability: "available";
+  readonly phase: ScopedDiagnosticPhase;
+  readonly failure: { readonly code: ScopedDiagnosticFailureCode; readonly executionErrorCode?: ScopedDiagnosticExecutionCode }
+    | { readonly unavailable: "not-failed" | "unclassified" };
+  readonly command: ScopedDiagnosticCommand;
+}
+export type ScopedAttemptDiagnostic = RecordedScopedAttemptDiagnostic
+  | { readonly availability: "unavailable"; readonly reason: "legacy" | "running" };
+export interface ScopedCheckDiagnostics {
+  readonly version: "scoped-check-diagnostics/1";
+  readonly providers: readonly {
+    readonly providerId: string;
+    readonly attempts: readonly (ScopedCheckAttempt & { readonly durationMs?: number; readonly diagnostic: ScopedAttemptDiagnostic })[];
+  }[];
+  readonly unavailableAttemptIds: readonly string[];
+}
+
+export function scopedDiagnosticFailure(error: unknown, executionErrorCode?: string): RecordedScopedAttemptDiagnostic["failure"] {
+  if (!(error instanceof CheckSnapshotError) || !(failureCodes as readonly string[]).includes(error.code)) return { unavailable: "unclassified" };
+  return { code: error.code as ScopedDiagnosticFailureCode,
+    ...((executionCodes as readonly string[]).includes(executionErrorCode ?? "") ? { executionErrorCode: executionErrorCode as ScopedDiagnosticExecutionCode } : {}) };
+}
+export function redactScopedOutput(text: string, secrets: readonly string[]): string {
+  return [...secrets].filter(Boolean).sort((a, b) => b.length - a.length).reduce((value, secret) => value.split(secret).join("[REDACTED]"), text);
+}
+export function scopedCommandDiagnostic(result: ExecOutcome, secrets: readonly string[]): ScopedDiagnosticCommand {
+  // execFile can clip a fully emitted credential before full-value redaction.
+  // The typed execution failure remains available; this partial capture is not safe to export.
+  if (result.errorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { unavailable: "not-completed" };
+  const numericExit = result.errorCode === undefined || result.errorCode === String(result.code);
+  if (!numericExit && result.stdout.length + result.stderr.length === 0) return { unavailable: ["ENOENT", "EACCES", "EPERM"].includes(result.errorCode!) ? "not-started" : "not-completed" };
+  const redacted = redactScopedOutput(`${result.stdout}\n${result.stderr}`, secrets);
+  return { exitCode: numericExit ? result.code : null, outputTail: redacted.slice(-4000), truncated: redacted.length > 4000 };
+}
+
+function projectDiagnostic(value: unknown): RecordedScopedAttemptDiagnostic {
+  const corrupt = (): never => { throw new CheckSnapshotError("check_attempt_corrupt", "Selected scoped diagnostics are malformed."); };
+  const object = (v: unknown): Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : corrupt();
+  const row = object(value), failure = object(row["failure"]), command = object(row["command"]);
+  if (row["availability"] !== "available" || !(phases as readonly unknown[]).includes(row["phase"])) return corrupt();
+  let safeFailure: RecordedScopedAttemptDiagnostic["failure"];
+  if ("unavailable" in failure) {
+    if (typeof failure["unavailable"] !== "string" || !["not-failed", "unclassified"].includes(failure["unavailable"]) || "code" in failure || "executionErrorCode" in failure) return corrupt();
+    safeFailure = { unavailable: failure["unavailable"] as "not-failed" | "unclassified" };
+  } else {
+    if (!(failureCodes as readonly unknown[]).includes(failure["code"]) || ("executionErrorCode" in failure && !(executionCodes as readonly unknown[]).includes(failure["executionErrorCode"]))) return corrupt();
+    safeFailure = { code: failure["code"] as ScopedDiagnosticFailureCode, ...("executionErrorCode" in failure ? { executionErrorCode: failure["executionErrorCode"] as ScopedDiagnosticExecutionCode } : {}) };
+  }
+  let safeCommand: ScopedDiagnosticCommand;
+  if ("unavailable" in command) {
+    if (typeof command["unavailable"] !== "string" || !["not-started", "not-completed"].includes(command["unavailable"]) || "exitCode" in command || "outputTail" in command || "truncated" in command) return corrupt();
+    safeCommand = { unavailable: command["unavailable"] as "not-started" | "not-completed" };
+  } else {
+    if (!(command["exitCode"] === null || typeof command["exitCode"] === "number" && Number.isSafeInteger(command["exitCode"]) && command["exitCode"] >= 0) || typeof command["outputTail"] !== "string" || command["outputTail"].length > 4000 || typeof command["truncated"] !== "boolean") return corrupt();
+    safeCommand = { exitCode: command["exitCode"] as number | null, outputTail: command["outputTail"], truncated: command["truncated"] };
+  }
+  return { availability: "available", phase: row["phase"] as ScopedDiagnosticPhase, failure: safeFailure, command: safeCommand };
+}
+
+/** Read at most 100 explicit attempts. No logs from legacy payloads, no writes,
+ * and no claim of applicability/admission. Unselected provider history is ignored. */
+export async function readScopedCheckDiagnostics(input: {
+  readonly rootDir: string;
+  readonly config: Pick<HarnessConfig, "gateId" | "storageNamespace" | "providers">;
+  readonly attemptIds: readonly string[];
+}): Promise<ScopedCheckDiagnostics> {
+  const { rootDir, config, attemptIds } = input;
+  if (!Array.isArray(attemptIds) || attemptIds.length > 100 || attemptIds.some(id => typeof id !== "string" || !id.length || id.length > 128) || new Set(attemptIds).size !== attemptIds.length) throw new CheckSnapshotError("check_diagnostics_request_invalid", "Diagnostics require at most 100 unique nonempty attempt identifiers.");
+  const requested = new Set(attemptIds), seen = new Set<string>();
+  const providers: ScopedCheckDiagnostics["providers"][number][] = [];
+  const storage = await resolveRecordStorage(rootDir, { storageNamespace: config.storageNamespace, leaf: "scoped-attempts" });
+  for (const provider of config.providers.filter(p => p.check?.scope !== undefined)) {
+    const rows = requested.size ? await new AttemptStore(path.join(storage.storageDir, digestCanonical({ gate: config.gateId, provider: provider.id }))).read() : [];
+    if (rows.some(row => row.attempt.providerId !== provider.id)) throw new CheckSnapshotError("check_attempt_corrupt", "Scoped history belongs to a different provider.");
+    const attempts: ScopedCheckDiagnostics["providers"][number]["attempts"][number][] = [];
+    for (const { attempt, payload } of rows.filter(row => requested.has(row.attempt.attemptId))) {
+      if (seen.has(attempt.attemptId)) throw new CheckSnapshotError("check_attempt_corrupt", "A requested attempt identifier is ambiguous.");
+      seen.add(attempt.attemptId);
+      const diagnostic: ScopedAttemptDiagnostic = attempt.status === "running" ? { availability: "unavailable", reason: "running" }
+        : payload?.diagnostic === undefined ? { availability: "unavailable", reason: "legacy" } : projectDiagnostic(payload.diagnostic);
+      attempts.push({ ...projectScopedAttempt(attempt, payload?.durationMs), diagnostic });
+    }
+    providers.push({ providerId: provider.id, attempts });
+  }
+  return { version: "scoped-check-diagnostics/1", providers, unavailableAttemptIds: attemptIds.filter(id => !seen.has(id)) };
+}

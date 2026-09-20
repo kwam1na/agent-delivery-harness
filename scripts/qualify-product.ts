@@ -2130,7 +2130,7 @@ async function runLifecycle(input: LifecycleInput): Promise<void> {
 export const SCOPED_RUNTIME_PROBES = [
   "partial-failure", "retry-reuse", "report-reuse", "source-invalidation",
   "setup-invalidation", "foreign-portable", "tamper-refusal",
-  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations", "large-source-portability", "bounded-release-metadata",
+  "base-invalidation", "head-invalidation", "cancellation", "selection-snapshot-guard", "attempt-observations", "large-source-portability", "bounded-release-metadata", "attempt-diagnostics",
 ] as const;
 
 export interface ScopedRuntimeQualification {
@@ -2161,7 +2161,7 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
   const temporary = mkdtempSync(path.join(os.tmpdir(), "scoped-runtime-qualification-"));
   const commands: ScopedRuntimeQualification["commands"][number][] = [];
   const proven = new Set<string>();
-  const env: Record<string, string | undefined> = { PATH: process.env["PATH"], HOME: temporary, NODE_PATH: "", FAIL: "0" };
+  const env: Record<string, string | undefined> = { PATH: process.env["PATH"], HOME: temporary, NODE_PATH: "", FAIL: "0", API_TOKEN: "qualification-secret-" + "Q".repeat(6000) };
   const args = ["--experimental-strip-types", "--import", path.join(runtime, "bootstrap.mjs"), path.join(runtime, "cli.mjs")];
   const git = (cwd: string, ...argv: string[]) => execFileSync("git", argv, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const write = (cwd: string, name: string, bytes: string) => { mkdirSync(path.dirname(path.join(cwd, name)), { recursive: true }); writeFileSync(path.join(cwd, name), bytes); };
@@ -2184,14 +2184,20 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     commands.push({ repository: path.basename(cwd), command: "api:readScopedCheckObservations", code: 0, stdout, stderr: "" });
     return JSON.parse(stdout) as { version: string; providers: { providerId: string; attempts: { attemptId: string; status: string; durationMs?: number }[] }[] };
   };
+  const diagnostics = (cwd: string, attemptIds: string[]) => {
+    const program = "const {readScopedCheckDiagnostics}=await import(" + JSON.stringify(pathToFileURL(path.join(runtime, "cli-api.mjs")).href) + ");const {default:config}=await import(" + JSON.stringify(pathToFileURL(path.join(cwd, "harness.config.ts")).href) + ");console.log(JSON.stringify(await readScopedCheckDiagnostics({rootDir:process.cwd(),config,attemptIds:" + JSON.stringify(attemptIds) + "})));";
+    const stdout = execFileSync(process.execPath, ["--experimental-strip-types", "--import", path.join(runtime, "bootstrap.mjs"), "--input-type=module", "--eval", program], { cwd, env, encoding: "utf8", timeout: 30000 });
+    commands.push({ repository: path.basename(cwd), command: "api:readScopedCheckDiagnostics", code: 0, stdout, stderr: "" });
+    return JSON.parse(stdout) as import("../packages/cli/src/scoped-diagnostics.ts").ScopedCheckDiagnostics;
+  };
   const config = (gitContext: "none" | "full", slow = false) => {
     const providers = ["a", "b"].map(id => ({ id: "check." + id, findingCodes: [], check: {
-      command: [process.execPath, "-e", slow && id === "a" ? "setTimeout(()=>{},10000)" : "if('" + id + "'==='b'&&process.env.FAIL==='1')process.exit(3);require('fs').writeFileSync('result-" + id + ".json',JSON.stringify({value:require('fs').readFileSync('source.txt','utf8')}))"],
-      timeoutMs: 15000, outputs: ["result-" + id + ".json"], scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: id, environment: id === "b" ? [{ name: "FAIL", kind: "flag" }] : [] },
+      command: [process.execPath, "-e", slow && id === "a" ? "setTimeout(()=>{},10000)" : "if('" + id + "'==='b'&&process.env.FAIL==='1'){console.log('x'.repeat(5000)+process.env.API_TOKEN+' assertion failed');process.exit(3)};require('fs').writeFileSync('result-" + id + ".json',JSON.stringify({value:require('fs').readFileSync('source.txt','utf8')}))"],
+      timeoutMs: 15000, outputs: ["result-" + id + ".json"], scope: { version: "scoped-check/1", files: ["source.txt"], memberships: [], tests: [], cwd: ".", profile: id, environment: id === "b" ? [{ name: "FAIL", kind: "flag" }, { name: "API_TOKEN", kind: "credential" }] : [] },
     } }));
     return { gateId: "scoped.release", baseRef: "origin/main", storageNamespace: "delivery-harness/", acceptedEnvelopeSpecs: ["delivery-evidence/1"], identityVersions: ["scoped-release/v1"], computingIdentityVersion: "scoped-release/v1", reviewNeutral: [{ prefix: "docs/reports/" }, { prefix: "delivery/records/" }], recordNeutral: [{ prefix: "delivery/records/" }], pathClassification: { generated: [], test: [], lockfile: [] }, sensitivePaths: [], activationThreshold: 1, agentEnvSignals: [], ciPolicies: [], ciPolicyEnvKey: "QUALIFICATION_CI", preparationWiringPaths: ["harness.config.ts"], preparationCommands: [], providers,
       obligations: providers.map(provider => ({ id: provider.id + ".passed", activation: { kind: "always" }, freshness: "exact_candidate", providers: [provider.id], acceptedPayloadSpecs: ["checks.passed/1"], allowedResolutionKinds: ["satisfied_evidence"], humanWaiverAllowed: false, minimumAttestationLevel: "self", ciDelegationPolicyIds: [], remediation: { default: [{ id: "check", kind: "manual_action", summary: "Run check." }] }, waivableCodes: [], nonWaivableCodes: ["review_evidence_missing", "stale_evidence", "evidence_not_green", "unresolved_actionable_findings", "ambiguous_records", "malformed_record", "unknown_provider", "live_provider_missing", "ambiguous_live_provider", "live_provider_failed", "resolution_not_allowed"] })),
-      scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: ["a", "b"].map(id => ({ id, gitContext, dependencyInputs: id === "a" ? ["deps.lock"] : [], mutableOutputs: ["result-" + id + ".json"], credentialIdentities: {} })) }, deliveryRecordPath: "delivery/records/record.json", deliveryRecordVerification: { baseMovement: "stale" } };
+      scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: ["a", "b"].map(id => ({ id, gitContext, dependencyInputs: id === "a" ? ["deps.lock"] : [], mutableOutputs: ["result-" + id + ".json"], credentialIdentities: id === "b" ? { API_TOKEN: "qualification-credential/v1" } : {} })) }, deliveryRecordPath: "delivery/records/record.json", deliveryRecordVerification: { baseMovement: "stale" } };
   };
   const writeConfig = (cwd: string, mode: "none" | "full", slow = false) => write(cwd, "harness.config.ts", "import { defineHarnessConfig } from '@agent-delivery-harness/kernel';\nexport default defineHarnessConfig(" + JSON.stringify(config(mode, slow)) + ");\n");
   const createRepo = (name: string, mode: "none" | "full") => {
@@ -2204,6 +2210,10 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     requireObservation(partial.stdout.includes("passed check.a") && partial.stdout.includes("checking check.b"), "partial execution"); proven.add("partial-failure");
     const failedRead = observations(files);
     requireObservation(failedRead.version === "scoped-check-observations/1" && failedRead.providers.some(provider => provider.providerId === "check.a" && provider.attempts.some(attempt => attempt.status === "passed" && typeof attempt.durationMs === "number")) && failedRead.providers.some(provider => provider.providerId === "check.b" && provider.attempts.some(attempt => attempt.status === "failed" && typeof attempt.durationMs === "number")), "public bundled API must expose passed and failed durations after gate refusal");
+    const failedAttempt = failedRead.providers.find(p => p.providerId === "check.b")!.attempts.find(a => a.status === "failed")!;
+    const failedDiagnostic = diagnostics(files, [failedAttempt.attemptId]).providers.find(p => p.providerId === "check.b")!.attempts[0]!;
+    requireObservation(failedDiagnostic.attemptId === failedAttempt.attemptId && failedDiagnostic.status === "failed" && failedDiagnostic.diagnostic.availability === "available" && failedDiagnostic.diagnostic.phase === "command" && "code" in failedDiagnostic.diagnostic.failure && failedDiagnostic.diagnostic.failure.code === "check_command_failed" && "exitCode" in failedDiagnostic.diagnostic.command && failedDiagnostic.diagnostic.command.exitCode === 3, "bundled diagnostics must retain the exact failed attempt and raw exit");
+    requireObservation(failedDiagnostic.diagnostic.availability === "available" && "outputTail" in failedDiagnostic.diagnostic.command && failedDiagnostic.diagnostic.command.outputTail.length === 4000 && failedDiagnostic.diagnostic.command.truncated && failedDiagnostic.diagnostic.command.outputTail.includes("[REDACTED] assertion failed") && !JSON.stringify(failedDiagnostic).includes("QQQ"), "installed diagnostics must redact before bounding output");
     env["FAIL"] = "0"; const retry = await cli(files, "gate");
     requireObservation(retry.stdout.includes("reusing check.a") && retry.stdout.includes("checking check.b"), "retry must preserve sibling"); proven.add("retry-reuse");
     write(files, "docs/reports/result.md", "report"); git(files, "add", "."); git(files, "-c", "commit.gpgsign=false", "commit", "-qm", "report");
@@ -2240,6 +2250,25 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     requireObservation(!cancelled.stdout.includes("passed check.a"), "cancelled check cannot report passed"); proven.add("cancellation");
     const interruptedRead = observations(full);
     requireObservation(interruptedRead.providers.some(provider => provider.providerId === "check.a" && provider.attempts.some(attempt => attempt.attemptId === cancelledAttempt && attempt.status === "interrupted" && typeof attempt.durationMs === "number")), "public bundled API must expose the exact interrupted attempt duration"); proven.add("attempt-observations");
+    const interruptedDiagnostic = diagnostics(full, [cancelledAttempt!]).providers.find(p => p.providerId === "check.a")!.attempts[0]!;
+    requireObservation(interruptedDiagnostic.attemptId === cancelledAttempt && interruptedDiagnostic.status === "interrupted" && interruptedDiagnostic.diagnostic.availability === "available" && "unavailable" in interruptedDiagnostic.diagnostic.command, "bundled diagnostics must preserve cancellation without inventing an exit");
+    requireObservation(readFileSync(path.join(runtime, "cli-api.d.mts"), "utf8").includes("readScopedCheckDiagnostics"), "bundled declarations must export diagnostics"); proven.add("attempt-diagnostics");
+    for (const stream of [1, 2]) {
+      const overflow = config("none");
+      overflow.providers[1]!.check.command = [process.execPath, "-e", `require('fs').writeSync(${stream},'x'.repeat(1048576-(process.env.API_TOKEN.length-4))+process.env.API_TOKEN+'z'.repeat(100));`];
+      write(full, "harness.config.ts", "export default " + JSON.stringify(overflow) + ";\n");
+      await cli(full, "prepare"); await cli(full, "gate", 1);
+      const latest = observations(full).providers.find(p => p.providerId === "check.b")!.attempts.at(-1)!;
+      const diagnostic = diagnostics(full, [latest.attemptId]).providers.find(p => p.providerId === "check.b")!.attempts[0]!.diagnostic;
+      requireObservation(latest.status === "failed" && diagnostic.availability === "available" && diagnostic.phase === "command" && "code" in diagnostic.failure && diagnostic.failure.executionErrorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && "unavailable" in diagnostic.command && diagnostic.command.unavailable === "not-completed", "installed diagnostics must suppress buffer-clipped credentials on stream " + stream);
+    }
+    const setupFailure = config("none");
+    const setupProfile = { ...setupFailure.scopedExecution.profiles[0]!, dependencies: { command: [process.execPath, "-e", "process.exit(7)"], timeoutMs: 5000 } };
+    write(full, "harness.config.ts", "export default " + JSON.stringify({ ...setupFailure, scopedExecution: { ...setupFailure.scopedExecution, profiles: [setupProfile, setupFailure.scopedExecution.profiles[1]!] } }) + ";\n");
+    await cli(full, "prepare"); await cli(full, "gate", 1);
+    const setupAttempt = observations(full).providers.find(p => p.providerId === "check.a")!.attempts.at(-1)!;
+    const setupDiagnostic = diagnostics(full, [setupAttempt.attemptId]).providers.find(p => p.providerId === "check.a")!.attempts[0]!.diagnostic;
+    requireObservation(setupAttempt.status === "failed" && setupDiagnostic.availability === "available" && setupDiagnostic.phase === "snapshot-setup" && "code" in setupDiagnostic.failure && setupDiagnostic.failure.code === "check_dependency_failed" && "unavailable" in setupDiagnostic.command && setupDiagnostic.command.unavailable === "not-started", "installed pre-command failure must retain typed cause without invented output");
     // Static configuration keeps evidence portable; only the guard observes
     // these declared, nonsecret coordinates of the immutable selection.
     const guarded = config("none");
@@ -2254,6 +2283,9 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
       env["SELECTION_TREE"] = git(full, "write-tree"); env["SELECTION_HEAD"] = git(full, "rev-parse", "HEAD");
       env["SELECTION_BASE"] = git(full, "rev-parse", "origin/main"); env["SELECTION_MERGE_BASE"] = git(full, "merge-base", "HEAD", "origin/main");
     };
+    // The diagnostic controls above already passed check.a under this profile.
+    // Give the guard a fresh application input so its positive control executes it.
+    write(full, "source.txt", "selection guard control"); git(full, "add", ".");
     select(); const guardedPass = await cli(full, "prepare"); requireObservation(guardedPass.stdout.includes("checking check.a"), "selection guard positive control");
     const selectedMergeBase = env["SELECTION_MERGE_BASE"];
     env["SELECTION_MERGE_BASE"] = selectedMergeBase === "0".repeat(40) ? "1".repeat(40) : "0".repeat(40);
