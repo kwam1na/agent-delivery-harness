@@ -2283,6 +2283,9 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
       env["SELECTION_TREE"] = git(full, "write-tree"); env["SELECTION_HEAD"] = git(full, "rev-parse", "HEAD");
       env["SELECTION_BASE"] = git(full, "rev-parse", "origin/main"); env["SELECTION_MERGE_BASE"] = git(full, "merge-base", "HEAD", "origin/main");
     };
+    // The diagnostic controls above already passed check.a under this profile.
+    // Give the guard a fresh application input so its positive control executes it.
+    write(full, "source.txt", "selection guard control"); git(full, "add", ".");
     select(); const guardedPass = await cli(full, "prepare"); requireObservation(guardedPass.stdout.includes("checking check.a"), "selection guard positive control");
     const selectedMergeBase = env["SELECTION_MERGE_BASE"];
     env["SELECTION_MERGE_BASE"] = selectedMergeBase === "0".repeat(40) ? "1".repeat(40) : "0".repeat(40);
