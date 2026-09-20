@@ -165,7 +165,8 @@ export class ScopedChecks {
       if (deferSubmission) this.submissions.push(submit); else await submit();
       this.context.write(`passed ${provider.id}: ${Date.now() - started}ms including snapshot setup; retained ${runId}`);
     } catch (error) {
-      if (!terminal) await store.finish(attempt, this.context.signal?.aborted ? "interrupted" : "failed", { ...payload, durationMs: Date.now() - started });
+      if (!terminal) await store.finish(attempt, this.context.signal?.aborted ? "interrupted" : "failed", { ...payload, durationMs: Date.now() - started,
+        ...(error instanceof CheckSnapshotError ? { log: `${payload.log ?? ""}\n${error.code}`.slice(-4000) } : {}) });
       const damaged = this.snapshots.get(profile.id);
       this.snapshots.delete(profile.id);
       await damaged?.cleanup();

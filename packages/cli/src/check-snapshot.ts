@@ -1,13 +1,15 @@
 /** Private execution tree. Never shares writable source, objects, index or dependencies. */
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { createExecPort, digestCanonical } from "@agent-delivery-harness/kernel";
+import { createExecPort } from "@agent-delivery-harness/kernel";
+
+import { snapshotInventoryWorker } from "./snapshot-inventory-worker.ts";
 
 const exec = promisify(execFile);
+const SNAPSHOT_TIMEOUT_MS = 5 * 60_000;
 export class CheckSnapshotError extends Error {
   readonly code: string;
   constructor(code: string, message: string) { super(message); this.code = code; }
@@ -26,32 +28,53 @@ export interface CheckSnapshot {
   readonly rootDir: string;
   readonly environment: Readonly<Record<string, string>>;
   readonly dependencyDigest: string;
-  verify(): Promise<void>;
+  verify(options?: { readonly timeoutMs: number }): Promise<void>;
   cleanup(): Promise<void>;
 }
 function inside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
-/** Hash actual private bytes, including dependency symlinks, without following outside links. */
-export async function snapshotInventory(root: string, exclude: (relative: string) => boolean): Promise<string> {
-  const entries: unknown[] = [];
-  const walk = async (relative: string): Promise<void> => {
-    if (exclude(relative)) return;
-    const absolute = path.join(root, relative), stat = await lstat(absolute);
-    if (stat.isSymbolicLink()) {
-      const target = await readlink(absolute);
-      if (path.isAbsolute(target) || !inside(root, path.resolve(path.dirname(absolute), target))) throw new CheckSnapshotError("check_snapshot_escape", "A snapshot link escapes its private execution tree.");
-      // Resolve chains as well as the immediate lexical target.
-      try { if (!inside(root, await realpath(absolute))) throw new CheckSnapshotError("check_snapshot_escape", "A snapshot link resolves outside its private execution tree."); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      entries.push([relative, "link", target]);
-    } else if (stat.isDirectory()) {
-      for (const name of (await readdir(absolute)).sort()) await walk(relative ? `${relative}/${name}` : name);
-    } else if (stat.isFile()) entries.push([relative, stat.mode & 0o111, createHash("sha256").update(await readFile(absolute)).digest("hex")]);
-    else throw new CheckSnapshotError("check_snapshot_escape", "A snapshot contains an unsupported filesystem entry.");
-  };
-  await walk(""); return digestCanonical(entries);
+/** Kill the owned read-only process and await close before callers may clean up.
+ * AbortSignal is handled here: child_process's early AbortError event is not
+ * proof that the process has stopped touching the snapshot. */
+async function snapshotProcess(command: string, args: string[], cwd: string, env: Readonly<Record<string, string>>, deadline: number, signal?: AbortSignal): Promise<{ code: number | null; stdout: string }> {
+  if (signal?.aborted) throw new CheckSnapshotError("check_snapshot_interrupted", "Snapshot verification was interrupted.");
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) throw new CheckSnapshotError("check_snapshot_timeout", "Snapshot verification exceeded its deadline.");
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    let failure: CheckSnapshotError | undefined, stdout = "", size = 0;
+    const stop = (code: string, message: string) => {
+      failure ??= new CheckSnapshotError(code, message);
+      child.kill("SIGKILL");
+    };
+    const abort = () => stop("check_snapshot_interrupted", "Snapshot verification was interrupted.");
+    const timer = setTimeout(() => stop("check_snapshot_timeout", "Snapshot verification exceeded its deadline."), remaining);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    child.stdout.on("data", (bytes: Buffer) => {
+      size += bytes.length;
+      if (size > 64 * 1024) stop("check_snapshot_unavailable", "Snapshot verifier output exceeded its limit.");
+      else stdout += bytes.toString();
+    });
+    child.stderr.on("data", () => {}); // Drain; never expose private paths or source bytes.
+    child.on("error", () => { failure ??= new CheckSnapshotError("check_snapshot_unavailable", "Snapshot verifier could not execute."); });
+    child.once("close", code => {
+      clearTimeout(timer); signal?.removeEventListener("abort", abort);
+      if (!failure && performance.now() >= deadline) failure = new CheckSnapshotError("check_snapshot_timeout", "Snapshot verification exceeded its deadline.");
+      if (failure) reject(failure); else resolve({ code, stdout });
+    });
+  });
+}
+/** The inventory's blocking filesystem operations live only in a killable process. */
+export async function snapshotInventory(root: string, outputs: readonly string[], excludeDependencies = false, deadline = performance.now() + SNAPSHOT_TIMEOUT_MS, signal?: AbortSignal, forbidGit = false): Promise<string> {
+  const result = await snapshotProcess(process.execPath, ["--input-type=module", "--eval", snapshotInventoryWorker], root,
+    { PATH: process.env["PATH"] ?? "/usr/bin:/bin", DELIVERY_SNAPSHOT_REQUEST: JSON.stringify({ root, outputs, excludeDependencies, forbidGit }) }, deadline, signal);
+  let parsed: { code?: string; digest?: string };
+  try { parsed = JSON.parse(result.stdout); } catch { throw new CheckSnapshotError("check_snapshot_unavailable", "Snapshot inventory returned no valid result."); }
+  if (result.code !== 0 || !/^[a-f0-9]{64}$/.test(parsed.digest ?? "")) throw new CheckSnapshotError(["check_snapshot_escape", "check_snapshot_drift"].includes(parsed.code ?? "") ? parsed.code! : "check_snapshot_unavailable", "Snapshot inventory could not verify private bytes and links.");
+  return parsed.digest!;
 }
 export function executionPath(root: string, value: string): string {
   return value.split(path.delimiter).filter(p => p && path.isAbsolute(p) && !inside(root, p) && !p.split(path.sep).includes("node_modules")).join(path.delimiter) || "/usr/bin:/bin";
@@ -92,9 +115,8 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
       await rename(path.join(rootDir, ".git"), gitDirectory);
     }
     const controlRoot = privateControl ?? path.join(rootDir, ".git");
-    const output = (p: string) => input.outputs.some(o => o.endsWith("/") ? p === o.slice(0, -1) || p.startsWith(o) : p === o);
-    const sourceExcluded = (p: string) => p === ".git" || p.split("/").includes("node_modules") || output(p);
-    const sourceDigest = await snapshotInventory(rootDir, sourceExcluded);
+    const inventory = (outputs: readonly string[], sourceOnly = false, deadline = performance.now() + SNAPSHOT_TIMEOUT_MS) => snapshotInventory(rootDir, outputs, sourceOnly, deadline, input.signal, input.gitContext === "none");
+    const sourceDigest = await inventory(input.outputs, true);
     const environment: Record<string, string> = { ...input.environment, PATH: `${path.join(rootDir, "node_modules/.bin")}${path.delimiter}${cleanEnv["PATH"]}`, HOME: path.join(controlRoot, "home"), TMPDIR: path.join(controlRoot, "tmp"), GIT_CEILING_DIRECTORIES: path.dirname(rootDir),
       ...(input.gitContext === "none" ? {} : {
       DELIVERY_CHECK_BASE_REF: baseRef, DELIVERY_CHECK_CANDIDATE_REF: candidateRef, DELIVERY_CHECK_ORIGIN_HEAD: input.candidate.headSha, DELIVERY_CHECK_ORIGIN_TREE: input.candidate.treeSha, DELIVERY_CHECK_MERGE_BASE: input.candidate.base.mergeBaseSha }) };
@@ -103,14 +125,22 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
       const result = await createExecPort().run({ command: input.dependencies.command[0], args: input.dependencies.command.slice(1), cwd: rootDir, env: environment, timeoutMs: input.dependencies.timeoutMs, maxBuffer: 1024 * 1024, ...(input.signal ? { signal: input.signal } : {}) });
       if (result.code !== 0 || input.signal?.aborted) throw new CheckSnapshotError("check_dependency_failed", "Private dependency installation did not complete successfully.");
     }
-    if (sourceDigest !== await snapshotInventory(rootDir, sourceExcluded)) throw new CheckSnapshotError("check_snapshot_drift", "Dependency setup changed prepared source bytes.");
-    const dependencyDigest = await snapshotInventory(rootDir, p => p === ".git" || output(p));
+    if (sourceDigest !== await inventory(input.outputs, true)) throw new CheckSnapshotError("check_snapshot_drift", "Dependency setup changed prepared source bytes.");
+    const dependencyDigest = await inventory(input.outputs);
     // The second digest covers both source and installed dependency bytes and
     // all links. It intentionally excludes only declared mutable output paths.
-    const verify = async () => {
-      if (input.gitContext === "none" && await lstat(path.join(rootDir, ".git")).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; })) throw new CheckSnapshotError("check_snapshot_drift", "A file-only check introduced Git metadata.");
-      await snapshotInventory(rootDir, p => p === ".git");
-      if (await git("write-tree") !== input.candidate.treeSha || await git("rev-parse", "HEAD") !== candidateCommit || await git("rev-parse", `${candidateRef}^{tree}`) !== input.candidate.treeSha || await git("rev-parse", baseRef) !== input.candidate.base.tipSha || dependencyDigest !== await snapshotInventory(rootDir, p => p === ".git" || output(p))) throw new CheckSnapshotError("check_snapshot_drift", "Execution changed the private source, dependencies or pinned Git context.");
+    const verify = async (options?: { readonly timeoutMs: number }) => {
+      const timeoutMs = options?.timeoutMs ?? SNAPSHOT_TIMEOUT_MS;
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > SNAPSHOT_TIMEOUT_MS) throw new CheckSnapshotError("check_snapshot_timeout", "Snapshot deadline must be positive and cannot exceed five minutes.");
+      const deadline = performance.now() + timeoutMs;
+      // The worker also checks file-only Git metadata, so lstat cannot stall the parent.
+      const verifyGit = async (...args: string[]) => {
+        const result = await snapshotProcess("git", gitDirectory ? [`--git-dir=${gitDirectory}`, `--work-tree=${rootDir}`, ...args] : args, rootDir, cleanEnv, deadline, input.signal);
+        if (result.code !== 0) throw new CheckSnapshotError("check_snapshot_unavailable", "Snapshot Git identity could not be read.");
+        return result.stdout.trim();
+      };
+      await inventory([], false, deadline);
+      if (await verifyGit("write-tree") !== input.candidate.treeSha || await verifyGit("rev-parse", "HEAD") !== candidateCommit || await verifyGit("rev-parse", `${candidateRef}^{tree}`) !== input.candidate.treeSha || await verifyGit("rev-parse", baseRef) !== input.candidate.base.tipSha || dependencyDigest !== await inventory(input.outputs, false, deadline)) throw new CheckSnapshotError("check_snapshot_drift", "Execution changed the private source, dependencies or pinned Git context.");
     };
     return { rootDir, commandRoot: path.join(controlRoot, "commands"), environment, dependencyDigest, verify, cleanup };
   } catch (error) {

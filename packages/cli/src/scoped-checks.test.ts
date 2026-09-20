@@ -567,3 +567,33 @@ it.each(["candidate", "base", "head", "guard", "merge-base"])("a mandatory snaps
   expect(await f.run("gate")).toBe(1);
   expect(await f.run("record")).toBe(1);
 }, 60000);
+
+it("retains a typed failed terminal without outputs when post-command snapshot verification times out", async () => {
+  const snapshots = await import("./check-snapshot.ts");
+  const original = snapshots.createCheckSnapshot;
+  const f = await fixture(); f.env["FAIL"] = "0";
+  f.setConfig({ ...f.config, providers: f.config.providers.map(p => ({ ...p, check: { ...p.check!, command: [p.check!.command[0], p.check!.command[1]!, `${p.check!.command[2]};console.log('raw-command-success')`] as [string,...string[]] } })) });
+  const spy = vi.spyOn(snapshots, "createCheckSnapshot").mockImplementation(async input => {
+    const snapshot = await original(input); let calls = 0;
+    return { ...snapshot, verify: async () => {
+      if (++calls === 2) throw new snapshots.CheckSnapshotError("check_snapshot_timeout", "Snapshot deadline exceeded.");
+      await snapshot.verify();
+    } };
+  });
+  try {
+    expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+    expect(await f.run("gate")).toBe(1);
+    expect(f.err.join("\n")).toContain("check_snapshot_timeout");
+    const { resolveRecordStorage } = await import("@agent-delivery-harness/kernel");
+    const { AttemptStore } = await import("./scoped-attempts.ts");
+    const storage = await resolveRecordStorage(f.dir, { storageNamespace: f.config.storageNamespace, leaf: "scoped-attempts" });
+    const { readdir } = await import("node:fs/promises");
+    const rows = (await Promise.all((await readdir(storage.storageDir)).map(name => new AttemptStore(path.join(storage.storageDir,name)).read()))).flat();
+    const failed = rows.filter(row => row.attempt.status === "failed");
+    expect(failed.length).toBeGreaterThan(0);
+    expect(failed.some(row => row.payload?.log?.includes("raw-command-success"))).toBe(true);
+    expect(failed.every(row => row.payload?.log?.includes("check_snapshot_timeout"))).toBe(true);
+    expect(rows.some(row => row.attempt.status === "passed")).toBe(false);
+    expect(failed.every(row => row.payload?.outputs.length === 0)).toBe(true);
+  } finally { spy.mockRestore(); }
+},30000);
