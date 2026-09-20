@@ -40,10 +40,13 @@ export function redactScopedOutput(text: string, secrets: readonly string[]): st
   return [...secrets].filter(Boolean).sort((a, b) => b.length - a.length).reduce((value, secret) => value.split(secret).join("[REDACTED]"), text);
 }
 export function scopedCommandDiagnostic(result: ExecOutcome, secrets: readonly string[]): ScopedDiagnosticCommand {
+  // execFile can clip a fully emitted credential before full-value redaction.
+  // The typed execution failure remains available; this partial capture is not safe to export.
+  if (result.errorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { unavailable: "not-completed" };
   const numericExit = result.errorCode === undefined || result.errorCode === String(result.code);
   if (!numericExit && result.stdout.length + result.stderr.length === 0) return { unavailable: ["ENOENT", "EACCES", "EPERM"].includes(result.errorCode!) ? "not-started" : "not-completed" };
   const redacted = redactScopedOutput(`${result.stdout}\n${result.stderr}`, secrets);
-  return { exitCode: numericExit ? result.code : null, outputTail: redacted.slice(-4000), truncated: redacted.length > 4000 || result.errorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" };
+  return { exitCode: numericExit ? result.code : null, outputTail: redacted.slice(-4000), truncated: redacted.length > 4000 };
 }
 
 function projectDiagnostic(value: unknown): RecordedScopedAttemptDiagnostic {

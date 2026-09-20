@@ -217,6 +217,7 @@ it("retains cancellation as interrupted and retries without publishing success",
   const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
   const diagnostics = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: observed.providers.flatMap(p => p.attempts.map(a => a.attemptId)) });
   expect(diagnostics.providers.flatMap(p => p.attempts).some(a => a.status === "interrupted" && a.diagnostic.availability === "available" && "unavailable" in a.diagnostic.command)).toBe(true);
+  expect(diagnostics.providers[0]!.attempts[0]).toMatchObject({ status: "interrupted", diagnostic: { availability: "available", phase: "command", failure: { code: "check_command_failed", executionErrorCode: "ABORT_ERR" }, command: { unavailable: "not-completed" } } });
 }, 60000);
 
 it('a missing sibling output cannot borrow a previous check output',async()=>{
@@ -640,4 +641,49 @@ it.each(["typed", "unknown"])("retains a precommand %s failure without invented 
     for (const attempt of result.providers.flatMap(p => p.attempts)) expect(attempt).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "snapshot-setup", failure: kind === "typed" ? { code: "check_snapshot_unavailable" } : { unavailable: "unclassified" }, command: { unavailable: "not-started" } } });
     expect(JSON.stringify(result)).not.toContain("private exception message");
   } finally { spy.mockRestore(); }
+}, 30000);
+
+it("retains first verification failure as pre-command-verification without a command result", async () => {
+  const f = await fixture(); const snapshots = await import("./check-snapshot.ts");
+  const original = snapshots.createCheckSnapshot;
+  const spy = vi.spyOn(snapshots, "createCheckSnapshot").mockImplementation(async input => {
+    const snapshot = await original(input);
+    return { ...snapshot, verify: async () => { throw new snapshots.CheckSnapshotError("check_snapshot_drift", "private verification details"); } };
+  });
+  try {
+    expect(await f.run("prepare"), f.err.join("\n")).toBe(0); expect(await f.run("gate")).toBe(1);
+    const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
+    const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+    const ids = observed.providers.flatMap(p => p.attempts.map(a => a.attemptId)); expect(ids.length).toBeGreaterThan(0);
+    const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: ids });
+    for (const attempt of result.providers.flatMap(p => p.attempts)) expect(attempt).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "pre-command-verification", failure: { code: "check_snapshot_drift" }, command: { unavailable: "not-started" } } });
+    expect(JSON.stringify(result)).not.toContain("private verification details");
+  } finally { spy.mockRestore(); }
+}, 30000);
+
+it("retains output-capture failure separately from successful command execution", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const a = f.config.providers[0]!;
+  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "console.log('capture-output-sentinel')"] } }, f.config.providers[1]!] });
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0); expect(await f.run("gate")).toBe(1);
+  const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
+  const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+  const attempt = observed.providers[0]!.attempts[0]!;
+  const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: [attempt.attemptId] });
+  expect(result.providers[0]!.attempts[0]).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "output-capture", failure: { code: "check_output_missing" }, command: { exitCode: 0, outputTail: expect.stringContaining("capture-output-sentinel") } } });
+}, 30000);
+
+it.each(["stdout", "stderr"])("exports unavailable diagnostics for a real %s buffer overflow", async stream => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const secret = "CAPTURE_BOUNDARY_" + "0123456789".repeat(6) + "_END", prefix = secret.slice(0, -4);
+  f.env["API_TOKEN"] = secret;
+  const a = f.config.providers[0]!;
+  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", `require('fs').writeSync(${stream === "stdout" ? 1 : 2},'x'.repeat(${1024 * 1024 - prefix.length})+process.env.API_TOKEN+'z'.repeat(100));`], scope: { ...a.check!.scope!, environment: [{ name: "API_TOKEN", kind: "credential" }] } } }, f.config.providers[1]!] });
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0); expect(await f.run("gate")).toBe(1);
+  const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
+  const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+  const attempt = observed.providers[0]!.attempts[0]!;
+  const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: [attempt.attemptId] });
+  expect(result.providers[0]!.attempts[0]).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "command", failure: { code: "check_command_failed", executionErrorCode: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, command: { unavailable: "not-completed" } } });
+  expect(JSON.stringify(result)).not.toContain(prefix);
 }, 30000);

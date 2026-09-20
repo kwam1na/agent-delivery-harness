@@ -163,3 +163,8 @@ exit 0 can still accompany a failed post-command verification: the native attemp
 status remains authoritative. Consumers must bind diagnostics to their observed
 attempt IDs and candidate coordinates, rather than treating a log as current
 proof. Reads create no storage and reject malformed selected diagnostics.
+
+An execution-port buffer overflow also reports `not-completed`, even when the
+port returns partial output. That capture can cut a fully emitted credential
+before full-value redaction runs. Suppressing it preserves the typed
+`ERR_CHILD_PROCESS_STDIO_MAXBUFFER` cause without exposing a credential fragment.

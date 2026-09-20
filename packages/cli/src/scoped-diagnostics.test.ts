@@ -48,6 +48,20 @@ it("does not create storage for absent or empty requests", async () => {
   const hundred = Array.from({ length: 100 }, (_, i) => `missing-${i}`);
   expect((await readScopedCheckDiagnostics({ ...f, attemptIds: hundred })).unavailableAttemptIds).toEqual(hundred);
 });
+it("refuses native history filed under another configured provider", async () => {
+  const f = await fixture();
+  const wrongOwner = await f.store("a").allocate(f.input("b"));
+  await expect(readScopedCheckDiagnostics({ ...f, attemptIds: [wrongOwner.attemptId] })).rejects.toMatchObject({ code: "check_attempt_corrupt" });
+});
+it("refuses one requested identifier shared by separate provider histories", async () => {
+  const f = await fixture();
+  const a = await f.store("a").allocate(f.input("a"));
+  const b = f.store("b"); await b.allocate(f.input("b"));
+  const file = path.join(b.root, "1/running.json"), row = JSON.parse(await readFile(file, "utf8"));
+  row.entry.attempt.attemptId = a.attemptId;
+  row.digest = digestCanonical(row.entry); await writeFile(file, JSON.stringify(row));
+  await expect(readScopedCheckDiagnostics({ ...f, attemptIds: [a.attemptId] })).rejects.toMatchObject({ code: "check_attempt_corrupt" });
+});
 it.each([["same", "same"], [""], ["x".repeat(129)], Array.from({ length: 101 }, (_, i) => String(i))].map(attemptIds => ({ attemptIds })))("refuses invalid explicit requests without writes", async ({ attemptIds }) => {
   const f = await fixture(); const before = await readdir(path.join(f.rootDir, ".git"));
   await expect(readScopedCheckDiagnostics({ ...f, attemptIds })).rejects.toMatchObject({ code: "check_diagnostics_request_invalid" });
@@ -74,15 +88,21 @@ it.each(["ENOENT", "EACCES", "EPERM", "ABORT_ERR", "SIGKILL", "SIGTERM", "ERR_CH
   const failure = scopedDiagnosticFailure(new CheckSnapshotError("check_command_failed", "private"), errorCode);
   expect(failure).toEqual({ code: "check_command_failed", executionErrorCode: errorCode });
   expect(scopedCommandDiagnostic({ code: 1, errorCode, stdout: "", stderr: "" }, [])).toEqual({ unavailable: ["ENOENT", "EACCES", "EPERM"].includes(errorCode) ? "not-started" : "not-completed" });
-  expect(scopedCommandDiagnostic({ code: 1, errorCode, stdout: "captured secret", stderr: "" }, ["secret"])).toEqual({ exitCode: null, outputTail: "captured [REDACTED]\n", truncated: errorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
+  expect(scopedCommandDiagnostic({ code: 1, errorCode, stdout: "captured secret", stderr: "" }, ["secret"])).toEqual(errorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? { unavailable: "not-completed" } : { exitCode: null, outputTail: "captured [REDACTED]\n", truncated: false });
 });
 it("retains genuine numeric exits and handles unknown failures without arbitrary text", () => {
+  expect(scopedCommandDiagnostic({ code: 1, errorCode: "1", stdout: "", stderr: "assertion" }, [])).toEqual({ exitCode: 1, outputTail: "\nassertion", truncated: false });
   expect(scopedCommandDiagnostic({ code: 7, errorCode: "7", stdout: "assertion", stderr: "stderr" }, [])).toEqual({ exitCode: 7, outputTail: "assertion\nstderr", truncated: false });
   expect(scopedCommandDiagnostic({ code: 0, stdout: "", stderr: "" }, [])).toEqual({ exitCode: 0, outputTail: "\n", truncated: false });
   expect(scopedDiagnosticFailure(new Error("private"))).toEqual({ unavailable: "unclassified" });
   expect(scopedDiagnosticFailure(new CheckSnapshotError("private-secret", "private"))).toEqual({ unavailable: "unclassified" });
   expect(scopedDiagnosticFailure(new CheckSnapshotError("check_command_failed", "private"), "private")).toEqual({ code: "check_command_failed" });
   expect(redactScopedOutput("long-secret short", ["long", "long-secret", "short"])).toBe("[REDACTED] [REDACTED]");
+});
+it.each(["E2BIG", "SIGHUP", "private-unknown-code"])("keeps unknown execution errors distinct from numeric exits: %s", errorCode => {
+  expect(scopedCommandDiagnostic({ code: 1, errorCode, stdout: "", stderr: "" }, [])).toEqual({ unavailable: "not-completed" });
+  expect(scopedCommandDiagnostic({ code: 1, errorCode, stdout: "captured secret", stderr: "" }, ["secret"])).toEqual({ exitCode: null, outputTail: "captured [REDACTED]\n", truncated: false });
+  expect(scopedDiagnosticFailure(new CheckSnapshotError("check_command_failed", "private"), errorCode)).toEqual({ code: "check_command_failed" });
 });
 
 it("strips unknown diagnostic properties and ignores removed provider history", async () => {
@@ -97,4 +117,27 @@ it("strips unknown diagnostic properties and ignores removed provider history", 
   await writeFile(file, "{}");
   await expect(readScopedCheckDiagnostics({ ...f, attemptIds: [attempt.attemptId] })).rejects.toMatchObject({ code: "check_attempt_corrupt" });
   expect((await readScopedCheckDiagnostics({ ...f, config: { ...f.config, providers: [f.config.providers[1]!] }, attemptIds: [attempt.attemptId] })).unavailableAttemptIds).toEqual([attempt.attemptId]);
+});
+
+it.each(["stdout", "stderr"])("does not export a credential clipped by the real exec buffer on %s", async stream => {
+  const {createExecPort}=await import("@agent-delivery-harness/kernel");
+  const limit=1024*1024, secret="OC_BOUNDARY_TOKEN_"+"0123456789".repeat(6)+"_END";
+  const prefix=secret.slice(0,-4);
+  const result=await createExecPort().run({command:process.execPath,args:["-e",`require('fs').writeSync(${stream === "stdout" ? 1 : 2},'x'.repeat(${limit-prefix.length})+process.env.API_TOKEN+'z'.repeat(100));`],env:{API_TOKEN:secret},maxBuffer:limit,timeoutMs:5000});
+  expect(result.errorCode).toBe("ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
+  expect(result[stream === "stdout" ? "stdout" : "stderr"]).toContain(prefix);
+  expect(result[stream === "stdout" ? "stdout" : "stderr"]).not.toContain(secret);
+  const f=await fixture(), store=f.store("a"), attempt=await store.allocate(f.input("a"));
+  const command=scopedCommandDiagnostic(result,[secret]);
+  await store.finish(attempt,"failed",{outputs:[],diagnostic:{availability:"available",phase:"command",failure:scopedDiagnosticFailure(new CheckSnapshotError("check_command_failed","safe"),result.errorCode),command}});
+  const projected=await readScopedCheckDiagnostics({...f,attemptIds:[attempt.attemptId]});
+  expect(projected.providers[0]!.attempts[0]!.diagnostic).toEqual({ availability: "available", phase: "command", failure: { code: "check_command_failed", executionErrorCode: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, command: { unavailable: "not-completed" } });
+  expect(JSON.stringify(projected)).not.toContain(prefix);
+},10000);
+it("complete credential captured below exec limit is redacted before public export", async()=>{
+  const {createExecPort}=await import("@agent-delivery-harness/kernel");
+  const secret="OC_COMPLETE_TOKEN_"+"q".repeat(60),limit=1024*1024;
+  const result=await createExecPort().run({command:process.execPath,args:["-e",`require('fs').writeSync(1,'x'.repeat(${limit-200})+process.env.API_TOKEN);process.exit(7);`],env:{API_TOKEN:secret},maxBuffer:limit,timeoutMs:5000});
+  expect(result.errorCode).toBe("7");const command=scopedCommandDiagnostic(result,[secret]);
+  expect(command).toMatchObject({exitCode:7,truncated:true});expect(JSON.stringify(command)).toContain("[REDACTED]");expect(JSON.stringify(command)).not.toContain(secret);
 });

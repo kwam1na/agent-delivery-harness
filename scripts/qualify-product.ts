@@ -2253,6 +2253,22 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
     const interruptedDiagnostic = diagnostics(full, [cancelledAttempt!]).providers.find(p => p.providerId === "check.a")!.attempts[0]!;
     requireObservation(interruptedDiagnostic.attemptId === cancelledAttempt && interruptedDiagnostic.status === "interrupted" && interruptedDiagnostic.diagnostic.availability === "available" && "unavailable" in interruptedDiagnostic.diagnostic.command, "bundled diagnostics must preserve cancellation without inventing an exit");
     requireObservation(readFileSync(path.join(runtime, "cli-api.d.mts"), "utf8").includes("readScopedCheckDiagnostics"), "bundled declarations must export diagnostics"); proven.add("attempt-diagnostics");
+    for (const stream of [1, 2]) {
+      const overflow = config("none");
+      overflow.providers[1]!.check.command = [process.execPath, "-e", `require('fs').writeSync(${stream},'x'.repeat(1048576-(process.env.API_TOKEN.length-4))+process.env.API_TOKEN+'z'.repeat(100));`];
+      write(full, "harness.config.ts", "export default " + JSON.stringify(overflow) + ";\n");
+      await cli(full, "prepare"); await cli(full, "gate", 1);
+      const latest = observations(full).providers.find(p => p.providerId === "check.b")!.attempts.at(-1)!;
+      const diagnostic = diagnostics(full, [latest.attemptId]).providers.find(p => p.providerId === "check.b")!.attempts[0]!.diagnostic;
+      requireObservation(latest.status === "failed" && diagnostic.availability === "available" && diagnostic.phase === "command" && "code" in diagnostic.failure && diagnostic.failure.executionErrorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && "unavailable" in diagnostic.command && diagnostic.command.unavailable === "not-completed", "installed diagnostics must suppress buffer-clipped credentials on stream " + stream);
+    }
+    const setupFailure = config("none");
+    const setupProfile = { ...setupFailure.scopedExecution.profiles[0]!, dependencies: { command: [process.execPath, "-e", "process.exit(7)"], timeoutMs: 5000 } };
+    write(full, "harness.config.ts", "export default " + JSON.stringify({ ...setupFailure, scopedExecution: { ...setupFailure.scopedExecution, profiles: [setupProfile, setupFailure.scopedExecution.profiles[1]!] } }) + ";\n");
+    await cli(full, "prepare"); await cli(full, "gate", 1);
+    const setupAttempt = observations(full).providers.find(p => p.providerId === "check.a")!.attempts.at(-1)!;
+    const setupDiagnostic = diagnostics(full, [setupAttempt.attemptId]).providers.find(p => p.providerId === "check.a")!.attempts[0]!.diagnostic;
+    requireObservation(setupAttempt.status === "failed" && setupDiagnostic.availability === "available" && setupDiagnostic.phase === "snapshot-setup" && "code" in setupDiagnostic.failure && setupDiagnostic.failure.code === "check_dependency_failed" && "unavailable" in setupDiagnostic.command && setupDiagnostic.command.unavailable === "not-started", "installed pre-command failure must retain typed cause without invented output");
     // Static configuration keeps evidence portable; only the guard observes
     // these declared, nonsecret coordinates of the immutable selection.
     const guarded = config("none");
