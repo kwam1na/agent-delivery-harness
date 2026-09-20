@@ -7,6 +7,7 @@ import { captureCheckBindings, captureCheckOutputSnapshots, candidateTreeEvidenc
 import type { CommandContext } from "./boundary.ts";
 import { AttemptStore, type AttemptPayload, type StoredAttempt } from "./scoped-attempts.ts";
 import { CheckSnapshotError, createCheckSnapshot, executionPath, type CheckSnapshot } from "./check-snapshot.ts";
+import { redactScopedOutput, scopedCommandDiagnostic, scopedDiagnosticFailure, type RecordedScopedAttemptDiagnostic } from "./scoped-diagnostics.ts";
 export function scopedCandidate(candidate: CandidateBinding): RecordCandidateBinding {
   return { treeSha: candidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId };
 }
@@ -117,6 +118,8 @@ export class ScopedChecks {
     const started = Date.now(), check = provider.check!, profile = this.context.config.scopedExecution!.profiles.find(p => p.id === check.scope!.profile)!;
     const attempt = this.owned.get(provider.id) ?? await this.allocate(provider.id);
     let payload: AttemptPayload = { outputs: [] }, terminal = false;
+    let diagnostic: RecordedScopedAttemptDiagnostic = { availability: "available", phase: "snapshot-setup", failure: { unavailable: "not-failed" }, command: { unavailable: "not-started" } };
+    let executionErrorCode: string | undefined;
     const store = this.stores.get(provider.id)!;
     try {
       const key = profile.id;
@@ -125,22 +128,29 @@ export class ScopedChecks {
         snapshot = await createCheckSnapshot({ rootDir: this.context.rootDir, candidate: this.candidate, outputs: profile.mutableOutputs, gitContext: profile.gitContext ?? "full", environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" }, ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}) });
         this.snapshots.set(key, snapshot);
       }
+      diagnostic = { ...diagnostic, phase: "pre-command-verification" };
       await snapshot.verify();
       // A sibling or dependency setup cannot supply this command's result.
       for (const output of check.outputs ?? []) await rm(path.join(snapshot.rootDir, output), { recursive: true, force: true });
       const injected = Object.fromEntries(check.scope!.environment.filter(e => this.context.env[e.name] !== undefined).map(e => [e.name, this.context.env[e.name]!]));
       this.context.write(`checking ${provider.id}: attempt ${attempt.attemptId}`);
+      diagnostic = { ...diagnostic, phase: "command" };
       const commandHome = path.join(snapshot.commandRoot, attempt.attemptId, "home"), commandTemp = path.join(snapshot.commandRoot, attempt.attemptId, "tmp");
       await mkdir(commandHome, { recursive: true }); await mkdir(commandTemp, { recursive: true });
+      diagnostic = { ...diagnostic, command: { unavailable: "not-completed" } };
       const result = await createExecPort().run({ command: check.command[0], args: check.command.slice(1), cwd: path.join(snapshot.rootDir, check.scope!.cwd), env: { ...snapshot.environment, ...injected, HOME: commandHome, TMPDIR: commandTemp }, timeoutMs: check.timeoutMs, maxBuffer: 1024 * 1024, ...(this.context.signal ? { signal: this.context.signal } : {}) });
       const secrets = check.scope!.environment.filter(e => e.kind === "credential").map(e => this.context.env[e.name]).filter((v): v is string => !!v);
-      const redact = (s: string) => secrets.reduce((text, secret) => text.split(secret).join("[REDACTED]"), s);
+      const redact = (s: string) => redactScopedOutput(s, secrets);
+      executionErrorCode = result.errorCode;
+      diagnostic = { ...diagnostic, command: scopedCommandDiagnostic(result, secrets) };
       payload = { outputs: [], durationMs: Date.now() - started, log: redact(`${result.stdout}\n${result.stderr}`).slice(-4000), dependencyDigest: snapshot.dependencyDigest };
       if (result.code !== 0 || this.context.signal?.aborted) throw new CheckSnapshotError("check_command_failed", `Declared scoped check ${provider.id} did not complete successfully (exit ${result.code}).`);
+      diagnostic = { ...diagnostic, phase: "post-command-verification" };
       await snapshot.verify();
+      diagnostic = { ...diagnostic, phase: "output-capture" };
       const outputs = await captureCheckOutputSnapshots(snapshot.rootDir, check.outputs ?? []);
       if (!outputs || outputs.some(o => secrets.some(secret => Buffer.from(o.base64, "base64").includes(Buffer.from(secret))))) throw new CheckSnapshotError("check_output_missing", "A retained output is absent, corrupt, escaped or contains credential bytes.");
-      payload = { ...payload, outputs };
+      payload = { ...payload, outputs, diagnostic: { ...diagnostic, phase: "complete" } };
       await store.finish(attempt, "passed", payload); terminal = true;
       const scopedPlan = await this.plan();
       const wiring = await this.context.wire();
@@ -166,6 +176,7 @@ export class ScopedChecks {
       this.context.write(`passed ${provider.id}: ${Date.now() - started}ms including snapshot setup; retained ${runId}`);
     } catch (error) {
       if (!terminal) await store.finish(attempt, this.context.signal?.aborted ? "interrupted" : "failed", { ...payload, durationMs: Date.now() - started,
+        diagnostic: { ...diagnostic, failure: scopedDiagnosticFailure(error, executionErrorCode) },
         ...(error instanceof CheckSnapshotError ? { log: `${payload.log ?? ""}\n${error.code}`.slice(-4000) } : {}) });
       const damaged = this.snapshots.get(profile.id);
       this.snapshots.delete(profile.id);

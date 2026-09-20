@@ -11,6 +11,19 @@ export interface ScopedCheckObservations {
   }[];
 }
 
+export function projectScopedAttempt(attempt: ScopedCheckAttempt, durationMs?: number): ScopedCheckAttempt & { readonly durationMs?: number } {
+  return {
+    version: attempt.version, providerId: attempt.providerId, attemptId: attempt.attemptId,
+    generation: attempt.generation, inputDigest: attempt.inputDigest, profileDigest: attempt.profileDigest,
+    status: attempt.status, origin: { runId: attempt.origin.runId, candidate: {
+      treeSha: attempt.origin.candidate.treeSha, deliverableDigest: attempt.origin.candidate.deliverableDigest,
+      identityToken: attempt.origin.candidate.identityToken, baseRef: attempt.origin.candidate.baseRef,
+      baseTipSha: attempt.origin.candidate.baseTipSha, mergeBaseSha: attempt.origin.candidate.mergeBaseSha,
+      workspaceId: attempt.origin.candidate.workspaceId,
+    } }, ...(durationMs === undefined ? {} : { durationMs }),
+  };
+}
+
 /**
  * Read retained attempts for the supplied scoped providers, in configuration
  * order and ascending generation order. This creates no directories or evidence.
@@ -32,16 +45,7 @@ export async function readScopedCheckObservations(input: {
     if (retained.some(row => row.attempt.providerId !== provider.id)) {
       throw new CheckSnapshotError("check_attempt_corrupt", "Scoped check attempt history belongs to a different provider.");
     }
-    providers.push({ providerId: provider.id, attempts: retained.map(({ attempt, payload }) => ({
-      version: attempt.version, providerId: attempt.providerId, attemptId: attempt.attemptId,
-      generation: attempt.generation, inputDigest: attempt.inputDigest, profileDigest: attempt.profileDigest,
-      status: attempt.status, origin: { runId: attempt.origin.runId, candidate: {
-        treeSha: attempt.origin.candidate.treeSha, deliverableDigest: attempt.origin.candidate.deliverableDigest,
-        identityToken: attempt.origin.candidate.identityToken, baseRef: attempt.origin.candidate.baseRef,
-        baseTipSha: attempt.origin.candidate.baseTipSha, mergeBaseSha: attempt.origin.candidate.mergeBaseSha,
-        workspaceId: attempt.origin.candidate.workspaceId,
-      } }, ...(payload?.durationMs === undefined ? {} : { durationMs: payload.durationMs }),
-    })) });
+    providers.push({ providerId: provider.id, attempts: retained.map(({ attempt, payload }) => projectScopedAttempt(attempt, payload?.durationMs)) });
   }
   return { version: "scoped-check-observations/1", providers };
 }
