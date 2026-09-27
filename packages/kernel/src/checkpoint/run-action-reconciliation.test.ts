@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunStore } from "./run-store.ts";
 import { validateRunEventInput, type RunEventInput, type RunEventKind } from "./run-event.ts";
+import { digestCanonical } from "../digest.ts";
 import { reconciliationActions } from "../spine/run-action-reconciliation.ts";
 
 const dirs: string[] = [];
@@ -109,4 +110,28 @@ it("rejects credentials in structural evidence and refuses unknown outcome at gr
   const f = await fixture(); await f.append(f.observed("orphan")); const e = await f.reconcile();
   expect(validateRunEventInput({ ...e, payload: { ...e.payload, outcome: "unknown" } }).ok).toBe(false);
   expect((await f.append({ ...e, payload: { ...e.payload, evidenceReference: "https://user:password@example.com/pr/851" } })).ok).toBe(false);
+});
+
+
+it.each(["succeeded", "failed", "not-performed"])("retains the actual reconciled terminal outcome %s", async outcome => {
+  const f = await fixture(); await f.append(f.observed("orphan")); const e = await f.reconcile();
+  expect((await f.append({ ...e, payload: { ...e.payload, outcome } })).ok).toBe(true);
+  expect(reconciliationActions(await f.history())[0]).toMatchObject({ outcome, inconsistent: false });
+});
+
+it("binds the complete original event rather than a subset of its fields", async () => {
+  const f = await fixture(); await f.append(f.observed("orphan"));
+  const event = (await f.history())[1]!;
+  expect(reconciliationActions([event])[0]?.historyDigest).toBe(digestCanonical([event]));
+  const original = reconciliationActions([event])[0]!.historyDigest;
+  for (const changed of [
+    { runId: "run-other" }, { seq: 99 }, { at: "2026-09-27T11:00:00Z" }, { eventId: "other" },
+    { actor: { role: "cli" as const } }, { repo: { commonDir: "/other" } },
+    { payload: { ...event.payload, reference: "repo/pr/852" } },
+  ]) {
+    const revised = { ...event, ...changed };
+    const actual = reconciliationActions([revised])[0]!.historyDigest;
+    expect(actual).not.toBe(original);
+    expect(actual).toBe(digestCanonical([revised]));
+  }
 });
