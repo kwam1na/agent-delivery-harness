@@ -164,3 +164,30 @@ it("file-only snapshot excludes Git for setup and checks even under a parent rep
   const control=path.dirname(snapshot.commandRoot);await snapshot.cleanup();snapshot=undefined;await expect(readFile(path.join(control,"repository/HEAD"))).rejects.toMatchObject({code:"ENOENT"});
  } finally {if(snapshot)await snapshot.cleanup();if(prior===undefined)delete process.env["TMPDIR"];else process.env["TMPDIR"]=prior;}
 });
+
+it("observes dependency status before failure cleanup removes the private workspace", async () => {
+  const f = await fixture();
+  const results: Array<{ code: number; stdout: string; durationMs: number }> = [];
+  await expect(createCheckSnapshot({ rootDir: f.root, candidate: f.candidate, outputs: [], environment: {},
+    dependencies: { command: [process.execPath, "-e", "console.log(process.cwd());process.exit(7)"], timeoutMs: 5000 },
+    onDependencyResult: (result, durationMs) => results.push({ code: result.code, stdout: result.stdout, durationMs }),
+  })).rejects.toMatchObject({ code: "check_dependency_failed" });
+  expect(results).toHaveLength(1);
+  expect(results[0]!.code).toBe(7);
+  expect(results[0]!.durationMs).toBeGreaterThanOrEqual(0);
+  const privateRoot = results[0]!.stdout.trim();
+  expect(privateRoot).not.toBe(f.root);
+  expect(path.basename(privateRoot)).toMatch(/^delivery-check-/);
+  await expect(readFile(path.join(privateRoot, "source.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+it.each([
+  { name: "missing executable", command: ["/missing-dependency-command"] as [string, ...string[]], timeoutMs: 5000, errorCode: "ENOENT" },
+  { name: "signal", command: [process.execPath, "-e", "process.kill(process.pid,'SIGTERM')"] as [string, ...string[]], timeoutMs: 5000, errorCode: "SIGTERM" },
+  { name: "timeout", command: [process.execPath, "-e", "setInterval(()=>{},1000)"] as [string, ...string[]], timeoutMs: 100, errorCode: "SIGKILL" },
+])("retains the actual dependency execution error for $name", async ({ command, timeoutMs, errorCode }) => {
+  const f = await fixture(), observed: string[] = [];
+  await expect(createCheckSnapshot({ rootDir: f.root, candidate: f.candidate, outputs: [], environment: {}, dependencies: { command, timeoutMs },
+    onDependencyResult: result => observed.push(result.errorCode ?? "missing"),
+  })).rejects.toMatchObject({ code: "check_dependency_failed" });
+  expect(observed).toEqual([errorCode]);
+});

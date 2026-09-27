@@ -89,7 +89,7 @@ export const EXPECTED_LICENSE_ID = "FSL-1.1-ALv2";
 export const CANONICAL_LICENSE_SHA256 = "02ed546806a3298b12c633742eb2fd354821d5dc9a5ee4384d4ae8196737a83f";
 
 /** Repository identity trusted by npm provenance for every published package. */
-export const EXPECTED_REPOSITORY_IDENTITY = "github.com/kwam1na/agent-delivery-harness";
+export const EXPECTED_REPOSITORY_IDENTITY = "github.com/v26-technologies/agent-delivery-harness";
 
 /**
  * Files every published tarball must carry. The FSL's Redistribution clause

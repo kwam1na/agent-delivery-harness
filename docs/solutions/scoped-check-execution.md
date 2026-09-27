@@ -168,3 +168,14 @@ An execution-port buffer overflow also reports `not-completed`, even when the
 port returns partial output. That capture can cut a fully emitted credential
 before full-value redaction runs. Suppressing it preserves the typed
 `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` cause without exposing a credential fragment.
+
+Dependency setup has its own optional `dependency` diagnostic: elapsed
+`durationMs`, the same bounded/redacted `command` result, and a recognized
+`executionErrorCode` when available. Capture it before failed snapshot cleanup;
+the later generic `check_dependency_failed` error cannot recover discarded
+process output. A setup failure still leaves the main command `not-started`.
+Successful setup is retained too, but only on the attempt that actually ran it:
+reusing that snapshot does not copy its setup result into a sibling attempt.
+Older attempts without this field remain readable and acquire no invented
+dependency result. These diagnostics do not change installation limits,
+snapshot reuse, attempt identities, or admission.

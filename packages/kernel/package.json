@@ -1,12 +1,12 @@
 {
   "name": "@agent-delivery-harness/kernel",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Config-driven delivery-evidence kernel: validator, identity, records, gate evaluator",
   "license": "FSL-1.1-ALv2",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kwam1na/agent-delivery-harness.git",
+    "url": "git+https://github.com/v26-technologies/agent-delivery-harness.git",
     "directory": "packages/kernel"
   },
   "engines": {
