@@ -69,3 +69,43 @@ costs, and completeness with the same projection used by the command. Changed
 totals or malformed events fail with `run_export_invalid`. Successful parsing
 only proves an internally consistent observation; it does not authenticate the
 executor, authorize an operation, or replace delivery-record verification.
+
+## Acknowledge inconsistent action history
+
+Runtime 0.7.0 adds `action.reconciled` for version-2 runs. It records the host's
+external verification of an orphan or conflicting action without fabricating a
+missing intent, changing prior entries, or repeating the operation. It does not
+satisfy admission or authorize execution. The host must verify the intended action
+and its actual external result; the product checks binding, not remote truth.
+
+Read `resume` and inspect the journal before writing. Copy the action's exact
+`actionId`, `historyDigest`, and current `reference` into `observedReference`.
+Use a fresh stable event ID for this acknowledgement and supply a terminal
+`outcome` (`succeeded`, `failed`, or `not-performed`), an `evidenceReference`
+pointing to what the host actually checked, and a bounded `reason` explaining it.
+
+```sh
+delivery-harness emit action.reconciled --run <run-id> --event-id reconcile-push-1 --json '<payload>'
+```
+
+The payload contains exactly `actionId`, `historyDigest`, `observedReference`,
+`outcome`, `evidenceReference`, and `reason`. The digest binds the complete
+sequence of that action's events, including run identity and earlier
+acknowledgements. The store checks it under the append lock. A missing,
+consistent, changed, or wrongly referenced action refuses the append. Unrelated
+observations do not invalidate this action's binding. Exact transport retries
+are idempotent and do not reapply a historical acknowledgement.
+
+The resumed action retains the acknowledgement's event ID, evidence reference,
+and reason. A later conflicting outcome, changed reference, or new intent
+reblocks it and requires fresh inspection and a newly bound acknowledgement.
+Historical failures remain in the journal. A normal pending intent still uses
+`action.observed`; reconciliation is not a substitute for that flow.
+
+**First-emission compatibility:** journals containing this event require runtime
+0.7.0 or later with this grammar. Version-1 runs cannot emit it. Older runtimes
+refuse such journals, including after a lifecycle rollback; they cannot resume
+or append until a compatible runtime is restored. A re-upgrade reads the original
+journal without migration. Before first emission, confirm every reader that must
+consume the run is compatible. Policy rollback (for example forcing full
+validation) on the compatible runtime is separate from runtime downgrade.

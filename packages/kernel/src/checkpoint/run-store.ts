@@ -52,6 +52,7 @@ import {
   type RunEventInput,
 } from "./run-event.ts";
 import { isDeepStrictEqual } from "node:util";
+import { runActionReconciliationError } from "../spine/run-action-reconciliation.ts";
 import { runActivityTransitionError } from "./run-activity.ts";
 import { MANAGED_DELIVERY_NAMESPACE, RUN_STORE_DIRECTORY } from "./run-namespace.ts";
 
@@ -277,6 +278,8 @@ export function createRunStore(commonDir: string): RunStore {
       }
       const event = entry as RunEvent;
       if (events[0] && events[0].version !== event.version) return { ok: false, rejections: reject("unsupported_spec", `/${index}/version`, "a run cannot mix writer versions") };
+      const reconciliation = runActionReconciliationError(events, event);
+      if (reconciliation) return { ok: false, rejections: reject("invalid_transition", `/${index}/payload`, reconciliation) };
       events.push(event);
     }
     return { ok: true, events };
@@ -414,6 +417,8 @@ export function createRunStore(commonDir: string): RunStore {
                 return { ok: false, rejected: reject("invalid_transition", "/eventId", "this event ID already identifies different content") };
               }
             }
+            const reconciliation = runActionReconciliationError(parsed.entries as RunEvent[], candidate as unknown as RunEventInput);
+            if (reconciliation) return { ok: false, rejected: reject("invalid_transition", "/payload", reconciliation) };
             const transition = runActivityTransitionError(parsed.entries as RunEvent[], candidate as unknown as RunEventInput);
             if (transition) return { ok: false, rejected: reject("invalid_transition", "/payload", transition) };
 
