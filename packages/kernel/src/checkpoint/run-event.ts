@@ -128,7 +128,7 @@ export const RUN_EVENT_KINDS_V1 = Object.freeze([
 ] as const);
 export const RUN_EVENT_KINDS = Object.freeze([...RUN_EVENT_KINDS_V1,
   "activity.observed", "wait.started", "wait.resolved", "finding.observed",
-  "report.referenced", "artifact.referenced", "finish.step.observed",
+  "report.referenced", "artifact.referenced", "finish.step.observed", "action.reconciled",
 ] as const);
 export type RunEventKind = (typeof RUN_EVENT_KINDS)[number];
 
@@ -359,6 +359,21 @@ const httpUrl: MemberCheck = describedAs(
     constraint: `a non-empty URL of at most ${MAX_RUN_URL} characters that parses as an absolute http or https locator`,
     example: "https://github.com/example/repository/pull/1",
   }),
+);
+
+// New reconciliation references retain opaque locators but refuse URL userinfo.
+const reconciliationReference: MemberCheck = describedAs(
+  (value, at, collector) => {
+    if (typeof value !== "string" || value.trim().length === 0 || value.length > MAX_RUN_URL) {
+      malformed(collector, at, "expected a bounded nonblank reconciliation reference");
+      return;
+    }
+    try {
+      const url = new URL(value);
+      if (url.username || url.password) malformed(collector, at, "credentials are not allowed in a reconciliation reference");
+    } catch { /* Relative paths and opaque host references are allowed. */ }
+  },
+  () => ({ type: "string", constraint: `a nonblank reference of at most ${MAX_RUN_URL} characters, without URL userinfo`, example: "https://github.com/example/repo/pull/851" }),
 );
 
 const finiteNonNegative: MemberCheck = describedAs(
@@ -606,6 +621,14 @@ const roundBinding: readonly RunMemberRule[] = [
 ];
 const V2_PAYLOAD_MEMBERS: Readonly<Record<RunEventKind, readonly RunMemberRule[]>> = {
   ...PAYLOAD_MEMBERS,
+  "action.reconciled": [
+    { name: "actionId", check: label, example: "push-1" },
+    { name: "historyDigest", check: digest },
+    { name: "observedReference", check: reconciliationReference },
+    { name: "outcome", check: oneOf(["succeeded", "failed", "not-performed"]) },
+    { name: "evidenceReference", check: reconciliationReference },
+    { name: "reason", check: freeText, example: "Host verified the merged head against the intended push." },
+  ],
   "command.completed": [...PAYLOAD_MEMBERS["command.completed"], { name: "preparation", check: preparation, required: false }],
   "run.started": [...PAYLOAD_MEMBERS["run.started"], { name: "predecessorRunId", check: runStoreId, required: false, example: "run-0000000000000000" }],
   "review.round.opened": [...PAYLOAD_MEMBERS["review.round.opened"],

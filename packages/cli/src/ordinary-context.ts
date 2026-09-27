@@ -79,21 +79,5 @@ export async function installedRelease(rootDir: string) {
 
 export const policyDigest = (context: CommandContext) => digestCanonical({ config: context.config, policyBinding: context.policyBinding ?? null });
 
-/** Observed action outcomes are a host handoff, never permission to invoke an action. */
-export function reconciliationActions(events: readonly RunEvent[]) {
-  const actions = new Map<string, { actionId: string; operation?: unknown; reference: unknown; outcome: string; inconsistent?: boolean }>();
-  for (const event of events) {
-    const p = event.payload;
-    if (event.kind === "action.intent") {
-      const actionId = p["actionId"] as string;
-      const prior = actions.get(actionId);
-      actions.set(actionId, { actionId, operation: p["operation"], reference: p["reference"], outcome: "unknown", ...(prior ? { inconsistent: true } : {}) });
-    } else if (event.kind === "action.observed") {
-      const actionId = p["actionId"] as string;
-      const prior = actions.get(actionId);
-      actions.set(actionId, { ...prior, actionId, reference: p["reference"], outcome: p["outcome"] as string,
-        ...(!prior || prior.inconsistent || (prior.outcome !== "unknown" && prior.outcome !== p["outcome"]) ? { inconsistent: true } : {}) });
-    }
-  }
-  return [...actions.values()];
-}
+// One reduction is shared with the atomic journal append validator.
+export { reconciliationActions } from "@agent-delivery-harness/kernel";

@@ -468,3 +468,28 @@ describe("the writer version a save-context observation is written at", () => {
     expect(new Set(saved.map(event => event.payload.policyDigest)).size).toBe(1);
   }, 30000);
 });
+
+
+it("reconciles a bound orphan append-only without fabricating intent or replay", async () => {
+  const f = await fixture({ version: "2" });
+  expect(await f.run("prepare")).toBe(0);
+  expect(await f.run("save-context", "--json", JSON.stringify({ contract, stage: "merge" }))).toBe(0);
+  expect(await f.run("emit", "action.observed", "--event-id", "orphan", "--json", JSON.stringify({ actionId: "push-1", outcome: "succeeded", reference: "repo/pr/851" }))).toBe(0);
+  expect(await f.run("resume")).toBe(1);
+  const state = JSON.parse(f.output.join("\n"));
+  const before = await f.journal();
+  const payload = { actionId: "push-1", historyDigest: state.actions[0].historyDigest,
+    observedReference: "repo/pr/851", outcome: "succeeded", evidenceReference: "https://github.com/example/repo/pull/851",
+    reason: "Host inspected merged PR and exact pushed head." };
+  expect(await f.run("emit", "action.reconciled", "--event-id", "reconcile-1", "--json", JSON.stringify(payload)), f.errors.join("\n")).toBe(0);
+  expect(await f.run("resume"), f.errors.join("\n")).toBe(0);
+  expect(JSON.parse(f.output.join("\n"))).toMatchObject({ automaticReplay: false, actions: [{ actionId: "push-1", outcome: "succeeded", inconsistent: false }] });
+  const after = await f.journal();
+  expect(after.slice(0, before.length)).toEqual(before);
+  expect(after.filter(e => e.kind === "action.intent")).toHaveLength(0);
+  await writeFile(path.join(f.dir, "source.ts"), "export const value = 2;\n");
+  await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", "later candidate");
+  expect(await f.run("resume")).toBe(1);
+  expect(f.errors.join("\n")).not.toContain("resume_action_unreconciled");
+  expect(JSON.parse(f.output.join("\n")).reuseAllowed).toBe(false);
+});

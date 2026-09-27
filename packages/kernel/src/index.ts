@@ -1219,3 +1219,5 @@ export { MAX_PORTABLE_ARTIFACT_BYTES, MAX_PORTABLE_ARTIFACTS, MAX_PORTABLE_EVIDE
 
 export type { ScopedExecutionDefinition, ScopedExecutionProfile } from "./config.ts";
 export { scopedCheckIdentity, type ScopedRuntimeObservation } from "./scoped-inputs.ts";
+
+export { reconciliationActions, runActionReconciliationError, type ReconciliationAction } from "./spine/run-action-reconciliation.ts";

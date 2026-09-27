@@ -10,6 +10,7 @@ import {
   evaluateRunJournal,
   RUN_STORE_ID,
   validateRunEvent,
+  runActionReconciliationError,
   type RunEvent,
 } from "@agent-delivery-harness/kernel";
 import {
@@ -134,6 +135,7 @@ export function parseRunExport(text: string): RunExportParseResult {
         : "costs,events,labels,readout,refusedAppends,runId,spec,summary")
     )
       return invalid;
+    const prefix: RunEvent[] = [];
     for (const [index, event] of value["events"].entries()) {
       if (
         !validateRunEvent(event).ok ||
@@ -143,6 +145,9 @@ export function parseRunExport(text: string): RunExportParseResult {
         event["version"] !== (v2 ? "run-event/2" : "run-event/1")
       )
         return invalid;
+      const validated = event as unknown as RunEvent;
+      if (runActionReconciliationError(prefix, validated)) return invalid;
+      prefix.push(validated);
     }
     if (
       hasAttachments &&

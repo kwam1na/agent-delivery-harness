@@ -154,6 +154,8 @@ export function detailOf(event: RunEvent): string {
       return `${oneLineOf(payload["outcome"])}${payload["reference"] === undefined ? "" : ` — ${oneLineOf(payload["reference"])}`}`;
     case "context.saved":
       return `stage ${oneLineOf(payload["stage"])} (observation only)`;
+    case "action.reconciled":
+      return `${oneLineOf(payload["actionId"])} reconciled ${oneLineOf(payload["outcome"])} (host-attested) evidence ${oneLineOf(payload["evidenceReference"])}`;
     case "action.intent":
     case "action.observed":
       return `${oneLineOf(payload["actionId"])} ${oneLineOf(payload["outcome"] ?? "unknown")} reference ${oneLineOf(payload["reference"])}`;
