@@ -184,3 +184,17 @@ it("strips unknown dependency metadata without altering its bounded public field
   expect(result.providers[0]!.attempts[0]!.diagnostic).toEqual({ ...diagnostic, dependency });
   expect(JSON.stringify(result)).not.toMatch(/private|secret|environment|message/);
 });
+
+it.each([["ENOENT", "not-started"], ["EACCES", "not-started"], ["EPERM", "not-started"], ["ABORT_ERR", "not-completed"], ["ERR_CHILD_PROCESS_STDIO_MAXBUFFER", "not-completed"], ["SIGKILL", "not-completed"], ["SIGTERM", "not-completed"], ["execution_failed", "not-completed"]] as const)("persists dependency execution cause %s through the public reader", async (errorCode, unavailable) => {
+  const f = await fixture(), store = f.store("a"), attempt = await store.allocate(f.input("a"));
+  const dependency = scopedDependencyDiagnostic({ code: 1, stdout: "", stderr: "", errorCode }, 73, []);
+  await store.finish(attempt, "failed", { outputs: [], diagnostic: { ...diagnostic, phase: "snapshot-setup", failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" }, dependency } });
+  const result = await readScopedCheckDiagnostics({ ...f, attemptIds: [attempt.attemptId] });
+  expect(result.providers[0]!.attempts[0]!.diagnostic).toEqual({ availability: "available", phase: "snapshot-setup", failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" },
+    dependency: { durationMs: 73, executionErrorCode: errorCode, command: { unavailable } },
+  });
+});
+it("omits arbitrary dependency causes and preserves genuine numeric dependency exits", () => {
+  expect(scopedDependencyDiagnostic({ code: 1, stdout: "", stderr: "", errorCode: "private-unknown-cause" }, 9, [])).toEqual({ durationMs: 9, command: { unavailable: "not-completed" } });
+  expect(scopedDependencyDiagnostic({ code: 7, stdout: "", stderr: "", errorCode: "7" }, 9, [])).toEqual({ durationMs: 9, command: { exitCode: 7, outputTail: "\n", truncated: false } });
+});

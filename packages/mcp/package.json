@@ -6,7 +6,7 @@
   "license": "FSL-1.1-ALv2",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kwam1na/agent-delivery-harness.git",
+    "url": "git+https://github.com/v26-technologies/agent-delivery-harness.git",
     "directory": "packages/mcp"
   },
   "engines": {

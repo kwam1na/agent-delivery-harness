@@ -562,7 +562,7 @@ describe("provenance-repository", () => {
     const result = runFixture(dir);
     expect(rulesOf(result.findings)).toEqual(["provenance-repository"]);
     expect(result.findings[0]!.file).toBe("packages/a/package.json");
-    expect(result.findings[0]!.message).toContain("kwam1na/agent-delivery-harness");
+    expect(result.findings[0]!.message).toContain("v26-technologies/agent-delivery-harness");
   });
 
   it("flags drift from the repository registered in the publish workflow", () => {

@@ -690,9 +690,9 @@ it.each(["stdout", "stderr"])("exports unavailable diagnostics for a real %s buf
 
 it("retains dependency failure diagnostics after cleanup without claiming the main command ran", async () => {
   const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
-  const f = await fixture();
-  f.setConfig({ ...f.config, scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p,
-    dependencies: { command: [process.execPath, "-e", "console.log('DEPENDENCY_STAGE:install');process.exit(7)"], timeoutMs: 5000 },
+  const f = await fixture(); const secret = "dependency-credential-sentinel"; f.env["TOKEN"] = secret;
+  f.setConfig({ ...f.config, providers: f.config.providers.map(p => ({ ...p, check: { ...p.check!, scope: { ...p.check!.scope!, environment: [...p.check!.scope!.environment, { name: "TOKEN", kind: "credential" }] } } })), scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p, credentialIdentities: { TOKEN: "dependency-token/v1" },
+    dependencies: { command: [process.execPath, "-e", `console.log("DEPENDENCY_STAGE:install " + ${JSON.stringify(secret)});console.error("dependency stderr " + ${JSON.stringify(secret)});process.exit(7)`], timeoutMs: 5000 },
   })) } });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate"), f.err.join("\n")).toBe(1);
@@ -703,9 +703,10 @@ it("retains dependency failure diagnostics after cleanup without claiming the ma
   for (const row of result.providers.flatMap(p => p.attempts)) {
     expect(row).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "snapshot-setup",
       failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" },
-      dependency: { durationMs: expect.any(Number), command: { exitCode: 7, outputTail: expect.stringContaining("DEPENDENCY_STAGE:install"), truncated: false } },
+      dependency: { durationMs: expect.any(Number), command: { exitCode: 7, outputTail: "DEPENDENCY_STAGE:install [REDACTED]\n\ndependency stderr [REDACTED]\n", truncated: false } },
     } });
   }
+  expect(JSON.stringify(result)).not.toContain(secret);
   expect(f.out.join("\n")).not.toContain("checking check.");
 }, 30000);
 it("does not attribute reused snapshot setup to a sibling check attempt", async () => {

@@ -19,7 +19,7 @@
 #
 # OPERATOR PREREQUISITE, ONE TIME. Each of the five packages —
 # @agent-delivery-harness/{action,cli,conformance,kernel,mcp} — must have
-# `kwam1na/agent-delivery-harness` and `.github/workflows/publish.yml`
+# `v26-technologies/agent-delivery-harness` and `.github/workflows/publish.yml`
 # registered as its trusted publisher on npmjs.com. Until that registration
 # exists the job reaches the publish steps and the registry refuses them; every
 # step before that point still runs and still reports honestly.
