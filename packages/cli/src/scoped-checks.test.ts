@@ -51,6 +51,73 @@ it.each(["none", "full"] as const)("prepares and verifies portable evidence from
   await exec("git", ["update-ref", "refs/remotes/origin/main", head], { cwd: foreign });
   expect(await runCli(["verify"], { ...runtime, cwd: foreign }), f.err.join("\n")).toBe(0);
 }, 60000);
+it("bounds live snapshots across profile changes while retaining same-profile reuse and durable outputs", async () => {
+  const f = await fixture();
+  const template = f.config.providers[0]!;
+  const providers = ["a", "a2", "b", "a3"].map(id => ({ ...template, id: `check.${id}`, check: { ...template.check!,
+    command: [process.execPath, "-e", `require('fs').writeFileSync('result-${id}.json','{}')`] as [string, ...string[]],
+    outputs: [`result-${id}.json`], scope: { ...template.check!.scope!, profile: id === "b" ? "b" : "a" },
+  } }));
+  f.setConfig({ ...f.config, providers,
+    obligations: providers.map(p => ({ ...f.config.obligations[0]!, id: `${p.id}.passed`, providers: [p.id] })),
+    scopedExecution: { ...f.config.scopedExecution!, profiles: ["a", "b"].map(id => ({ ...f.config.scopedExecution!.profiles[0]!, id,
+      mutableOutputs: providers.flatMap(p => p.check.outputs),
+      dependencies: { command: [process.execPath, "-e", "const fs=require('fs');fs.mkdirSync('node_modules');fs.writeFileSync('node_modules/private.bin',Buffer.alloc(65536,1))"], timeoutMs: 5000 },
+    })) },
+  });
+  const snapshots = await import("./check-snapshot.ts"), original = snapshots.createCheckSnapshot;
+  const roots: string[] = [], liveBeforeAllocation: number[] = [];
+  const { access } = await import("node:fs/promises");
+  const exists = async (file: string) => access(file).then(() => true, () => false);
+  const spy = vi.spyOn(snapshots, "createCheckSnapshot").mockImplementation(async input => {
+    liveBeforeAllocation.push((await Promise.all(roots.map(exists))).filter(Boolean).length);
+    const snapshot = await original(input); roots.push(snapshot.rootDir); return snapshot;
+  });
+  try {
+    expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+    expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+    expect(liveBeforeAllocation).toEqual([0, 0, 0]); // A/A reuse, B switch, fresh A return.
+    expect(await Promise.all(roots.map(exists))).toEqual([false, false, false]);
+    expect(await f.run("record"), f.err.join("\n")).toBe(0);
+    await f.git("add", ".");
+    expect(await f.run("verify"), f.err.join("\n")).toBe(0);
+    expect(spy).toHaveBeenCalledTimes(3); // Durable evidence survives all private trees.
+  } finally { spy.mockRestore(); }
+}, 30000);
+
+it("refuses a new profile when inactive snapshot cleanup fails and retries cleanup at gate exit", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  f.setConfig({ ...f.config, providers: f.config.providers.map(p => ({ ...p, check: { ...p.check!, scope: { ...p.check!.scope!, profile: p.id } } })),
+    scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.providers.map(p => ({ ...f.config.scopedExecution!.profiles[0]!, id: p.id })) },
+  });
+  const snapshots = await import("./check-snapshot.ts"), original = snapshots.createCheckSnapshot;
+  let cleanupCalls = 0; const roots: string[] = [];
+  const spy = vi.spyOn(snapshots, "createCheckSnapshot").mockImplementation(async input => {
+    const snapshot = await original(input); roots.push(snapshot.rootDir);
+    return { ...snapshot, cleanup: async () => {
+      if (++cleanupCalls === 1) throw new snapshots.CheckSnapshotError("check_snapshot_cleanup_failed", "Injected removal failure.");
+      await snapshot.cleanup();
+    } };
+  });
+  try {
+    expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+    expect(await f.run("gate")).toBe(1);
+    expect(f.err.join("\n")).toContain("check_snapshot_cleanup_failed");
+    expect(f.out.join("\n")).not.toContain("checking check.b");
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(cleanupCalls).toBe(2);
+    const { access } = await import("node:fs/promises");
+    await expect(access(roots[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+    const { readScopedCheckDiagnostics, readScopedCheckObservations } = await import("./index.ts");
+    const observations = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+    const attemptIds = observations.providers.flatMap(p => p.attempts.map(a => a.attemptId));
+    const diagnostics = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds });
+    expect(diagnostics.providers.find(p => p.providerId === "check.b")!.attempts[0]).toMatchObject({ status: "failed", diagnostic: {
+      availability: "available", phase: "snapshot-setup", failure: { code: "check_snapshot_cleanup_failed" }, command: { unavailable: "not-started" },
+    } });
+  } finally { spy.mockRestore(); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true }))); }
+}, 30000);
+
 it("retains A across B failure, retry and report replan, then records portable evidence", async () => {
   const f = await fixture(); expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate"), f.err.join("\n")).toBe(1);

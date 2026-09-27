@@ -126,6 +126,12 @@ export class ScopedChecks {
       const key = profile.id;
       let snapshot = this.snapshots.get(key);
       if (!snapshot) {
+        // Both invocation paths await each execution. Retain only consecutive
+        // same-profile reuse; durable outputs no longer need the private tree.
+        for (const [previousKey, previous] of this.snapshots) {
+          await previous.cleanup();
+          this.snapshots.delete(previousKey);
+        }
         snapshot = await createCheckSnapshot({ rootDir: this.context.rootDir, candidate: this.candidate, outputs: profile.mutableOutputs, gitContext: profile.gitContext ?? "full", environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" }, ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}),
           onDependencyResult: (result, durationMs) => { diagnostic = { ...diagnostic, dependency: scopedDependencyDiagnostic(result, durationMs, secrets) }; },
         });
