@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { digestCanonical, resolveRecordStorage, type HarnessConfig, type ScopedCheckAttempt } from "@agent-delivery-harness/kernel";
 import { AttemptStore, type AttemptPayload } from "./scoped-attempts.ts";
 import { readScopedCheckDiagnostics } from "./index.ts";
-import { redactScopedOutput, scopedCommandDiagnostic, scopedDiagnosticFailure } from "./scoped-diagnostics.ts";
+import { redactScopedOutput, scopedCommandDiagnostic, scopedDependencyDiagnostic, scopedDiagnosticFailure } from "./scoped-diagnostics.ts";
 import { CheckSnapshotError } from "./check-snapshot.ts";
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -129,9 +129,9 @@ it.each(["stdout", "stderr"])("does not export a credential clipped by the real 
   expect(result[stream === "stdout" ? "stdout" : "stderr"]).not.toContain(secret);
   const f=await fixture(), store=f.store("a"), attempt=await store.allocate(f.input("a"));
   const command=scopedCommandDiagnostic(result,[secret]);
-  await store.finish(attempt,"failed",{outputs:[],diagnostic:{availability:"available",phase:"command",failure:scopedDiagnosticFailure(new CheckSnapshotError("check_command_failed","safe"),result.errorCode),command}});
+  await store.finish(attempt,"failed",{outputs:[],diagnostic:{availability:"available",phase:"command",failure:scopedDiagnosticFailure(new CheckSnapshotError("check_command_failed","safe"),result.errorCode),command,dependency:scopedDependencyDiagnostic(result,1,[secret])}});
   const projected=await readScopedCheckDiagnostics({...f,attemptIds:[attempt.attemptId]});
-  expect(projected.providers[0]!.attempts[0]!.diagnostic).toEqual({ availability: "available", phase: "command", failure: { code: "check_command_failed", executionErrorCode: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, command: { unavailable: "not-completed" } });
+  expect(projected.providers[0]!.attempts[0]!.diagnostic).toEqual({ availability: "available", phase: "command", failure: { code: "check_command_failed", executionErrorCode: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, command: { unavailable: "not-completed" }, dependency: {durationMs:1,executionErrorCode:"ERR_CHILD_PROCESS_STDIO_MAXBUFFER",command:{unavailable:"not-completed"}} });
   expect(JSON.stringify(projected)).not.toContain(prefix);
 },10000);
 it("complete credential captured below exec limit is redacted before public export", async()=>{
@@ -140,4 +140,47 @@ it("complete credential captured below exec limit is redacted before public expo
   const result=await createExecPort().run({command:process.execPath,args:["-e",`require('fs').writeSync(1,'x'.repeat(${limit-200})+process.env.API_TOKEN);process.exit(7);`],env:{API_TOKEN:secret},maxBuffer:limit,timeoutMs:5000});
   expect(result.errorCode).toBe("7");const command=scopedCommandDiagnostic(result,[secret]);
   expect(command).toMatchObject({exitCode:7,truncated:true});expect(JSON.stringify(command)).toContain("[REDACTED]");expect(JSON.stringify(command)).not.toContain(secret);
+});
+
+it("projects additive dependency diagnostics independently from the unstarted main command", async () => {
+  const f = await fixture(), store = f.store("a"), attempt = await store.allocate(f.input("a"));
+  const value = { availability: "available", phase: "snapshot-setup", failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" },
+    dependency: { durationMs: 14, executionErrorCode: "SIGKILL", command: { exitCode: null, outputTail: "bounded dependency detail", truncated: false } } };
+  await store.finish(attempt, "failed", { outputs: [], diagnostic: value } as AttemptPayload);
+  const result = await readScopedCheckDiagnostics({ ...f, attemptIds: [attempt.attemptId] });
+  expect(result.providers[0]!.attempts[0]!.diagnostic).toEqual(value);
+});
+
+it("bounds and redacts dependency output and keeps arbitrary errors out of diagnostics", () => {
+  const value = scopedDependencyDiagnostic({ code: 7, errorCode: "private-unknown-error", stdout: "x".repeat(5000)+"secret", stderr: "dependency-stage:pip secret" }, 12, ["secret"]);
+  expect(value).not.toHaveProperty("executionErrorCode");
+  expect(value.command).toMatchObject({ exitCode: null, truncated: true, outputTail: expect.stringContaining("dependency-stage:pip [REDACTED]") });
+  expect(JSON.stringify(value)).not.toContain("secret");
+  if ("outputTail" in value.command) expect(value.command.outputTail).toHaveLength(4000);
+});
+it.each([
+  { durationMs: -1, command: { unavailable: "not-started" } },
+  { durationMs: "1", command: { unavailable: "not-started" } },
+  { durationMs: null, command: { unavailable: "not-started" } },
+  { durationMs: 1, executionErrorCode: "private", command: { unavailable: "not-started" } },
+  { durationMs: 1, command: { exitCode: 1, outputTail: "x".repeat(4001), truncated: true } },
+  { durationMs: 1, command: { unavailable: "not-started", exitCode: 1 } },
+  null,
+])("rejects malformed persisted dependency diagnostics %#", async dependency => {
+  const f = await fixture(), store = f.store("a"), attempt = await store.allocate(f.input("a"));
+  await store.finish(attempt, "failed", { outputs: [], diagnostic });
+  const file = path.join(store.root, "1/terminal.json"), row = JSON.parse(await readFile(file, "utf8"));
+  row.entry.payload.diagnostic.dependency = dependency; row.digest = digestCanonical(row.entry); await writeFile(file, JSON.stringify(row));
+  await expect(readScopedCheckDiagnostics({ ...f, attemptIds: [attempt.attemptId] })).rejects.toMatchObject({ code: "check_attempt_corrupt" });
+});
+it("strips unknown dependency metadata without altering its bounded public fields", async () => {
+  const f = await fixture(), store = f.store("a"), attempt = await store.allocate(f.input("a"));
+  const dependency = { durationMs: 0, command: { exitCode: 7, outputTail: "safe", truncated: false } };
+  await store.finish(attempt, "failed", { outputs: [], diagnostic: { ...diagnostic, dependency } } as AttemptPayload);
+  const file = path.join(store.root, "1/terminal.json"), row = JSON.parse(await readFile(file, "utf8"));
+  row.entry.payload.diagnostic.dependency.message = "private"; row.entry.payload.diagnostic.dependency.command.environment = "secret";
+  row.digest = digestCanonical(row.entry); await writeFile(file, JSON.stringify(row));
+  const result = await readScopedCheckDiagnostics({ ...f, attemptIds: [attempt.attemptId] });
+  expect(result.providers[0]!.attempts[0]!.diagnostic).toEqual({ ...diagnostic, dependency });
+  expect(JSON.stringify(result)).not.toMatch(/private|secret|environment|message/);
 });

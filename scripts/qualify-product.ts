@@ -2263,12 +2263,13 @@ export async function runScopedRuntimeQualification(runtimeRoot: string): Promis
       requireObservation(latest.status === "failed" && diagnostic.availability === "available" && diagnostic.phase === "command" && "code" in diagnostic.failure && diagnostic.failure.executionErrorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && "unavailable" in diagnostic.command && diagnostic.command.unavailable === "not-completed", "installed diagnostics must suppress buffer-clipped credentials on stream " + stream);
     }
     const setupFailure = config("none");
-    const setupProfile = { ...setupFailure.scopedExecution.profiles[0]!, dependencies: { command: [process.execPath, "-e", "process.exit(7)"], timeoutMs: 5000 } };
+    const setupProfile = { ...setupFailure.scopedExecution.profiles[0]!, dependencies: { command: [process.execPath, "-e", "console.log('installed-dependency-failure');process.exit(7)"], timeoutMs: 5000 } };
     write(full, "harness.config.ts", "export default " + JSON.stringify({ ...setupFailure, scopedExecution: { ...setupFailure.scopedExecution, profiles: [setupProfile, setupFailure.scopedExecution.profiles[1]!] } }) + ";\n");
     await cli(full, "prepare"); await cli(full, "gate", 1);
     const setupAttempt = observations(full).providers.find(p => p.providerId === "check.a")!.attempts.at(-1)!;
     const setupDiagnostic = diagnostics(full, [setupAttempt.attemptId]).providers.find(p => p.providerId === "check.a")!.attempts[0]!.diagnostic;
     requireObservation(setupAttempt.status === "failed" && setupDiagnostic.availability === "available" && setupDiagnostic.phase === "snapshot-setup" && "code" in setupDiagnostic.failure && setupDiagnostic.failure.code === "check_dependency_failed" && "unavailable" in setupDiagnostic.command && setupDiagnostic.command.unavailable === "not-started", "installed pre-command failure must retain typed cause without invented output");
+    requireObservation(setupDiagnostic.availability === "available" && setupDiagnostic.dependency !== undefined && setupDiagnostic.dependency.durationMs >= 0 && "exitCode" in setupDiagnostic.dependency.command && setupDiagnostic.dependency.command.exitCode === 7 && setupDiagnostic.dependency.command.outputTail.includes("installed-dependency-failure"), "installed public diagnostics must retain the actual dependency result before cleanup");
     // Static configuration keeps evidence portable; only the guard observes
     // these declared, nonsecret coordinates of the immutable selection.
     const guarded = config("none");

@@ -272,14 +272,14 @@ it('mutable output cannot hide a tracked source directory',async()=>{
 },60000);
 it("captures explicit repairs before validators and scoped mechanics", async () => {
   const f = await fixture(); f.env["FAIL"] = "0";
-  f.setConfig({ ...f.config, scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a"], repairCommands: [{ id: "repair-source", command: [process.execPath, "-e", "require('fs').writeFileSync('source.txt','repaired')"], timeoutMs: 5000 }] }, preparationCommands: [{ id: "validate-source", command: [process.execPath, "-e", "if(require('fs').readFileSync('source.txt','utf8')!=='repaired')process.exit(1)"], timeoutMs: 5000 }] });
+  f.setConfig({ ...f.config, obligations: f.config.obligations.slice(0, 1), providers: f.config.providers.slice(0, 1), scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a"], repairCommands: [{ id: "repair-source", command: [process.execPath, "-e", "require('fs').writeFileSync('source.txt','repaired')"], timeoutMs: 5000 }] }, preparationCommands: [{ id: "validate-source", command: [process.execPath, "-e", "if(require('fs').readFileSync('source.txt','utf8')!=='repaired')process.exit(1)"], timeoutMs: 5000 }] });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(f.out.join("\n")).toContain("checking check.a");
   expect(await f.run("gate"), f.err.join("\n")).toBe(0);
 });
 it("cannot accept output precreated by dependency setup", async () => {
   const f = await fixture(); const a = f.config.providers[0]!;
-  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", ""] } }, f.config.providers[1]!], scopedExecution: { ...f.config.scopedExecution!, profiles: [{ ...f.config.scopedExecution!.profiles[0]!, dependencies: { command: [process.execPath, "-e", "require('fs').writeFileSync('result-a.json','{}')"], timeoutMs: 5000 } }] } });
+  f.setConfig({ ...f.config, obligations: f.config.obligations.slice(0, 1), providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", ""] } }], scopedExecution: { ...f.config.scopedExecution!, profiles: [{ ...f.config.scopedExecution!.profiles[0]!, dependencies: { command: [process.execPath, "-e", "require('fs').writeFileSync('result-a.json','{}')"], timeoutMs: 5000 } }] } });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate")).toBe(1); expect(f.err.join("\n")).toContain("check_output_missing");
 });
@@ -291,7 +291,7 @@ it.each(["src", "src/"])("refuses output ancestor %s", async output => {
 it("injects declared flags and credentials while excluding an explicitly supplied undeclared variable", async () => {
   const f = await fixture(); f.env["FLAG"] = "yes"; f.env["TOKEN"] = "secret-sentinel"; f.env["UNDECLARED"] = "must-not-reach-command"; f.env["FAIL"] = "0";
   const a = f.config.providers[0]!;
-  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "if(process.env.FLAG!=='yes'||process.env.TOKEN!=='secret-sentinel'||process.env.UNDECLARED!==undefined)process.exit(7);require('fs').writeFileSync('result-a.json','{}')"], scope: { ...a.check!.scope!, environment: [{ name: "FLAG", kind: "flag" }, { name: "TOKEN", kind: "credential" }] } } }, f.config.providers[1]!] });
+  f.setConfig({ ...f.config, obligations: f.config.obligations.slice(0, 1), providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "if(process.env.FLAG!=='yes'||process.env.TOKEN!=='secret-sentinel'||process.env.UNDECLARED!==undefined)process.exit(7);require('fs').writeFileSync('result-a.json','{}')"], scope: { ...a.check!.scope!, environment: [{ name: "FLAG", kind: "flag" }, { name: "TOKEN", kind: "credential" }] } } }] });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate"), f.err.join("\n")).toBe(0);
 });
@@ -686,4 +686,38 @@ it.each(["stdout", "stderr"])("exports unavailable diagnostics for a real %s buf
   const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: [attempt.attemptId] });
   expect(result.providers[0]!.attempts[0]).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "command", failure: { code: "check_command_failed", executionErrorCode: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, command: { unavailable: "not-completed" } } });
   expect(JSON.stringify(result)).not.toContain(prefix);
+}, 30000);
+
+it("retains dependency failure diagnostics after cleanup without claiming the main command ran", async () => {
+  const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
+  const f = await fixture();
+  f.setConfig({ ...f.config, scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p,
+    dependencies: { command: [process.execPath, "-e", "console.log('DEPENDENCY_STAGE:install');process.exit(7)"], timeoutMs: 5000 },
+  })) } });
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate"), f.err.join("\n")).toBe(1);
+  const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+  const ids = observed.providers.flatMap(p => p.attempts.map(a => a.attemptId));
+  expect(ids).toHaveLength(2);
+  const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: ids });
+  for (const row of result.providers.flatMap(p => p.attempts)) {
+    expect(row).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "snapshot-setup",
+      failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" },
+      dependency: { durationMs: expect.any(Number), command: { exitCode: 7, outputTail: expect.stringContaining("DEPENDENCY_STAGE:install"), truncated: false } },
+    } });
+  }
+  expect(f.out.join("\n")).not.toContain("checking check.");
+}, 30000);
+it("does not attribute reused snapshot setup to a sibling check attempt", async () => {
+  const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
+  const f = await fixture(); f.env["FAIL"] = "0";
+  f.setConfig({ ...f.config, scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p,
+    dependencies: { command: [process.execPath, "-e", "console.log('dependency setup executed once')"], timeoutMs: 5000 },
+  })) } });
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+  const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+  const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: observed.providers.flatMap(p => p.attempts.map(a => a.attemptId)) });
+  expect(result.providers[0]!.attempts[0]!.diagnostic).toMatchObject({ dependency: { command: { exitCode: 0 } }, phase: "complete" });
+  expect(result.providers[1]!.attempts[0]!.diagnostic).not.toHaveProperty("dependency");
 }, 30000);

@@ -13,12 +13,19 @@ export type ScopedDiagnosticExecutionCode = typeof executionCodes[number];
 export type ScopedDiagnosticCommand =
   | { readonly exitCode: number | null; readonly outputTail: string; readonly truncated: boolean }
   | { readonly unavailable: "not-started" | "not-completed" };
+export interface ScopedDependencyDiagnostic {
+  readonly durationMs: number;
+  readonly executionErrorCode?: ScopedDiagnosticExecutionCode;
+  readonly command: ScopedDiagnosticCommand;
+}
 export interface RecordedScopedAttemptDiagnostic {
   readonly availability: "available";
   readonly phase: ScopedDiagnosticPhase;
   readonly failure: { readonly code: ScopedDiagnosticFailureCode; readonly executionErrorCode?: ScopedDiagnosticExecutionCode }
     | { readonly unavailable: "not-failed" | "unclassified" };
   readonly command: ScopedDiagnosticCommand;
+  /** Present only when this attempt actually ran dependency setup; never borrowed from a reused snapshot. */
+  readonly dependency?: ScopedDependencyDiagnostic;
 }
 export type ScopedAttemptDiagnostic = RecordedScopedAttemptDiagnostic
   | { readonly availability: "unavailable"; readonly reason: "legacy" | "running" };
@@ -49,10 +56,15 @@ export function scopedCommandDiagnostic(result: ExecOutcome, secrets: readonly s
   return { exitCode: numericExit ? result.code : null, outputTail: redacted.slice(-4000), truncated: redacted.length > 4000 };
 }
 
+export function scopedDependencyDiagnostic(result: ExecOutcome, durationMs: number, secrets: readonly string[]): ScopedDependencyDiagnostic {
+  return { durationMs, command: scopedCommandDiagnostic(result, secrets),
+    ...((executionCodes as readonly string[]).includes(result.errorCode ?? "") ? { executionErrorCode: result.errorCode as ScopedDiagnosticExecutionCode } : {}) };
+}
+
 function projectDiagnostic(value: unknown): RecordedScopedAttemptDiagnostic {
   const corrupt = (): never => { throw new CheckSnapshotError("check_attempt_corrupt", "Selected scoped diagnostics are malformed."); };
   const object = (v: unknown): Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : corrupt();
-  const row = object(value), failure = object(row["failure"]), command = object(row["command"]);
+  const row = object(value), failure = object(row["failure"]);
   if (row["availability"] !== "available" || !(phases as readonly unknown[]).includes(row["phase"])) return corrupt();
   let safeFailure: RecordedScopedAttemptDiagnostic["failure"];
   if ("unavailable" in failure) {
@@ -62,15 +74,25 @@ function projectDiagnostic(value: unknown): RecordedScopedAttemptDiagnostic {
     if (!(failureCodes as readonly unknown[]).includes(failure["code"]) || ("executionErrorCode" in failure && !(executionCodes as readonly unknown[]).includes(failure["executionErrorCode"]))) return corrupt();
     safeFailure = { code: failure["code"] as ScopedDiagnosticFailureCode, ...("executionErrorCode" in failure ? { executionErrorCode: failure["executionErrorCode"] as ScopedDiagnosticExecutionCode } : {}) };
   }
-  let safeCommand: ScopedDiagnosticCommand;
-  if ("unavailable" in command) {
-    if (typeof command["unavailable"] !== "string" || !["not-started", "not-completed"].includes(command["unavailable"]) || "exitCode" in command || "outputTail" in command || "truncated" in command) return corrupt();
-    safeCommand = { unavailable: command["unavailable"] as "not-started" | "not-completed" };
-  } else {
+  const commandDiagnostic = (value: unknown): ScopedDiagnosticCommand => {
+    const command = object(value);
+    if ("unavailable" in command) {
+      if (typeof command["unavailable"] !== "string" || !["not-started", "not-completed"].includes(command["unavailable"]) || "exitCode" in command || "outputTail" in command || "truncated" in command) return corrupt();
+      return { unavailable: command["unavailable"] as "not-started" | "not-completed" };
+    }
     if (!(command["exitCode"] === null || typeof command["exitCode"] === "number" && Number.isSafeInteger(command["exitCode"]) && command["exitCode"] >= 0) || typeof command["outputTail"] !== "string" || command["outputTail"].length > 4000 || typeof command["truncated"] !== "boolean") return corrupt();
-    safeCommand = { exitCode: command["exitCode"] as number | null, outputTail: command["outputTail"], truncated: command["truncated"] };
+    return { exitCode: command["exitCode"] as number | null, outputTail: command["outputTail"], truncated: command["truncated"] };
+  };
+  let dependency: ScopedDependencyDiagnostic | undefined;
+  if ("dependency" in row) {
+    const value = object(row["dependency"]);
+    if (typeof value["durationMs"] !== "number" || !Number.isFinite(value["durationMs"]) || value["durationMs"] < 0 ||
+        ("executionErrorCode" in value && !(executionCodes as readonly unknown[]).includes(value["executionErrorCode"]))) return corrupt();
+    dependency = { durationMs: value["durationMs"], command: commandDiagnostic(value["command"]),
+      ...("executionErrorCode" in value ? { executionErrorCode: value["executionErrorCode"] as ScopedDiagnosticExecutionCode } : {}) };
   }
-  return { availability: "available", phase: row["phase"] as ScopedDiagnosticPhase, failure: safeFailure, command: safeCommand };
+  return { availability: "available", phase: row["phase"] as ScopedDiagnosticPhase, failure: safeFailure, command: commandDiagnostic(row["command"]),
+    ...(dependency === undefined ? {} : { dependency }) };
 }
 
 /** Read at most 100 explicit attempts. No logs from legacy payloads, no writes,

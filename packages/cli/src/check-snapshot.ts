@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { createExecPort } from "@agent-delivery-harness/kernel";
+import { createExecPort, type ExecOutcome } from "@agent-delivery-harness/kernel";
 
 import { snapshotInventoryWorker } from "./snapshot-inventory-worker.ts";
 
@@ -21,6 +21,7 @@ export interface SnapshotRequest {
   readonly gitContext?: "full" | "none";
   readonly environment: Readonly<Record<string, string>>;
   readonly dependencies?: { readonly command: readonly [string, ...string[]]; readonly timeoutMs: number };
+  readonly onDependencyResult?: (result: ExecOutcome, durationMs: number) => void;
   readonly signal?: AbortSignal;
 }
 export interface CheckSnapshot {
@@ -122,7 +123,9 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
       DELIVERY_CHECK_BASE_REF: baseRef, DELIVERY_CHECK_CANDIDATE_REF: candidateRef, DELIVERY_CHECK_ORIGIN_HEAD: input.candidate.headSha, DELIVERY_CHECK_ORIGIN_TREE: input.candidate.treeSha, DELIVERY_CHECK_MERGE_BASE: input.candidate.base.mergeBaseSha }) };
     await mkdir(environment["HOME"]!, { recursive: true }); await mkdir(environment["TMPDIR"]!, { recursive: true });
     if (input.dependencies) {
+      const started = performance.now();
       const result = await createExecPort().run({ command: input.dependencies.command[0], args: input.dependencies.command.slice(1), cwd: rootDir, env: environment, timeoutMs: input.dependencies.timeoutMs, maxBuffer: 1024 * 1024, ...(input.signal ? { signal: input.signal } : {}) });
+      input.onDependencyResult?.(result, Math.round(performance.now() - started));
       if (result.code !== 0 || input.signal?.aborted) throw new CheckSnapshotError("check_dependency_failed", "Private dependency installation did not complete successfully.");
     }
     if (sourceDigest !== await inventory(input.outputs, true)) throw new CheckSnapshotError("check_snapshot_drift", "Dependency setup changed prepared source bytes.");
