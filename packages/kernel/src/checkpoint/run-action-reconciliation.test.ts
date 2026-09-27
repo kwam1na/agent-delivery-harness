@@ -135,3 +135,23 @@ it("binds the complete original event rather than a subset of its fields", async
     expect(actual).toBe(digestCanonical([revised]));
   }
 });
+
+
+it("binds earlier reconciliation evidence in every subsequent history identity", async () => {
+  const f = await fixture(); await f.append(f.observed("orphan"));
+  expect((await f.append(await f.reconcile("first-ack"))).ok).toBe(true);
+  let events = await f.history();
+  const actionEvents = () => events.filter(e => ["action.intent", "action.observed", "action.reconciled"].includes(e.kind) && e.payload["actionId"] === "push-1");
+  expect(reconciliationActions(events)[0]!.historyDigest).toBe(digestCanonical(actionEvents()));
+  await f.append(f.observed("later-conflict", "failed"));
+  events = await f.history();
+  const second = await f.reconcile("second-ack");
+  expect(second.payload["historyDigest"]).toBe(digestCanonical(actionEvents()));
+  const before = events.find(e => e.kind === "action.reconciled")!;
+  // Changing the earlier host's cited evidence must stale the pending acknowledgement.
+  const changed = events.map(e => e === before ? { ...e, payload: { ...e.payload, evidenceReference: "https://github.com/example/repo/pull/852" } } : e);
+  expect(reconciliationActions(changed)[0]!.historyDigest).not.toBe(second.payload["historyDigest"]);
+  expect((await f.append(second)).ok).toBe(true);
+  events = await f.history();
+  expect(reconciliationActions(events)[0]!.historyDigest).toBe(digestCanonical(actionEvents()));
+});
