@@ -190,3 +190,41 @@ reusing that snapshot does not copy its setup result into a sibling attempt.
 Older attempts without this field remain readable and acquire no invented
 dependency result. These diagnostics do not change installation limits,
 snapshot reuse, attempt identities, or admission.
+
+## Supervise process groups before removing private trees
+
+A command timeout can stop its direct child while a grandchild keeps writing.
+The same problem occurs on cancellation or output overflow, and a successful
+leader can leave descendants holding its output pipes. The regression fixture
+continues writing from a real descendant and checks that writes stop before the
+execution result is returned. It covers timeout, abort, both output streams'
+overflow, and successful leader exit, including direct execution under Bun.
+
+On POSIX hosts the execution port now creates an invocation-owned process group,
+keeps the child referenced, signals that group, and waits for stream closure.
+It never calls `unref` or uses a machine-wide process-name match. Descendants
+that deliberately establish another session are outside that group; this is not
+a sandbox or a claim about arbitrary daemon escape. Windows keeps its existing
+direct-child implementation and receives no negative-PID signal or new promise
+of descendant containment.
+
+Bun 1.1.29 creates the group but rejects a negative PID in `process.kill` with
+`ERR_OUT_OF_RANGE`. That specific failure uses the host `/bin/kill` utility with
+a numeric owned group id, a one-second timeout and a fixed locale. The native
+Bun fixture exercises the real fallback. This is not a reason to weaken source,
+dependency, output or portable-evidence verification.
+
+Private setup Git commands now use the same execution port and a five-minute
+per-command deadline. A controlled stalled Git wrapper and its writing child
+proved the previously unbounded wait before the change; timeout and cancellation
+now finish before private-tree cleanup. Existing inventory and verification
+budgets remain separate. There is no new whole-inventory budget, and recursive
+filesystem cleanup is not claimed to have a process deadline.
+
+These repairs followed the cancelled health run 36343583881. Its retained log
+contained no active-provider or phase trace, so it does not establish that an
+orphan descendant or Git setup caused the hosted three-hour timeout. Adopters
+must forward the existing CLI progress sinks and cancellation signal and retain
+public attempt observations during execution. Running attempts still report
+unavailable diagnostics, while completed diagnostics retain their original
+bindings; progress presentation never substitutes for successful health.
