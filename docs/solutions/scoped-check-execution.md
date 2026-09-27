@@ -37,7 +37,18 @@ file-only profiles; full Git profiles conservatively rerun.
 Source and dependencies never link to the authoring
 checkout. Dependencies install privately, prepared source is checked for drift,
 and the installed tree is hashed and checked after execution. Compatible checks
-share a snapshot; failed or changed snapshots are discarded before siblings run.
+share a snapshot while their profile remains current; failed or changed snapshots
+are discarded before siblings run. The serial executor removes the previous
+profile's snapshot before allocating another, so live disk does not grow with
+the number of successful profiles. Returning to an earlier profile installs a
+fresh private tree. Persisted output bytes and attempt evidence survive eviction;
+consecutive checks in the same profile still reuse their verified snapshot.
+Cleanup failure blocks the next allocation and final cleanup is still attempted.
+Final cleanup alone does not bound live disk: a serial A/B/C control retained
+three complete trees before invocation exit. Bounded retention keeps one while
+preserving evidence. Hosted health run 36324223452 reported zero available bytes
+during dependency setup, but its bounded diagnostics cannot attribute the exact
+historical disk usage to individual snapshots.
 Each command has separate home and temporary directories. Only declared flags
 and credentials are injected alongside controlled runtime paths and Git context.
 
