@@ -4,6 +4,17 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createExecPort } from "../exec-port.ts";
+
+// Synchronous process launches inside one child's exit callback can strand a
+// sibling's pipe/exit notifications under Bun 1.1.29. Serial cleanup probes do
+// not exercise that event-loop boundary.
+const expected = Array.from({ length: 34 }, (_, index) => `out-${index}`);
+const concurrent = await Promise.all(expected.map(out => createExecPort().run({
+  command: "/bin/sh", args: ["-c", 'printf %s "$1"', "exec-probe", out], timeoutMs: 1000,
+})));
+assert.deepEqual(concurrent.map(result => result.code), expected.map(() => 0));
+assert.deepEqual(concurrent.map(result => result.stdout), expected);
+
 for (const reason of ["timeout", "abort", "overflow", "stderr-overflow", "leader-exit", "leader-failure"]) {
   const root = await mkdtemp(path.join(tmpdir(), "exec-supervision-"));
   const pidFile = path.join(root, "pid"), activity = path.join(root, "activity");
