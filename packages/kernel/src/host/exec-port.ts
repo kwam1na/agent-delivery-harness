@@ -9,7 +9,7 @@
  * descendants. Every launch remains referenced and awaited; there is no
  * product-owned background execution. Windows retains direct-child semantics.
  */
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 export interface ExecInvocation {
   readonly command: string;
@@ -82,18 +82,25 @@ function runProcessGroup(invocation: ExecInvocation): Promise<ExecOutcome> {
     const sizes = { stdout: 0, stderr: 0 };
     let errorCode: string | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
-    const stopGroup = () => {
-      if (child.pid === undefined || stopped) return;
-      stopped = true;
+    let cleanup: Promise<void> | undefined;
+    const stopGroup = () => cleanup ??= (async () => {
+      if (child.pid === undefined) return;
       try {
         try { process.kill(-child.pid, "SIGKILL"); }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ERR_OUT_OF_RANGE") throw error;
-          // Older Bun rejects negative PIDs even for a group it created. Use
-          // the host POSIX utility with a bounded wait and a numeric owned ID.
-          try { execFileSync("/bin/kill", ["-KILL", "--", `-${child.pid}`], { timeout: 1000, env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, stdio: ["ignore", "ignore", "pipe"] }); }
-          catch (fallback) { if (!String((fallback as { stderr?: Buffer }).stderr).includes("No such process")) throw fallback; }
+          // Older Bun rejects negative PIDs even for a group it created.
+          // Await the bounded utility asynchronously: a synchronous launch in
+          // an exit callback can lose sibling completion events in Bun 1.1.29.
+          await new Promise<void>((resolve, reject) => {
+            execFile("/bin/kill", ["-KILL", "--", `-${child.pid}`], {
+              timeout: 1000, maxBuffer: 16 * 1024,
+              env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+            }, (error, _stdout, stderr) => {
+              if (error && !stderr.includes("No such process")) reject(error);
+              else resolve();
+            });
+          });
         }
       }
       catch (error) {
@@ -102,7 +109,7 @@ function runProcessGroup(invocation: ExecInvocation): Promise<ExecOutcome> {
           child.kill("SIGKILL");
         }
       }
-    };
+    })();
     const stop = (reason: string) => { errorCode ??= reason; stopGroup(); };
     const abort = () => stop("ABORT_ERR");
     for (const stream of ["stdout", "stderr"] as const) {
@@ -117,9 +124,10 @@ function runProcessGroup(invocation: ExecInvocation): Promise<ExecOutcome> {
     // A successful leader must not leave background descendants holding pipes
     // or mutating the caller's execution tree after the invocation completes.
     child.once("exit", stopGroup);
-    child.once("close", (code, signal) => {
+    child.once("close", async (code, signal) => {
       clearTimeout(timer);
       invocation.signal?.removeEventListener("abort", abort);
+      await cleanup;
       resolve({ code: errorCode === undefined ? code ?? 1 : 1,
         stdout: Buffer.concat(output.stdout).toString("utf8"), stderr: Buffer.concat(output.stderr).toString("utf8"),
         ...(errorCode !== undefined ? { errorCode } : code === 0 ? {} : { errorCode: String(signal ?? code ?? "execution_failed") }),

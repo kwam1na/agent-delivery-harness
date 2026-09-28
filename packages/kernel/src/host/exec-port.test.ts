@@ -4,12 +4,39 @@ import path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { expect, it, vi } from "vitest";
 import { createExecPort } from "./exec-port.ts";
 
 vi.mock("node:child_process", async importOriginal => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: vi.fn(actual.spawn) };
+});
+
+it.skipIf(process.platform === "win32")("awaits asynchronous group cleanup even when close arrives first", async () => {
+  const child = Object.assign(new EventEmitter(), {
+    pid: 2147483647, stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(),
+  });
+  vi.mocked(spawn).mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+  const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new RangeError("negative PID unsupported"), { code: "ERR_OUT_OF_RANGE" });
+  });
+  let settled = false;
+  const pending = createExecPort().run({ command: "fixture", args: [] });
+  void pending.then(() => { settled = true; });
+  try {
+    child.emit("exit", 0, null);
+    child.emit("close", 0, null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(await pending).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(settled).toBe(true);
+  } finally {
+    kill.mockRestore();
+    await pending;
+  }
 });
 
 it.skipIf(process.platform === "win32").each(["timeout", "abort", "overflow", "stderr-overflow", "leader-exit", "leader-failure"])("stops an owned descendant before resolving after %s", async reason => {
