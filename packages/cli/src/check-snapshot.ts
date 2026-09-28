@@ -1,14 +1,12 @@
 /** Private execution tree. Never shares writable source, objects, index or dependencies. */
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { createExecPort, type ExecOutcome } from "@agent-delivery-harness/kernel";
 
 import { snapshotInventoryWorker } from "./snapshot-inventory-worker.ts";
 
-const exec = promisify(execFile);
 const SNAPSHOT_TIMEOUT_MS = 5 * 60_000;
 export class CheckSnapshotError extends Error {
   readonly code: string;
@@ -85,7 +83,22 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
   const cleanEnv = { ...input.environment, PATH: executionPath(input.rootDir, input.environment["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" };
   let privateControl: string | undefined;
   let gitDirectory: string | undefined;
-  const git = async (...args: string[]) => (await exec("git", gitDirectory ? [`--git-dir=${gitDirectory}`, `--work-tree=${rootDir}`, ...args] : args, { cwd: rootDir, env: cleanEnv, maxBuffer: 128 * 1024 * 1024, ...(input.signal ? { signal: input.signal } : {}) })).stdout.trim();
+  const git = async (...args: string[]) => {
+    const controller = new AbortController();
+    let timedOut = false;
+    const deadline = performance.now() + SNAPSHOT_TIMEOUT_MS;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, SNAPSHOT_TIMEOUT_MS);
+    const abort = () => controller.abort();
+    input.signal?.addEventListener("abort", abort, { once: true });
+    if (input.signal?.aborted) abort();
+    try {
+      const result = await createExecPort().run({ command: "git", args: gitDirectory ? [`--git-dir=${gitDirectory}`, `--work-tree=${rootDir}`, ...args] : args,
+        cwd: rootDir, env: cleanEnv, maxBuffer: 128 * 1024 * 1024, signal: controller.signal });
+      timedOut ||= performance.now() >= deadline;
+      if (timedOut || result.code !== 0) throw new CheckSnapshotError(timedOut ? "check_snapshot_timeout" : input.signal?.aborted ? "check_snapshot_interrupted" : "check_snapshot_unavailable", "Private Git materialization did not complete successfully.");
+      return result.stdout.trim();
+    } finally { clearTimeout(timer); input.signal?.removeEventListener("abort", abort); }
+  };
   const cleanup = async () => {
     const removed = await Promise.allSettled([rootDir, ...(privateControl ? [privateControl] : [])].map(dir => rm(dir, { recursive: true, force: true })));
     if (removed.some(result => result.status === "rejected")) throw new CheckSnapshotError("check_snapshot_cleanup_failed", "Cannot remove the owned execution snapshot after retaining evidence.");

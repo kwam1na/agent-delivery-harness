@@ -5,11 +5,11 @@
  * worktree-scoped configuration, the trusted-base sensor — goes through this
  * port, so a test can wrap it and the walking-skeleton scenario can assert
  * the complete launch inventory: no `codex`, no `claude`, no agent runtime,
- * no daemon. The port never detaches a child: every launch is awaited to
- * exit, which is the mechanical half of "no product-owned background
- * execution".
+ * no daemon. POSIX launches own a process group so timeout/cancellation also stops
+ * descendants. Every launch remains referenced and awaited; there is no
+ * product-owned background execution. Windows retains direct-child semantics.
  */
-import { execFile } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 
 export interface ExecInvocation {
   readonly command: string;
@@ -33,10 +33,11 @@ export interface ExecPort {
   run(invocation: ExecInvocation): Promise<ExecOutcome>;
 }
 
-/** The real port: a foreground, awaited `execFile` — never detached. */
+/** Foreground supervision; process-group isolation never unrefs a launch. */
 export function createExecPort(): ExecPort {
   return {
     run(invocation) {
+      if (process.platform !== "win32") return runProcessGroup(invocation);
       return new Promise<ExecOutcome>((resolve) => {
         execFile(
           invocation.command,
@@ -64,4 +65,68 @@ export function createExecPort(): ExecPort {
       });
     },
   };
+}
+
+/** A dedicated POSIX session gives this invocation exclusive signal ownership. */
+function runProcessGroup(invocation: ExecInvocation): Promise<ExecOutcome> {
+  if (invocation.signal?.aborted) return Promise.resolve({ code: 1, stdout: "", stderr: "", errorCode: "ABORT_ERR" });
+  return new Promise(resolve => {
+    const child = spawn(invocation.command, [...invocation.args], {
+      cwd: invocation.cwd,
+      ...(invocation.env === undefined ? {} : { env: { ...invocation.env } }),
+      detached: true, // A new process group, still referenced and fully awaited.
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const limit = invocation.maxBuffer ?? 16 * 1024 * 1024;
+    const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+    const sizes = { stdout: 0, stderr: 0 };
+    let errorCode: string | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const stopGroup = () => {
+      if (child.pid === undefined || stopped) return;
+      stopped = true;
+      try {
+        try { process.kill(-child.pid, "SIGKILL"); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ERR_OUT_OF_RANGE") throw error;
+          // Older Bun rejects negative PIDs even for a group it created. Use
+          // the host POSIX utility with a bounded wait and a numeric owned ID.
+          try { execFileSync("/bin/kill", ["-KILL", "--", `-${child.pid}`], { timeout: 1000, env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, stdio: ["ignore", "ignore", "pipe"] }); }
+          catch (fallback) { if (!String((fallback as { stderr?: Buffer }).stderr).includes("No such process")) throw fallback; }
+        }
+      }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH" && (error as NodeJS.ErrnoException).errno !== 3) {
+          errorCode ??= "execution_cleanup_failed";
+          child.kill("SIGKILL");
+        }
+      }
+    };
+    const stop = (reason: string) => { errorCode ??= reason; stopGroup(); };
+    const abort = () => stop("ABORT_ERR");
+    for (const stream of ["stdout", "stderr"] as const) {
+      child[stream].on("data", (chunk: Buffer) => {
+        const remaining = Math.max(0, limit - sizes[stream]);
+        if (remaining > 0) output[stream].push(chunk.subarray(0, remaining));
+        sizes[stream] += chunk.length;
+        if (sizes[stream] > limit) stop("ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
+      });
+    }
+    child.once("error", (error: NodeJS.ErrnoException) => { errorCode ??= error.code ?? "execution_failed"; });
+    // A successful leader must not leave background descendants holding pipes
+    // or mutating the caller's execution tree after the invocation completes.
+    child.once("exit", stopGroup);
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      invocation.signal?.removeEventListener("abort", abort);
+      resolve({ code: errorCode === undefined ? code ?? 1 : 1,
+        stdout: Buffer.concat(output.stdout).toString("utf8"), stderr: Buffer.concat(output.stderr).toString("utf8"),
+        ...(errorCode !== undefined ? { errorCode } : code === 0 ? {} : { errorCode: String(signal ?? code ?? "execution_failed") }),
+      });
+    });
+    if (invocation.timeoutMs !== undefined && invocation.timeoutMs > 0) timer = setTimeout(() => stop("SIGKILL"), invocation.timeoutMs);
+    invocation.signal?.addEventListener("abort", abort, { once: true });
+    if (invocation.signal?.aborted) abort();
+  });
 }
