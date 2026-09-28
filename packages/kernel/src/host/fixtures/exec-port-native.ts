@@ -4,11 +4,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createExecPort } from "../exec-port.ts";
-for (const reason of ["timeout", "abort", "overflow", "stderr-overflow", "leader-exit"]) {
+for (const reason of ["timeout", "abort", "overflow", "stderr-overflow", "leader-exit", "leader-failure"]) {
   const root = await mkdtemp(path.join(tmpdir(), "exec-supervision-"));
   const pidFile = path.join(root, "pid"), activity = path.join(root, "activity");
   const descendant = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>fs.appendFileSync(${JSON.stringify(activity)},'x'),10);setTimeout(()=>process.exit(99),5500)`;
-  const parent = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','inherit','inherit']});${reason.endsWith("overflow") ? `setTimeout(()=>process.${reason === "stderr-overflow" ? "stderr" : "stdout"}.write('x'.repeat(65536)),300);` : ""}${reason === "leader-exit" ? "setTimeout(()=>process.exit(0),300)" : "setInterval(()=>{},1000);setTimeout(()=>process.exit(99),5000)"}`;
+  const parent = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','inherit','inherit']});${reason.endsWith("overflow") ? `setTimeout(()=>process.${reason === "stderr-overflow" ? "stderr" : "stdout"}.write('x'.repeat(65536)),300);` : ""}${reason.startsWith("leader-") ? `setTimeout(()=>process.exit(${reason === "leader-exit" ? 0 : 7}),300)` : "setInterval(()=>{},1000);setTimeout(()=>process.exit(99),5000)"}`;
   const controller = new AbortController();
   const started = performance.now();
   const pending = createExecPort().run({ command: process.execPath, args: ["-e", parent], timeoutMs: 2000, maxBuffer: reason.endsWith("overflow") ? 1024 : 65536, signal: controller.signal });
@@ -19,8 +19,8 @@ for (const reason of ["timeout", "abort", "overflow", "stderr-overflow", "leader
     if (reason === "abort") controller.abort();
     const result = await pending;
     assert.ok(performance.now() - started < 3500, "supervision must finish before fixture self-exit safety timers");
-    assert.equal(result.errorCode, reason === "abort" ? "ABORT_ERR" : reason.endsWith("overflow") ? "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" : reason === "timeout" ? "SIGKILL" : undefined);
-    if (reason === "leader-exit") assert.equal(result.code, 0); else assert.notEqual(result.code, 0);
+    assert.equal(result.errorCode, reason === "abort" ? "ABORT_ERR" : reason.endsWith("overflow") ? "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" : reason === "timeout" ? "SIGKILL" : reason === "leader-failure" ? "7" : undefined);
+    if (reason.startsWith("leader-")) assert.equal(result.code, reason === "leader-exit" ? 0 : 7); else assert.notEqual(result.code, 0);
     const before = await readFile(activity, "utf8");
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(await readFile(activity, "utf8"), before);
