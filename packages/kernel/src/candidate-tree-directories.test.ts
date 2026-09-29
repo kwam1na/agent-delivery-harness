@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -49,12 +49,12 @@ it.each(["bytes", "addition", "deletion", "mode", "retarget"])("invalidates dire
   if (change === "addition") writeFileSync(path.join(f.root, "target/nested/new"), "new");
   if (change === "deletion") rmSync(file);
   if (change === "mode") chmodSync(file, 0o755);
-  if (change === "retarget") { rmSync(path.join(f.root, "link")); symlinkSync("other", path.join(f.root, "link")); }
+  if (change === "retarget") { unlinkSync(path.join(f.root, "link")); symlinkSync("other", path.join(f.root, "link")); }
   expect((await f.capture()).inputDigest).not.toBe(before.inputDigest);
 });
 
 it.each(["../escape", "/absolute", "chain"])("still refuses unsafe directory-link chain %s", async target => {
-  const f = fixture(); rmSync(path.join(f.root, "link")); symlinkSync(target, path.join(f.root, "link"));
+  const f = fixture(); unlinkSync(path.join(f.root, "link")); symlinkSync(target, path.join(f.root, "link"));
   const read = await candidateTreeSourceReader(f.root, f.tree());
   await expect(read("chain")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable" }] });
   await expect(read.metadata("chain")).rejects.toMatchObject({ blockers: [{ code: "portable_tree_unreadable" }] });
