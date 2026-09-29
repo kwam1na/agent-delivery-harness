@@ -115,10 +115,12 @@ describe("locally executable assertions", () => {
         expect(dependency, `${manifest.name} runtime dependency`).toMatch(/^@agent-delivery-harness\//u);
       }
     }
-    // Preserve the historical composition artifact. This qualified adoption
-    // release advances every existing package together, without adding one.
+    // Preserve the historical artifact while checking current packages against
+    // the current root version, rather than pinning every future patch release.
     expect(new Set(Object.values(recorded))).toEqual(new Set(["0.2.0"]));
-    expect(actual).toEqual(Object.fromEntries(Object.keys(recorded).map((name) => [name, "0.7.3"])));
+    const currentVersion: unknown = readJson("package.json").version;
+    expect(currentVersion).toEqual(expect.stringMatching(/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/u));
+    expect(actual).toEqual(Object.fromEntries(Object.keys(recorded).map((name) => [name, currentVersion])));
   });
 
   it("the CLI surface retains the recorded loop plus composite admission", () => {
