@@ -48,13 +48,33 @@ export async function captureScopedCheckInputs(definition: ScopedCheckDefinition
   if (new Set(inventory).size !== inventory.length || inventory.some(p => !p || p.startsWith("/") || p.includes("\\") || p.includes("\0") || p.split("/").some(s => s === ".." || s === "." || s === ""))) throw new Error("Invalid snapshot inventory");
   const memberships = [...definition.memberships].sort().map(prefix => ({ prefix, paths: inventory.filter(p => p.startsWith(prefix)) }));
   const selected = [...new Set([...definition.files, ...definition.tests, ...memberships.flatMap(m => m.paths)])].sort();
-  const files = [];
-  for (const file of selected) {
-    const bytes = await ports.readFile(file);
-    if (definition.tests.includes(file) && bytes === null) throw new Error("Required test is absent");
-    if ((bytes !== null) !== inventory.includes(file)) throw new Error("Snapshot membership and bytes disagree");
-    files.push({ path: file, sha256: bytes === null ? null : sha256Hex(bytes), ...(ports.readMetadata ? { metadata: await ports.readMetadata(file) } : {}) });
+  const files: ScopedInputCapture["files"][number][] = new Array(selected.length);
+  let cursor = 0;
+  let failure: { index: number; error: unknown } | undefined;
+  function retainFailure(index: number, error: unknown) {
+    if (failure === undefined || index < failure.index) failure = { index, error };
   }
+  async function worker() {
+    while (failure === undefined) {
+      const index = cursor++;
+      if (index >= selected.length) return;
+      const file = selected[index]!;
+      try {
+        const bytes = await ports.readFile(file);
+        if (definition.tests.includes(file) && bytes === null) throw new Error("Required test is absent");
+        if ((bytes !== null) !== inventory.includes(file)) throw new Error("Snapshot membership and bytes disagree");
+        files[index] = { path: file, sha256: bytes === null ? null : sha256Hex(bytes), ...(ports.readMetadata ? { metadata: await ports.readMetadata(file) } : {}) };
+      } catch (error) {
+        // Stop scheduling, but drain every started read. Earlier sorted inputs
+        // may still fail; retain the same first error a serial capture returns.
+        retainFailure(index, error);
+      }
+    }
+  }
+  // Indexed results preserve identity bytes despite out-of-order completion.
+  // Ports have no cancellation contract: settle in-flight work before rejecting.
+  await Promise.all(Array.from({ length: Math.min(8, selected.length) }, worker));
+  if (failure !== undefined) throw failure.error;
   const environment: ScopedInputCapture["environment"] = [...definition.environment].sort((a, b) => a.name.localeCompare(b.name)).map(entry => {
     const value = ports.environment[entry.name];
     const present = value !== undefined;
