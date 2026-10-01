@@ -59,6 +59,10 @@ export function redactScopedOutput(text: string, secrets: readonly string[]): st
     if (last && last[1] >= start) last[1] = Math.max(last[1], end); else spans.push([start, end]);
     return spans;
   };
+  // A byte clip inside a multi-byte character decodes to U+FFFD after the prefix it cut. Counted
+  // backwards: an anchored /\uFFFD+$/ backtracks quadratically over a run that does not end the text.
+  let tail = text.length;
+  while (tail > 0 && text.charCodeAt(tail - 1) === 0xfffd) tail--;
   const spans: [number, number][] = [];
   for (const secret of new Set(secrets.filter(Boolean))) {
     // Knuth-Morris-Pratt: linear in the output however self-similar the credential.
@@ -67,15 +71,12 @@ export function redactScopedOutput(text: string, secrets: readonly string[]): st
       while (k > 0 && secret.charCodeAt(i) !== secret.charCodeAt(k)) k = border[k - 1]!;
       border.push(k += secret.charCodeAt(i) === secret.charCodeAt(k) ? 1 : 0);
     }
-    const least = Math.min(secret.length, INTERRUPTED_CREDENTIAL_PREFIX);
-    // A byte-clipped stream can end in an incomplete UTF-8 sequence, decoded as U+FFFD after the prefix.
-    const tail = text.replace(/�+$/, "").length;
     // The candidate match's start never moves backwards, so spans arrive in ascending start order.
     const own: [number, number][] = [];
     let matched = 0, atTail = 0;
     for (let i = 0; i < text.length; i++) {
       if (i === tail) atTail = matched;
-      if (matched >= least && text.charCodeAt(i) !== secret.charCodeAt(matched)) union(own, [i - matched, i]);
+      if (matched >= INTERRUPTED_CREDENTIAL_PREFIX && text.charCodeAt(i) !== secret.charCodeAt(matched)) union(own, [i - matched, i]);
       while (matched > 0 && text.charCodeAt(i) !== secret.charCodeAt(matched)) matched = border[matched - 1]!;
       if (text.charCodeAt(i) === secret.charCodeAt(matched)) matched++;
       if (matched === secret.length) { union(own, [i + 1 - matched, i + 1]); matched = border[matched - 1]!; }

@@ -677,7 +677,7 @@ it("exports bounded redacted diagnostics after a real failing command without ch
   const f = await fixture(); f.env["FAIL"] = "0";
   f.env["API_TOKEN"] = `SENTINEL-${"Q".repeat(6000)}-END`;
   const a = f.config.providers[0]!;
-  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "process.stdout.write('x'.repeat(5000)+process.env.API_TOKEN.slice(0,3000));process.stderr.write(process.env.API_TOKEN+' assertion failed');process.exitCode=7"], scope: { ...a.check!.scope!, environment: [{ name: "API_TOKEN", kind: "credential" }] } } }, f.config.providers[1]!] });
+  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "process.stdout.write('x'.repeat(5000)+process.env.API_TOKEN.slice(0,7));process.stderr.write(process.env.API_TOKEN+' assertion failed');process.exitCode=7"], scope: { ...a.check!.scope!, environment: [{ name: "API_TOKEN", kind: "credential" }] } } }, f.config.providers[1]!] });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate")).toBe(1);
   const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
@@ -689,16 +689,17 @@ it("exports bounded redacted diagnostics after a real failing command without ch
   expect(row).toMatchObject({ ...attempt, diagnostic: { availability: "available", phase: "command", failure: { code: "check_command_failed" }, command: { exitCode: 7, truncated: true } } });
   if (row.diagnostic.availability !== "available" || "unavailable" in row.diagnostic.command) throw Error("missing captured command");
   expect(row.diagnostic.command.outputTail).toHaveLength(4000);
-  // stdout ends inside the credential and stderr carries it whole: neither may surface, even in part.
+  // stdout ends inside the credential, below the interrupted-prefix length, and stderr carries it whole:
+  // only redacting each stream before the join keeps the prefix out of the diagnostic and the retained log.
   expect(row.diagnostic.command.outputTail).toMatch(/x\[REDACTED\]\n\[REDACTED\] assertion failed$/);
-  expect(JSON.stringify(diagnostics)).not.toMatch(/SENTINEL|QQQ|outputs|payload/);
+  expect(JSON.stringify(diagnostics)).not.toMatch(/SENTINE|QQQ|outputs|payload/);
   const { resolveRecordStorage } = await import("@agent-delivery-harness/kernel");
   const { AttemptStore } = await import("./scoped-attempts.ts");
   const storage = await resolveRecordStorage(f.dir, { storageNamespace: f.config.storageNamespace, leaf: "scoped-attempts" });
   const { readdir } = await import("node:fs/promises");
   const stored = (await Promise.all((await readdir(storage.storageDir)).map(name => new AttemptStore(path.join(storage.storageDir, name)).read()))).flat().find(r => r.attempt.attemptId === attempt.attemptId)!;
   expect(stored.payload?.log).toMatch(/x\[REDACTED\]\n\[REDACTED\] assertion failed\ncheck_command_failed$/);
-  expect(JSON.stringify(stored.payload)).not.toMatch(/SENTINEL|QQQ/);
+  expect(JSON.stringify(stored.payload)).not.toMatch(/SENTINE|QQQ/);
   const passed = observations.providers[1]!.attempts[0]!;
   expect((await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: [passed.attemptId] })).providers[1]!.attempts[0]).toMatchObject({ status: "passed", diagnostic: { availability: "available", phase: "complete", failure: { unavailable: "not-failed" }, command: { exitCode: 0 } } });
 }, 30000);

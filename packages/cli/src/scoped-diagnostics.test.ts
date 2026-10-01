@@ -181,9 +181,19 @@ it("leaves a shorter interrupted run as ordinary output and masks a short creden
 });
 it("redacts a credential prefix that a byte clip leaves before an incomplete character", () => {
   const secret = "SENTINEL-éé-END", clipped = Buffer.from("out " + secret).subarray(0, "out SENTINEL-".length + 1).toString("utf8");
-  expect(clipped).toBe("out SENTINEL-�");
+  expect(clipped).toBe("out SENTINEL-\uFFFD");
   expect(redactScopedOutput(clipped, [secret])).toBe("out [REDACTED]");
-  expect(redactScopedOutput("out ��", [secret])).toBe("out ��");
+  expect(redactScopedOutput("out \uFFFD\uFFFD", [secret])).toBe("out \uFFFD\uFFFD");
+  expect(redactScopedOutput("out SENTINEL-\uFFFD\uFFFD", [secret])).toBe("out [REDACTED]");
+  // Below the interrupted-prefix length only the tail rule can mask what precedes the clip.
+  const shortSecret = "SENT\u00e9-END", shortClipped = Buffer.from("out " + shortSecret).subarray(0, "out SENT".length + 1).toString("utf8");
+  expect(shortClipped).toBe("out SENT\uFFFD");
+  expect(redactScopedOutput(shortClipped, [shortSecret])).toBe("out [REDACTED]");
+});
+it("stays linear over a long replacement-character run that does not end the text", () => {
+  const run = "\uFFFD".repeat(1024 * 1024), started = performance.now();
+  expect(redactScopedOutput(run + "x", [fragmentSecret, "\u00e9-token"])).toBe(run + "x");
+  expect(performance.now() - started).toBeLessThan(2000);
 });
 it("redacts a credential split across separate writes of the real exec port", async () => {
   const { createExecPort } = await import("@agent-delivery-harness/kernel");
