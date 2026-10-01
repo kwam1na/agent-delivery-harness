@@ -142,6 +142,47 @@ it("complete credential captured below exec limit is redacted before public expo
   expect(command).toMatchObject({exitCode:7,truncated:true});expect(JSON.stringify(command)).toContain("[REDACTED]");expect(JSON.stringify(command)).not.toContain(secret);
 });
 
+// A writer that exits or is killed mid-write (macOS drops async pipe writes at
+// process.exit) ends its stream inside a credential no full-value match finds.
+const fragmentSecret = "SENTINEL-" + "Q".repeat(40) + "-END";
+it.each([1, 2, 9, 10, fragmentSecret.length - 1])("redacts a %i-character credential prefix ending either stream", length => {
+  const fragment = fragmentSecret.slice(0, length);
+  expect(scopedCommandDiagnostic({ code: 7, errorCode: "7", stdout: "out " + fragment, stderr: "err" }, [fragmentSecret])).toEqual({ exitCode: 7, outputTail: "out [REDACTED]\nerr", truncated: false });
+  expect(scopedCommandDiagnostic({ code: 7, errorCode: "7", stdout: "out", stderr: "err " + fragment }, [fragmentSecret])).toEqual({ exitCode: 7, outputTail: "out\nerr [REDACTED]", truncated: false });
+  expect(scopedDependencyDiagnostic({ code: 7, errorCode: "7", stdout: "x".repeat(5000) + fragment, stderr: fragmentSecret + " assertion failed" }, 1, [fragmentSecret]).command).toEqual({ exitCode: 7, outputTail: "x".repeat(4000 - "[REDACTED]\n[REDACTED] assertion failed".length) + "[REDACTED]\n[REDACTED] assertion failed", truncated: true });
+});
+it("redacts every overlapping occurrence and only text a credential could have produced", () => {
+  expect(redactScopedOutput("aXaXa", ["aXa"])).toBe("[REDACTED]");
+  expect(redactScopedOutput("x aXa", ["aXa"])).toBe("x [REDACTED]");
+  expect(redactScopedOutput("aXaX", ["aXa"])).toBe("[REDACTED]");
+  expect(redactScopedOutput("aXa y aX", ["aXa"])).toBe("[REDACTED] y [REDACTED]");
+  expect(redactScopedOutput("done\n", [fragmentSecret])).toBe("done\n");
+  expect(redactScopedOutput("QQQ-END", [fragmentSecret])).toBe("QQQ-END");
+  expect(redactScopedOutput("short sho", ["short", "shorter"])).toBe("[REDACTED] [REDACTED]");
+  expect(redactScopedOutput("", [fragmentSecret])).toBe("");
+});
+it("redacts a credential split across separate writes of the real exec port", async () => {
+  const { createExecPort } = await import("@agent-delivery-harness/kernel");
+  const secret = "SPLIT_TOKEN_" + "w".repeat(20000) + "_END";
+  const program = "const s=process.env.API_TOKEN,w=t=>new Promise(r=>process.stdout.write(t,()=>setTimeout(r,2)));(async()=>{await w('x'.repeat(5000));for(let i=0;i<s.length;i+=997)await w(s.slice(i,i+997));await w(' assertion failed');process.exitCode=7})()";
+  const result = await createExecPort().run({ command: process.execPath, args: ["-e", program], env: { API_TOKEN: secret }, timeoutMs: 10000 });
+  expect(result.stdout).toBe("x".repeat(5000) + secret + " assertion failed");
+  const command = scopedCommandDiagnostic(result, [secret]);
+  expect(command).toMatchObject({ exitCode: 7, truncated: true, outputTail: expect.stringMatching(/x\[REDACTED\] assertion failed\n$/) });
+  expect(JSON.stringify(command)).not.toContain("w".repeat(8));
+}, 15000);
+it.each(["stdout", "stderr"])("does not export a credential the real exec port captured only partially on %s", async stream => {
+  const { createExecPort } = await import("@agent-delivery-harness/kernel");
+  const secret = "PARTIAL_TOKEN_" + "p".repeat(30000) + "_END";
+  // A blocking write delivers every byte whatever the platform's pipe chunk size; the stream itself ends mid-credential.
+  const program = `require('fs').writeSync(${stream === "stdout" ? 1 : 2},'x'.repeat(20000)+process.env.API_TOKEN.slice(0,17000));process.exit(7)`;
+  const result = await createExecPort().run({ command: process.execPath, args: ["-e", program], env: { API_TOKEN: secret }, timeoutMs: 10000 });
+  expect(result[stream as "stdout" | "stderr"]).toBe("x".repeat(20000) + secret.slice(0, 17000));
+  const command = scopedCommandDiagnostic(result, [secret]);
+  expect(command).toMatchObject({ exitCode: 7, truncated: true, outputTail: expect.stringMatching(stream === "stdout" ? /x\[REDACTED\]\n$/ : /x\[REDACTED\]$/) });
+  expect(JSON.stringify(command)).not.toMatch(/PARTIAL|ppp/);
+}, 15000);
+
 it("projects additive dependency diagnostics independently from the unstarted main command", async () => {
   const f = await fixture(), store = f.store("a"), attempt = await store.allocate(f.input("a"));
   const value = { availability: "available", phase: "snapshot-setup", failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" },
