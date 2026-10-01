@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { digestCanonical, resolveRecordStorage, type HarnessConfig, type ScopedCheckAttempt } from "@agent-delivery-harness/kernel";
 import { AttemptStore, type AttemptPayload } from "./scoped-attempts.ts";
 import { readScopedCheckDiagnostics } from "./index.ts";
-import { redactScopedOutput, scopedCommandDiagnostic, scopedDependencyDiagnostic, scopedDiagnosticFailure } from "./scoped-diagnostics.ts";
+import { INTERRUPTED_CREDENTIAL_PREFIX, redactScopedOutput, scopedCommandDiagnostic, scopedDependencyDiagnostic, scopedDiagnosticFailure } from "./scoped-diagnostics.ts";
 import { CheckSnapshotError } from "./check-snapshot.ts";
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -141,6 +141,91 @@ it("complete credential captured below exec limit is redacted before public expo
   expect(result.errorCode).toBe("7");const command=scopedCommandDiagnostic(result,[secret]);
   expect(command).toMatchObject({exitCode:7,truncated:true});expect(JSON.stringify(command)).toContain("[REDACTED]");expect(JSON.stringify(command)).not.toContain(secret);
 });
+
+// A writer that exits or is killed mid-write (macOS drops async pipe writes at
+// process.exit) ends its stream inside a credential no full-value match finds.
+const fragmentSecret = "SENTINEL-" + "Q".repeat(40) + "-END";
+it.each([1, 2, 9, 10, fragmentSecret.length - 1])("redacts a %i-character credential prefix ending either stream", length => {
+  const fragment = fragmentSecret.slice(0, length);
+  expect(scopedCommandDiagnostic({ code: 7, errorCode: "7", stdout: "out " + fragment, stderr: "err" }, [fragmentSecret])).toEqual({ exitCode: 7, outputTail: "out [REDACTED]\nerr", truncated: false });
+  expect(scopedCommandDiagnostic({ code: 7, errorCode: "7", stdout: "out", stderr: "err " + fragment }, [fragmentSecret])).toEqual({ exitCode: 7, outputTail: "out\nerr [REDACTED]", truncated: false });
+  expect(scopedDependencyDiagnostic({ code: 7, errorCode: "7", stdout: "x".repeat(5000) + fragment, stderr: fragmentSecret + " assertion failed" }, 1, [fragmentSecret]).command).toEqual({ exitCode: 7, outputTail: "x".repeat(4000 - "[REDACTED]\n[REDACTED] assertion failed".length) + "[REDACTED]\n[REDACTED] assertion failed", truncated: true });
+});
+it("redacts every overlapping occurrence and only text a credential could have produced", () => {
+  expect(redactScopedOutput("aXaXa", ["aXa"])).toBe("[REDACTED]");
+  expect(redactScopedOutput("x aXa", ["aXa"])).toBe("x [REDACTED]");
+  expect(redactScopedOutput("aXaX", ["aXa"])).toBe("[REDACTED]");
+  expect(redactScopedOutput("aXa y aX", ["aXa"])).toBe("[REDACTED] y [REDACTED]");
+  expect(redactScopedOutput("done\n", [fragmentSecret])).toBe("done\n");
+  expect(redactScopedOutput("QQQ-END", [fragmentSecret])).toBe("QQQ-END");
+  expect(redactScopedOutput("short sho", ["short", "shorter"])).toBe("[REDACTED] [REDACTED]");
+  expect(redactScopedOutput("", [fragmentSecret])).toBe("");
+  // The matcher falls back to the longest border on a mismatch rather than restarting.
+  expect(redactScopedOutput("log aaab done", ["aab"])).toBe("log a[REDACTED] done");
+  expect(redactScopedOutput("0000abc", ["000abc"])).toBe("0[REDACTED]");
+  // The border table itself falls back: "aabaaa" recurs at offset 4 only through border[2] = 1.
+  expect(redactScopedOutput("aabaaabaaa", ["aabaaa"])).toBe("[REDACTED]");
+  // A credential nested in another declared one, merged across credentials whatever their order.
+  expect(redactScopedOutput("url=postgres://u:PASS@h end", ["PASS", "postgres://u:PASS@h"])).toBe("url=[REDACTED] end");
+  expect(redactScopedOutput("abcabc abc", ["abc"])).toBe("[REDACTED] [REDACTED]");
+});
+it.each([INTERRUPTED_CREDENTIAL_PREFIX, INTERRUPTED_CREDENTIAL_PREFIX + 1, fragmentSecret.length - 1])("redacts a %i-character credential prefix that later output interrupts", length => {
+  const fragment = fragmentSecret.slice(0, length);
+  expect(redactScopedOutput("out " + fragment + "\nafter", [fragmentSecret])).toBe("out [REDACTED]\nafter");
+  expect(redactScopedOutput(fragment + fragment + fragmentSecret + fragment + "!", [fragmentSecret])).toBe("[REDACTED]!");
+});
+it("leaves a shorter interrupted run as ordinary output and masks a short credential only whole or ending the text", () => {
+  expect(INTERRUPTED_CREDENTIAL_PREFIX).toBe(8);
+  expect(redactScopedOutput("SENTINE is a word", [fragmentSecret])).toBe("SENTINE is a word");
+  expect(redactScopedOutput("ab x abc y ab", ["abc"])).toBe("ab x [REDACTED] y [REDACTED]");
+});
+it("redacts a credential prefix that a byte clip leaves before an incomplete character", () => {
+  const secret = "SENTINEL-éé-END", clipped = Buffer.from("out " + secret).subarray(0, "out SENTINEL-".length + 1).toString("utf8");
+  expect(clipped).toBe("out SENTINEL-\uFFFD");
+  expect(redactScopedOutput(clipped, [secret])).toBe("out [REDACTED]");
+  expect(redactScopedOutput("out \uFFFD\uFFFD", [secret])).toBe("out \uFFFD\uFFFD");
+  expect(redactScopedOutput("out SENTINEL-\uFFFD\uFFFD", [secret])).toBe("out [REDACTED]");
+  // Below the interrupted-prefix length only the tail rule can mask what precedes the clip.
+  const shortSecret = "SENT\u00e9-END", shortClipped = Buffer.from("out " + shortSecret).subarray(0, "out SENT".length + 1).toString("utf8");
+  expect(shortClipped).toBe("out SENT\uFFFD");
+  expect(redactScopedOutput(shortClipped, [shortSecret])).toBe("out [REDACTED]");
+});
+it("stays linear over a long replacement-character run that does not end the text", () => {
+  const run = "\uFFFD".repeat(1024 * 1024), started = performance.now();
+  expect(redactScopedOutput(run + "x", [fragmentSecret, "\u00e9-token"])).toBe(run + "x");
+  expect(performance.now() - started).toBeLessThan(2000);
+});
+it("redacts a credential split across separate writes of the real exec port", async () => {
+  const { createExecPort } = await import("@agent-delivery-harness/kernel");
+  const secret = "SPLIT_TOKEN_" + "w".repeat(20000) + "_END";
+  const program = "const s=process.env.API_TOKEN,w=t=>new Promise(r=>process.stdout.write(t,()=>setTimeout(r,2)));(async()=>{await w('x'.repeat(5000));for(let i=0;i<s.length;i+=997)await w(s.slice(i,i+997));await w(' assertion failed');process.exitCode=7})()";
+  const result = await createExecPort().run({ command: process.execPath, args: ["-e", program], env: { API_TOKEN: secret }, timeoutMs: 10000 });
+  expect(result.stdout).toBe("x".repeat(5000) + secret + " assertion failed");
+  const command = scopedCommandDiagnostic(result, [secret]);
+  expect(command).toMatchObject({ exitCode: 7, truncated: true, outputTail: expect.stringMatching(/x\[REDACTED\] assertion failed\n$/) });
+  expect(JSON.stringify(command)).not.toContain("w".repeat(8));
+}, 15000);
+it.each(["stdout", "stderr"])("does not export a credential the real exec port captured only partially on %s", async stream => {
+  const { createExecPort } = await import("@agent-delivery-harness/kernel");
+  const secret = "PARTIAL_TOKEN_" + "p".repeat(30000) + "_END";
+  // A blocking write delivers every byte whatever the platform's pipe chunk size; the stream itself ends mid-credential.
+  const program = `require('fs').writeSync(${stream === "stdout" ? 1 : 2},'x'.repeat(20000)+process.env.API_TOKEN.slice(0,17000));process.exit(7)`;
+  const result = await createExecPort().run({ command: process.execPath, args: ["-e", program], env: { API_TOKEN: secret }, timeoutMs: 10000 });
+  expect(result[stream as "stdout" | "stderr"]).toBe("x".repeat(20000) + secret.slice(0, 17000));
+  const command = scopedCommandDiagnostic(result, [secret]);
+  expect(command).toMatchObject({ exitCode: 7, truncated: true, outputTail: expect.stringMatching(stream === "stdout" ? /x\[REDACTED\]\n$/ : /x\[REDACTED\]$/) });
+  expect(JSON.stringify(command)).not.toMatch(/PARTIAL|ppp/);
+}, 15000);
+it("does not export a partial credential that a wrapping shell's later output follows", async () => {
+  const { createExecPort } = await import("@agent-delivery-harness/kernel");
+  const secret = "WRAPPED_TOKEN_" + "r".repeat(30000) + "_END";
+  const script = "require('fs').writeSync(1,'x'.repeat(20000)+process.env.API_TOKEN.slice(0,17000));process.exit(7)";
+  const result = await createExecPort().run({ command: "/bin/sh", args: ["-c", '"$NODE" -e "$SCRIPT"; s=$?; echo "child exited $s"; exit $s'], env: { API_TOKEN: secret, NODE: process.execPath, SCRIPT: script, PATH: "/usr/bin:/bin" }, timeoutMs: 10000 });
+  expect(result.stdout).toBe("x".repeat(20000) + secret.slice(0, 17000) + "child exited 7\n");
+  const command = scopedCommandDiagnostic(result, [secret]);
+  expect(command).toMatchObject({ exitCode: 7, truncated: true, outputTail: expect.stringMatching(/x\[REDACTED\]child exited 7\n\n$/) });
+  expect(JSON.stringify(command)).not.toMatch(/WRAPPED|rrr/);
+}, 15000);
 
 it("projects additive dependency diagnostics independently from the unstarted main command", async () => {
   const f = await fixture(), store = f.store("a"), attempt = await store.allocate(f.input("a"));

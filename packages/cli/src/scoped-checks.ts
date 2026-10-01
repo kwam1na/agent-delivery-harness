@@ -7,7 +7,7 @@ import { captureCheckBindings, captureCheckOutputSnapshots, candidateTreeEvidenc
 import type { CommandContext } from "./boundary.ts";
 import { AttemptStore, type AttemptPayload, type StoredAttempt } from "./scoped-attempts.ts";
 import { CheckSnapshotError, createCheckSnapshot, executionPath, type CheckSnapshot } from "./check-snapshot.ts";
-import { redactScopedOutput, scopedCommandDiagnostic, scopedDependencyDiagnostic, scopedDiagnosticFailure, type RecordedScopedAttemptDiagnostic } from "./scoped-diagnostics.ts";
+import { redactScopedStreams, scopedCommandDiagnostic, scopedDependencyDiagnostic, scopedDiagnosticFailure, type RecordedScopedAttemptDiagnostic } from "./scoped-diagnostics.ts";
 export function scopedCandidate(candidate: CandidateBinding): RecordCandidateBinding {
   return { treeSha: candidate.treeSha, deliverableDigest: candidate.deliverable.digest, identityToken: candidate.deliverable.identity, baseRef: candidate.base.ref, baseTipSha: candidate.base.tipSha, mergeBaseSha: candidate.base.mergeBaseSha, workspaceId: candidate.workspaceId };
 }
@@ -148,10 +148,9 @@ export class ScopedChecks {
       await mkdir(commandHome, { recursive: true }); await mkdir(commandTemp, { recursive: true });
       diagnostic = { ...diagnostic, command: { unavailable: "not-completed" } };
       const result = await createExecPort().run({ command: check.command[0], args: check.command.slice(1), cwd: path.join(snapshot.rootDir, check.scope!.cwd), env: { ...snapshot.environment, ...injected, HOME: commandHome, TMPDIR: commandTemp }, timeoutMs: check.timeoutMs, maxBuffer: 1024 * 1024, ...(this.context.signal ? { signal: this.context.signal } : {}) });
-      const redact = (s: string) => redactScopedOutput(s, secrets);
       executionErrorCode = result.errorCode;
       diagnostic = { ...diagnostic, command: scopedCommandDiagnostic(result, secrets) };
-      payload = { outputs: [], durationMs: Date.now() - started, log: redact(`${result.stdout}\n${result.stderr}`).slice(-4000), dependencyDigest: snapshot.dependencyDigest };
+      payload = { outputs: [], durationMs: Date.now() - started, log: redactScopedStreams(result, secrets).slice(-4000), dependencyDigest: snapshot.dependencyDigest };
       if (result.code !== 0 || this.context.signal?.aborted) throw new CheckSnapshotError("check_command_failed", `Declared scoped check ${provider.id} did not complete successfully (exit ${result.code}).`);
       diagnostic = { ...diagnostic, phase: "post-command-verification" };
       await snapshot.verify();

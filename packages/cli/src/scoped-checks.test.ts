@@ -677,7 +677,7 @@ it("exports bounded redacted diagnostics after a real failing command without ch
   const f = await fixture(); f.env["FAIL"] = "0";
   f.env["API_TOKEN"] = `SENTINEL-${"Q".repeat(6000)}-END`;
   const a = f.config.providers[0]!;
-  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "console.log('x'.repeat(5000)+process.env.API_TOKEN+' assertion failed');process.exit(7)"], scope: { ...a.check!.scope!, environment: [{ name: "API_TOKEN", kind: "credential" }] } } }, f.config.providers[1]!] });
+  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "process.stdout.write('x'.repeat(5000)+process.env.API_TOKEN.slice(0,7));process.stderr.write(process.env.API_TOKEN+' assertion failed');process.exitCode=7"], scope: { ...a.check!.scope!, environment: [{ name: "API_TOKEN", kind: "credential" }] } } }, f.config.providers[1]!] });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate")).toBe(1);
   const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
@@ -689,8 +689,17 @@ it("exports bounded redacted diagnostics after a real failing command without ch
   expect(row).toMatchObject({ ...attempt, diagnostic: { availability: "available", phase: "command", failure: { code: "check_command_failed" }, command: { exitCode: 7, truncated: true } } });
   if (row.diagnostic.availability !== "available" || "unavailable" in row.diagnostic.command) throw Error("missing captured command");
   expect(row.diagnostic.command.outputTail).toHaveLength(4000);
-  expect(row.diagnostic.command.outputTail).toContain("[REDACTED] assertion failed");
-  expect(JSON.stringify(diagnostics)).not.toMatch(/SENTINEL|QQQ|outputs|payload/);
+  // stdout ends inside the credential, below the interrupted-prefix length, and stderr carries it whole:
+  // only redacting each stream before the join keeps the prefix out of the diagnostic and the retained log.
+  expect(row.diagnostic.command.outputTail).toMatch(/x\[REDACTED\]\n\[REDACTED\] assertion failed$/);
+  expect(JSON.stringify(diagnostics)).not.toMatch(/SENTINE|QQQ|outputs|payload/);
+  const { resolveRecordStorage } = await import("@agent-delivery-harness/kernel");
+  const { AttemptStore } = await import("./scoped-attempts.ts");
+  const storage = await resolveRecordStorage(f.dir, { storageNamespace: f.config.storageNamespace, leaf: "scoped-attempts" });
+  const { readdir } = await import("node:fs/promises");
+  const stored = (await Promise.all((await readdir(storage.storageDir)).map(name => new AttemptStore(path.join(storage.storageDir, name)).read()))).flat().find(r => r.attempt.attemptId === attempt.attemptId)!;
+  expect(stored.payload?.log).toMatch(/x\[REDACTED\]\n\[REDACTED\] assertion failed\ncheck_command_failed$/);
+  expect(JSON.stringify(stored.payload)).not.toMatch(/SENTINE|QQQ/);
   const passed = observations.providers[1]!.attempts[0]!;
   expect((await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: [passed.attemptId] })).providers[1]!.attempts[0]).toMatchObject({ status: "passed", diagnostic: { availability: "available", phase: "complete", failure: { unavailable: "not-failed" }, command: { exitCode: 0 } } });
 }, 30000);
@@ -768,9 +777,10 @@ it("retains dependency failure diagnostics after cleanup without claiming the ma
   expect(ids).toHaveLength(2);
   const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: ids });
   for (const row of result.providers.flatMap(p => p.attempts)) {
+    // "dependency" is the credential's first ten characters, interrupted by later output: masked as a possible clipped prefix.
     expect(row).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "snapshot-setup",
       failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" },
-      dependency: { durationMs: expect.any(Number), command: { exitCode: 7, outputTail: "DEPENDENCY_STAGE:install [REDACTED]\n\ndependency stderr [REDACTED]\n", truncated: false } },
+      dependency: { durationMs: expect.any(Number), command: { exitCode: 7, outputTail: "DEPENDENCY_STAGE:install [REDACTED]\n\n[REDACTED] stderr [REDACTED]\n", truncated: false } },
     } });
   }
   expect(JSON.stringify(result)).not.toContain(secret);
