@@ -43,10 +43,15 @@ export function scopedDiagnosticFailure(error: unknown, executionErrorCode?: str
   return { code: error.code as ScopedDiagnosticFailureCode,
     ...((executionCodes as readonly string[]).includes(executionErrorCode ?? "") ? { executionErrorCode: executionErrorCode as ScopedDiagnosticExecutionCode } : {}) };
 }
-/** Masks every occurrence of each credential, overlapping ones included, and any
- * credential prefix the text ends with: a writer that exits, is killed or is
- * clipped mid-write ends its stream inside a value no full match can find. Apply
- * it to each captured stream before joining or bounding them. */
+/** Shortest credential prefix masked where later output interrupts it. Any prefix
+ * ending the text is masked; mid-text, a shorter run is indistinguishable from
+ * ordinary output sharing a credential's leading characters. */
+export const INTERRUPTED_CREDENTIAL_PREFIX = 8;
+/** Masks every occurrence of each credential, overlapping ones included, and the
+ * credential prefixes a writer that exits, is killed or is clipped mid-write
+ * leaves behind: at the end of the text, or interrupted by whatever writes next
+ * to the same stream (a wrapping shell's own output). Apply it to each captured
+ * stream before joining or bounding them. */
 export function redactScopedOutput(text: string, secrets: readonly string[]): string {
   // Ascending start order makes a union of overlapping spans one append-or-extend step.
   const union = (spans: [number, number][], [start, end]: [number, number]) => {
@@ -62,16 +67,23 @@ export function redactScopedOutput(text: string, secrets: readonly string[]): st
       while (k > 0 && secret.charCodeAt(i) !== secret.charCodeAt(k)) k = border[k - 1]!;
       border.push(k += secret.charCodeAt(i) === secret.charCodeAt(k) ? 1 : 0);
     }
+    const least = Math.min(secret.length, INTERRUPTED_CREDENTIAL_PREFIX);
+    // A byte-clipped stream can end in an incomplete UTF-8 sequence, decoded as U+FFFD after the prefix.
+    const tail = text.replace(/�+$/, "").length;
+    // The candidate match's start never moves backwards, so spans arrive in ascending start order.
     const own: [number, number][] = [];
-    let matched = 0;
+    let matched = 0, atTail = 0;
     for (let i = 0; i < text.length; i++) {
+      if (i === tail) atTail = matched;
+      if (matched >= least && text.charCodeAt(i) !== secret.charCodeAt(matched)) union(own, [i - matched, i]);
       while (matched > 0 && text.charCodeAt(i) !== secret.charCodeAt(matched)) matched = border[matched - 1]!;
       if (text.charCodeAt(i) === secret.charCodeAt(matched)) matched++;
       if (matched === secret.length) { union(own, [i + 1 - matched, i + 1]); matched = border[matched - 1]!; }
     }
-    // The matcher's final state is the longest credential prefix ending the text.
-    if (matched > 0) union(own, [text.length - matched, text.length]);
+    if (tail === text.length) atTail = matched;
     for (const span of own) spans.push(span);
+    // The matcher's state at the tail is the longest credential prefix ending the text.
+    if (atTail > 0) spans.push([tail - atTail, text.length]);
   }
   const merged = spans.sort((a, b) => a[0] - b[0]).reduce(union, []);
   return merged.map(([start], i) => text.slice(i ? merged[i - 1]![1] : 0, start) + "[REDACTED]").join("") + text.slice(merged.at(-1)?.[1] ?? 0);

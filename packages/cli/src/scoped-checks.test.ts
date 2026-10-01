@@ -776,9 +776,10 @@ it("retains dependency failure diagnostics after cleanup without claiming the ma
   expect(ids).toHaveLength(2);
   const result = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: ids });
   for (const row of result.providers.flatMap(p => p.attempts)) {
+    // "dependency" is the credential's first ten characters, interrupted by later output: masked as a possible clipped prefix.
     expect(row).toMatchObject({ status: "failed", diagnostic: { availability: "available", phase: "snapshot-setup",
       failure: { code: "check_dependency_failed" }, command: { unavailable: "not-started" },
-      dependency: { durationMs: expect.any(Number), command: { exitCode: 7, outputTail: "DEPENDENCY_STAGE:install [REDACTED]\n\ndependency stderr [REDACTED]\n", truncated: false } },
+      dependency: { durationMs: expect.any(Number), command: { exitCode: 7, outputTail: "DEPENDENCY_STAGE:install [REDACTED]\n\n[REDACTED] stderr [REDACTED]\n", truncated: false } },
     } });
   }
   expect(JSON.stringify(result)).not.toContain(secret);
