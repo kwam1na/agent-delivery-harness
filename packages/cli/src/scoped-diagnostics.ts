@@ -43,8 +43,42 @@ export function scopedDiagnosticFailure(error: unknown, executionErrorCode?: str
   return { code: error.code as ScopedDiagnosticFailureCode,
     ...((executionCodes as readonly string[]).includes(executionErrorCode ?? "") ? { executionErrorCode: executionErrorCode as ScopedDiagnosticExecutionCode } : {}) };
 }
+/** Masks every occurrence of each credential, overlapping ones included, and any
+ * credential prefix the text ends with: a writer that exits, is killed or is
+ * clipped mid-write ends its stream inside a value no full match can find. Apply
+ * it to each captured stream before joining or bounding them. */
 export function redactScopedOutput(text: string, secrets: readonly string[]): string {
-  return [...secrets].filter(Boolean).sort((a, b) => b.length - a.length).reduce((value, secret) => value.split(secret).join("[REDACTED]"), text);
+  // Ascending start order makes a union of overlapping spans one append-or-extend step.
+  const union = (spans: [number, number][], [start, end]: [number, number]) => {
+    const last = spans.at(-1);
+    if (last && last[1] >= start) last[1] = Math.max(last[1], end); else spans.push([start, end]);
+    return spans;
+  };
+  const spans: [number, number][] = [];
+  for (const secret of new Set(secrets.filter(Boolean))) {
+    // Knuth-Morris-Pratt: linear in the output however self-similar the credential.
+    const border = [0];
+    for (let i = 1, k = 0; i < secret.length; i++) {
+      while (k > 0 && secret.charCodeAt(i) !== secret.charCodeAt(k)) k = border[k - 1]!;
+      border.push(k += secret.charCodeAt(i) === secret.charCodeAt(k) ? 1 : 0);
+    }
+    const own: [number, number][] = [];
+    let matched = 0;
+    for (let i = 0; i < text.length; i++) {
+      while (matched > 0 && text.charCodeAt(i) !== secret.charCodeAt(matched)) matched = border[matched - 1]!;
+      if (text.charCodeAt(i) === secret.charCodeAt(matched)) matched++;
+      if (matched === secret.length) { union(own, [i + 1 - matched, i + 1]); matched = border[matched - 1]!; }
+    }
+    // The matcher's final state is the longest credential prefix ending the text.
+    if (matched > 0) union(own, [text.length - matched, text.length]);
+    for (const span of own) spans.push(span);
+  }
+  const merged = spans.sort((a, b) => a[0] - b[0]).reduce(union, []);
+  return merged.map(([start], i) => text.slice(i ? merged[i - 1]![1] : 0, start) + "[REDACTED]").join("") + text.slice(merged.at(-1)?.[1] ?? 0);
+}
+/** Each stream is redacted on its own: one can end inside a credential the join would hide mid-text. */
+export function redactScopedStreams(result: Pick<ExecOutcome, "stdout" | "stderr">, secrets: readonly string[]): string {
+  return `${redactScopedOutput(result.stdout, secrets)}\n${redactScopedOutput(result.stderr, secrets)}`;
 }
 export function scopedCommandDiagnostic(result: ExecOutcome, secrets: readonly string[]): ScopedDiagnosticCommand {
   // execFile can clip a fully emitted credential before full-value redaction.
@@ -52,7 +86,7 @@ export function scopedCommandDiagnostic(result: ExecOutcome, secrets: readonly s
   if (result.errorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { unavailable: "not-completed" };
   const numericExit = result.errorCode === undefined || result.errorCode === String(result.code);
   if (!numericExit && result.stdout.length + result.stderr.length === 0) return { unavailable: ["ENOENT", "EACCES", "EPERM"].includes(result.errorCode!) ? "not-started" : "not-completed" };
-  const redacted = redactScopedOutput(`${result.stdout}\n${result.stderr}`, secrets);
+  const redacted = redactScopedStreams(result, secrets);
   return { exitCode: numericExit ? result.code : null, outputTail: redacted.slice(-4000), truncated: redacted.length > 4000 };
 }
 
