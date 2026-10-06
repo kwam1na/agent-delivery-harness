@@ -17,6 +17,8 @@ import { computeDeliverableIdentity, runAdmission, type AdmissionResult, type Bl
 import { CliInterruption, type CommandContext, type CommandDescriptor, type CommandResult } from "../boundary.ts";
 import { oneLine } from "../run-surface.ts";
 
+const scopedCheckBlocker = (error: CheckSnapshotError): Blocker => commandBlocker({ code: error.code, sourceId: "delivery-harness.cli.gate", summary: error.message, remediations: [{ id: "repair-scoped-check", kind: "manual_action", summary: "Repair the declared scoped check or its execution profile and run the gate again." }] });
+
 /**
  * Runs the ordinary admission first, invokes only configured providers that can
  * answer the resulting missing-evidence/live-result blocks, then re-evaluates
@@ -79,6 +81,15 @@ async function providerAdmission(
       }
     }
 
+    // A pool runs every requested scoped check at once; a single worker keeps the one-at-a-time loop below.
+    const scoped = session !== undefined && session.concurrency > 1 ? [...requested].filter(([id]) => context.config.providers.find(p => p.id === id)!.check?.scope) : [];
+    if (session !== undefined && scoped.length > 0) {
+      for (const [id] of scoped) attempted.add(id);
+      const failures = await session.executeAll(scoped.map(([id, request]) => ({ provider: context.config.providers.find(p => p.id === id)!, obligationIds: request.obligationIds })));
+      attemptBlockers.push(...failures.map(scopedCheckBlocker));
+      admission = await admit({ ...input, ...(liveResults.length === 0 ? {} : { liveResults }) }, admissionOptions);
+      continue;
+    }
     const next = requested.entries().next().value as
       | [string, { obligationIds: string[]; requiresEvidence: boolean; needsLiveResult: boolean }]
       | undefined;
@@ -91,7 +102,7 @@ async function providerAdmission(
         try { await session.execute(registration, request.obligationIds); }
         catch (error) {
           if (!(error instanceof CheckSnapshotError)) throw error;
-          attemptBlockers.push(commandBlocker({ code: error.code, sourceId: "delivery-harness.cli.gate", summary: error.message, remediations: [{ id: "repair-scoped-check", kind: "manual_action", summary: "Repair the declared scoped check or its execution profile and run the gate again." }] }));
+          attemptBlockers.push(scopedCheckBlocker(error));
         }
       } else attemptBlockers.push(...await runDeclaredCheck(context, registration, request.obligationIds, admission.candidate));
       admission = await admit({ ...input, ...(liveResults.length === 0 ? {} : { liveResults }) }, admissionOptions);
