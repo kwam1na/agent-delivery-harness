@@ -907,3 +907,120 @@ it("does not share a full-Git snapshot with a file-only profile of the same depe
   expect(await f.run("prepare"), f.err.join("\n") + f.out.join("\n")).toBe(0);
   expect(await f.installs()).toBe("11");
 }, 60000);
+
+/** Checks c1..cN on their own profiles; profiles whose `keys` entry matches share one dependency setup, which logs its key. */
+async function poolFixture(keys: readonly string[], concurrency: number | undefined, commandFor: (id: string, shared: string) => string, mechanical = false) {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const shared = await mkdtemp(path.join(tmpdir(), "scoped-pool-")); dirs.push(shared);
+  const log = path.join(shared, "installs.log");
+  const template = f.config.providers[0]!, profile = f.config.scopedExecution!.profiles[0]!;
+  const providers = keys.map((_, i) => ({ ...template, id: `check.c${i + 1}`, check: { ...template.check!, timeoutMs: 30000,
+    command: [process.execPath, "-e", `${commandFor(`c${i + 1}`, shared)};require('fs').writeFileSync('result-c${i + 1}.json','{}')`] as [string, ...string[]],
+    outputs: [`result-c${i + 1}.json`], scope: { ...template.check!.scope!, environment: [], profile: `pc${i + 1}` } } }));
+  f.setConfig({ ...f.config, providers,
+    obligations: providers.map(p => ({ ...f.config.obligations[0]!, id: `${p.id}.passed`, providers: [p.id] })),
+    scopedExecution: { ...f.config.scopedExecution!, ...(concurrency === undefined ? {} : { concurrency }), mechanicalProviders: mechanical ? providers.map(p => p.id) : [],
+      profiles: keys.map((key, i) => ({ ...profile, id: `pc${i + 1}`, mutableOutputs: [`result-c${i + 1}.json`],
+        dependencies: { command: [process.execPath, "-e", `require('fs').appendFileSync(${JSON.stringify(log)},'${key}')`] as [string, ...string[]], timeoutMs: 5000 } })) } });
+  const installs = async (key: string) => [...await readFile(log, "utf8").catch(() => "")].filter(k => k === key).length;
+  return { ...f, shared, installs };
+}
+/** Exits 7 unless `count` checks are inside this rendezvous at once; a serial run can never get there. */
+const barrier = (shared: string, count: number) => `const fs=require('fs'),d=${JSON.stringify(path.join(shared, "arrived"))};fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+'/'+process.pid,'');` +
+  `const end=Date.now()+10000;while(fs.readdirSync(d).length<${count}){if(Date.now()>end)process.exit(7);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20)}`;
+const normalized = (f: { dir: string; shared: string }, text: string) => text.replaceAll(f.dir, "<dir>").replaceAll(f.shared, "<shared>").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<id>").replace(/\d+ms/g, "<ms>");
+it("accepts only a positive integer scoped concurrency", () => {
+  const profile = { id: "fixture", dependencyInputs: [], mutableOutputs: [], credentialIdentities: {} };
+  const define = (concurrency: unknown) => defineHarnessConfig({ ...base, scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [], profiles: [profile], concurrency } } as unknown as HarnessConfigInput);
+  for (const invalid of [0, -1, 1.5, "2", null]) expect(() => define(invalid)).toThrow();
+  expect(define(4).scopedExecution?.concurrency).toBe(4);
+});
+it("gate overlaps independent checks and installs each setup at most once per worker", async () => {
+  // Two workers; setup "1" has four checks and setup "2" one, so they install at most min(2, 4) and min(2, 1) times.
+  const f = await poolFixture(["1", "1", "1", "1", "2"], 2, (_, shared) => barrier(shared, 2));
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate"), f.err.join("\n") + f.out.join("\n")).toBe(0);
+  expect(f.out.join("\n").match(/passed check\.c\d/g)?.sort()).toEqual(["passed check.c1", "passed check.c2", "passed check.c3", "passed check.c4", "passed check.c5"]);
+  expect(await f.installs("1")).toBeLessThanOrEqual(2);
+  expect(await f.installs("2")).toBe(1);
+  expect(await f.run("record"), f.err.join("\n")).toBe(0);
+}, 90000);
+it("prepare finishes the first declared mechanical check before overlapping the rest", async () => {
+  const f = await poolFixture(["1", "1", "1", "1"], 3, (id, shared) => id === "c1"
+    ? `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500);require('fs').writeFileSync(${JSON.stringify(path.join(shared, "guard"))},'')`
+    : `if(!require('fs').existsSync(${JSON.stringify(path.join(shared, "guard"))}))process.exit(8);${barrier(shared, 3)}`, true);
+  expect(await f.run("prepare"), f.err.join("\n") + f.out.join("\n")).toBe(0);
+  expect(f.out.join("\n").match(/checking check\.c\d/)?.[0]).toBe("checking check.c1");
+  expect(await f.installs("1")).toBeLessThanOrEqual(3);
+  expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+}, 90000);
+it("concurrency 1 keeps serial output and one live snapshot exactly as when unset", async () => {
+  const runs: { out: string[]; setups: number }[] = [];
+  for (const concurrency of [undefined, 1]) {
+    const f = await poolFixture(["1", "2", "1", "2"], concurrency, () => "");
+    const snapshots = await import("./check-snapshot.ts"), original = snapshots.createCheckSnapshot;
+    const spy = vi.spyOn(snapshots, "createCheckSnapshot").mockImplementation(input => original(input));
+    try {
+      expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+      expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+      runs.push({ out: f.out.map(line => normalized(f, line)), setups: spy.mock.calls.length });
+    } finally { spy.mockRestore(); }
+  }
+  expect(runs[0]!.setups).toBe(4); // The serial path alternates setups and keeps only one live.
+  expect(runs[1]).toEqual(runs[0]);
+}, 90000);
+it("failures, diagnostics, retained attempts, reuse and evidence under concurrency match serial", async () => {
+  const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
+  const runs: unknown[] = [];
+  for (const concurrency of [1, 3]) {
+    // c1 is slow, so a pool finishes c2's failure and c3 while c1 still runs.
+    // c2 fails while a marker outside the tree exists, so fixing it changes no check input.
+    const f = await poolFixture(["1", "1", "1"], concurrency, (id, shared) => id === "c1" ? "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500)"
+      : id === "c2" ? `if(require('fs').existsSync(${JSON.stringify(path.join(shared, "fail"))})){console.log('c2 broke');process.exit(3)}` : "");
+    expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+    await writeFile(path.join(f.shared, "fail"), "");
+    expect(await f.run("gate")).toBe(1);
+    // Each check's lines arrive together: nothing else is printed between a check starting and its result.
+    const out = f.out.map(line => normalized(f, line));
+    for (const [index, line] of out.entries()) if (line.startsWith("checking ")) expect(out[index + 1], out.join("\n")).toMatch(new RegExp(`^(passed|failed) ${line.split(" ")[1]!.replace(":", "")}:`));
+    const failedGate = { out: [...out].sort(), err: f.err.map(line => normalized(f, line)) };
+    const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+    const diagnostics = await readScopedCheckDiagnostics({ rootDir: f.dir, config: f.config, attemptIds: observed.providers.flatMap(p => p.attempts.map(a => a.attemptId)) });
+    const attempts = diagnostics.providers.map(p => ({ providerId: p.providerId, attempts: p.attempts.map(a => ({ status: a.status, generation: a.generation,
+      diagnostic: a.diagnostic.availability === "available" ? { phase: a.diagnostic.phase, failure: a.diagnostic.failure, dependency: a.diagnostic.dependency !== undefined,
+        command: "unavailable" in a.diagnostic.command ? a.diagnostic.command : { exitCode: a.diagnostic.command.exitCode, outputTail: a.diagnostic.command.outputTail } } : a.diagnostic })) }));
+    await rm(path.join(f.shared, "fail"));
+    expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+    const passedGate = f.out.map(line => normalized(f, line)).sort();
+    expect(await f.run("record"), f.err.join("\n")).toBe(0);
+    await f.git("add", ".");
+    expect(await f.run("verify"), f.err.join("\n")).toBe(0);
+    runs.push({ failedGate, attempts: attempts.map(p => ({ ...p, attempts: p.attempts.map(a => ({ ...a, diagnostic: { ...a.diagnostic, dependency: undefined } })) })), passedGate });
+  }
+  expect(runs[1]).toEqual(runs[0]);
+  expect(JSON.stringify(runs[0])).toContain("reusing check.c1: matching inputs/profile");
+  expect(JSON.stringify(runs[0])).toContain("c2 broke");
+}, 120000);
+it("an abort stops every worker and cleans up every pooled snapshot", async () => {
+  // c1 holds the first worker; the second passes c2, keeps its idle setup-2 snapshot, and holds c3.
+  const f = await poolFixture(["1", "2", "3"], 2, (id, shared) => id === "c2" ? "" : `require('fs').writeFileSync(${JSON.stringify(shared)}+'/started-${id}','');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20000)`);
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  const snapshots = await import("./check-snapshot.ts"), original = snapshots.createCheckSnapshot, roots: string[] = [];
+  const spy = vi.spyOn(snapshots, "createCheckSnapshot").mockImplementation(async input => { const snapshot = await original(input); roots.push(snapshot.rootDir); return snapshot; });
+  const { access, readdir } = await import("node:fs/promises");
+  try {
+    const controller = new AbortController();
+    const gate = runCli(["gate"], { ...f.runtime, signal: controller.signal });
+    for (const end = Date.now() + 20000; (await readdir(f.shared)).filter(n => n.startsWith("started-")).length < 2;) {
+      if (Date.now() > end) throw new Error("checks never started together");
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    controller.abort();
+    expect(await gate).toBe(130);
+    expect(roots).toHaveLength(3);
+    for (const root of roots) await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
+    const { readScopedCheckObservations } = await import("./index.ts");
+    const observed = await readScopedCheckObservations({ rootDir: f.dir, config: f.config });
+    expect(observed.providers.map(p => p.attempts.at(-1)?.status)).toEqual(["interrupted", "passed", "interrupted"]);
+  } finally { spy.mockRestore(); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true }))); }
+}, 60000);

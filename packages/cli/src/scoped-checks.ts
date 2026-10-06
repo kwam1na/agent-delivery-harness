@@ -33,8 +33,21 @@ function setupKey(profile: ScopedExecutionProfile): string {
   return digestCanonical({ dependencies: profile.dependencies ?? null, dependencyInputs: [...profile.dependencyInputs].sort(), gitContext: profile.gitContext ?? "full" });
 }
 const shownArgument = (argument: string) => /^[\w@%+=:,./-]+$/.test(argument) ? argument : JSON.stringify(argument);
+/** Runs the tasks it is given one at a time, in call order. */
+function oneAtATime() {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => { const result = tail.then(task); tail = result.catch(() => undefined); return result; };
+}
+/** One worker's view while it runs a check: the snapshots only it uses, by setup key, and where its lines go. */
+interface Lane { readonly snapshots: Map<string, CheckSnapshot>; readonly write: (text: string) => void }
 export class ScopedChecks {
-  private readonly snapshots = new Map<string, CheckSnapshot>();
+  /** `scopedExecution.concurrency` workers, each owning its snapshots; the first is the serial lane. */
+  private readonly workers: Map<string, CheckSnapshot>[];
+  readonly concurrency: number;
+  /** Attempt allocation is two writes, so readers of attempt history wait for it to finish. */
+  private readonly locked = oneAtATime();
+  /** Evidence submission captures the candidate through the author's Git index, which one writer may hold. */
+  private readonly publishing = oneAtATime();
   private readonly owned = new Map<string, Awaited<ReturnType<AttemptStore["allocate"]>>>();
   private readonly stores = new Map<string, AttemptStore>();
   private readonly identities = new Map<string, Awaited<ReturnType<typeof scopedCheckIdentity>>>();
@@ -43,7 +56,12 @@ export class ScopedChecks {
   private readonly submissions: (() => Promise<void>)[] = [];
   readonly context: CommandContext;
   readonly candidate: CapturedCandidate;
-  private constructor(context: CommandContext, candidate: CapturedCandidate) { this.context = context; this.candidate = candidate; }
+  private constructor(context: CommandContext, candidate: CapturedCandidate) {
+    this.context = context; this.candidate = candidate;
+    this.concurrency = context.config.scopedExecution?.concurrency ?? 1;
+    this.workers = Array.from({ length: this.concurrency }, () => new Map<string, CheckSnapshot>());
+  }
+  private get serial(): Lane { return { snapshots: this.workers[0]!, write: text => this.context.write(text) }; }
   static async create(context: CommandContext, candidate: CapturedCandidate): Promise<ScopedChecks | undefined> {
     const providers = context.config.providers.filter(p => p.check?.scope);
     if (!providers.length) return undefined;
@@ -77,12 +95,12 @@ export class ScopedChecks {
   }
   async plan(): Promise<ScopedCheckPlan> {
     const checks: Record<string, ScopedCheckPlan["checks"][string]> = {};
-    for (const [id, identity] of this.identities) checks[id] = { inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, reusable: identity.reusable, attempts: (await this.stores.get(id)!.read()).map(r => r.attempt) };
+    for (const [id, identity] of this.identities) checks[id] = { inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, reusable: identity.reusable, attempts: (await this.locked(() => this.stores.get(id)!.read())).map(r => r.attempt) };
     return { version: "scoped-plan/1", candidate: scopedCandidate(this.candidate), selectionDigest: digestCanonical(this.context.config.providers.filter(p => p.check?.scope).map(p => ({ id: p.id, check: p.check })).sort((a, b) => a.id.localeCompare(b.id))), checks };
   }
   private async selected(id: string): Promise<StoredAttempt | undefined> {
     const identity = this.identities.get(id)!;
-    const rows = await this.stores.get(id)!.read();
+    const rows = await this.locked(() => this.stores.get(id)!.read());
     const selected = selectScopedCheckAttempt(id, identity.inputDigest, identity.profileDigest, rows.map(r => r.attempt));
     return rows.find(r => r.attempt.attemptId === selected?.attemptId);
   }
@@ -99,7 +117,7 @@ export class ScopedChecks {
   }
   private async allocate(id: string) {
     const identity = this.identities.get(id)!;
-    const attempt = await this.stores.get(id)!.allocate({ version: "scoped-attempt/1", providerId: id, inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, origin: { candidate: scopedCandidate(this.candidate), runId: this.runId } });
+    const attempt = await this.locked(() => this.stores.get(id)!.allocate({ version: "scoped-attempt/1", providerId: id, inputDigest: identity.inputDigest, profileDigest: identity.profileDigest, origin: { candidate: scopedCandidate(this.candidate), runId: this.runId } }));
     this.owned.set(id, attempt); return attempt;
   }
   async explainReuse(admitted: readonly string[]): Promise<void> {
@@ -130,18 +148,51 @@ export class ScopedChecks {
     const keys = byCost.map(id => setupKey(this.profileOf(id)));
     return [...new Set(keys)].flatMap(key => byCost.filter((_, index) => keys[index] === key));
   }
+  /**
+   * Runs ids on the session's workers, each taking the next id when it is free. Every worker keeps its own
+   * snapshots, so two checks never share one at once. A worker prints a check's lines together when it
+   * finishes; a single worker prints them as they come. After a check throws no new id starts, the running
+   * ones finish, and the first failure in `ids` order is thrown.
+   */
+  private async pool(ids: readonly string[], run: (id: string, lane: Lane) => Promise<void>): Promise<void> {
+    const failures = new Map<string, unknown>();
+    let next = 0;
+    await Promise.all(this.workers.map(async snapshots => {
+      while (next < ids.length && failures.size === 0) {
+        const id = ids[next++]!, lines: string[] = [];
+        try { await run(id, this.concurrency === 1 ? this.serial : { snapshots, write: text => { lines.push(text); } }); }
+        catch (error) { failures.set(id, error); }
+        finally { for (const line of lines) this.context.write(line); }
+      }
+    }));
+    const failed = ids.find(id => failures.has(id));
+    if (failed !== undefined) throw failures.get(failed);
+  }
   /** Stops at the first failure: a failed mechanical check publishes no receipt. */
   async satisfyMechanical(): Promise<void> {
     const ids = await this.cheapestFirst(this.context.config.scopedExecution!.mechanicalProviders);
     await this.fenceNonReusable(ids);
-    for (const id of ids) {
-      if ((await this.selected(id))?.attempt.status === "passed") { this.context.write(`reusing mechanical ${id}`); continue; }
+    const satisfy = async (id: string, lane: Lane) => {
+      if ((await this.selected(id))?.attempt.status === "passed") { lane.write(`reusing mechanical ${id}`); return; }
       const provider = this.context.config.providers.find(p => p.id === id)!;
-      await this.execute(provider, this.context.config.obligations.filter(o => o.providers.includes(id)).map(o => o.id), true);
-    }
+      await this.execute(provider, this.context.config.obligations.filter(o => o.providers.includes(id)).map(o => o.id), true, lane);
+    };
+    // The first declared check guards the rest, so it finishes before any other starts.
+    await this.pool(ids.slice(0, 1), satisfy);
+    await this.pool(ids.slice(1), satisfy);
+  }
+  /** Runs the gate's requested checks on the pool. A check's own failure is returned in request order and stops nothing. */
+  async executeAll(requests: readonly { readonly provider: ProviderRegistration; readonly obligationIds: readonly string[] }[]): Promise<CheckSnapshotError[]> {
+    const failures = new Map<string, CheckSnapshotError>();
+    await this.pool(requests.map(r => r.provider.id), async (id, lane) => {
+      const request = requests.find(r => r.provider.id === id)!;
+      try { await this.execute(request.provider, request.obligationIds, false, lane); }
+      catch (error) { if (!(error instanceof CheckSnapshotError)) throw error; failures.set(id, error); }
+    });
+    return requests.flatMap(r => failures.has(r.provider.id) ? [failures.get(r.provider.id)!] : []);
   }
   async submitMechanical(): Promise<void> { for (const submit of this.submissions) await submit(); this.submissions.length = 0; }
-  async execute(provider: ProviderRegistration, obligationIds: readonly string[], deferSubmission = false): Promise<void> {
+  async execute(provider: ProviderRegistration, obligationIds: readonly string[], deferSubmission = false, lane: Lane = this.serial): Promise<void> {
     const started = Date.now(), check = provider.check!, profile = this.context.config.scopedExecution!.profiles.find(p => p.id === check.scope!.profile)!;
     const attempt = this.owned.get(provider.id) ?? await this.allocate(provider.id);
     let payload: AttemptPayload = { outputs: [] }, terminal = false;
@@ -155,18 +206,18 @@ export class ScopedChecks {
       // only those profiles passed the overlap refusal in create().
       const sharedOutputs = [...new Set(this.context.config.scopedExecution!.profiles
         .filter(p => setupKey(p) === key && this.context.config.providers.some(q => q.check?.scope?.profile === p.id)).flatMap(p => p.mutableOutputs))];
-      let snapshot = this.snapshots.get(key);
+      let snapshot = lane.snapshots.get(key);
       if (!snapshot) {
-        // Both invocation paths await each execution. Retain only consecutive
-        // same-setup reuse; durable outputs no longer need the private tree.
-        for (const [previousKey, previous] of this.snapshots) {
+        // A single worker retains only consecutive same-setup reuse; durable outputs no longer
+        // need the private tree. A pool keeps each worker's snapshots until cleanup().
+        if (this.concurrency === 1) for (const [previousKey, previous] of lane.snapshots) {
           await previous.cleanup();
-          this.snapshots.delete(previousKey);
+          lane.snapshots.delete(previousKey);
         }
         snapshot = await createCheckSnapshot({ rootDir: this.context.rootDir, candidate: this.candidate, outputs: sharedOutputs, gitContext: profile.gitContext ?? "full", environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" }, ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}),
           onDependencyResult: (result, durationMs) => { diagnostic = { ...diagnostic, dependency: scopedDependencyDiagnostic(result, durationMs, secrets) }; },
         });
-        this.snapshots.set(key, snapshot);
+        lane.snapshots.set(key, snapshot);
       }
       diagnostic = { ...diagnostic, phase: "pre-command-verification" };
       // A sibling or dependency setup cannot supply this command's result, and
@@ -174,7 +225,7 @@ export class ScopedChecks {
       for (const output of [...check.outputs ?? [], ...sharedOutputs.filter(o => !profile.mutableOutputs.includes(o))]) await rm(path.join(snapshot.rootDir, output), { recursive: true, force: true });
       await snapshot.verify({ outputs: profile.mutableOutputs });
       const injected = Object.fromEntries(check.scope!.environment.filter(e => this.context.env[e.name] !== undefined).map(e => [e.name, this.context.env[e.name]!]));
-      this.context.write(`checking ${provider.id}: attempt ${attempt.attemptId}`);
+      lane.write(`checking ${provider.id}: attempt ${attempt.attemptId}`);
       diagnostic = { ...diagnostic, phase: "command" };
       const commandHome = path.join(snapshot.commandRoot, attempt.attemptId, "home"), commandTemp = path.join(snapshot.commandRoot, attempt.attemptId, "tmp");
       await mkdir(commandHome, { recursive: true }); await mkdir(commandTemp, { recursive: true });
@@ -207,12 +258,12 @@ export class ScopedChecks {
       const c = this.candidate;
       const manifest = { spec: "delivery-evidence/1", provider: { id: provider.id, runId, finalPassId }, candidate: { vcs: "git", treeSha: c.treeSha, headSha: c.headSha, deliverable: c.deliverable, base: c.base, workspaceId: c.workspaceId }, runHistory: [{ preparedTreeSha: c.treeSha, evaluatedInPassId: finalPassId }], artifacts, attestation: { level: "self", signatures: [] }, recordedAt: new Date().toISOString(), claims: obligationIds.map(obligation => ({ obligation, payloadSpec: "checks.passed/1", payload: claim })) };
       const manifestPath = path.join(allocation.runRoot.path, "manifest.json"); await this.context.artifacts.writeTextFile(manifestPath, JSON.stringify(manifest));
-      const submit = async () => {
+      const submit = () => this.publishing(async () => {
       const outcome = await submitManifest({ rootDir: this.context.rootDir, config: this.context.config, manifestPath }, { captureCandidate: wiring.captureCandidate, artifacts: this.context.artifacts, ...wiring.storageOptions, scopedPlan: await this.plan(), readOutput: this.readOutput });
       if (outcome.status !== "accepted") throw new CheckSnapshotError("check_evidence_rejected", outcome.blockers.map(b => b.code).join(", "));
-      };
+      });
       if (deferSubmission) this.submissions.push(submit); else await submit();
-      this.context.write(`passed ${provider.id}: ${Date.now() - started}ms including snapshot setup; retained ${runId}`);
+      lane.write(`passed ${provider.id}: ${Date.now() - started}ms including snapshot setup; retained ${runId}`);
     } catch (error) {
       const status = this.context.signal?.aborted ? "interrupted" : "failed";
       if (!terminal) await store.finish(attempt, status, { ...payload, durationMs: Date.now() - started,
@@ -221,15 +272,17 @@ export class ScopedChecks {
       // Setup failures report the dependency command that ran; every other failure reports the check's own.
       const ran = diagnostic.phase === "snapshot-setup" && diagnostic.dependency
         ? { argv: profile.dependencies!.command, cwd: ".", result: diagnostic.dependency.command } : { argv: check.command, cwd: check.scope!.cwd, result: diagnostic.command };
-      this.context.write([`${status} ${provider.id}: ${error instanceof CheckSnapshotError ? error.code : "unclassified"}; attempt ${attempt.attemptId} retained at ${store.terminalPath(attempt)}`,
+      lane.write([`${status} ${provider.id}: ${error instanceof CheckSnapshotError ? error.code : "unclassified"}; attempt ${attempt.attemptId} retained at ${store.terminalPath(attempt)}`,
         `  command (cwd ${ran.cwd}): ${ran.argv.map(shownArgument).join(" ")}`,
         ...("unavailable" in ran.result ? [`  output ${ran.result.unavailable}`]
           : [`  exit ${ran.result.exitCode ?? "unavailable"}; output tail (last 40 lines):`, ...ran.result.outputTail.trimEnd().split("\n").slice(-40).map(line => `    ${line}`)])].join("\n"));
-      const damaged = this.snapshots.get(setupKey(profile));
-      this.snapshots.delete(setupKey(profile));
+      const damaged = lane.snapshots.get(setupKey(profile));
+      lane.snapshots.delete(setupKey(profile));
       await damaged?.cleanup();
       throw error;
     }
   }
-  async cleanup(): Promise<void> { for (const snapshot of this.snapshots.values()) await snapshot.cleanup(); this.snapshots.clear(); }
+  async cleanup(): Promise<void> {
+    for (const snapshots of this.workers) { for (const snapshot of snapshots.values()) await snapshot.cleanup(); snapshots.clear(); }
+  }
 }

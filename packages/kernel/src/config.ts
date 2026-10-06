@@ -241,9 +241,12 @@ export interface ScopedExecutionDefinition {
   readonly mechanicalProviders: readonly string[];
   /** Explicit source repair before capture; preparationCommands remain validators. */
   readonly repairCommands?: readonly PreparationCommand[];
+  /** How many scoped checks may run at once, each in a snapshot its worker owns; unset means one. */
+  readonly concurrency?: number;
 }
 function isScopedExecution(value: unknown): value is ScopedExecutionDefinition {
-  if (!isRecord(value) || Object.keys(value).some(k => !["mechanicalProviders", "profiles", "version", "repairCommands"].includes(k)) || value["version"] !== "scoped-execution/1" || !Array.isArray(value["profiles"]) || !Array.isArray(value["mechanicalProviders"])) return false;
+  if (!isRecord(value) || Object.keys(value).some(k => !["mechanicalProviders", "profiles", "version", "repairCommands", "concurrency"].includes(k)) || value["version"] !== "scoped-execution/1" || !Array.isArray(value["profiles"]) || !Array.isArray(value["mechanicalProviders"])) return false;
+  if (value["concurrency"] !== undefined && (!Number.isSafeInteger(value["concurrency"]) || Number(value["concurrency"]) < 1)) return false;
   const repairs = value["repairCommands"];
   if (repairs !== undefined && (!Array.isArray(repairs) || new Set(repairs.map(r => isRecord(r) ? r["id"] : null)).size !== repairs.length || !repairs.every(r => isRecord(r) && Object.keys(r).sort().join(",") === "command,id,timeoutMs" && typeof r["id"] === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(r["id"]) && Array.isArray(r["command"]) && r["command"].length > 0 && r["command"].every(a => typeof a === "string" && a.length > 0 && !a.includes("\0")) && Number.isSafeInteger(r["timeoutMs"]) && Number(r["timeoutMs"]) > 0 && Number(r["timeoutMs"]) <= 3600000))) return false;
   const safe = (v: unknown) => typeof v === "string" && v.length > 0 && !v.startsWith("/") && !v.includes("\\") && !v.includes("\0") && !v.replace(/\/$/, "").split("/").some(p => p === ".." || p === "." || p === "") && !v.split("/").includes(".git") && !v.split("/").includes("node_modules");
