@@ -617,6 +617,25 @@ describe("review evidence beside a scoped check", () => {
     expect((await harness.cli(["record"])).code).toBe(EXIT_OK);
   });
 
+  it("accepts the scoped check's retained manifest resubmitted through submit-evidence", { timeout: 120000 }, async () => {
+    const harness = await makeHarness(scopedCheckOverrides(), true);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    const submitted = await harness.cli(["submit-evidence", "--manifest", await emitGreenReview(harness)]);
+    expect(submitted.code, submitted.err).toBe(EXIT_OK);
+    const gated = await harness.cli(["gate"]);
+    expect(gated.code, gated.err).toBe(EXIT_OK);
+    const runId = new RegExp(`passed ${SCOPED_CHECK}: .*; retained (\\S+)`).exec(gated.out)?.[1];
+    expect(runId, gated.out).toBeDefined();
+    const root = await harness.artifacts.resolveRunRoot({ providerId: SCOPED_CHECK, runId: runId! });
+    if (!root.ok) throw new Error(`run root unavailable: ${root.reason}`);
+    // Only the check's retained output, read through the scoped session, can confirm its binding.
+    const resubmitted = await harness.cli(["submit-evidence", "--manifest", path.join(root.runRoot.path, "manifest.json")]);
+    expect(resubmitted.code, resubmitted.err).toBe(EXIT_OK);
+    expect(resubmitted.out).toContain("accepted (manifestDigest");
+    // The gate already published this exact manifest, so the resubmission is recognized as the same publication.
+    expect(resubmitted.out).toContain("check.passed: idempotent");
+  });
+
   it("admits a concluded outcome end to end", { timeout: 120000 }, async () => {
     const harness = await makeHarness(scopedCheckOverrides(), true);
     expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
