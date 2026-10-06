@@ -10,6 +10,7 @@
 import { submitManifest } from "@agent-delivery-harness/kernel";
 import type { CommandContext, CommandDescriptor, CommandResult } from "../boundary.ts";
 import { oneLine } from "../run-surface.ts";
+import { ScopedChecks } from "../scoped-checks.ts";
 
 function manifestPathsFrom(args: readonly string[]): string[] | undefined {
   const paths: string[] = [];
@@ -68,10 +69,22 @@ export const submitEvidenceCommand: CommandDescriptor = {
     }
 
     const wiring = await context.wire();
-    const outcome = await submitManifest(
-      { rootDir: context.rootDir, manifestPath, config: context.config },
-      { captureCandidate: wiring.captureCandidate, artifacts: context.artifacts, ...wiring.storageOptions },
-    );
+    // Scoped check bindings are captured for every manifest, so a scoped
+    // provider needs the plan rebuilt for the current candidate and base, as
+    // the gate builds it. The kernel still refuses a plan that is not current.
+    let session: ScopedChecks | undefined;
+    let outcome: Awaited<ReturnType<typeof submitManifest>>;
+    try {
+      if (context.config.providers.some(p => p.check?.scope)) {
+        const capture = await wiring.captureCandidate();
+        if (capture.ok) session = await ScopedChecks.create(context, capture.candidate);
+      }
+      outcome = await submitManifest(
+        { rootDir: context.rootDir, manifestPath, config: context.config },
+        { captureCandidate: wiring.captureCandidate, artifacts: context.artifacts, ...wiring.storageOptions,
+          ...(session ? { scopedPlan: await session.plan(), readOutput: session.readOutput } : {}) },
+      );
+    } finally { await session?.cleanup(); }
 
     if (outcome.status === "accepted") {
       const lines = outcome.records.map(
