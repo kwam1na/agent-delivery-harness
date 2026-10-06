@@ -868,3 +868,21 @@ it("prepare runs the first declared mechanical check first, the rest cheapest fi
   expect(await f.run("prepare")).toBe(1);
   expect(order()).toEqual(["checking check.a", "checking check.c"]);
 }, 60000);
+it("does not let an unreferenced profile sharing a setup remove tracked source", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const a = f.config.providers[0]!;
+  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "if(!require('fs').existsSync('source.txt'))process.exit(5);require('fs').writeFileSync('result-a.json','{}')"] } }],
+    obligations: [f.config.obligations[0]!],
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a"],
+      profiles: [...f.config.scopedExecution!.profiles, { ...f.config.scopedExecution!.profiles[0]!, id: "unreferenced", mutableOutputs: ["source.txt"] }] } });
+  expect(await f.run("prepare"), f.err.join("\n") + f.out.join("\n")).toBe(0);
+}, 30000);
+it("does not share a full-Git snapshot with a file-only profile of the same dependency setup", async () => {
+  // Declared full first, so the full tree exists when the file-only check would otherwise borrow it.
+  const f = await sharedSetupFixture(id => `const fs=require('fs');if('${id}'==='c'&&fs.existsSync('.git'))process.exit(6);fs.writeFileSync('result-${id}.json','{}')`);
+  f.setConfig({ ...f.config, providers: f.config.providers.filter(p => p.id !== "check.b"), obligations: f.config.obligations.filter(o => !o.providers.includes("check.b")),
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a", "check.c"],
+      profiles: f.config.scopedExecution!.profiles.filter(p => p.id !== "pb").map(p => ({ ...p, gitContext: p.id === "pa" ? "full" as const : "none" as const })) } });
+  expect(await f.run("prepare"), f.err.join("\n") + f.out.join("\n")).toBe(0);
+  expect(await f.installs()).toBe("11");
+}, 60000);

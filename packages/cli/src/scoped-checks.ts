@@ -151,8 +151,10 @@ export class ScopedChecks {
     const secrets = check.scope!.environment.filter(e => e.kind === "credential").map(e => this.context.env[e.name]).filter((v): v is string => !!v);
     try {
       const key = setupKey(profile);
-      // Every profile sharing this setup may write its own outputs in the shared tree.
-      const sharedOutputs = [...new Set(this.context.config.scopedExecution!.profiles.filter(p => setupKey(p) === key).flatMap(p => p.mutableOutputs))];
+      // Every scoped check's profile sharing this setup may write its own outputs in the shared tree;
+      // only those profiles passed the overlap refusal in create().
+      const sharedOutputs = [...new Set(this.context.config.scopedExecution!.profiles
+        .filter(p => setupKey(p) === key && this.context.config.providers.some(q => q.check?.scope?.profile === p.id)).flatMap(p => p.mutableOutputs))];
       let snapshot = this.snapshots.get(key);
       if (!snapshot) {
         // Both invocation paths await each execution. Retain only consecutive
