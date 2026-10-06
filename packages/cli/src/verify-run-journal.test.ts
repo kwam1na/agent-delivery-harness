@@ -19,7 +19,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   MAX_RUN_PROVIDER_ID,
   captureGitCandidate,
@@ -37,6 +37,7 @@ import {
 } from "@agent-delivery-harness/kernel";
 import { EXIT_OK, EXIT_POLICY, EXIT_USAGE, runCli, type CliRuntime } from "./index.ts";
 import { resolveRunSurface } from "./run-surface.ts";
+import { ScopedChecks } from "./scoped-checks.ts";
 
 const exec = promisify(execFile);
 const cleanups: string[] = [];
@@ -564,6 +565,92 @@ describe("the composite admit command", () => {
     expect(unprepared.code).toBe(EXIT_POLICY);
     expect(unprepared.err).toContain("review_context_requires_receipt");
     expect(await readdir(path.join(harness.dir, "telemetry/delivery-runs")).catch(() => [])).toEqual([]);
+  });
+});
+
+const SCOPED_CHECK = "fixture.scoped-check";
+
+/** One scoped check provider and its obligation beside the review provider. */
+function scopedCheckOverrides(): Partial<HarnessConfigInput> {
+  const review = makeConfig().obligations[0]!;
+  return {
+    providers: [
+      { id: PROVIDER.id, findingCodes: [] },
+      { id: SCOPED_CHECK, findingCodes: [], check: {
+        command: [process.execPath, "-e", "require('fs').writeFileSync('result.json','{}')"], timeoutMs: 5000, outputs: ["result.json"],
+        scope: { version: "scoped-check/1", files: ["src.txt"], memberships: [], tests: [], cwd: ".", profile: "fixture", environment: [] },
+      } },
+    ],
+    obligations: [review, { ...review, id: "check.passed", activation: { kind: "always" }, providers: [SCOPED_CHECK],
+      acceptedPayloadSpecs: ["checks.passed/1"], humanWaiverAllowed: false, allowedResolutionKinds: ["satisfied_evidence"] }],
+    scopedExecution: { version: "scoped-execution/1", mechanicalProviders: [],
+      profiles: [{ id: "fixture", gitContext: "none", dependencyInputs: [], mutableOutputs: ["result.json"], credentialIdentities: {} }] },
+  } as Partial<HarnessConfigInput>;
+}
+
+/** Emits green review evidence for the current prepared candidate and returns the manifest path. */
+async function emitGreenReview(harness: Harness): Promise<string> {
+  const reviewed = await harness.cli(["review-context", "--json"]);
+  expect(reviewed.code, reviewed.err).toBe(EXIT_OK);
+  const contextDir = await mkdtemp(path.join(os.tmpdir(), "dh-scoped-context-"));
+  cleanups.push(contextDir);
+  const contextPath = path.join(contextDir, "review-context.json");
+  await writeFile(contextPath, reviewed.out);
+  const outcome = { spec: "review-outcome/1", contextDigest: (JSON.parse(reviewed.out) as { digest: string }).digest,
+    verdict: "green", reviewers: [{ id: "correctness", result: "approved" }], findings: [] };
+  const emitted = await harness.cli(["emit-review-evidence", "--context", contextPath], { readStdin: async () => `${JSON.stringify(outcome)}\n` });
+  expect(emitted.code, emitted.err).toBe(EXIT_OK);
+  return emitted.out.trim();
+}
+
+describe("review evidence beside a scoped check", () => {
+  it("submits review evidence for the prepared candidate, then gates and records it", { timeout: 120000 }, async () => {
+    const harness = await makeHarness(scopedCheckOverrides(), true);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    const submitted = await harness.cli(["submit-evidence", "--manifest", await emitGreenReview(harness)]);
+    expect(submitted.code, submitted.err).toBe(EXIT_OK);
+    expect(submitted.out).toContain("review.green: published");
+    const gated = await harness.cli(["gate"]);
+    expect(gated.code, gated.err).toBe(EXIT_OK);
+    expect(gated.out).toContain("review.green=satisfied_evidence");
+    expect(gated.out).toContain("check.passed=satisfied_evidence");
+    expect((await harness.cli(["record"])).code).toBe(EXIT_OK);
+  });
+
+  it("admits a concluded outcome end to end", { timeout: 120000 }, async () => {
+    const harness = await makeHarness(scopedCheckOverrides(), true);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    const reviewed = await harness.cli(["review-context", "--json"]);
+    expect(reviewed.code, reviewed.err).toBe(EXIT_OK);
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "dh-scoped-admit-"));
+    cleanups.push(scratch);
+    const outcomePath = path.join(scratch, "outcome.json");
+    await writeFile(outcomePath, JSON.stringify({ spec: "review-outcome/1", contextDigest: (JSON.parse(reviewed.out) as { digest: string }).digest,
+      verdict: "green", reviewers: [{ id: "correctness", result: "approved" }], findings: [] }));
+    const admitted = await harness.cli(["admit", "--outcome", outcomePath]);
+    expect(admitted.code, admitted.err).toBe(EXIT_OK);
+    expect(admitted.out).toContain("submitted:");
+    expect(admitted.out).toContain("gate: admitted");
+    expect(admitted.out).toContain("recorded telemetry/delivery-runs/record--");
+  });
+
+  it("still refuses a plan built for a candidate whose base has since moved", { timeout: 120000 }, async () => {
+    const harness = await makeHarness(scopedCheckOverrides(), true);
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    const storage = await resolveRecordStorage(harness.dir, { storageNamespace: harness.config.storageNamespace });
+    const stale = await captureGitCandidate({ rootDir: harness.dir, config: harness.config, workspaceId: storage.workspaceId, computeIdentity: withDeliverableIdentity() });
+    if (!stale.ok) throw new Error(`capture failed: ${stale.code}`);
+    await git(harness.dir, "branch", "-f", "origin/main", "HEAD");
+    expect((await harness.cli(["prepare"])).code).toBe(EXIT_OK);
+    const manifestPath = await emitGreenReview(harness);
+    const create = ScopedChecks.create.bind(ScopedChecks);
+    const spy = vi.spyOn(ScopedChecks, "create").mockImplementation(context => create(context, stale.candidate));
+    try {
+      const refused = await harness.cli(["submit-evidence", "--manifest", manifestPath]);
+      expect(spy).toHaveBeenCalled();
+      expect(refused.code).toBe(EXIT_POLICY);
+      expect(refused.err).toContain("scoped_check_plan_required");
+    } finally { spy.mockRestore(); }
   });
 });
 
