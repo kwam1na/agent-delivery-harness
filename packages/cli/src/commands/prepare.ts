@@ -29,7 +29,7 @@ export const prepareCommand: CommandDescriptor = {
   summary: "Run preparation checks; --refresh-record-neutral permits proven artifact-only receipt refresh.",
   // The text prepare has always answered `--help` with, unchanged; the
   // boundary is what prints it now, for every command rather than this one.
-  usage: `${USAGE}\nOrdinary prepare always runs mechanical checks. The refresh flag reuses prior success only when strict validation, policy, wiring and base are unchanged; otherwise it runs the checks.`,
+  usage: `${USAGE}\nOrdinary prepare always runs mechanical checks. The refresh flag reuses prior success only when strict validation, policy, wiring and base are unchanged; otherwise it runs the checks.\nScoped mechanical checks run the first declared check first and the rest cheapest first by recorded duration, one dependency setup at a time, stopping at the first failure.`,
   async run(context: CommandContext): Promise<CommandResult> {
     if (context.args.length > 1 || (context.args.length === 1 && context.args[0] !== "--refresh-record-neutral")) {
       return { kind: "usage", message: USAGE };

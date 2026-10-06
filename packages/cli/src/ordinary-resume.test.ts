@@ -293,6 +293,23 @@ describe("the writer version a save-context observation is written at", () => {
     expect(await f.journal()).toEqual(before);
   });
 
+  it("names every bounded contract member and its limit in its help, and a refusal names the member, its limit and that help", async () => {
+    const f = await fixture({ version: "2" });
+    const bounds = [
+      "contract.objective: bounded free text: a non-empty string of at most 2000 characters",
+      "contract.acceptanceCriteria: 1 to 32 bounded acceptance criteria, each bounded free text: a non-empty string of at most 2000 characters",
+      "contract.finishLine: a bounded label: a non-empty string of at most 128 characters",
+      "stage: a bounded label: a non-empty string of at most 128 characters",
+    ];
+    expect(await f.run("save-context", "--help")).toBe(0);
+    for (const line of bounds) expect(f.output.join("\n")).toContain(line);
+    expect(await f.run("prepare"), f.errors.join("\n")).toBe(0);
+    expect(await f.run("save-context", "--json", JSON.stringify({ contract: { ...contract, finishLine: "x".repeat(129) }, stage: "work" }))).toBe(1);
+    const reported = f.errors.join("\n");
+    expect(reported).toContain("/payload/contract/finishLine: expected a bounded label: a non-empty string of at most 128 characters");
+    expect(reported).toContain("`save-context --help` lists every bound.");
+  }, 30000);
+
   // Both operator members are spread conditionally, so both are asked at both
   // writer versions: a fix proven only for contract leaves stage unfalsified.
   it.each([["1", "contract"], ["2", "contract"], ["1", "stage"], ["2", "stage"]] as const)(

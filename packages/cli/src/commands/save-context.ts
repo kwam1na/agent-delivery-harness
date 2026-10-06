@@ -1,13 +1,20 @@
+import { describeRunEventPayload, RUN_EVENT_SPEC, type RunEventPayloadMemberGrammar } from "@agent-delivery-harness/kernel";
 import { buildRunEvent } from "../run-surface.ts";
 import { installedRelease, ordinaryEventWriter, policyDigest, recoveryBlocker, recoveryRun, rejectionDetails } from "../ordinary-context.ts";
 import type { CommandDescriptor } from "../boundary.ts";
 
 const USAGE = "Usage: delivery-harness save-context --json '{\"contract\":{\"objective\":\"...\",\"acceptanceCriteria\":[\"...\"],\"finishLine\":\"merge-ready\"},\"stage\":\"work\"}'";
+// Read from the store's own grammar, so the stated limits are the enforced ones.
+const members = describeRunEventPayload("context.saved", RUN_EVENT_SPEC)!.members;
+const bound = (name: string, member: RunEventPayloadMemberGrammar) => `  ${name}: ${member.constraint}${member.items ? `, each ${member.items.constraint}` : ""}`;
+const BOUNDS = ["Bounds:",
+  ...members.find(m => m.name === "contract")!.members!.map(m => bound(`contract.${m.name}`, m)),
+  bound("stage", members.find(m => m.name === "stage")!)].join("\n");
 
 export const saveContextCommand: CommandDescriptor = {
   name: "save-context", sourceId: "delivery-harness.cli.save-context",
   summary: "Save a bounded delivery contract and stage observation in the current run.",
-  usage: USAGE,
+  usage: `${USAGE}\n${BOUNDS}`,
   async run(context) {
     if (context.args.length !== 2 || context.args[0] !== "--json") return { kind: "usage", message: USAGE };
     let input: { contract?: unknown; stage?: unknown };
@@ -44,7 +51,7 @@ export const saveContextCommand: CommandDescriptor = {
       { reuseExistingTimestamp: true },
     );
     if (!appended.ok) return { kind: "blocked", blockers: [recoveryBlocker("resume_context_invalid",
-      "Context was refused by the bounded run-event contract; inspect contract, stage, and secret-free inputs.",
+      "Context was refused by the bounded run-event contract; inspect contract, stage, and secret-free inputs. `save-context --help` lists every bound.",
       `run ${run.runId}: ${rejectionDetails(appended.rejections)}`)] };
     return { kind: "ok", summary: `saved ordinary context for ${run.runId}; stage is an observation, not evidence` };
   },

@@ -51,7 +51,7 @@ it.each(["none", "full"] as const)("prepares and verifies portable evidence from
   await exec("git", ["update-ref", "refs/remotes/origin/main", head], { cwd: foreign });
   expect(await runCli(["verify"], { ...runtime, cwd: foreign }), f.err.join("\n")).toBe(0);
 }, 60000);
-it("bounds live snapshots across profile changes while retaining same-profile reuse and durable outputs", async () => {
+it("bounds live snapshots across dependency setup changes while retaining same-setup reuse and durable outputs", async () => {
   const f = await fixture();
   const template = f.config.providers[0]!;
   const providers = ["a", "a2", "b", "a3"].map(id => ({ ...template, id: `check.${id}`, check: { ...template.check!,
@@ -62,7 +62,7 @@ it("bounds live snapshots across profile changes while retaining same-profile re
     obligations: providers.map(p => ({ ...f.config.obligations[0]!, id: `${p.id}.passed`, providers: [p.id] })),
     scopedExecution: { ...f.config.scopedExecution!, profiles: ["a", "b"].map(id => ({ ...f.config.scopedExecution!.profiles[0]!, id,
       mutableOutputs: providers.flatMap(p => p.check.outputs),
-      dependencies: { command: [process.execPath, "-e", "const fs=require('fs');fs.mkdirSync('node_modules');fs.writeFileSync('node_modules/private.bin',Buffer.alloc(65536,1))"], timeoutMs: 5000 },
+      dependencies: { command: [process.execPath, "-e", `const fs=require('fs');fs.mkdirSync('node_modules');fs.writeFileSync('node_modules/private-${id}.bin',Buffer.alloc(65536,1))`], timeoutMs: 5000 },
     })) },
   });
   const snapshots = await import("./check-snapshot.ts"), original = snapshots.createCheckSnapshot;
@@ -85,10 +85,11 @@ it("bounds live snapshots across profile changes while retaining same-profile re
   } finally { spy.mockRestore(); }
 }, 30000);
 
-it("refuses a new profile when inactive snapshot cleanup fails and retries cleanup at gate exit", async () => {
+it("refuses a new dependency setup when inactive snapshot cleanup fails and retries cleanup at gate exit", async () => {
   const f = await fixture(); f.env["FAIL"] = "0";
   f.setConfig({ ...f.config, providers: f.config.providers.map(p => ({ ...p, check: { ...p.check!, scope: { ...p.check!.scope!, profile: p.id } } })),
-    scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.providers.map(p => ({ ...f.config.scopedExecution!.profiles[0]!, id: p.id })) },
+    scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.providers.map(p => ({ ...f.config.scopedExecution!.profiles[0]!, id: p.id,
+      dependencies: { command: [process.execPath, "-e", `// setup for ${p.id}`] as [string, ...string[]], timeoutMs: 5000 } })) },
   });
   const snapshots = await import("./check-snapshot.ts"), original = snapshots.createCheckSnapshot;
   let cleanupCalls = 0; const roots: string[] = [];
@@ -799,3 +800,89 @@ it("does not attribute reused snapshot setup to a sibling check attempt", async 
   expect(result.providers[0]!.attempts[0]!.diagnostic).toMatchObject({ dependency: { command: { exitCode: 0 } }, phase: "complete" });
   expect(result.providers[1]!.attempts[0]!.diagnostic).not.toHaveProperty("dependency");
 }, 30000);
+
+/** Three mechanical checks declared a, b, c whose profiles pa and pc share one dependency setup and pb has its own. */
+async function sharedSetupFixture(commandFor: (id: string) => string) {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const logDir = await mkdtemp(path.join(tmpdir(), "scoped-installs-")); dirs.push(logDir);
+  const log = path.join(logDir, "installs.log");
+  const setup = (key: string) => ({ command: [process.execPath, "-e", `require('fs').appendFileSync(${JSON.stringify(log)},'${key}')`] as [string, ...string[]], timeoutMs: 5000 });
+  const template = f.config.providers[0]!;
+  const providers = ["a", "b", "c"].map(id => ({ ...template, id: `check.${id}`, check: { ...template.check!,
+    command: [process.execPath, "-e", commandFor(id)] as [string, ...string[]],
+    outputs: [`result-${id}.json`], scope: { ...template.check!.scope!, environment: [], profile: `p${id}` } } }));
+  f.setConfig({ ...f.config, providers,
+    obligations: providers.map(p => ({ ...f.config.obligations[0]!, id: `${p.id}.passed`, providers: [p.id] })),
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: providers.map(p => p.id),
+      profiles: ["a", "b", "c"].map(id => ({ ...f.config.scopedExecution!.profiles[0]!, id: `p${id}`, mutableOutputs: [`result-${id}.json`], dependencies: setup(id === "b" ? "2" : "1") })) } });
+  return { ...f, installs: () => readFile(log, "utf8") };
+}
+it("installs each shared dependency setup once per prepare and removes other profiles' outputs before a check", async () => {
+  // Each check refuses to start beside any result file, so an output left by a sibling profile would fail it.
+  const f = await sharedSetupFixture(id => `const fs=require('fs');if(fs.readdirSync('.').some(n=>n.startsWith('result-')))process.exit(4);fs.writeFileSync('result-${id}.json','{}')`);
+  expect(await f.run("prepare"), f.err.join("\n") + f.out.join("\n")).toBe(0);
+  expect(await f.installs()).toBe("12");
+  expect(f.out.join("\n").match(/checking check\.\w/g)).toEqual(["checking check.a", "checking check.c", "checking check.b"]);
+}, 60000);
+it("refuses a check that writes another profile's output in a shared snapshot", async () => {
+  const f = await sharedSetupFixture(id => `const fs=require('fs');fs.writeFileSync('result-${id}.json','{}');${id === "a" ? "fs.writeFileSync('result-c.json','{}')" : ""}`);
+  expect(await f.run("prepare")).toBe(1);
+  expect(f.err.join("\n")).toContain("check_snapshot_drift");
+  expect(f.out.join("\n")).not.toContain("checking check.c");
+}, 60000);
+it.each(["prepare", "gate"] as const)("%s prints a failed check's command, output tail and retained attempt", async command => {
+  const f = await fixture();
+  const b = f.config.providers[1]!;
+  f.setConfig({ ...f.config, providers: [f.config.providers[0]!, { ...b, check: { ...b.check!, command: [process.execPath, "-e", "for(let i=0;i<100;i++)console.log('line-'+i);process.exit(3)"] } }],
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: command === "prepare" ? ["check.b"] : [] } });
+  if (command === "gate") expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run(command)).toBe(1);
+  const out = f.out.join("\n");
+  expect(f.err.join("\n")).toContain("check_command_failed");
+  expect(out).toContain(`command (cwd .): ${process.execPath} -e "for(let i=0;i<100;i++)console.log('line-'+i);process.exit(3)"`);
+  expect(out).toContain("exit 3");
+  expect(out).toContain("line-60"); expect(out).toContain("line-99"); expect(out).not.toContain("line-59");
+  const retained = /failed check\.b: check_command_failed; attempt (\S+) retained at (\S+terminal\.json)/.exec(out);
+  expect(retained, out).not.toBeNull();
+  expect(JSON.parse(await readFile(retained![2]!, "utf8")).entry.attempt).toMatchObject({ attemptId: retained![1], providerId: "check.b", status: "failed" });
+}, 60000);
+it("prepare runs the first declared mechanical check first, the rest cheapest first by recorded duration, and stops at the first failure", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const sleep = (ms: number) => `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${ms});`;
+  const template = f.config.providers[0]!;
+  const providers = [["a", 1500], ["b", 700], ["c", 0]].map(([id, ms]) => ({ ...template, id: `check.${id}`, check: { ...template.check!,
+    command: [process.execPath, "-e", `${sleep(ms as number)}if('${id}'==='c'&&process.env.FAIL==='1')process.exit(3);require('fs').writeFileSync('result-${id}.json','{}')`] as [string, ...string[]],
+    outputs: [`result-${id}.json`], scope: { ...template.check!.scope!, environment: [{ name: "FAIL", kind: "flag" as const }] } } }));
+  f.setConfig({ ...f.config, providers,
+    obligations: providers.map(p => ({ ...f.config.obligations[0]!, id: `${p.id}.passed`, providers: [p.id] })),
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: providers.map(p => p.id),
+      profiles: [{ ...f.config.scopedExecution!.profiles[0]!, mutableOutputs: providers.map(p => p.check.outputs[0]!) }] } });
+  const order = () => f.out.join("\n").match(/checking check\.\w/g);
+  const change = async (text: string) => { await writeFile(path.join(f.dir, "source.txt"), text); await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", text); };
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(order()).toEqual(["checking check.a", "checking check.b", "checking check.c"]); // Never timed: declaration order.
+  await change("second");
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(order()).toEqual(["checking check.a", "checking check.c", "checking check.b"]);
+  await change("third"); f.env["FAIL"] = "1";
+  expect(await f.run("prepare")).toBe(1);
+  expect(order()).toEqual(["checking check.a", "checking check.c"]);
+}, 60000);
+it("does not let an unreferenced profile sharing a setup remove tracked source", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const a = f.config.providers[0]!;
+  f.setConfig({ ...f.config, providers: [{ ...a, check: { ...a.check!, command: [process.execPath, "-e", "if(!require('fs').existsSync('source.txt'))process.exit(5);require('fs').writeFileSync('result-a.json','{}')"] } }],
+    obligations: [f.config.obligations[0]!],
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a"],
+      profiles: [...f.config.scopedExecution!.profiles, { ...f.config.scopedExecution!.profiles[0]!, id: "unreferenced", mutableOutputs: ["source.txt"] }] } });
+  expect(await f.run("prepare"), f.err.join("\n") + f.out.join("\n")).toBe(0);
+}, 30000);
+it("does not share a full-Git snapshot with a file-only profile of the same dependency setup", async () => {
+  // Declared full first, so the full tree exists when the file-only check would otherwise borrow it.
+  const f = await sharedSetupFixture(id => `const fs=require('fs');if('${id}'==='c'&&fs.existsSync('.git'))process.exit(6);fs.writeFileSync('result-${id}.json','{}')`);
+  f.setConfig({ ...f.config, providers: f.config.providers.filter(p => p.id !== "check.b"), obligations: f.config.obligations.filter(o => !o.providers.includes("check.b")),
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a", "check.c"],
+      profiles: f.config.scopedExecution!.profiles.filter(p => p.id !== "pb").map(p => ({ ...p, gitContext: p.id === "pa" ? "full" as const : "none" as const })) } });
+  expect(await f.run("prepare"), f.err.join("\n") + f.out.join("\n")).toBe(0);
+  expect(await f.installs()).toBe("11");
+}, 60000);
