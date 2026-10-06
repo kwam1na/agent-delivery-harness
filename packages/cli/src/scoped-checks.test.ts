@@ -768,8 +768,9 @@ it.each(["stdout", "stderr"])("exports unavailable diagnostics for a real %s buf
 it("retains dependency failure diagnostics after cleanup without claiming the main command ran", async () => {
   const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
   const f = await fixture(); const secret = "dependency-credential-sentinel"; f.env["TOKEN"] = secret;
+  const install = `console.log("DEPENDENCY_STAGE:install " + ${JSON.stringify(secret)});console.error("dependency stderr " + ${JSON.stringify(secret)});process.exit(7)`;
   f.setConfig({ ...f.config, providers: f.config.providers.map(p => ({ ...p, check: { ...p.check!, scope: { ...p.check!.scope!, environment: [...p.check!.scope!.environment, { name: "TOKEN", kind: "credential" }] } } })), scopedExecution: { ...f.config.scopedExecution!, profiles: f.config.scopedExecution!.profiles.map(p => ({ ...p, credentialIdentities: { TOKEN: "dependency-token/v1" },
-    dependencies: { command: [process.execPath, "-e", `console.log("DEPENDENCY_STAGE:install " + ${JSON.stringify(secret)});console.error("dependency stderr " + ${JSON.stringify(secret)});process.exit(7)`], timeoutMs: 5000 },
+    dependencies: { command: [process.execPath, "-e", install], timeoutMs: 5000 },
   })) } });
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(await f.run("gate"), f.err.join("\n")).toBe(1);
@@ -785,7 +786,15 @@ it("retains dependency failure diagnostics after cleanup without claiming the ma
     } });
   }
   expect(JSON.stringify(result)).not.toContain(secret);
-  expect(f.out.join("\n")).not.toContain("checking check.");
+  const out = f.out.join("\n");
+  expect(out).not.toContain("checking check.");
+  // The failure report names the install that ran, not the check that never started.
+  const argv = `command (cwd .): ${process.execPath} -e ${JSON.stringify(install)}`;
+  expect(out).toContain(argv);
+  expect(out).toContain("exit 7");
+  expect(out).toContain("    DEPENDENCY_STAGE:install [REDACTED]");
+  // This fixture spells the sentinel into its own declared argv; the printed output tail stays redacted.
+  expect(out.replaceAll(argv, "")).not.toContain(secret);
 }, 30000);
 it("does not attribute reused snapshot setup to a sibling check attempt", async () => {
   const { readScopedCheckObservations, readScopedCheckDiagnostics } = await import("./index.ts");
@@ -847,16 +856,21 @@ it.each(["prepare", "gate"] as const)("%s prints a failed check's command, outpu
   expect(JSON.parse(await readFile(retained![2]!, "utf8")).entry.attempt).toMatchObject({ attemptId: retained![1], providerId: "check.b", status: "failed" });
 }, 60000);
 it("prepare runs the first declared mechanical check first, the rest cheapest first by recorded duration, and stops at the first failure", async () => {
-  const f = await fixture(); f.env["FAIL"] = "0";
+  const f = await fixture(); f.env["FAIL"] = "0"; f.env["TOKEN"] = "nonreusable-credential";
   const sleep = (ms: number) => `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${ms});`;
   const template = f.config.providers[0]!;
-  const providers = [["a", 1500], ["b", 700], ["c", 0]].map(([id, ms]) => ({ ...template, id: `check.${id}`, check: { ...template.check!,
-    command: [process.execPath, "-e", `${sleep(ms as number)}if('${id}'==='c'&&process.env.FAIL==='1')process.exit(3);require('fs').writeFileSync('result-${id}.json','{}')`] as [string, ...string[]],
-    outputs: [`result-${id}.json`], scope: { ...template.check!.scope!, environment: [{ name: "FAIL", kind: "flag" as const }] } } }));
+  // c is cheap when it passes and slow when it fails; b carries a credential without an identity, so it never reuses an attempt.
+  const providers = [["a", 1500], ["b", 700], ["c", 0], ["d", 0]].map(([id, ms]) => ({ ...template, id: `check.${id}`, check: { ...template.check!,
+    command: [process.execPath, "-e", `if('${id}'==='c'&&process.env.FAIL==='1'){${sleep(1500)}process.exit(3)}${sleep(ms as number)}require('fs').writeFileSync('result-${id}.json','{}')`] as [string, ...string[]],
+    outputs: [`result-${id}.json`], scope: { ...template.check!.scope!, profile: id === "a" ? "pinned" : "installed",
+      environment: [{ name: "FAIL", kind: "flag" as const }, ...id === "b" ? [{ name: "TOKEN", kind: "credential" as const }] : []] } } }));
+  // Only the first check to run in "installed" pays its slow dependency setup, so b, c and d cost what their own commands take.
+  const profile = f.config.scopedExecution!.profiles[0]!;
   f.setConfig({ ...f.config, providers,
     obligations: providers.map(p => ({ ...f.config.obligations[0]!, id: `${p.id}.passed`, providers: [p.id] })),
-    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: providers.map(p => p.id),
-      profiles: [{ ...f.config.scopedExecution!.profiles[0]!, mutableOutputs: providers.map(p => p.check.outputs[0]!) }] } });
+    scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a", "check.b", "check.c"],
+      profiles: [{ ...profile, id: "pinned", mutableOutputs: ["result-a.json"] },
+        { ...profile, id: "installed", mutableOutputs: ["result-b.json", "result-c.json", "result-d.json"], dependencies: { command: [process.execPath, "-e", sleep(1500)], timeoutMs: 5000 } }] } });
   const order = () => f.out.join("\n").match(/checking check\.\w/g);
   const change = async (text: string) => { await writeFile(path.join(f.dir, "source.txt"), text); await f.git("add", "."); await f.git("-c", "commit.gpgsign=false", "commit", "-qm", text); };
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
@@ -864,10 +878,17 @@ it("prepare runs the first declared mechanical check first, the rest cheapest fi
   await change("second");
   expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
   expect(order()).toEqual(["checking check.a", "checking check.c", "checking check.b"]);
+  // c set up the shared tree last time, so it is cheapest only once that setup is taken off; the newly declared d has never run.
+  f.setConfig({ ...f.config, scopedExecution: { ...f.config.scopedExecution!, mechanicalProviders: ["check.a", "check.b", "check.c", "check.d"] } });
   await change("third"); f.env["FAIL"] = "1";
   expect(await f.run("prepare")).toBe(1);
   expect(order()).toEqual(["checking check.a", "checking check.c"]);
-}, 60000);
+  // c's slow failure is now its most recent cost; b's attempt fenced by the stopped run never finished, so b still
+  // costs its last finished attempt; d stays behind every timed check.
+  await change("fourth"); f.env["FAIL"] = "0";
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(order()).toEqual(["checking check.a", "checking check.b", "checking check.c", "checking check.d"]);
+}, 90000);
 it("does not let an unreferenced profile sharing a setup remove tracked source", async () => {
   const f = await fixture(); f.env["FAIL"] = "0";
   const a = f.config.providers[0]!;
