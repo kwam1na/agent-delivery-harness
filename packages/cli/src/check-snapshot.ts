@@ -27,7 +27,8 @@ export interface CheckSnapshot {
   readonly rootDir: string;
   readonly environment: Readonly<Record<string, string>>;
   readonly dependencyDigest: string;
-  verify(options?: { readonly timeoutMs: number }): Promise<void>;
+  /** `outputs` narrows the writable paths to one profile's within a snapshot shared by several. */
+  verify(options?: { readonly timeoutMs?: number; readonly outputs?: readonly string[] }): Promise<void>;
   cleanup(): Promise<void>;
 }
 function inside(root: string, target: string): boolean {
@@ -145,7 +146,7 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
     const dependencyDigest = await inventory(input.outputs);
     // The second digest covers both source and installed dependency bytes and
     // all links. It intentionally excludes only declared mutable output paths.
-    const verify = async (options?: { readonly timeoutMs: number }) => {
+    const verify = async (options?: { readonly timeoutMs?: number; readonly outputs?: readonly string[] }) => {
       const timeoutMs = options?.timeoutMs ?? SNAPSHOT_TIMEOUT_MS;
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > SNAPSHOT_TIMEOUT_MS) throw new CheckSnapshotError("check_snapshot_timeout", "Snapshot deadline must be positive and cannot exceed five minutes.");
       const deadline = performance.now() + timeoutMs;
@@ -156,7 +157,7 @@ export async function createCheckSnapshot(input: SnapshotRequest): Promise<Check
         return result.stdout.trim();
       };
       await inventory([], false, deadline);
-      if (await verifyGit("write-tree") !== input.candidate.treeSha || await verifyGit("rev-parse", "HEAD") !== candidateCommit || await verifyGit("rev-parse", `${candidateRef}^{tree}`) !== input.candidate.treeSha || await verifyGit("rev-parse", baseRef) !== input.candidate.base.tipSha || dependencyDigest !== await inventory(input.outputs, false, deadline)) throw new CheckSnapshotError("check_snapshot_drift", "Execution changed the private source, dependencies or pinned Git context.");
+      if (await verifyGit("write-tree") !== input.candidate.treeSha || await verifyGit("rev-parse", "HEAD") !== candidateCommit || await verifyGit("rev-parse", `${candidateRef}^{tree}`) !== input.candidate.treeSha || await verifyGit("rev-parse", baseRef) !== input.candidate.base.tipSha || dependencyDigest !== await inventory(options?.outputs ?? input.outputs, false, deadline)) throw new CheckSnapshotError("check_snapshot_drift", "Execution changed the private source, dependencies or pinned Git context.");
     };
     return { rootDir, commandRoot: path.join(controlRoot, "commands"), environment, dependencyDigest, verify, cleanup };
   } catch (error) {

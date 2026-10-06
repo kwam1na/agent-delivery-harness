@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { captureCheckBindings, captureCheckOutputSnapshots, candidateTreeEvidenceReader, candidateTreeSourceReader, createExecPort, digestCanonical, resolveRecordStorage, runGitCommand, scopedCheckIdentity, selectScopedCheckAttempt, sha256Hex, submitManifest,
-  type CandidateBinding, type CapturedCandidate, type ProviderRegistration, type ScopedCheckPlan, type ScopedRuntimeObservation, type RecordCandidateBinding } from "@agent-delivery-harness/kernel";
+  type CandidateBinding, type CapturedCandidate, type ProviderRegistration, type ScopedCheckPlan, type ScopedExecutionProfile, type ScopedRuntimeObservation, type RecordCandidateBinding } from "@agent-delivery-harness/kernel";
 import type { CommandContext } from "./boundary.ts";
 import { AttemptStore, type AttemptPayload, type StoredAttempt } from "./scoped-attempts.ts";
 import { CheckSnapshotError, createCheckSnapshot, executionPath, type CheckSnapshot } from "./check-snapshot.ts";
@@ -28,6 +28,11 @@ async function executableIdentity(command: string, root: string, searchPath: str
   }
   throw new CheckSnapshotError("check_runtime_unavailable", "A declared execution tool cannot be resolved and bound.");
 }
+/** Checks whose profiles declare the same dependency setup and Git context share one installed snapshot. */
+function setupKey(profile: ScopedExecutionProfile): string {
+  return digestCanonical({ dependencies: profile.dependencies ?? null, dependencyInputs: [...profile.dependencyInputs].sort(), gitContext: profile.gitContext ?? "full" });
+}
+const shownArgument = (argument: string) => /^[\w@%+=:,./-]+$/.test(argument) ? argument : JSON.stringify(argument);
 export class ScopedChecks {
   private readonly snapshots = new Map<string, CheckSnapshot>();
   private readonly owned = new Map<string, Awaited<ReturnType<AttemptStore["allocate"]>>>();
@@ -104,8 +109,30 @@ export class ScopedChecks {
       for (const row of await this.stores.get(id)!.read()) if (row.attempt.status !== "passed" && row.attempt.inputDigest !== this.identities.get(id)!.inputDigest) this.context.write(`superseded ${id}: ${row.attempt.status} attempt ${row.attempt.attemptId} has different inputs`);
     }
   }
+  private profileOf(id: string): ScopedExecutionProfile {
+    const scope = this.context.config.providers.find(p => p.id === id)!.check!.scope!;
+    return this.context.config.scopedExecution!.profiles.find(p => p.id === scope.profile)!;
+  }
+  /** The first declared check runs first: it is where an adopter puts a selection guard that must precede
+   * every other check. The rest run cheapest first, each costing its most recent passed or failed attempt's
+   * duration less that attempt's own dependency setup; never-timed checks follow timed ones and ties keep
+   * declaration order. Checks then run one dependency setup at a time, in the order each setup first
+   * appears, so each setup installs once. */
+  private async cheapestFirst(ids: readonly string[]): Promise<string[]> {
+    const cost = new Map<string, number>();
+    for (const id of ids) {
+      const last = (await this.stores.get(id)!.read()).filter(r => r.attempt.status === "passed" || r.attempt.status === "failed").at(-1)?.payload;
+      cost.set(id, last?.durationMs === undefined ? Infinity : last.durationMs - (last.diagnostic?.dependency?.durationMs ?? 0));
+    }
+    const [first, ...rest] = ids;
+    if (first === undefined) return [];
+    const byCost = [first, ...rest.sort((a, b) => cost.get(a)! === cost.get(b)! ? 0 : cost.get(a)! < cost.get(b)! ? -1 : 1)];
+    const keys = byCost.map(id => setupKey(this.profileOf(id)));
+    return [...new Set(keys)].flatMap(key => byCost.filter((_, index) => keys[index] === key));
+  }
+  /** Stops at the first failure: a failed mechanical check publishes no receipt. */
   async satisfyMechanical(): Promise<void> {
-    const ids = this.context.config.scopedExecution!.mechanicalProviders;
+    const ids = await this.cheapestFirst(this.context.config.scopedExecution!.mechanicalProviders);
     await this.fenceNonReusable(ids);
     for (const id of ids) {
       if ((await this.selected(id))?.attempt.status === "passed") { this.context.write(`reusing mechanical ${id}`); continue; }
@@ -123,24 +150,27 @@ export class ScopedChecks {
     const store = this.stores.get(provider.id)!;
     const secrets = check.scope!.environment.filter(e => e.kind === "credential").map(e => this.context.env[e.name]).filter((v): v is string => !!v);
     try {
-      const key = profile.id;
+      const key = setupKey(profile);
+      // Every profile sharing this setup may write its own outputs in the shared tree.
+      const sharedOutputs = [...new Set(this.context.config.scopedExecution!.profiles.filter(p => setupKey(p) === key).flatMap(p => p.mutableOutputs))];
       let snapshot = this.snapshots.get(key);
       if (!snapshot) {
         // Both invocation paths await each execution. Retain only consecutive
-        // same-profile reuse; durable outputs no longer need the private tree.
+        // same-setup reuse; durable outputs no longer need the private tree.
         for (const [previousKey, previous] of this.snapshots) {
           await previous.cleanup();
           this.snapshots.delete(previousKey);
         }
-        snapshot = await createCheckSnapshot({ rootDir: this.context.rootDir, candidate: this.candidate, outputs: profile.mutableOutputs, gitContext: profile.gitContext ?? "full", environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" }, ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}),
+        snapshot = await createCheckSnapshot({ rootDir: this.context.rootDir, candidate: this.candidate, outputs: sharedOutputs, gitContext: profile.gitContext ?? "full", environment: { PATH: this.context.env["PATH"] ?? process.env["PATH"] ?? "/usr/bin:/bin" }, ...(profile.dependencies ? { dependencies: profile.dependencies } : {}), ...(this.context.signal ? { signal: this.context.signal } : {}),
           onDependencyResult: (result, durationMs) => { diagnostic = { ...diagnostic, dependency: scopedDependencyDiagnostic(result, durationMs, secrets) }; },
         });
         this.snapshots.set(key, snapshot);
       }
       diagnostic = { ...diagnostic, phase: "pre-command-verification" };
-      await snapshot.verify();
-      // A sibling or dependency setup cannot supply this command's result.
-      for (const output of check.outputs ?? []) await rm(path.join(snapshot.rootDir, output), { recursive: true, force: true });
+      // A sibling or dependency setup cannot supply this command's result, and
+      // another profile's outputs are not this profile's to read or write.
+      for (const output of [...check.outputs ?? [], ...sharedOutputs.filter(o => !profile.mutableOutputs.includes(o))]) await rm(path.join(snapshot.rootDir, output), { recursive: true, force: true });
+      await snapshot.verify({ outputs: profile.mutableOutputs });
       const injected = Object.fromEntries(check.scope!.environment.filter(e => this.context.env[e.name] !== undefined).map(e => [e.name, this.context.env[e.name]!]));
       this.context.write(`checking ${provider.id}: attempt ${attempt.attemptId}`);
       diagnostic = { ...diagnostic, phase: "command" };
@@ -153,7 +183,7 @@ export class ScopedChecks {
       payload = { outputs: [], durationMs: Date.now() - started, log: redactScopedStreams(result, secrets).slice(-4000), dependencyDigest: snapshot.dependencyDigest };
       if (result.code !== 0 || this.context.signal?.aborted) throw new CheckSnapshotError("check_command_failed", `Declared scoped check ${provider.id} did not complete successfully (exit ${result.code}).`);
       diagnostic = { ...diagnostic, phase: "post-command-verification" };
-      await snapshot.verify();
+      await snapshot.verify({ outputs: profile.mutableOutputs });
       diagnostic = { ...diagnostic, phase: "output-capture" };
       const outputs = await captureCheckOutputSnapshots(snapshot.rootDir, check.outputs ?? []);
       if (!outputs || outputs.some(o => secrets.some(secret => Buffer.from(o.base64, "base64").includes(Buffer.from(secret))))) throw new CheckSnapshotError("check_output_missing", "A retained output is absent, corrupt, escaped or contains credential bytes.");
@@ -182,11 +212,19 @@ export class ScopedChecks {
       if (deferSubmission) this.submissions.push(submit); else await submit();
       this.context.write(`passed ${provider.id}: ${Date.now() - started}ms including snapshot setup; retained ${runId}`);
     } catch (error) {
-      if (!terminal) await store.finish(attempt, this.context.signal?.aborted ? "interrupted" : "failed", { ...payload, durationMs: Date.now() - started,
+      const status = this.context.signal?.aborted ? "interrupted" : "failed";
+      if (!terminal) await store.finish(attempt, status, { ...payload, durationMs: Date.now() - started,
         diagnostic: { ...diagnostic, failure: scopedDiagnosticFailure(error, executionErrorCode) },
         ...(error instanceof CheckSnapshotError ? { log: `${payload.log ?? ""}\n${error.code}`.slice(-4000) } : {}) });
-      const damaged = this.snapshots.get(profile.id);
-      this.snapshots.delete(profile.id);
+      // Setup failures report the dependency command that ran; every other failure reports the check's own.
+      const ran = diagnostic.phase === "snapshot-setup" && diagnostic.dependency
+        ? { argv: profile.dependencies!.command, cwd: ".", result: diagnostic.dependency.command } : { argv: check.command, cwd: check.scope!.cwd, result: diagnostic.command };
+      this.context.write([`${status} ${provider.id}: ${error instanceof CheckSnapshotError ? error.code : "unclassified"}; attempt ${attempt.attemptId} retained at ${store.terminalPath(attempt)}`,
+        `  command (cwd ${ran.cwd}): ${ran.argv.map(shownArgument).join(" ")}`,
+        ...("unavailable" in ran.result ? [`  output ${ran.result.unavailable}`]
+          : [`  exit ${ran.result.exitCode ?? "unavailable"}; output tail (last 40 lines):`, ...ran.result.outputTail.trimEnd().split("\n").slice(-40).map(line => `    ${line}`)])].join("\n"));
+      const damaged = this.snapshots.get(setupKey(profile));
+      this.snapshots.delete(setupKey(profile));
       await damaged?.cleanup();
       throw error;
     }

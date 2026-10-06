@@ -49,8 +49,9 @@ export class AttemptStore {
     const rows = await this.read();
     const running = rows.find(row => row.attempt.generation === attempt.generation)?.attempt;
     if (running?.status !== "running" || digestCanonical(running) !== digestCanonical(attempt)) throw corrupt();
-    await this.publish(path.join(this.root, String(attempt.generation), "terminal.json"), { attempt: { ...attempt, status }, payload });
+    await this.publish(this.terminalPath(attempt), { attempt: { ...attempt, status }, payload });
   }
+  terminalPath(attempt: ScopedCheckAttempt): string { return path.join(this.root, String(attempt.generation), "terminal.json"); }
   private async load(file: string): Promise<StoredAttempt> {
     const raw = JSON.parse(await readFile(file, "utf8")) as { digest?: string; entry?: StoredAttempt };
     const row = raw.entry;
