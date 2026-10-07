@@ -104,7 +104,7 @@ async function providerAdmission(
           if (!(error instanceof CheckSnapshotError)) throw error;
           attemptBlockers.push(scopedCheckBlocker(error));
         }
-      } else attemptBlockers.push(...await runDeclaredCheck(context, registration, request.obligationIds, admission.candidate));
+      } else attemptBlockers.push(...await runDeclaredCheck(context, registration, request.obligationIds, admission.candidate, session ? { scopedPlan: await session.plan(), readOutput: session.readOutput } : {}));
       admission = await admit({ ...input, ...(liveResults.length === 0 ? {} : { liveResults }) }, admissionOptions);
       continue;
     }

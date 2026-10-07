@@ -1024,3 +1024,15 @@ it("an abort stops every worker and cleans up every pooled snapshot", async () =
     expect(observed.providers.map(p => p.attempts.at(-1)?.status)).toEqual(["interrupted", "passed", "interrupted"]);
   } finally { spy.mockRestore(); await Promise.all(roots.map(root => rm(root, { recursive: true, force: true }))); }
 }, 60000);
+it("records an unscoped declared check's evidence during gate alongside scoped providers", async () => {
+  const f = await fixture(); f.env["FAIL"] = "0";
+  const plain = { id: "check.plain", findingCodes: [], check: { command: [process.execPath, "-e", ""] as [string, ...string[]], timeoutMs: 5000 } };
+  f.setConfig({ ...f.config, providers: [...f.config.providers, plain],
+    obligations: [...f.config.obligations, { ...f.config.obligations[0]!, id: "check.plain.passed", providers: [plain.id] }] } as unknown as HarnessConfigInput);
+  expect(await f.run("prepare"), f.err.join("\n")).toBe(0);
+  expect(await f.run("gate"), f.err.join("\n")).toBe(0);
+  expect(f.out.join("\n")).toContain("checking check.plain");
+  expect(await f.run("record"), f.err.join("\n")).toBe(0);
+  await f.git("add", ".");
+  expect(await f.run("verify"), f.err.join("\n")).toBe(0);
+}, 30000);
