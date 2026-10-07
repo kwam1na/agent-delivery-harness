@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { captureCheckBindings, captureCheckOutputSnapshots, digestCanonical, classifyCandidateDrift, computeCheckWiringFingerprint, createBlocker, createExecPort, sha256Hex, submitManifest, type Blocker, type CandidateBinding, type ProviderRegistration } from "@agent-delivery-harness/kernel";
+import { captureCheckBindings, captureCheckOutputSnapshots, digestCanonical, classifyCandidateDrift, computeCheckWiringFingerprint, createBlocker, createExecPort, sha256Hex, submitManifest, type Blocker, type CandidateBinding, type CheckBindingOptions, type ProviderRegistration } from "@agent-delivery-harness/kernel";
 import type { CommandContext } from "./boundary.ts";
 
 /** Runs one declared argv check and submits its product-constructed terminal evidence. */
-export async function runDeclaredCheck(context: CommandContext, provider: ProviderRegistration, obligationIds: readonly string[], before: CandidateBinding): Promise<readonly Blocker[]> {
+export async function runDeclaredCheck(context: CommandContext, provider: ProviderRegistration, obligationIds: readonly string[], before: CandidateBinding, scoped: Pick<CheckBindingOptions, "scopedPlan" | "readOutput"> = {}): Promise<readonly Blocker[]> {
   const check = provider.check!;
   const wiring = await context.wire();
   const fail = (code: string, summary: string, details?: string): readonly Blocker[] => [createBlocker({ code, source: { kind: "command", id: "delivery-harness.cli.gate" }, summary,
@@ -21,7 +21,7 @@ export async function runDeclaredCheck(context: CommandContext, provider: Provid
   const captured = await wiring.captureCandidate();
   if (!captured.ok) return captured.blockers;
   if (classifyCandidateDrift(before, captured.candidate).length || start.candidate.headSha !== captured.candidate.headSha || fingerprint !== await computeCheckWiringFingerprint(context.rootDir, context.config, wiring.storageOptions)) return fail("check_candidate_changed", "The candidate, base or wiring changed while the check ran.");
-  const binding = (await captureCheckBindings(context.rootDir, context.config, captured.candidate, wiring.storageOptions))[provider.id];
+  const binding = (await captureCheckBindings(context.rootDir, context.config, captured.candidate, { ...wiring.storageOptions, ...scoped }))[provider.id];
   if (binding === undefined) return fail("check_output_missing", `Declared check ${provider.id} has a missing, unreadable, oversized or escaped output.`);
   const runId = randomUUID(), finalPassId = "pass-1";
   const allocation = await context.artifacts.allocateRunRoot({ providerId: provider.id, runId });
@@ -45,6 +45,6 @@ export async function runDeclaredCheck(context: CommandContext, provider: Provid
     attestation: { level: "self", signatures: [] }, recordedAt: new Date().toISOString(), claims: obligationIds.map(obligation => ({ obligation, payloadSpec: "checks.passed/1", payload })) };
   const manifestPath = path.join(allocation.runRoot.path, "manifest.json");
   await context.artifacts.writeTextFile(manifestPath, JSON.stringify(manifest));
-  const outcome = await submitManifest({ rootDir: context.rootDir, config: context.config, manifestPath }, { captureCandidate: wiring.captureCandidate, artifacts: context.artifacts, ...wiring.storageOptions });
+  const outcome = await submitManifest({ rootDir: context.rootDir, config: context.config, manifestPath }, { captureCandidate: wiring.captureCandidate, artifacts: context.artifacts, ...wiring.storageOptions, ...scoped });
   return outcome.status === "accepted" ? [] : outcome.blockers;
 }
